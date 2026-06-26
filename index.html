@@ -1,0 +1,1817 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配送管理 - OFK3</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: '#FAFAF8',
+            ink: '#2D2D2D',
+            'ink-light': '#6B6B6B',
+            'ink-lighter': '#9A9A9A',
+            accent: '#D94032',
+            'accent-light': '#FDF2F1',
+            border: '#E8E8E6',
+            'card-bg': '#FFFFFF',
+          },
+          fontFamily: {
+            sans: ['"Noto Sans JP"', 'Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    body { background: #FAFAF8; }
+    .upload-zone { border: 2px dashed #E8E8E6; transition: all 0.2s; }
+    .upload-zone:hover, .upload-zone.dragover { border-color: #D94032; background: #FDF2F1; }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .tab-active { border-bottom: 2px solid #D94032; color: #2D2D2D; font-weight: 500; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #9A9A9A; }
+    .tab-inactive:hover { color: #6B6B6B; }
+    .btn-primary { background: #D94032; color: white; transition: all 0.15s; }
+    .btn-primary:hover { background: #C13529; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(217,64,50,0.3); }
+    .btn-secondary { background: white; border: 1px solid #E8E8E6; color: #2D2D2D; transition: all 0.15s; }
+    .btn-secondary:hover { border-color: #D94032; color: #D94032; }
+    .card { background: white; border: 1px solid #E8E8E6; border-radius: 8px; transition: box-shadow 0.2s; }
+    .card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    .progress-bar { height: 4px; border-radius: 2px; background: #E8E8E6; }
+    .progress-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease-out; }
+    .tooltip { position: relative; }
+    .tooltip::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #2D2D2D; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+    .tooltip:hover::after { opacity: 1; }
+    input[type="file"] { display: none; }
+    .optimization-badge { background: #FDF2F1; color: #D94032; border: 1px solid #D94032; border-radius: 4px; font-size: 11px; padding: 2px 6px; }
+
+    /* Print Styles */
+    @media print {
+      body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      #app > header, #app > main > nav, #upload-section, .btn-primary, .btn-secondary, #line-modal, #settings-modal { display: none !important; }
+      #panel-dashboard { display: block !important; }
+      #dashboard-content { display: block !important; }
+      .card { border: none !important; box-shadow: none !important; }
+      #print-header { display: block !important; }
+      #stat-bar-print { display: none; }
+      .no-print { display: none !important; }
+    }
+    #print-header { display: none; }
+
+    /* Print Preview Modal */
+    .print-preview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .print-preview-table th { background: #F5F5F5; border: 1px solid #DDD; padding: 6px 10px; font-weight: 600; text-align: left; }
+    .print-preview-table td { border: 1px solid #DDD; padding: 5px 10px; }
+    .print-preview-table tr:nth-child(even) { background: #FAFAFA; }
+  </style>
+</head>
+<body class="min-h-screen text-ink">
+  <div id="app">
+    <!-- Header -->
+    <header class="bg-card-bg border-b border-border px-6 py-3 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-3">
+        <img src="logo.png" alt="OFK3" class="h-9 w-9 object-contain rounded">
+        <div class="flex items-center gap-4">
+          <h1 class="text-lg font-bold tracking-tight">配送管理</h1>
+          <span class="text-xs text-ink-lighter font-mono bg-surface px-2 py-0.5 rounded">OFK3</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-ink-light" id="today-date"></span>
+        <button class="btn-secondary text-xs px-3 py-1.5 rounded-md" onclick="showSettings()">設定</button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-6 py-6">
+      <!-- Tabs -->
+      <nav class="flex gap-6 mb-6 border-b border-border">
+        <button class="tab-active pb-3 text-sm" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
+      </nav>
+
+      <!-- Dashboard Tab -->
+      <div id="panel-dashboard">
+        <!-- Upload Section -->
+        <div id="upload-section">
+          <div class="grid grid-cols-2 gap-4">
+            <!-- Cycle / Address Data Upload -->
+            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-cycle" onclick="document.getElementById('cycle-file-input').click()">
+              <input type="file" id="cycle-file-input" accept=".xlsx,.xls" onchange="handleCycleDataUpload(event)" style="display:none;">
+              <div class="mb-2">
+                <svg class="w-8 h-8 mx-auto text-ink-lighter" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+                </svg>
+              </div>
+              <p class="text-sm font-medium text-ink mb-1">住所データ（コース詳細）</p>
+              <p class="text-xs text-ink-lighter">OFK3_CYCLE...xlsx</p>
+              <p class="text-xs text-ink-lighter mt-1" id="cycle-status"></p>
+            </div>
+            <!-- Assign Data Upload -->
+            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-assign" onclick="document.getElementById('file-input').click()">
+              <input type="file" id="file-input" accept=".xlsx,.xls,.csv" onchange="handleFileUpload(event)">
+              <div class="mb-2">
+                <svg class="w-8 h-8 mx-auto text-ink-lighter" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              </div>
+              <p class="text-sm font-medium text-ink mb-1">アサインデータ</p>
+              <p class="text-xs text-ink-lighter">ルート_OFK3...xlsx</p>
+              <p class="text-xs text-ink-lighter mt-1" id="assign-status"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dashboard Content (after upload) -->
+        <div id="dashboard-content" class="hidden fade-in">
+          <!-- Summary Stats -->
+          <div class="grid grid-cols-4 gap-4 mb-6">
+            <div class="card p-4">
+              <p class="text-xs text-ink-lighter mb-1">総ルート数</p>
+              <p class="text-2xl font-bold font-mono" id="stat-routes">-</p>
+            </div>
+            <div class="card p-4">
+              <p class="text-xs text-ink-lighter mb-1">稼働ドライバー</p>
+              <p class="text-2xl font-bold font-mono" id="stat-drivers">-</p>
+            </div>
+            <div class="card p-4">
+              <p class="text-xs text-ink-lighter mb-1">総配達数</p>
+              <p class="text-2xl font-bold font-mono" id="stat-packages">-</p>
+            </div>
+            <div class="card p-4">
+              <p class="text-xs text-ink-lighter mb-1">予測最終完了</p>
+              <p class="text-2xl font-bold font-mono" id="stat-latest">-</p>
+            </div>
+          </div>
+
+          <!-- Route Table -->
+          <div class="card overflow-hidden">
+            <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+              <h2 class="text-sm font-medium">ルート別配送予測</h2>
+              <div class="flex items-center gap-2">
+                <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="document.getElementById('file-input').click()">データ更新</button>
+                <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="openPrintPreview()">
+                  <span class="inline-flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                    印刷・掲示用
+                  </span>
+                </button>
+                <button class="text-xs px-3 py-1 rounded text-white transition-all hover:opacity-90" style="background:#06C755;" onclick="openLineSendModal()">
+                  <span class="inline-flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="white"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
+                    LINE送信
+                  </span>
+                </button>
+              </div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm table-fixed">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-32">ドライバー</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-20">ルート</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider" style="min-width: 280px;">エリア</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-20">サービス</th>
+                    <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider w-16">配達数</th>
+                    <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider w-16">目的地</th>
+                    <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider w-20">能力(個/h)</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-16">出発</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-20">予測終了</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-24">ステータス</th>
+                  </tr>
+                </thead>
+                <tbody id="route-table-body">
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Drivers Tab -->
+      <div id="panel-drivers" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-medium">ドライバー能力データベース</h2>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">実績データ更新</button>
+            <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
+          </div>
+        </div>
+        <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
+
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">個/時間</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">配管率%</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">誤配率%</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">稼働日数</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">総配送数</th>
+                  <th class="px-4 py-2.5 text-right text-xs font-medium text-ink-lighter uppercase tracking-wider">正配依頼</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">最終更新</th>
+                </tr>
+              </thead>
+              <tbody id="driver-table-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Master Management Tab -->
+      <div id="panel-master" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">マスタ管理</h2>
+            <p class="text-xs text-ink-lighter mt-1">ドライバーのLINE ID紐付け・基本情報の管理</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="addNewDriver()">+ ドライバー追加</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportMasterData()">エクスポート</button>
+          </div>
+        </div>
+
+        <!-- Search -->
+        <div class="mb-4">
+          <input type="text" id="master-search" placeholder="ドライバー名で検索..." class="border border-border rounded px-3 py-2 text-sm w-64 focus:outline-none focus:border-accent" oninput="renderMasterTable()">
+        </div>
+
+        <!-- Master Table -->
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ステータス</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">LINE ID</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">電話番号</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">連携状態</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">メモ</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">操作</th>
+                </tr>
+              </thead>
+              <tbody id="master-table-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Summary -->
+        <div class="mt-4 flex items-center gap-6 text-xs text-ink-lighter">
+          <span id="master-total">合計: 0名</span>
+          <span id="master-linked">LINE紐付け済み: 0名</span>
+          <span id="master-unlinked">未紐付け: 0名</span>
+        </div>
+      </div>
+
+      <!-- Optimization Tab -->
+      <div id="panel-optimization" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">コース割最適化提案</h2>
+            <p class="text-xs text-ink-lighter mt-1">ドライバー能力に基づいて、現在のAmazonアサインからの改善案を提示します</p>
+          </div>
+          <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runOptimization()" id="optimize-btn">最適化を実行</button>
+        </div>
+
+        <div id="optimization-results" class="hidden fade-in">
+          <!-- Will be populated dynamically -->
+        </div>
+
+        <div id="optimization-empty" class="text-center py-16">
+          <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- LINE Notification Modal -->
+    <div id="line-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/30" onclick="closeModal()"></div>
+      <div class="relative bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl fade-in">
+        <h3 class="text-base font-bold mb-2">配送計画を確定して通知</h3>
+        <p class="text-sm text-ink-light mb-4">以下の内容でドライバーにLINE通知を送信します。</p>
+
+        <!-- Notification Mode Toggle -->
+        <div class="flex gap-2 mb-4">
+          <button class="text-xs px-3 py-1.5 rounded border transition-all" id="mode-notify" onclick="setNotifyMode('notify')">グループ一括（Notify）</button>
+          <button class="text-xs px-3 py-1.5 rounded border transition-all" id="mode-messaging" onclick="setNotifyMode('messaging')">個別送信（Messaging API）</button>
+        </div>
+
+        <div class="bg-surface rounded p-3 mb-4 text-xs font-mono max-h-48 overflow-y-auto" id="notification-preview">
+        </div>
+
+        <!-- Status Messages -->
+        <div id="line-not-configured" class="flex items-center gap-2 p-3 bg-accent-light rounded mb-4">
+          <svg class="w-4 h-4 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+          <p class="text-xs text-accent">LINE連携が未設定です。設定画面からトークンを入力してください。</p>
+        </div>
+        <div id="line-ready" class="hidden flex items-center gap-2 p-3 bg-emerald-50 rounded mb-4">
+          <svg class="w-4 h-4 text-emerald-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          <p class="text-xs text-emerald-700">LINE連携済み。通知を送信できます。</p>
+        </div>
+
+        <div class="flex gap-2 justify-end">
+          <button class="btn-secondary text-sm px-4 py-2 rounded" onclick="closeModal()">キャンセル</button>
+          <button class="btn-primary text-sm px-4 py-2 rounded" id="send-line-btn" onclick="sendLineNotification()">通知を送信</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/30" onclick="closeSettings()"></div>
+      <div class="relative bg-white rounded-lg p-6 max-w-2xl w-full mx-4 shadow-xl fade-in max-h-[90vh] overflow-y-auto">
+        <h3 class="text-base font-bold mb-4">設定</h3>
+        <div class="space-y-6">
+
+          <!-- LINE Notify Section -->
+          <div class="border border-border rounded-lg p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
+              <h4 class="text-sm font-bold">LINE Notify（グループ一括通知）</h4>
+              <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700" id="notify-status">未設定</span>
+            </div>
+            <p class="text-xs text-ink-lighter mb-3">LINEグループに全ドライバーの配送予測をまとめて投稿します。</p>
+            <div class="space-y-2">
+              <label class="text-xs font-medium text-ink-light">アクセストークン</label>
+              <input type="text" id="line-notify-token" placeholder="LINE Notify トークンを貼り付け" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+              <p class="text-xs text-ink-lighter">取得方法: <a href="https://notify-bot.line.me/my/" target="_blank" class="text-accent underline">notify-bot.line.me</a> → トークンを発行 → グループを選択</p>
+            </div>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded mt-3" onclick="testLineNotify()">テスト送信</button>
+          </div>
+
+          <!-- LINE Messaging API Section -->
+          <div class="border border-border rounded-lg p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
+              <h4 class="text-sm font-bold">Messaging API（個別通知）</h4>
+              <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700" id="messaging-status">未設定</span>
+            </div>
+            <p class="text-xs text-ink-lighter mb-3">各ドライバーに個別でコース・物量・終了予測を送信します。</p>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs font-medium text-ink-light">チャネルアクセストークン</label>
+                <input type="text" id="line-channel-token" placeholder="Channel Access Token（長期）" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent mt-1" oninput="saveLineSettings()">
+              </div>
+              <div>
+                <label class="text-xs font-medium text-ink-light">チャネルシークレット</label>
+                <input type="text" id="line-channel-secret" placeholder="Channel Secret" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent mt-1" oninput="saveLineSettings()">
+              </div>
+              <p class="text-xs text-ink-lighter">取得方法: <a href="https://developers.line.biz/console/" target="_blank" class="text-accent underline">LINE Developers Console</a> → プロバイダー作成 → Messaging APIチャネル作成</p>
+            </div>
+
+            <!-- Driver LINE ID Mapping -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-bold text-ink">ドライバー × LINE ID 紐付け</label>
+                <button class="text-xs text-accent underline" onclick="addDriverLineMapping()">+ 追加</button>
+              </div>
+              <p class="text-xs text-ink-lighter mb-2">ドライバーが公式アカウントを友だち追加した後、LINE IDを紐付けてください。</p>
+              <div id="line-mapping-list" class="space-y-1.5 max-h-40 overflow-y-auto">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+
+            <!-- Admin LINE ID -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">管理者 LINE ID</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">管理者には全ルート・全ドライバーの予測一覧が送信されます。複数指定する場合はカンマで区切ってください。</p>
+              <input type="text" id="line-admin-id" placeholder="U...,U..." class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+            </div>
+
+            <!-- LINE Bot Basic ID -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">LINE公式アカウント ID</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">マスタ管理画面に友だち追加用QRコードを表示します（例: @046vllck）。</p>
+              <input type="text" id="line-bot-id" placeholder="@で始まるBasic ID" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+            </div>
+
+            <!-- LINE Bot Logo URL -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">LINE公式アカウント ロゴ画像URL</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">マスタ管理の友だち追加ボタンに表示する画像URLを入力してください。</p>
+              <input type="text" id="line-bot-logo-url" placeholder="https://.../logo.png" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+            </div>
+
+            <!-- GAS Proxy URL -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">GASプロキシ URL</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">LINE API用のGoogle Apps Script WebアプリURLを入力してください。</p>
+              <input type="text" id="gas-proxy-url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+            </div>
+          </div>
+
+          <!-- General Settings -->
+          <div class="border border-border rounded-lg p-4">
+            <h4 class="text-sm font-bold mb-2">配送設定</h4>
+            <p class="text-xs text-ink-lighter mb-3">ステーション: 〒819-0022 福岡市西区福重3丁目36-24</p>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-xs font-medium text-ink-light">デフォルト出発時刻</label>
+                <input type="time" value="09:00" class="border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent w-full mt-1" id="default-departure">
+              </div>
+              <div>
+                <label class="text-xs font-medium text-ink-light">積み込み時間（分）</label>
+                <input type="number" value="15" min="0" max="60" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="loading-time">
+              </div>
+              <div>
+                <label class="text-xs font-medium text-ink-light">往路 ステーション→配送エリア（分）</label>
+                <input type="number" value="20" min="0" max="90" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="travel-outbound">
+                <p class="text-xs text-ink-lighter mt-0.5">西区福重 → 配送先エリアまでの平均移動時間</p>
+              </div>
+              <div>
+                <label class="text-xs font-medium text-ink-light">帰庫 配送エリア→ステーション（分）</label>
+                <input type="number" value="20" min="0" max="90" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="travel-return">
+                <p class="text-xs text-ink-lighter mt-0.5">配送先最終地点 → ステーションまでの平均移動時間</p>
+              </div>
+            </div>
+            <div class="mt-3 p-2 bg-surface rounded text-xs text-ink-light">
+              <strong>計算式:</strong> 出発時刻 + 積み込み + 往路移動 + (配達数 ÷ 能力値) + 帰庫移動
+            </div>
+          </div>
+
+          <!-- Notification Template -->
+          <div class="border border-border rounded-lg p-4">
+            <h4 class="text-sm font-bold mb-3">通知テンプレート（個別送信時）</h4>
+            <textarea id="line-message-template" rows="9" class="w-full border border-border rounded px-3 py-2 text-xs font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">おはようございます！
+本日の配送情報です：
+
+コース: {route}
+エリア: {area}
+配達数: {packages}個
+目的地: {destinations}件
+出発予定: {departure}
+終了目安: {predicted_end}
+
+メンターの起動をお願いします！
+安全運転でお願いします！</textarea>
+            <p class="text-xs text-ink-lighter mt-1">変数: {driver}, {route}, {area}, {packages}, {destinations}, {departure}, {predicted_end}</p>
+          </div>
+
+        </div>
+        <div class="flex justify-end mt-6">
+          <button class="btn-primary text-sm px-4 py-2 rounded" onclick="closeSettings()">保存して閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Print Preview Modal -->
+    <div id="print-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/30" onclick="closePrintPreview()"></div>
+      <div class="relative bg-white rounded-lg p-6 max-w-4xl w-full mx-4 shadow-xl fade-in max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-base font-bold">点呼場掲示用 — ルート別配送予測表</h3>
+          <div class="flex items-center gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="closePrintPreview()">閉じる</button>
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="printTable()">
+              <span class="inline-flex items-center gap-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                印刷する
+              </span>
+            </button>
+          </div>
+        </div>
+        <div id="print-content">
+          <!-- Will be populated dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ===== State =====
+    let assignmentData = [];
+    let driverDB = {};
+    let currentTab = 'dashboard';
+
+    // Initialize
+    document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+
+    // Load saved driver data from localStorage
+    const savedDrivers = localStorage.getItem('driverDB');
+    if (savedDrivers) {
+      driverDB = JSON.parse(savedDrivers);
+      renderDriverTable();
+    }
+
+    // ===== Tab Navigation =====
+    function switchTab(tab) {
+      currentTab = tab;
+      ['dashboard', 'drivers', 'master', 'optimization'].forEach(t => {
+        document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
+        document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
+      });
+      if (tab === 'master') renderMasterTable();
+    }
+
+    // ===== File Upload - Assignment Data =====
+    const assignZone = document.getElementById('upload-zone-assign');
+    assignZone.addEventListener('dragover', (e) => { e.preventDefault(); assignZone.classList.add('dragover'); });
+    assignZone.addEventListener('dragleave', () => { assignZone.classList.remove('dragover'); });
+    assignZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      assignZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    });
+
+    // ===== File Upload - Cycle/Address Data =====
+    const cycleZone = document.getElementById('upload-zone-cycle');
+    cycleZone.addEventListener('dragover', (e) => { e.preventDefault(); cycleZone.classList.add('dragover'); });
+    cycleZone.addEventListener('dragleave', () => { cycleZone.classList.remove('dragover'); });
+    cycleZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      cycleZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        const fakeEvent = { target: { files: e.dataTransfer.files } };
+        handleCycleDataUpload(fakeEvent);
+      }
+    });
+
+    function handleFileUpload(event) {
+      if (event.target.files.length) handleFile(event.target.files[0]);
+    }
+
+    function handleFile(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+        processAssignmentData(json);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function processAssignmentData(data) {
+      assignmentData = data.map(row => {
+        const routeCode = row['ルートコード'] || '';
+        const driverName = row['ドライバー名'] || '';
+        const serviceType = row['配送サービスタイプ'] || '';
+        const totalDeliveries = parseInt(row['合計配達数']) || 0;
+        const allDestinations = parseInt(row['すべての目的地']) || 0;
+        const routeDuration = parseInt(row['ルート所要時間']) || 0;
+        const departureRaw = row['出発予定時刻'] || '';
+
+        // Get driver capability from DB
+        const driverInfo = findDriver(driverName);
+        const capability = driverInfo ? driverInfo.packagesPerHour : null;
+
+        // Calculate predicted end time
+        const departure = parseDepartureTime(departureRaw);
+        const predictedEnd = calculateEndTime(departure, allDestinations, capability, routeDuration);
+
+        // Get area from cycle data, saved areas, or empty
+        const area = routeAreas[routeCode] || (cycleData[routeCode] ? extractAreaFromAddresses(cycleData[routeCode]) : '');
+
+        return {
+          routeCode,
+          driverName,
+          serviceType,
+          totalDeliveries,
+          allDestinations,
+          routeDuration,
+          departure,
+          departureRaw,
+          capability,
+          predictedEnd,
+          area,
+          status: getStatus(predictedEnd)
+        };
+      }).filter(r => r.routeCode); // Filter empty rows
+
+      renderDashboard();
+    }
+
+    function findDriver(name) {
+      if (!name) return null;
+      // Direct match
+      if (driverDB[name]) return driverDB[name];
+      // Try reversing first/last name
+      const parts = name.split(' ');
+      if (parts.length === 2) {
+        const reversed = parts[1] + ' ' + parts[0];
+        if (driverDB[reversed]) return driverDB[reversed];
+      }
+      return null;
+    }
+
+    function parseDepartureTime(raw) {
+      if (!raw) {
+        const defaultTime = document.getElementById('default-departure')?.value || '09:00';
+        return defaultTime;
+      }
+      // Handle formats like "09:07", "11:07"
+      const match = raw.match(/(\d{1,2}):(\d{2})/);
+      if (match) return `${match[1].padStart(2,'0')}:${match[2]}`;
+      return '09:00';
+    }
+
+    function calculateEndTime(departure, packages, capability, amazonDuration) {
+      const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
+      const travelOutbound = parseInt(document.getElementById('travel-outbound')?.value || '15');
+      const travelReturn = parseInt(document.getElementById('travel-return')?.value || '15');
+      let deliveryMinutes;
+
+      if (capability && capability > 0) {
+        // Use driver capability (packages/hour) — purely delivery time, no travel
+        deliveryMinutes = (packages / capability) * 60;
+      } else {
+        // Fall back to Amazon's estimate (already includes travel)
+        deliveryMinutes = amazonDuration;
+      }
+
+      // Total = loading + outbound travel + delivery work + return travel
+      const totalMinutes = loadingTime + travelOutbound + deliveryMinutes + travelReturn;
+      const [depH, depM] = departure.split(':').map(Number);
+      const endMinutes = depH * 60 + depM + totalMinutes;
+      const endH = Math.floor(endMinutes / 60);
+      const endM = Math.round(endMinutes % 60);
+
+      return `${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}`;
+    }
+
+    function getStatus(endTime) {
+      if (!endTime) return 'unknown';
+      const [h] = endTime.split(':').map(Number);
+      if (h >= 21) return 'risk';
+      if (h >= 19) return 'warning';
+      return 'ok';
+    }
+
+    function renderDashboard() {
+      document.getElementById('dashboard-content').classList.remove('hidden');
+      document.getElementById('assign-status').textContent = `✓ ${assignmentData.length}ルート読込済み`;
+      document.getElementById('assign-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
+
+      // Stats
+      const totalRoutes = assignmentData.length;
+      const totalDrivers = new Set(assignmentData.map(r => r.driverName).filter(Boolean)).size;
+      const totalPackages = assignmentData.reduce((sum, r) => sum + r.totalDeliveries, 0);
+      const latestEnd = assignmentData.reduce((latest, r) => {
+        if (!r.predictedEnd) return latest;
+        return r.predictedEnd > latest ? r.predictedEnd : latest;
+      }, '00:00');
+
+      document.getElementById('stat-routes').textContent = totalRoutes;
+      document.getElementById('stat-drivers').textContent = totalDrivers;
+      document.getElementById('stat-packages').textContent = totalPackages.toLocaleString();
+      document.getElementById('stat-latest').textContent = latestEnd;
+
+      // Table - sort by departure time → driver name → route code
+      const sortedData = [...assignmentData].sort((a, b) =>
+        (a.departure || '99:99').localeCompare(b.departure || '99:99') ||
+        (a.driverName || '').localeCompare(b.driverName || '', 'ja') ||
+        (a.routeCode || '').localeCompare(b.routeCode || '')
+      );
+      const tbody = document.getElementById('route-table-body');
+      tbody.innerHTML = sortedData.map((route, i) => {
+        const statusColor = route.status === 'risk' ? 'bg-accent' : route.status === 'warning' ? 'bg-yellow-400' : 'bg-emerald-400';
+        const statusText = route.status === 'risk' ? '遅延リスク' : route.status === 'warning' ? '注意' : '正常';
+        const capDisplay = route.capability ? route.capability.toFixed(1) : '<span class="text-ink-lighter">-</span>';
+        const rowBg = i % 2 === 0 ? '' : 'bg-surface/50';
+        const lineIcon = route.driverName ? '<svg class="w-4 h-4 flex-shrink-0 inline-block" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>' : '';
+        const originalIdx = assignmentData.indexOf(route);
+
+        return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
+          <td class="px-4 py-2.5 text-sm"><span class="inline-flex items-center gap-1.5">${lineIcon}${route.driverName || '<span class="text-ink-lighter">未割当</span>'}</span></td>
+          <td class="px-4 py-2.5 font-mono text-xs font-medium">${route.routeCode}</td>
+          <td class="px-4 py-2.5 text-xs"><input type="text" value="${route.area || ''}" placeholder="クリックで入力" class="w-full bg-transparent border-b border-dashed border-border focus:border-accent focus:outline-none px-0 py-0.5 text-xs" onchange="updateArea(${originalIdx}, this.value)"></td>
+          <td class="px-4 py-2.5 text-xs text-ink-light">${shortenService(route.serviceType)}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm font-medium">${route.totalDeliveries}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm">${route.allDestinations}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm">${capDisplay}</td>
+          <td class="px-4 py-2.5 text-sm font-mono">${route.departure}</td>
+          <td class="px-4 py-2.5 text-sm font-mono font-medium">${route.predictedEnd}</td>
+          <td class="px-4 py-2.5">
+            <span class="inline-flex items-center gap-1.5 text-xs">
+              <span class="status-dot ${statusColor}"></span>
+              ${statusText}
+            </span>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function shortenService(service) {
+      if (!service) return '-';
+      if (service.includes('Biker')) return 'Biker';
+      if (service.includes('AmFlex')) return 'Kei Van';
+      if (service.includes('Standard')) return 'Standard';
+      if (service.includes('Nursery')) return 'Nursery';
+      return service.substring(0, 12);
+    }
+
+    // ===== Area Management =====
+    let cycleData = {}; // routeCode -> array of addresses
+    let routeAreas = JSON.parse(localStorage.getItem('routeAreas') || '{}');
+
+    function updateArea(index, value) {
+      assignmentData[index].area = value;
+      // Save to localStorage for persistence
+      routeAreas[assignmentData[index].routeCode] = value;
+      localStorage.setItem('routeAreas', JSON.stringify(routeAreas));
+    }
+
+    // Extract area names from addresses in cycle data
+    function extractAreaFromAddresses(addresses) {
+      if (!addresses || addresses.length === 0) return '';
+
+      // Parse addresses like "西区石丸3丁目39-11-3-201, 福岡市, 福岡"
+      // or "早良区原3丁目, 福岡市, 福岡"
+      // Extract: 区名 + 町名. Drop 福岡市 to save space.
+      const neighborhoodCounts = {};
+
+      addresses.forEach(addr => {
+        if (!addr) return;
+
+        // Remove 福岡市 prefix/suffix to normalize
+        const normalized = addr.replace(/福岡市\s*/g, '');
+
+        // Match patterns: X区Y町/X区Y (followed by number or comma)
+        const match = normalized.match(/([\u4e00-\u9fff]+区)([\u4e00-\u9fff]+?)[\d丁,\s]/);
+        if (match) {
+          const ku = match[1]; // 区名 (e.g. "早良区")
+          const machi = match[2]; // 町名 (e.g. "原")
+          const key = machi;
+          if (!neighborhoodCounts[key]) {
+            neighborhoodCounts[key] = { count: 0, ku: ku };
+          }
+          neighborhoodCounts[key].count++;
+        }
+      });
+
+      // Sort by frequency and get top neighborhoods
+      const sorted = Object.entries(neighborhoodCounts)
+        .sort((a, b) => b[1].count - a[1].count);
+
+      if (sorted.length === 0) return '';
+
+      // Get the primary ward (区)
+      const primaryKu = sorted[0][1].ku;
+
+      // Get top 3 neighborhoods from the same or nearby wards
+      const topNames = sorted.slice(0, 3).map(([name, _]) => name);
+
+      // Format: "早良区原・藤崎・昭代" style (福岡市 omitted)
+      return primaryKu + topNames.join('・');
+    }
+
+    // ===== Driver Data Upload =====
+    function handleDriverDataUpload(event) {
+      if (!event.target.files.length) return;
+      const file = event.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+        processDriverData(json);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // ===== Cycle Data Upload (for area detection) =====
+    function handleCycleDataUpload(event) {
+      if (!event.target.files.length) return;
+      const file = event.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+
+        // Each sheet is a route - extract addresses from each
+        let routeCount = 0;
+        workbook.SheetNames.forEach(sheetName => {
+          const sheet = workbook.Sheets[sheetName];
+          const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+          // First row contains "Route for XXXXX" - extract route code
+          if (json.length > 0 && json[0] && json[0][0]) {
+            const routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
+            if (routeMatch) {
+              const routeCode = routeMatch[1].trim();
+
+              // Column F (index 5) = "Actual Customer Address"
+              // Start from row 3 (index 2) — row 1 is route name, row 2 is headers
+              const addresses = [];
+              for (let i = 2; i < json.length; i++) {
+                const row = json[i];
+                if (row && row[5] && String(row[5]).includes('区')) {
+                  addresses.push(String(row[5]));
+                }
+              }
+
+              if (addresses.length > 0) {
+                cycleData[routeCode] = addresses;
+                // Auto-extract area
+                const area = extractAreaFromAddresses(addresses);
+                if (area) routeAreas[routeCode] = area;
+                routeCount++;
+              }
+            }
+          }
+        });
+
+        localStorage.setItem('routeAreas', JSON.stringify(routeAreas));
+        document.getElementById('cycle-status').textContent = `✓ ${routeCount}ルートのエリア情報読込済み`;
+        document.getElementById('cycle-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
+        alert(`${routeCount}ルートのエリア情報を読み取りました`);
+
+        // Re-render if dashboard is showing
+        if (assignmentData.length) {
+          assignmentData.forEach(r => {
+            if (routeAreas[r.routeCode]) {
+              r.area = routeAreas[r.routeCode];
+            }
+          });
+          renderDashboard();
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function processDriverData(data) {
+      const today = new Date().toLocaleDateString('ja-JP');
+
+      data.forEach(row => {
+        const name = row['配達アソシエート'] || '';
+        if (!name) return;
+
+        const packagesPerHour = parseFloat(row['1時間あたり配送個数']) || null;
+        // 列名に改行が含まれる場合があるため、キーを部分一致で検索
+        const findCol = (keys, ...patterns) => {
+          for (const p of patterns) {
+            const key = keys.find(k => k.replace(/\s+/g, '').includes(p));
+            if (key && row[key] != null) return row[key];
+          }
+          return null;
+        };
+        const colKeys = Object.keys(row);
+        const deliveryRateRaw = findCol(colKeys, '配管率%(平均)', '配管率%', '配管率');
+        const deliveryRate = deliveryRateRaw != null ? parseFloat(String(deliveryRateRaw).replace('%', '')) : null;
+        const workDaysRaw = findCol(colKeys, '集計対象稼働日数', '稼働日数');
+        const workDays = workDaysRaw != null ? parseInt(workDaysRaw) : 0;
+        const totalPkgRaw = findCol(colKeys, '配送個数合計(集計対象日)', '配送個数合計');
+        const totalPackages = totalPkgRaw != null ? parseInt(totalPkgRaw) : 0;
+        const incidentRaw = findCol(colKeys, '正配依頼合計', '正配依頼');
+        const incidents = incidentRaw != null ? parseInt(incidentRaw) : 0;
+        const misRateRaw = findCol(colKeys, '誤配率%', '誤配率');
+        // Excelの内部値は小数（例: 0.0076 = 0.76%）なので、1未満なら×100して%に変換
+        let misdeliveryRate = misRateRaw != null ? parseFloat(String(misRateRaw).replace('%', '')) : null;
+        if (misdeliveryRate != null && misdeliveryRate < 1 && misdeliveryRate > 0) { misdeliveryRate = Math.round(misdeliveryRate * 10000) / 100; }
+
+        // If we already have data, calculate weighted average
+        if (driverDB[name] && driverDB[name].packagesPerHour && packagesPerHour) {
+          const existing = driverDB[name];
+          const totalDays = existing.workDays + workDays;
+          const weightedCapability = (existing.packagesPerHour * existing.workDays + packagesPerHour * workDays) / totalDays;
+
+          driverDB[name] = {
+            packagesPerHour: Math.round(weightedCapability * 10) / 10,
+            deliveryRate: deliveryRate || existing.deliveryRate,
+            misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
+            workDays: totalDays,
+            totalPackages: existing.totalPackages + totalPackages,
+            incidents: existing.incidents + incidents,
+            lastUpdated: today,
+            history: [...(existing.history || []), { date: today, pph: packagesPerHour, days: workDays }]
+          };
+        } else {
+          driverDB[name] = {
+            packagesPerHour: packagesPerHour ? Math.round(packagesPerHour * 10) / 10 : null,
+            deliveryRate,
+            misdeliveryRate,
+            workDays,
+            totalPackages,
+            incidents,
+            lastUpdated: today,
+            history: [{ date: today, pph: packagesPerHour, days: workDays }]
+          };
+        }
+      });
+
+      // Save to localStorage
+      localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      renderDriverTable();
+
+      // Re-calculate predictions if assignment data exists
+      if (assignmentData.length) {
+        processAssignmentData(assignmentData.map(r => ({
+          'ルートコード': r.routeCode,
+          'ドライバー名': r.driverName,
+          '配送サービスタイプ': r.serviceType,
+          '合計配達数': r.totalDeliveries,
+          'すべての目的地': r.allDestinations,
+          'ルート所要時間': r.routeDuration,
+          '出発予定時刻': r.departureRaw
+        })));
+      }
+
+      alert(`${Object.keys(driverDB).length}名のドライバーデータを更新しました`);
+    }
+
+    function renderDriverTable() {
+      const tbody = document.getElementById('driver-table-body');
+      const sorted = Object.entries(driverDB)
+        .filter(([_, d]) => d.packagesPerHour)
+        .sort((a, b) => (b[1].packagesPerHour || 0) - (a[1].packagesPerHour || 0));
+
+      tbody.innerHTML = sorted.map(([name, d], i) => {
+        const rowBg = i % 2 === 0 ? '' : 'bg-surface/50';
+        const rateColor = d.deliveryRate >= 98 ? 'text-emerald-600' : d.deliveryRate >= 95 ? 'text-ink' : 'text-accent';
+        const misRate = d.misdeliveryRate != null ? d.misdeliveryRate : (d.totalPackages > 0 ? Math.round(d.incidents / d.totalPackages * 10000) / 100 : null);
+        const misRateColor = misRate != null ? (misRate <= 0.5 ? 'text-emerald-600' : misRate <= 1.0 ? 'text-ink' : 'text-accent') : '';
+        const lineIcon = '<svg class="w-4 h-4 flex-shrink-0 inline-block" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>';
+
+        return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
+          <td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">${lineIcon}${name}</span></td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm font-medium">${d.packagesPerHour || '-'}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm ${rateColor}">${d.deliveryRate ? d.deliveryRate.toFixed(1) + '%' : '-'}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm ${misRateColor}">${misRate != null ? misRate.toFixed(2) + '%' : '-'}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm">${d.workDays}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm">${d.totalPackages.toLocaleString()}</td>
+          <td class="px-4 py-2.5 text-right font-mono text-sm">${d.incidents}</td>
+          <td class="px-4 py-2.5 text-xs text-ink-lighter">${d.lastUpdated || '-'}</td>
+        </tr>`;
+      }).join('');
+
+      if (sorted.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="px-4 py-12 text-center text-sm text-ink-lighter">
+          ドライバー実績データをアップロードしてください<br>
+          <span class="text-xs">（ドライバー別配送データ.xlsx 形式）</span>
+        </td></tr>`;
+      }
+    }
+
+    // ===== Optimization =====
+    function runOptimization() {
+      if (!assignmentData.length) {
+        alert('先にアサインデータをアップロードしてください');
+        return;
+      }
+      if (Object.keys(driverDB).length === 0) {
+        alert('先にドライバー実績データをアップロードしてください');
+        return;
+      }
+
+      const results = generateOptimizationSuggestions();
+      renderOptimizationResults(results);
+    }
+
+    function generateOptimizationSuggestions() {
+      const suggestions = [];
+
+      // Sort routes by package count (heavy first)
+      const sortedRoutes = [...assignmentData].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
+
+      // Sort available drivers by capability (fast first)
+      const availableDrivers = Object.entries(driverDB)
+        .filter(([_, d]) => d.packagesPerHour)
+        .sort((a, b) => b[1].packagesPerHour - a[1].packagesPerHour);
+
+      // Current assignment analysis
+      sortedRoutes.forEach(route => {
+        if (!route.driverName) return;
+        const driverInfo = findDriver(route.driverName);
+        if (!driverInfo) return;
+
+        // Check if there's a better match
+        const currentEfficiency = driverInfo.packagesPerHour;
+        const hoursNeeded = route.totalDeliveries / currentEfficiency;
+
+        // Find if a faster driver is on a lighter route
+        const lighterRoutes = sortedRoutes.filter(r =>
+          r.routeCode !== route.routeCode &&
+          r.totalDeliveries < route.totalDeliveries * 0.7 &&
+          r.driverName
+        );
+
+        lighterRoutes.forEach(lighterRoute => {
+          const lighterDriverInfo = findDriver(lighterRoute.driverName);
+          if (!lighterDriverInfo) return;
+
+          if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
+            // Faster driver is on a lighter route — suggest swap
+            const currentEnd = route.predictedEnd;
+            const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
+            const [depH, depM] = route.departure.split(':').map(Number);
+            const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
+            const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
+            const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
+
+            suggestions.push({
+              type: 'swap',
+              route1: route.routeCode,
+              driver1: route.driverName,
+              route2: lighterRoute.routeCode,
+              driver2: lighterRoute.driverName,
+              currentEnd,
+              optimizedEnd: newEnd,
+              improvement: calculateTimeDiff(currentEnd, newEnd),
+              reason: `${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。重いルートに再配置で${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
+            });
+          }
+        });
+      });
+
+      // Deduplicate and sort by improvement
+      const seen = new Set();
+      return suggestions
+        .filter(s => {
+          const key = `${s.driver1}-${s.driver2}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => b.improvement - a.improvement)
+        .slice(0, 5);
+    }
+
+    function calculateTimeDiff(time1, time2) {
+      const [h1, m1] = time1.split(':').map(Number);
+      const [h2, m2] = time2.split(':').map(Number);
+      return (h1 * 60 + m1) - (h2 * 60 + m2);
+    }
+
+    function renderOptimizationResults(suggestions) {
+      const container = document.getElementById('optimization-results');
+      const empty = document.getElementById('optimization-empty');
+
+      if (suggestions.length === 0) {
+        container.classList.add('hidden');
+        empty.classList.remove('hidden');
+        empty.innerHTML = '<p class="text-sm text-ink-lighter text-center py-16">現在のアサインは概ね最適です。大幅な改善提案はありません。</p>';
+        return;
+      }
+
+      empty.classList.add('hidden');
+      container.classList.remove('hidden');
+
+      container.innerHTML = `
+        <div class="space-y-3">
+          ${suggestions.map((s, i) => `
+            <div class="card p-4 fade-in" style="animation-delay: ${i * 0.1}s">
+              <div class="flex items-start justify-between">
+                <div class="flex-1">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="optimization-badge">提案 ${i + 1}</span>
+                    <span class="text-xs text-emerald-600 font-medium">-${s.improvement}分</span>
+                  </div>
+                  <p class="text-sm text-ink mb-2">${s.reason}</p>
+                  <div class="flex items-center gap-4 text-xs text-ink-light">
+                    <span>${s.route1}: ${s.driver1} → ${s.driver2}</span>
+                    <span class="text-ink-lighter">|</span>
+                    <span>${s.route2}: ${s.driver2} → ${s.driver1}</span>
+                  </div>
+                </div>
+                <div class="text-right ml-4">
+                  <p class="text-xs text-ink-lighter">終了予測</p>
+                  <p class="text-sm font-mono"><span class="line-through text-ink-lighter">${s.currentEnd}</span> → <span class="font-medium text-emerald-600">${s.optimizedEnd}</span></p>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function closeModal() {
+      document.getElementById('line-modal').classList.add('hidden');
+    }
+
+    function showSettings() {
+      document.getElementById('settings-modal').classList.remove('hidden');
+    }
+
+    function closeSettings() {
+      document.getElementById('settings-modal').classList.add('hidden');
+      saveLineSettings();
+    }
+
+    // ===== Master Management =====
+    let lineMapping = JSON.parse(localStorage.getItem('lineMapping') || '{}');
+    let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
+    let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
+
+    // Pre-register admin
+    if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
+    if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
+    if (!masterNotes['前原雷蔵']) { masterNotes['前原雷蔵'] = '管理者'; localStorage.setItem('masterNotes', JSON.stringify(masterNotes)); }
+
+    function getLineQrUrl(basicId) {
+      // LINE official account QR code URL pattern
+      const id = basicId.replace(/^@/, '').trim();
+      if (!id) return '';
+      if (id.startsWith('L')) return `https://qr-official.line.me/sid/L/${id}.png`;
+      return `https://qr-official.line.me/sid/${id}.png`;
+    }
+
+    function openLineAddFriend(name) {
+      const basicId = (lineSettings.lineBotId || '').trim();
+      if (!basicId) {
+        alert('LINE公式アカウントIDが設定されていません。設定画面から @ で始まるIDを入力してください。');
+        return;
+      }
+      const url = basicId.startsWith('@') ? `https://line.me/R/ti/p/${encodeURIComponent(basicId)}` : `https://line.me/R/ti/p/${encodeURIComponent('@' + basicId)}`;
+      window.open(url, '_blank');
+    }
+
+    function renderMasterTable() {
+      const tbody = document.getElementById('master-table-body');
+      const searchVal = (document.getElementById('master-search')?.value || '').toLowerCase();
+
+      // Merge all known drivers from driverDB, lineMapping, phoneMapping, AND assignmentData
+      const allDrivers = new Set([
+        ...Object.keys(driverDB),
+        ...Object.keys(lineMapping),
+        ...Object.keys(phoneMapping),
+        ...assignmentData.map(r => r.driverName).filter(Boolean)
+      ]);
+      let drivers = [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja'));
+
+      if (searchVal) {
+        drivers = drivers.filter(name => name.toLowerCase().includes(searchVal));
+      }
+
+      let linked = 0, unlinked = 0;
+      [...allDrivers].forEach(name => {
+        if (lineMapping[name] || phoneMapping[name]) linked++; else unlinked++;
+      });
+
+      document.getElementById('master-total').textContent = `合計: ${allDrivers.size}名`;
+      document.getElementById('master-linked').textContent = `紐付け済み: ${linked}名`;
+      document.getElementById('master-unlinked').textContent = `未紐付け: ${unlinked}名`;
+
+      if (drivers.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-ink-lighter">
+          ドライバーが登録されていません<br>
+          <span class="text-xs">アサインデータのアップロードまたは手動追加で登録できます</span>
+        </td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = drivers.map(name => {
+        const db = driverDB[name] || {};
+        const lineId = lineMapping[name] || '';
+        const phone = phoneMapping[name] || '';
+        const hasLink = !!(lineId || phone);
+        const note = masterNotes[name] || '';
+        const statusLabel = lineId ? 'LINE連携済' : phone ? '電話番号のみ' : '未連携';
+        const statusClass = lineId ? 'bg-emerald-50 text-emerald-700' : phone ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500';
+        const dotClass = lineId ? 'text-emerald-500' : phone ? 'text-blue-400' : 'text-gray-300';
+
+        const basicId = (lineSettings.lineBotId || '').trim();
+        const botLogoUrl = (lineSettings.lineBotLogoUrl || '').trim();
+        const showAddBtn = !lineId && basicId;
+        const addBtn = showAddBtn
+          ? `<button onclick="openLineAddFriend('${name.replace(/'/g, "\\'")}')" title="友だち追加 / LINE待ち受け" class="ml-2 inline-flex items-center justify-center w-7 h-7 rounded-full overflow-hidden border border-border hover:opacity-80 transition-opacity">
+              ${botLogoUrl ? `<img src="${botLogoUrl}" class="w-full h-full object-cover" alt="LINE友だち追加" onerror="this.style.display='none'">` : ''}
+              <svg class="${botLogoUrl ? 'hidden' : 'w-4 h-4'} text-[#06C755]" viewBox="0 0 24 24" fill="currentColor"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
+             </button>`
+          : '';
+
+        return `<tr class="border-b border-border hover:bg-surface/50 transition-colors">
+          <td class="px-4 py-2.5 text-center">
+            <span class="${dotClass} text-lg" title="${statusLabel}">●</span>
+          </td>
+          <td class="px-4 py-2.5 font-medium text-ink inline-flex items-center">${name}${addBtn}</td>
+          <td class="px-4 py-2.5">
+            <input type="text" value="${lineId}" placeholder="LINE User ID"
+              class="border border-border rounded px-2 py-1 text-xs w-40 focus:outline-none focus:border-accent"
+              onchange="updateLineId('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5">
+            <input type="text" value="${phone}" placeholder="090-xxxx-xxxx"
+              class="border border-border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-accent"
+              onchange="updatePhone('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5">
+            <span class="text-xs px-2 py-0.5 rounded ${statusClass} font-medium">${statusLabel}</span>
+          </td>
+          <td class="px-4 py-2.5">
+            <input type="text" value="${note.replace(/"/g, '&quot;')}" placeholder="メモ"
+              class="border border-border rounded px-2 py-1 text-xs w-32 focus:outline-none focus:border-accent"
+              onchange="updateMasterNote('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5">
+            <button class="text-xs text-red-400 hover:text-red-600 transition-colors" onclick="deleteDriver('${name.replace(/'/g, "\\'")}')">削除</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function updateLineId(name, value) {
+      value = value.trim();
+      if (value) {
+        lineMapping[name] = value;
+      } else {
+        delete lineMapping[name];
+      }
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      renderMasterTable();
+    }
+
+    function updatePhone(name, value) {
+      value = value.trim();
+      if (value) {
+        phoneMapping[name] = value;
+      } else {
+        delete phoneMapping[name];
+      }
+      localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      renderMasterTable();
+    }
+
+    function updateMasterNote(name, value) {
+      if (value.trim()) {
+        masterNotes[name] = value.trim();
+      } else {
+        delete masterNotes[name];
+      }
+      localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+    }
+
+    function addNewDriver() {
+      const name = prompt('ドライバー名を入力してください:');
+      if (!name || !name.trim()) return;
+      const trimmed = name.trim();
+      if (driverDB[trimmed] || lineMapping[trimmed]) {
+        alert('このドライバーは既に登録されています');
+        return;
+      }
+      driverDB[trimmed] = {
+        packagesPerHour: null,
+        deliveryRate: null,
+        workDays: 0,
+        totalPackages: 0,
+        incidents: 0,
+        lastUpdated: new Date().toISOString().split('T')[0],
+        history: []
+      };
+      localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      renderMasterTable();
+    }
+
+    function deleteDriver(name) {
+      if (!confirm(`「${name}」を削除しますか？\nドライバーDB・LINE紐付け・電話番号・メモすべて削除されます。`)) return;
+      delete driverDB[name];
+      delete lineMapping[name];
+      delete phoneMapping[name];
+      delete masterNotes[name];
+      localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+      renderMasterTable();
+    }
+
+    function exportMasterData() {
+      const allDrivers = new Set([
+        ...Object.keys(driverDB),
+        ...Object.keys(lineMapping),
+        ...Object.keys(phoneMapping),
+        ...assignmentData.map(r => r.driverName).filter(Boolean)
+      ]);
+      const rows = [['ドライバー名', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
+
+      [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja')).forEach(name => {
+        const db = driverDB[name] || {};
+        rows.push([
+          name,
+          lineMapping[name] || '',
+          phoneMapping[name] || '',
+          db.packagesPerHour || '',
+          db.deliveryRate || '',
+          db.workDays || '',
+          db.totalPackages || '',
+          masterNotes[name] || '',
+          lineMapping[name] ? 'LINE連携済' : phoneMapping[name] ? '電話番号のみ' : '未連携'
+        ]);
+      });
+
+      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const bom = '\uFEFF';
+      const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `マスタデータ_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ===== LINE Integration =====
+    let lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
+    if (!lineSettings.adminLineId) { lineSettings.adminLineId = 'raizo0428gion'; }
+    if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
+    if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
+    localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
+    let notifyMode = 'notify';
+
+    // Load saved settings on init
+    function initLineSettings() {
+      if (lineSettings.notifyToken) {
+        document.getElementById('line-notify-token').value = lineSettings.notifyToken;
+        document.getElementById('notify-status').textContent = '設定済み';
+        document.getElementById('notify-status').className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+      }
+      if (lineSettings.channelToken) {
+        document.getElementById('line-channel-token').value = lineSettings.channelToken;
+      }
+      if (lineSettings.channelSecret) {
+        document.getElementById('line-channel-secret').value = lineSettings.channelSecret;
+      }
+      if (lineSettings.channelToken && lineSettings.channelSecret) {
+        document.getElementById('messaging-status').textContent = '設定済み';
+        document.getElementById('messaging-status').className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+      }
+      if (lineSettings.messageTemplate) {
+        document.getElementById('line-message-template').value = lineSettings.messageTemplate;
+      }
+      if (lineSettings.adminLineId) {
+        document.getElementById('line-admin-id').value = lineSettings.adminLineId;
+      }
+      if (lineSettings.lineBotId) {
+        document.getElementById('line-bot-id').value = lineSettings.lineBotId;
+      }
+      if (lineSettings.lineBotLogoUrl) {
+        document.getElementById('line-bot-logo-url').value = lineSettings.lineBotLogoUrl;
+      }
+      if (lineSettings.gasProxyUrl) {
+        document.getElementById('gas-proxy-url').value = lineSettings.gasProxyUrl;
+      }
+      renderLineMappings();
+    }
+
+    function saveLineSettings() {
+      lineSettings = {
+        notifyToken: document.getElementById('line-notify-token')?.value || '',
+        channelToken: document.getElementById('line-channel-token')?.value || '',
+        channelSecret: document.getElementById('line-channel-secret')?.value || '',
+        messageTemplate: document.getElementById('line-message-template')?.value || '',
+        adminLineId: document.getElementById('line-admin-id')?.value || '',
+        lineBotId: document.getElementById('line-bot-id')?.value || '',
+        lineBotLogoUrl: document.getElementById('line-bot-logo-url')?.value || '',
+        gasProxyUrl: document.getElementById('gas-proxy-url')?.value || ''
+      };
+      localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
+
+      // Update status badges
+      const notifyStatus = document.getElementById('notify-status');
+      if (lineSettings.notifyToken) {
+        notifyStatus.textContent = '設定済み';
+        notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+      } else {
+        notifyStatus.textContent = '未設定';
+        notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700';
+      }
+      const msgStatus = document.getElementById('messaging-status');
+      if (lineSettings.channelToken && lineSettings.channelSecret) {
+        msgStatus.textContent = '設定済み';
+        msgStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+      } else {
+        msgStatus.textContent = '未設定';
+        msgStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700';
+      }
+    }
+
+    function addDriverLineMapping() {
+      const driverNames = Object.keys(driverDB);
+      if (driverNames.length === 0) {
+        alert('先にドライバーデータをアップロードしてください');
+        return;
+      }
+
+      const name = prompt('ドライバー名を入力してください\n\n登録済み:\n' + driverNames.slice(0, 10).join('\n') + (driverNames.length > 10 ? '\n...' : ''));
+      if (!name) return;
+
+      const lineId = prompt(`${name} さんの LINE User ID を入力してください\n（U から始まる33文字の文字列）`);
+      if (!lineId) return;
+
+      lineMapping[name] = lineId;
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      renderLineMappings();
+    }
+
+    function removeLineMapping(name) {
+      delete lineMapping[name];
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      renderLineMappings();
+    }
+
+    function renderLineMappings() {
+      const container = document.getElementById('line-mapping-list');
+      if (!container) return;
+      const entries = Object.entries(lineMapping);
+
+      if (entries.length === 0) {
+        container.innerHTML = '<p class="text-xs text-ink-lighter py-2">紐付けなし — 「+ 追加」から登録してください</p>';
+        return;
+      }
+
+      container.innerHTML = entries.map(([name, id]) => `
+        <div class="flex items-center justify-between bg-surface rounded px-2 py-1.5">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
+            <span class="text-xs font-medium">${name}</span>
+            <span class="text-xs text-ink-lighter font-mono">${id.substring(0, 8)}...</span>
+          </div>
+          <button class="text-xs text-accent hover:underline" onclick="removeLineMapping('${name}')">削除</button>
+        </div>
+      `).join('');
+    }
+
+    function setNotifyMode(mode) {
+      notifyMode = mode;
+      const btnNotify = document.getElementById('mode-notify');
+      const btnMessaging = document.getElementById('mode-messaging');
+
+      if (mode === 'notify') {
+        btnNotify.className = 'text-xs px-3 py-1.5 rounded border border-accent bg-accent-light text-accent font-medium';
+        btnMessaging.className = 'text-xs px-3 py-1.5 rounded border border-border text-ink-light';
+        updateNotificationPreview('notify');
+      } else {
+        btnMessaging.className = 'text-xs px-3 py-1.5 rounded border border-accent bg-accent-light text-accent font-medium';
+        btnNotify.className = 'text-xs px-3 py-1.5 rounded border border-border text-ink-light';
+        updateNotificationPreview('messaging');
+      }
+
+      // Update button state
+      const isConfigured = mode === 'notify' ? !!lineSettings.notifyToken : !!(lineSettings.channelToken && lineSettings.channelSecret);
+      document.getElementById('line-not-configured').classList.toggle('hidden', isConfigured);
+      document.getElementById('line-ready').classList.toggle('hidden', !isConfigured);
+      const sendBtn = document.getElementById('send-line-btn');
+      sendBtn.disabled = !isConfigured;
+      sendBtn.className = isConfigured
+        ? 'btn-primary text-sm px-4 py-2 rounded'
+        : 'btn-primary text-sm px-4 py-2 rounded opacity-50 cursor-not-allowed';
+    }
+
+    function updateNotificationPreview(mode) {
+      const preview = document.getElementById('notification-preview');
+      if (mode === 'notify') {
+        // Group notification preview
+        const today = new Date().toLocaleDateString('ja-JP');
+        const lines = [`【本日の配送予測】${today}`, '━━━━━━━━━━━━━'];
+        assignmentData.filter(r => r.driverName).forEach(r => {
+          lines.push(`${r.driverName} → ${r.routeCode} / ${r.totalDeliveries}個 / 終了 ${r.predictedEnd}`);
+        });
+        lines.push('━━━━━━━━━━━━━');
+        preview.textContent = lines.join('\n');
+      } else {
+        // Individual notification preview
+        const template = lineSettings.messageTemplate || document.getElementById('line-message-template')?.value || '';
+        const sample = assignmentData.find(r => r.driverName) || {};
+        const filled = template
+          .replace('{driver}', sample.driverName || 'ドライバー名')
+          .replace('{route}', sample.routeCode || 'DCX00')
+          .replace('{area}', sample.area || '下山門～姪浜')
+          .replace('{packages}', sample.totalDeliveries || '0')
+          .replace('{destinations}', sample.allDestinations || '0')
+          .replace('{departure}', sample.departure || '09:00')
+          .replace('{predicted_end}', sample.predictedEnd || '17:00');
+
+        const mappedCount = Object.keys(lineMapping).length;
+        const totalDrivers = assignmentData.filter(r=>r.driverName).length;
+        const adminId = lineSettings.adminLineId;
+
+        let previewText = `【ドライバーへの個別通知（各自のコースのみ）】\n\n${filled}\n\n`;
+        previewText += `━━━━━━━━━━━━━\n`;
+        previewText += `【管理者への通知（全体一覧）】\n\n`;
+
+        const today = new Date().toLocaleDateString('ja-JP');
+        previewText += `配送予測一覧 ${today}\n`;
+        assignmentData.filter(r => r.driverName).slice(0, 4).forEach(r => {
+          previewText += `  ${r.routeCode} ${r.driverName} → ${r.totalDeliveries}個 / 終了 ${r.predictedEnd}\n`;
+        });
+        if (assignmentData.length > 4) previewText += `  ...他${assignmentData.length - 4}件\n`;
+
+        previewText += `\n━━━━━━━━━━━━━\n`;
+        previewText += `送信対象: ドライバー ${mappedCount}/${totalDrivers}名（ID紐付け済み）\n`;
+        previewText += `管理者: ${adminId ? '設定済み' : '未設定（設定画面から登録）'}`;
+
+        preview.textContent = previewText;
+      }
+    }
+
+    function openLineSendModal() {
+      if (!assignmentData.length) {
+        alert('先にアサインデータをアップロードしてください');
+        return;
+      }
+
+      // Set default mode and preview
+      setNotifyMode('notify');
+
+      document.getElementById('line-modal').classList.remove('hidden');
+    }
+
+    async function sendLineNotification() {
+      if (notifyMode === 'notify') {
+        await sendViaNotify();
+      } else {
+        await sendViaMessagingAPI();
+      }
+    }
+
+    async function sendViaNotify() {
+      const token = lineSettings.notifyToken;
+      if (!token) { alert('LINE Notifyトークンが設定されていません'); return; }
+
+      const today = new Date().toLocaleDateString('ja-JP');
+      let message = `\n【本日の配送予測】${today}\n━━━━━━━━━━━━━\n`;
+      assignmentData.filter(r => r.driverName).forEach(r => {
+        message += `${r.driverName} → ${r.routeCode} / ${r.totalDeliveries}個 / 終了 ${r.predictedEnd}\n`;
+      });
+      message += '━━━━━━━━━━━━━';
+
+      try {
+        const response = await fetch('https://notify-api.line.me/api/notify', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: `message=${encodeURIComponent(message)}`
+        });
+
+        if (response.ok) {
+          alert('LINE Notifyで通知を送信しました！');
+          closeModal();
+        } else {
+          const data = await response.json().catch(() => ({}));
+          alert(`送信エラー: ${data.message || response.statusText}\n\nCORSエラーの場合は、プロキシサーバーの設定が必要です。`);
+        }
+      } catch (e) {
+        // CORS error expected from browser - show helpful message
+        alert(`ブラウザからの直接送信はCORSにより制限されています。\n\n以下の方法で解決できます：\n1. Google Apps Script をプロキシとして使用\n2. Cloudflare Workers を使用\n3. 簡易Node.jsサーバーを立てる\n\n設定方法は別途ご案内します。`);
+      }
+    }
+
+    async function sendViaMessagingAPI() {
+      const token = lineSettings.channelToken;
+      if (!token) { alert('チャネルアクセストークンが設定されていません'); return; }
+      const proxyUrl = lineSettings.gasProxyUrl?.trim();
+      if (!proxyUrl) { alert('GASプロキシURLが設定されていません'); return; }
+
+      const template = lineSettings.messageTemplate || document.getElementById('line-message-template')?.value || '';
+      let sent = 0;
+      let failed = 0;
+      let skipped = 0;
+
+      // Helper to push via GAS proxy
+      async function pushViaProxy(to, messages) {
+        try {
+          const response = await fetch(proxyUrl, {
+            method: 'POST',
+            mode: 'cors',
+            redirect: 'follow',
+            credentials: 'omit',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to, messages })
+          });
+          const data = await response.json().catch(() => ({}));
+          if (response.ok) {
+            return { ok: true, status: response.status, data };
+          } else {
+            return { ok: false, status: response.status, data };
+          }
+        } catch (e) {
+          return { ok: false, status: 0, data: { message: e.message || String(e) } };
+        }
+      }
+
+      // 1. ドライバーに個別送信（自分のコースと物量のみ）
+      for (const route of assignmentData) {
+        if (!route.driverName) continue;
+        const userId = lineMapping[route.driverName];
+        if (!userId) { skipped++; continue; }
+
+        const message = template
+          .replace('{driver}', route.driverName)
+          .replace('{route}', route.routeCode)
+          .replace('{area}', route.area || '未設定')
+          .replace('{packages}', route.totalDeliveries)
+          .replace('{destinations}', route.allDestinations)
+          .replace('{departure}', route.departure)
+          .replace('{predicted_end}', route.predictedEnd);
+
+        try {
+          const { ok, status, data } = await pushViaProxy(userId, [{ type: 'text', text: message }]);
+          if (ok) { sent++; } else { failed++; console.error('Driver push failed:', status, data); }
+        } catch (e) {
+          failed++;
+          console.error('Driver push error:', e);
+        }
+      }
+
+      // 2. 管理者に全体一覧を送信（テキスト形式 — サイズ制限回避）
+      const adminIdRaw = lineSettings.adminLineId || '';
+      const adminIds = adminIdRaw.split(',').map(s => s.trim()).filter(Boolean);
+      let adminSent = 0;
+      let adminFailed = 0;
+      if (adminIds.length > 0) {
+        const today = new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
+        const totalPkg = assignmentData.reduce((s,r)=>s+r.totalDeliveries, 0);
+        const totalDest = assignmentData.reduce((s,r)=>s+r.allDestinations, 0);
+        const lastEnd = assignmentData.reduce((l,r) => r.predictedEnd > l ? r.predictedEnd : l, '00:00');
+
+        // テキストメッセージで全体一覧を生成（5000文字制限のため分割送信）
+        const header = `📦 配送予測一覧\n${today} | OFK3\n${assignmentData.length}ルート | ${totalPkg}個 | ${totalDest}件\n最終完了予測: ${lastEnd}\n${'─'.repeat(20)}`;
+        const rows = assignmentData.filter(r => r.driverName).map(r =>
+          `${r.routeCode} ${r.driverName}\n  ${(r.area||'-').split('・').slice(0,2).join('・')} | ${r.totalDeliveries}個 ${r.allDestinations}件 | 終了${r.predictedEnd}${r.status==='risk'?' ⚠️':''}`
+        );
+
+        // 5000文字以内に収まるようメッセージを分割
+        const messages = [];
+        let current = header;
+        for (const row of rows) {
+          if ((current + '\n' + row).length > 4500) {
+            messages.push(current);
+            current = `📦 配送予測一覧（続き）\n${'─'.repeat(20)}`;
+          }
+          current += '\n' + row;
+        }
+        current += `\n${'─'.repeat(20)}\n合計: ${totalPkg}個 / ${totalDest}件 | 最終完了: ${lastEnd}`;
+        messages.push(current);
+
+        for (const adminId of adminIds) {
+          try {
+            // LINEは1回のpushで最大5メッセージまで
+            for (let i = 0; i < messages.length; i += 5) {
+              const chunk = messages.slice(i, i + 5).map(t => ({ type: 'text', text: t }));
+              const { ok, status, data } = await pushViaProxy(adminId, chunk);
+              if (!ok) { adminFailed++; console.error('Admin push failed:', adminId, status, JSON.stringify(data)); break; }
+            }
+            if (adminFailed === 0) adminSent++;
+          } catch (e) {
+            adminFailed++;
+            console.error('Admin push error:', adminId, e.message || e);
+          }
+        }
+      }
+
+      // 結果表示
+      let result = `【送信結果】\n`;
+      result += `ドライバー個別送信: ${sent}件 成功`;
+      if (skipped > 0) result += ` / ${skipped}件 ID未登録でスキップ`;
+      if (failed > 0) result += ` / ${failed}件 失敗`;
+      result += `\n管理者通知: ${adminIds.length > 0 ? adminSent + '/' + adminIds.length + '件 成功' : 'ID未設定'}`;
+      if (adminFailed > 0) result += `（${adminFailed}件 失敗）`;
+      if (adminIds.length === 0) result += '\n\n※ 設定画面で管理者LINE IDを登録すると全体一覧が届きます';
+      result += '\n\nGASプロキシURL:\n' + (lineSettings.gasProxyUrl || '未設定');
+
+      alert(result);
+      closeModal();
+    }
+
+    async function testLineNotify() {
+      const token = document.getElementById('line-notify-token').value;
+      if (!token) { alert('トークンを入力してください'); return; }
+
+      try {
+        const response = await fetch('https://notify-api.line.me/api/notify', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: 'message=' + encodeURIComponent('\n【テスト送信】配送管理アプリからの通知テストです。')
+        });
+
+        if (response.ok) {
+          alert('テスト送信成功！LINEグループを確認してください。');
+        } else {
+          alert('送信に失敗しました。トークンを確認してください。');
+        }
+      } catch (e) {
+        alert(`CORSエラー: ブラウザからの直接呼び出しは制限されています。\nトークン自体は保存されました。プロキシ経由で動作します。`);
+      }
+    }
+
+    // ===== Print / Export =====
+    function openPrintPreview() {
+      if (!assignmentData.length) {
+        alert('先にアサインデータをアップロードしてください');
+        return;
+      }
+
+      const today = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+      const totalPackages = assignmentData.reduce((sum, r) => sum + r.totalDeliveries, 0);
+      const totalRoutes = assignmentData.length;
+
+      // Sort by departure time
+      const sorted = [...assignmentData].sort((a, b) => a.departure.localeCompare(b.departure));
+
+      const html = `
+        <div style="font-family: 'Noto Sans JP', sans-serif; padding: 8px;">
+          <!-- Header -->
+          <div style="text-align: center; margin-bottom: 16px; border-bottom: 2px solid #2D2D2D; padding-bottom: 12px;">
+            <h1 style="font-size: 20px; font-weight: 700; margin: 0 0 4px 0;">本日の配送予測表</h1>
+            <p style="font-size: 13px; color: #6B6B6B; margin: 0;">${today}　｜　OFK3　｜　${totalRoutes}ルート　｜　合計 ${totalPackages.toLocaleString()} 個</p>
+          </div>
+
+          <!-- Table -->
+          <table class="print-preview-table">
+            <thead>
+              <tr>
+                <th style="width: 70px;">ルート</th>
+                <th>ドライバー</th>
+                <th style="width: 80px;">種別</th>
+                <th style="width: 60px; text-align: right;">配達数</th>
+                <th style="width: 60px; text-align: right;">目的地</th>
+                <th style="width: 60px; text-align: center;">出発</th>
+                <th style="width: 70px; text-align: center; font-weight: 700;">終了予測</th>
+                <th style="width: 60px; text-align: center;">備考</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(route => {
+                const note = route.status === 'risk' ? '<span style="color:#D94032;font-weight:600;">遅延注意</span>' :
+                             route.status === 'warning' ? '<span style="color:#B45309;">要確認</span>' : '';
+                return `<tr>
+                  <td style="font-family: monospace; font-weight: 500;">${route.routeCode}</td>
+                  <td>${route.driverName || '-'}</td>
+                  <td style="font-size: 11px; color: #6B6B6B;">${shortenService(route.serviceType)}</td>
+                  <td style="text-align: right; font-family: monospace; font-weight: 500;">${route.totalDeliveries}</td>
+                  <td style="text-align: right; font-family: monospace;">${route.allDestinations}</td>
+                  <td style="text-align: center; font-family: monospace;">${route.departure}</td>
+                  <td style="text-align: center; font-family: monospace; font-weight: 700; font-size: 13px;">${route.predictedEnd}</td>
+                  <td style="text-align: center; font-size: 11px;">${note}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+
+          <!-- Footer -->
+          <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #DDD; display: flex; justify-content: space-between; font-size: 10px; color: #9A9A9A;">
+            <span>※ 終了予測はドライバー能力値に基づく推定値です</span>
+            <span>出力: ${new Date().toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})}</span>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('print-content').innerHTML = html;
+      document.getElementById('print-modal').classList.remove('hidden');
+    }
+
+    function closePrintPreview() {
+      document.getElementById('print-modal').classList.add('hidden');
+    }
+
+    function printTable() {
+      const content = document.getElementById('print-content').innerHTML;
+      const printWindow = window.open('', '_blank', 'width=800,height=600');
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+          <meta charset="UTF-8">
+          <title>配送予測表 - 点呼場掲示用</title>
+          <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Noto Sans JP', sans-serif; padding: 20px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th { background: #F5F5F5; border: 1px solid #DDD; padding: 6px 10px; font-weight: 600; text-align: left; }
+            td { border: 1px solid #DDD; padding: 5px 10px; }
+            tr:nth-child(even) { background: #FAFAFA; }
+            @media print {
+              body { padding: 10px; }
+              @page { size: A4 landscape; margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          ${content}
+          <script>window.onload = function() { window.print(); }<\/script>
+        </body>
+        </html>
+      `);
+      printWindow.document.close();
+    }
+
+    // Initialize
+    renderDriverTable();
+    initLineSettings();
+  </script>
+</body>
+</html>

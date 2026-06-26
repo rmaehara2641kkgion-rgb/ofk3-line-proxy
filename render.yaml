@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ofk3-line-proxy
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node render-webhook-server.js
+    envVars:
+      - key: CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: ADMIN_LINE_ID
+        sync: false
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000

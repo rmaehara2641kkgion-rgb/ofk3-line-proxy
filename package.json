@@ -1,0 +1,17 @@
+{
+  "name": "ofk3-line-proxy",
+  "version": "1.0.0",
+  "description": "LINE Messaging API webhook receiver and push proxy for OFK3 delivery app",
+  "main": "render-webhook-server.js",
+  "scripts": {
+    "start": "node render-webhook-server.js",
+    "dev": "node render-webhook-server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "express": "^4.19.2"
+  }
+}
