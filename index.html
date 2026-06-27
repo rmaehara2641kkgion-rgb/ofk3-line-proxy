@@ -2015,18 +2015,22 @@
     }
 
     function downloadQR(name) {
-      const src = document.getElementById('qr-modal-canvas');
-      // 白背景付きのcanvasを生成して真っ黒防止
-      const c = document.createElement('canvas');
-      c.width = src.width; c.height = src.height;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.drawImage(src, 0, 0);
-      const link = document.createElement('a');
-      link.download = 'QR_' + name + '.png';
-      link.href = c.toDataURL('image/png');
-      link.click();
+      const tid = transportIDs[name];
+      const qrData = tid ? tid : 'OFK3_DRIVER:' + name;
+      // 新規canvasにQR生成して白背景付きでダウンロード
+      const tmp = document.createElement('canvas');
+      QRCode.toCanvas(tmp, qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } }, function() {
+        const c = document.createElement('canvas');
+        c.width = tmp.width; c.height = tmp.height;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(tmp, 0, 0);
+        const link = document.createElement('a');
+        link.download = 'QR_' + name + '.png';
+        link.href = c.toDataURL('image/png');
+        link.click();
+      });
     }
 
     function printQR(name) {
