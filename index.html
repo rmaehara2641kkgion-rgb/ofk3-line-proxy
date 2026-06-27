@@ -397,19 +397,18 @@
 
     <!-- QR Code Modal -->
     <div id="qr-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4 p-6 text-center">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4 p-6 text-center" style="position:relative;z-index:51">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-lg font-bold">点呼認証QRコード</h3>
           <button onclick="closeQrModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
         </div>
         <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
         <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
-        <canvas id="qr-modal-canvas" class="mx-auto" style="display:none"></canvas>
-        <img id="qr-modal-img" class="mx-auto" style="display:block">
-        <div class="flex gap-2 mt-4">
-          <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">📥 ダウンロード</button>
-          <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">🖨 印刷</button>
-          <button onclick="closeQrModal()" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">閉じる</button>
+        <canvas id="qr-modal-canvas" class="mx-auto" style="display:block;max-width:250px;max-height:250px"></canvas>
+        <div class="flex gap-2 mt-4" style="position:relative;z-index:52">
+          <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer">📥 ダウンロード</button>
+          <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors cursor-pointer">🖨 印刷</button>
+          <button onclick="closeQrModal()" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors cursor-pointer">閉じる</button>
         </div>
       </div>
     </div>
@@ -1998,6 +1997,8 @@
       return tid ? tid : 'OFK3_DRIVER:' + name;
     }
 
+    var qrOpts = { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } };
+
     function showDriverQR(name) {
       var qrData = getQRData(name);
       var modal = document.getElementById('qr-modal');
@@ -2006,44 +2007,48 @@
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
-      var img = document.getElementById('qr-modal-img');
-      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
-        .then(function(url) { img.src = url; })
-        .catch(function(e) { console.error(e); });
+      var canvas = document.getElementById('qr-modal-canvas');
+      QRCode.toCanvas(canvas, qrData, qrOpts, function(err) {
+        if (err) console.error('QR生成エラー:', err);
+      });
     }
 
     function closeQrModal() {
       document.getElementById('qr-modal').classList.add('hidden');
     }
 
+    function getCanvasDataURL() {
+      var src = document.getElementById('qr-modal-canvas');
+      var c = document.createElement('canvas');
+      c.width = src.width;
+      c.height = src.height;
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(src, 0, 0);
+      return c.toDataURL('image/png');
+    }
+
     function downloadQR(name) {
-      var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
-        .then(function(url) {
-          var a = document.createElement('a');
-          a.href = url;
-          a.download = 'QR_' + name + '.png';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        })
-        .catch(function(e) { alert('QR生成エラー: ' + e); });
+      var dataURL = getCanvasDataURL();
+      var a = document.createElement('a');
+      a.href = dataURL;
+      a.download = 'QR_' + name + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
 
     function printQR(name) {
-      var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
-        .then(function(imgData) {
-          var win = window.open('', '_blank', 'width=400,height=500');
-          win.document.write(
-            '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
-            '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
-            'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
-            '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + imgData + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
-          );
-          win.document.close();
-        })
-        .catch(function(e) { alert('QR生成エラー: ' + e); });
+      var imgData = getCanvasDataURL();
+      var win = window.open('', '_blank', 'width=400,height=500');
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
+        '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
+        'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
+        '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + imgData + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
+      );
+      win.document.close();
     }
 
     function printAllQR() {
