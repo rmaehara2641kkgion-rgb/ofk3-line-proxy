@@ -100,6 +100,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
       </nav>
 
       <!-- Dashboard Tab -->
@@ -298,6 +299,65 @@
           <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
         </div>
       </div>
+
+      <!-- Tenko (Roll Call) Management Tab -->
+      <div id="panel-tenko" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">点呼管理</h2>
+            <p class="text-xs text-ink-lighter mt-1">シフトデータから当日の点呼スケジュールを生成し、認証状況をリアルタイム管理</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">シフトデータ読み込み</button>
+            <input type="file" id="shift-file-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftUpload(event)">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="resetTenkoStatus()">認証リセット</button>
+          </div>
+        </div>
+
+        <!-- Tenko Summary Cards -->
+        <div class="grid grid-cols-4 gap-4 mb-6" id="tenko-summary">
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter">本日予定</div>
+            <div class="text-2xl font-bold mt-1" id="tenko-total">-</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter">完了</div>
+            <div class="text-2xl font-bold mt-1 text-emerald-600" id="tenko-done">0</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter">認証中</div>
+            <div class="text-2xl font-bold mt-1 text-amber-500" id="tenko-progress">0</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter">未実施</div>
+            <div class="text-2xl font-bold mt-1 text-ink-lighter" id="tenko-pending">0</div>
+          </div>
+        </div>
+
+        <!-- Tenko Schedule Table -->
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">着車時間</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証認証</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">メンター認証</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">ステータス</th>
+                </tr>
+              </thead>
+              <tbody id="tenko-table-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="tenko-empty" class="text-center py-16">
+          <p class="text-sm text-ink-lighter">シフトデータをアップロードすると、当日の点呼スケジュールが表示されます</p>
+        </div>
+      </div>
+
     </main>
 
     <!-- LINE Notification Modal -->
@@ -513,7 +573,7 @@
     // ===== Tab Navigation =====
     function switchTab(tab) {
       currentTab = tab;
-      ['dashboard', 'drivers', 'master', 'optimization'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
@@ -856,10 +916,11 @@
         if (!name) return;
 
         const packagesPerHour = parseFloat(row['1時間あたり配送個数']) || null;
-        // 列名に改行が含まれる場合があるため、キーを部分一致で検索
+        // 列名に改行・空白が含まれる場合があるため、両方の空白を除去して部分一致検索
         const findCol = (keys, ...patterns) => {
           for (const p of patterns) {
-            const key = keys.find(k => k.replace(/\s+/g, '').includes(p));
+            const pNorm = p.replace(/\s+/g, '');
+            const key = keys.find(k => k.replace(/\s+/g, '').includes(pNorm));
             if (key && row[key] != null) return row[key];
           }
           return null;
@@ -869,7 +930,7 @@
         const deliveryRate = deliveryRateRaw != null ? parseFloat(String(deliveryRateRaw).replace('%', '')) : null;
         const workDaysRaw = findCol(colKeys, '集計対象稼働日数', '稼働日数');
         const workDays = workDaysRaw != null ? parseInt(workDaysRaw) : 0;
-        const totalPkgRaw = findCol(colKeys, '配送個数合計(集計対象日)', '配送個数合計');
+        const totalPkgRaw = findCol(colKeys, '配送個数合計', '配送個数');
         const totalPackages = totalPkgRaw != null ? parseInt(totalPkgRaw) : 0;
         const incidentRaw = findCol(colKeys, '正配依頼合計', '正配依頼');
         const incidents = incidentRaw != null ? parseInt(incidentRaw) : 0;
@@ -960,6 +1021,215 @@
         </td></tr>`;
       }
     }
+
+    // ===== Tenko (Roll Call) Management =====
+    let tenkoSchedule = []; // { name, arrivalTime, arrivalMinutes, licenseAuth, mentorAuth }
+
+    function handleShiftUpload(event) {
+      if (!event.target.files.length) return;
+      const file = event.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        processShiftData(json);
+      };
+      reader.readAsArrayBuffer(file);
+      event.target.value = '';
+    }
+
+    function processShiftData(rows) {
+      if (rows.length < 6) { alert('シフトデータの形式が正しくありません'); return; }
+
+      // Row4 (index 3) = header: find today's column
+      const headerRow = rows[3];
+      const today = new Date();
+      const todayDay = today.getDate();
+      const todayMonth = today.getMonth() + 1;
+
+      let todayCol = -1;
+      for (let c = 2; c < headerRow.length; c++) {
+        const h = String(headerRow[c] || '');
+        // Format: "日, 21/6月" or "月, 22/6月" — extract day/month
+        const match = h.match(/(\d+)\/(\d+)月/);
+        if (match) {
+          const day = parseInt(match[1]);
+          const month = parseInt(match[2]);
+          if (day === todayDay && month === todayMonth) {
+            todayCol = c;
+            break;
+          }
+        }
+      }
+
+      if (todayCol === -1) {
+        // Fallback: match by weekday index (日=0, 月=1, ..., 土=6)
+        const weekdayMap = { '日': 0, '月': 1, '火': 2, '水': 3, '木': 4, '金': 5, '土': 6 };
+        const todayWeekday = today.getDay();
+        for (let c = 2; c < headerRow.length; c++) {
+          const h = String(headerRow[c] || '');
+          const firstChar = h.charAt(0);
+          if (weekdayMap[firstChar] === todayWeekday) {
+            todayCol = c;
+            break;
+          }
+        }
+      }
+
+      if (todayCol === -1) {
+        alert('本日の日付に一致するシフト列が見つかりませんでした。\nヘッダー: ' + headerRow.slice(2).join(', '));
+        return;
+      }
+
+      // Parse drivers from Row6 onward (index 5+)
+      tenkoSchedule = [];
+      for (let r = 5; r < rows.length; r++) {
+        const name = String(rows[r]?.[0] || '').trim();
+        if (!name || name === '全記載') continue;
+        const cellValue = String(rows[r]?.[todayCol] || '').trim();
+        if (!cellValue) continue; // Not working today
+
+        // Parse arrival time from cell: "Standard Parcel\n11:00午前 • 6時間 30 m"
+        const arrivalTime = parseArrivalTime(cellValue);
+        if (!arrivalTime) continue;
+
+        tenkoSchedule.push({
+          name: name,
+          arrivalTime: arrivalTime.display,
+          arrivalMinutes: arrivalTime.minutes,
+          licenseAuth: false,
+          mentorAuth: false
+        });
+      }
+
+      // Sort by arrival time
+      tenkoSchedule.sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
+
+      // Save to localStorage
+      const todayStr = today.toISOString().slice(0, 10);
+      localStorage.setItem('tenkoDate', todayStr);
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+
+      renderTenkoTable();
+    }
+
+    function parseArrivalTime(cellText) {
+      // Match patterns like "11:00午前" or "2:40午後"
+      const lines = cellText.split(/\n/);
+      for (const line of lines) {
+        const match = line.match(/(\d{1,2}):(\d{2})\s*(午前|午後)/);
+        if (match) {
+          let hours = parseInt(match[1]);
+          const mins = parseInt(match[2]);
+          const ampm = match[3];
+          if (ampm === '午後' && hours < 12) hours += 12;
+          if (ampm === '午前' && hours === 12) hours = 0;
+          const display = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+          return { display, minutes: hours * 60 + mins };
+        }
+      }
+      return null;
+    }
+
+    function toggleAuth(index, type) {
+      if (index < 0 || index >= tenkoSchedule.length) return;
+      if (type === 'license') tenkoSchedule[index].licenseAuth = !tenkoSchedule[index].licenseAuth;
+      if (type === 'mentor') tenkoSchedule[index].mentorAuth = !tenkoSchedule[index].mentorAuth;
+      const todayStr = new Date().toISOString().slice(0, 10);
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      renderTenkoTable();
+    }
+
+    function resetTenkoStatus() {
+      if (!confirm('全ドライバーの認証状態をリセットしますか？')) return;
+      tenkoSchedule.forEach(d => { d.licenseAuth = false; d.mentorAuth = false; });
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      renderTenkoTable();
+    }
+
+    function renderTenkoTable() {
+      const tbody = document.getElementById('tenko-table-body');
+      const emptyEl = document.getElementById('tenko-empty');
+
+      if (tenkoSchedule.length === 0) {
+        tbody.innerHTML = '';
+        emptyEl.classList.remove('hidden');
+        document.getElementById('tenko-total').textContent = '-';
+        document.getElementById('tenko-done').textContent = '0';
+        document.getElementById('tenko-progress').textContent = '0';
+        document.getElementById('tenko-pending').textContent = '0';
+        return;
+      }
+
+      emptyEl.classList.add('hidden');
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+      let done = 0, progress = 0, pending = 0;
+
+      tbody.innerHTML = tenkoSchedule.map((d, i) => {
+        const bothDone = d.licenseAuth && d.mentorAuth;
+        const oneDone = d.licenseAuth || d.mentorAuth;
+        let status, statusClass;
+        if (bothDone) { status = '完了'; statusClass = 'text-emerald-600 font-medium'; done++; }
+        else if (oneDone) {
+          status = d.licenseAuth ? 'メンター待ち' : '免許証待ち';
+          statusClass = 'text-amber-500 font-medium'; progress++;
+        }
+        else { status = '未開始'; statusClass = 'text-ink-lighter'; pending++; }
+
+        const overdue = !bothDone && nowMinutes >= d.arrivalMinutes;
+        const rowBg = overdue ? 'bg-red-50' : (i % 2 === 0 ? '' : 'bg-surface/50');
+        const overdueIcon = overdue ? ' <span class="text-accent text-xs font-bold">⚠ 超過</span>' : '';
+
+        // 🟢 = 認証済み, 🔴 = 待ち(片方認証済み), ⚪ = 未開始
+        const licDot = d.licenseAuth
+          ? `<button onclick="toggleAuth(${i},'license')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full bg-emerald-500"></span><span class="text-xs text-emerald-600">済</span></button>`
+          : `<button onclick="toggleAuth(${i},'license')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full ${oneDone ? 'bg-red-500' : 'bg-gray-300'}"></span><span class="text-xs ${oneDone ? 'text-red-500' : 'text-ink-lighter'}">${oneDone ? '待ち' : '未'}</span></button>`;
+
+        const menDot = d.mentorAuth
+          ? `<button onclick="toggleAuth(${i},'mentor')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full bg-emerald-500"></span><span class="text-xs text-emerald-600">済</span></button>`
+          : `<button onclick="toggleAuth(${i},'mentor')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full ${oneDone ? 'bg-red-500' : 'bg-gray-300'}"></span><span class="text-xs ${oneDone ? 'text-red-500' : 'text-ink-lighter'}">${oneDone ? '待ち' : '未'}</span></button>`;
+
+        return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
+          <td class="px-4 py-2.5 text-sm font-medium">${d.name}</td>
+          <td class="px-4 py-2.5 text-center text-sm font-mono">${d.arrivalTime}${overdueIcon}</td>
+          <td class="px-4 py-2.5 text-center">${licDot}</td>
+          <td class="px-4 py-2.5 text-center">${menDot}</td>
+          <td class="px-4 py-2.5 text-center ${statusClass}">${status}</td>
+        </tr>`;
+      }).join('');
+
+      // Update summary cards
+      document.getElementById('tenko-total').textContent = tenkoSchedule.length;
+      document.getElementById('tenko-done').textContent = done;
+      document.getElementById('tenko-progress').textContent = progress;
+      document.getElementById('tenko-pending').textContent = pending;
+    }
+
+    // Load saved tenko data on startup
+    function loadTenkoData() {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const savedDate = localStorage.getItem('tenkoDate');
+      if (savedDate === todayStr) {
+        const saved = localStorage.getItem('tenkoSchedule');
+        if (saved) {
+          try { tenkoSchedule = JSON.parse(saved); } catch(e) { tenkoSchedule = []; }
+          renderTenkoTable();
+        }
+      } else {
+        // Different day — clear old data
+        localStorage.removeItem('tenkoSchedule');
+        localStorage.removeItem('tenkoDate');
+      }
+    }
+
+    // Auto-refresh overdue highlights every minute
+    setInterval(() => {
+      if (tenkoSchedule.length > 0 && currentTab === 'tenko') renderTenkoTable();
+    }, 60000);
 
     // ===== Optimization =====
     function runOptimization() {
@@ -1812,6 +2082,7 @@
     // Initialize
     renderDriverTable();
     initLineSettings();
+    loadTenkoData();
   </script>
 </body>
 </html>
