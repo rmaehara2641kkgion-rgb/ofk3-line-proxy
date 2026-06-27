@@ -357,7 +357,7 @@
             <div class="flex items-center justify-between mb-3">
               <div>
                 <h3 id="scan-status-title" class="text-base font-bold text-blue-600">🪪 QRコードをかざしてください</h3>
-                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">免許証QRコードをカメラに向けてください</p>
+                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">QRコードをカメラに向けてください</p>
               </div>
               <div id="scan-driver-badge" class="hidden px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-sm font-bold"></div>
             </div>
@@ -1631,7 +1631,7 @@
       const detail = document.getElementById('scan-status-detail');
       const badge = document.getElementById('scan-driver-badge');
       if (phase === 'qr') {
-        title.textContent = '🪪 免許証QRコードをかざしてください';
+        title.textContent = '🪪 QRコードをかざしてください';
         title.className = 'text-base font-bold text-blue-600';
         detail.textContent = '登録済みQRコードをカメラに向けてください';
         badge.classList.add('hidden');
@@ -1698,7 +1698,7 @@
         html5QrCode = new Html5Qrcode('qr-reader');
         html5QrCode.start(
           getCameraConfig(),
-          { fps: 10, qrbox: { width: 250, height: 250 } },
+          { fps: 15, qrbox: { width: 300, height: 300 }, aspectRatio: 1.0 },
           onQrCodeScanned,
           () => {} // ignore scan failures
         ).catch(err => {
@@ -1903,56 +1903,68 @@
     function generateOptimizationSuggestions() {
       const suggestions = [];
 
-      // Sort routes by package count (heavy first)
-      const sortedRoutes = [...assignmentData].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
+      // Group routes by departure time and service type
+      const groups = new Map();
+      assignmentData.forEach(route => {
+        if (!route.departure || !route.driverName) return;
+        const serviceKey = normalizeServiceType(route.serviceType);
+        const groupKey = `${route.departure}|${serviceKey}`;
+        if (!groups.has(groupKey)) groups.set(groupKey, []);
+        groups.get(groupKey).push(route);
+      });
 
-      // Sort available drivers by capability (fast first)
-      const availableDrivers = Object.entries(driverDB)
-        .filter(([_, d]) => d.packagesPerHour)
-        .sort((a, b) => b[1].packagesPerHour - a[1].packagesPerHour);
+      // Optimize within each group only
+      groups.forEach((groupRoutes, groupKey) => {
+        if (groupRoutes.length < 2) return;
 
-      // Current assignment analysis
-      sortedRoutes.forEach(route => {
-        if (!route.driverName) return;
-        const driverInfo = findDriver(route.driverName);
-        if (!driverInfo) return;
+        // Sort routes by package count (heavy first)
+        const sortedRoutes = [...groupRoutes].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
 
-        // Check if there's a better match
-        const currentEfficiency = driverInfo.packagesPerHour;
-        const hoursNeeded = route.totalDeliveries / currentEfficiency;
+        sortedRoutes.forEach(route => {
+          const driverInfo = findDriver(route.driverName);
+          if (!driverInfo || !driverInfo.packagesPerHour) return;
 
-        // Find if a faster driver is on a lighter route
-        const lighterRoutes = sortedRoutes.filter(r =>
-          r.routeCode !== route.routeCode &&
-          r.totalDeliveries < route.totalDeliveries * 0.7 &&
-          r.driverName
-        );
+          const currentEfficiency = driverInfo.packagesPerHour;
 
-        lighterRoutes.forEach(lighterRoute => {
-          const lighterDriverInfo = findDriver(lighterRoute.driverName);
-          if (!lighterDriverInfo) return;
+          // Find a faster driver on a lighter route within the same group
+          const lighterRoutes = sortedRoutes.filter(r =>
+            r.routeCode !== route.routeCode &&
+            r.totalDeliveries < route.totalDeliveries * 0.7 &&
+            r.driverName
+          );
 
-          if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
-            // Faster driver is on a lighter route — suggest swap
-            const currentEnd = route.predictedEnd;
-            const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
-            const [depH, depM] = route.departure.split(':').map(Number);
-            const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
-            const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
-            const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
+          lighterRoutes.forEach(lighterRoute => {
+            const lighterDriverInfo = findDriver(lighterRoute.driverName);
+            if (!lighterDriverInfo || !lighterDriverInfo.packagesPerHour) return;
 
-            suggestions.push({
-              type: 'swap',
-              route1: route.routeCode,
-              driver1: route.driverName,
-              route2: lighterRoute.routeCode,
-              driver2: lighterRoute.driverName,
-              currentEnd,
-              optimizedEnd: newEnd,
-              improvement: calculateTimeDiff(currentEnd, newEnd),
-              reason: `${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。重いルートに再配置で${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
-            });
-          }
+            if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
+              // Faster driver is on a lighter route — suggest swap
+              const currentEnd = route.predictedEnd;
+              const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
+              const [depH, depM] = route.departure.split(':').map(Number);
+              const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
+              const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
+              const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
+
+              const [departure, serviceKey] = groupKey.split('|');
+              const serviceLabel = route.serviceType || serviceKey;
+
+              suggestions.push({
+                type: 'swap',
+                route1: route.routeCode,
+                driver1: route.driverName,
+                route2: lighterRoute.routeCode,
+                driver2: lighterRoute.driverName,
+                currentEnd,
+                optimizedEnd: newEnd,
+                improvement: calculateTimeDiff(currentEnd, newEnd),
+                groupKey,
+                departure,
+                serviceType: serviceLabel,
+                reason: `【${serviceLabel} ${departure} 発】${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。同条件内で重いルートに再配置すると${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
+              });
+            }
+          });
         });
       });
 
@@ -1960,13 +1972,23 @@
       const seen = new Set();
       return suggestions
         .filter(s => {
-          const key = `${s.driver1}-${s.driver2}`;
+          const key = `${s.driver1}-${s.driver2}-${s.groupKey}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         })
         .sort((a, b) => b.improvement - a.improvement)
         .slice(0, 5);
+    }
+
+    function normalizeServiceType(service) {
+      if (!service) return '未設定';
+      const lower = String(service).toLowerCase();
+      if (lower.includes('biker')) return 'biker';
+      if (lower.includes('standard')) return 'standard';
+      if (lower.includes('flex') || lower.includes('kei')) return 'kei';
+      if (lower.includes('nursery')) return 'nursery';
+      return String(service).replace(/\s+/g, '').substring(0, 20);
     }
 
     function calculateTimeDiff(time1, time2) {
@@ -1997,6 +2019,8 @@
                 <div class="flex-1">
                   <div class="flex items-center gap-2 mb-2">
                     <span class="optimization-badge">提案 ${i + 1}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">${s.serviceType}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${s.departure} 発</span>
                     <span class="text-xs text-emerald-600 font-medium">-${s.improvement}分</span>
                   </div>
                   <p class="text-sm text-ink mb-2">${s.reason}</p>
@@ -2014,7 +2038,7 @@
             </div>
           `).join('')}
         </div>
-      `;
+      `;`
     }
 
     function closeModal() {
