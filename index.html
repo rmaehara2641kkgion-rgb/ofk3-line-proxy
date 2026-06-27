@@ -2821,8 +2821,6 @@
         var tax = parseNum(row[17]); // 税
         var total = parseNum(row[18]); // 合計
 
-        if (total === 0 && subtotal === 0) continue; // 金額0は除外
-
         billingData.push({
           driverKey: driverKey,
           name: name,
