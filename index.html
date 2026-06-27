@@ -1903,68 +1903,56 @@
     function generateOptimizationSuggestions() {
       const suggestions = [];
 
-      // Group routes by departure time and service type
-      const groups = new Map();
-      assignmentData.forEach(route => {
-        if (!route.departure || !route.driverName) return;
-        const serviceKey = normalizeServiceType(route.serviceType);
-        const groupKey = `${route.departure}|${serviceKey}`;
-        if (!groups.has(groupKey)) groups.set(groupKey, []);
-        groups.get(groupKey).push(route);
-      });
+      // Sort routes by package count (heavy first)
+      const sortedRoutes = [...assignmentData].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
 
-      // Optimize within each group only
-      groups.forEach((groupRoutes, groupKey) => {
-        if (groupRoutes.length < 2) return;
+      // Sort available drivers by capability (fast first)
+      const availableDrivers = Object.entries(driverDB)
+        .filter(([_, d]) => d.packagesPerHour)
+        .sort((a, b) => b[1].packagesPerHour - a[1].packagesPerHour);
 
-        // Sort routes by package count (heavy first)
-        const sortedRoutes = [...groupRoutes].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
+      // Current assignment analysis
+      sortedRoutes.forEach(route => {
+        if (!route.driverName) return;
+        const driverInfo = findDriver(route.driverName);
+        if (!driverInfo) return;
 
-        sortedRoutes.forEach(route => {
-          const driverInfo = findDriver(route.driverName);
-          if (!driverInfo || !driverInfo.packagesPerHour) return;
+        // Check if there's a better match
+        const currentEfficiency = driverInfo.packagesPerHour;
+        const hoursNeeded = route.totalDeliveries / currentEfficiency;
 
-          const currentEfficiency = driverInfo.packagesPerHour;
+        // Find if a faster driver is on a lighter route
+        const lighterRoutes = sortedRoutes.filter(r =>
+          r.routeCode !== route.routeCode &&
+          r.totalDeliveries < route.totalDeliveries * 0.7 &&
+          r.driverName
+        );
 
-          // Find a faster driver on a lighter route within the same group
-          const lighterRoutes = sortedRoutes.filter(r =>
-            r.routeCode !== route.routeCode &&
-            r.totalDeliveries < route.totalDeliveries * 0.7 &&
-            r.driverName
-          );
+        lighterRoutes.forEach(lighterRoute => {
+          const lighterDriverInfo = findDriver(lighterRoute.driverName);
+          if (!lighterDriverInfo) return;
 
-          lighterRoutes.forEach(lighterRoute => {
-            const lighterDriverInfo = findDriver(lighterRoute.driverName);
-            if (!lighterDriverInfo || !lighterDriverInfo.packagesPerHour) return;
+          if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
+            // Faster driver is on a lighter route — suggest swap
+            const currentEnd = route.predictedEnd;
+            const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
+            const [depH, depM] = route.departure.split(':').map(Number);
+            const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
+            const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
+            const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
 
-            if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
-              // Faster driver is on a lighter route — suggest swap
-              const currentEnd = route.predictedEnd;
-              const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
-              const [depH, depM] = route.departure.split(':').map(Number);
-              const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
-              const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
-              const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
-
-              const [departure, serviceKey] = groupKey.split('|');
-              const serviceLabel = route.serviceType || serviceKey;
-
-              suggestions.push({
-                type: 'swap',
-                route1: route.routeCode,
-                driver1: route.driverName,
-                route2: lighterRoute.routeCode,
-                driver2: lighterRoute.driverName,
-                currentEnd,
-                optimizedEnd: newEnd,
-                improvement: calculateTimeDiff(currentEnd, newEnd),
-                groupKey,
-                departure,
-                serviceType: serviceLabel,
-                reason: `【${serviceLabel} ${departure} 発】${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。同条件内で重いルートに再配置すると${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
-              });
-            }
-          });
+            suggestions.push({
+              type: 'swap',
+              route1: route.routeCode,
+              driver1: route.driverName,
+              route2: lighterRoute.routeCode,
+              driver2: lighterRoute.driverName,
+              currentEnd,
+              optimizedEnd: newEnd,
+              improvement: calculateTimeDiff(currentEnd, newEnd),
+              reason: `${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。重いルートに再配置で${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
+            });
+          }
         });
       });
 
@@ -1972,23 +1960,13 @@
       const seen = new Set();
       return suggestions
         .filter(s => {
-          const key = `${s.driver1}-${s.driver2}-${s.groupKey}`;
+          const key = `${s.driver1}-${s.driver2}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         })
         .sort((a, b) => b.improvement - a.improvement)
         .slice(0, 5);
-    }
-
-    function normalizeServiceType(service) {
-      if (!service) return '未設定';
-      const lower = String(service).toLowerCase();
-      if (lower.includes('biker')) return 'biker';
-      if (lower.includes('standard')) return 'standard';
-      if (lower.includes('flex') || lower.includes('kei')) return 'kei';
-      if (lower.includes('nursery')) return 'nursery';
-      return String(service).replace(/\s+/g, '').substring(0, 20);
     }
 
     function calculateTimeDiff(time1, time2) {
@@ -2019,8 +1997,6 @@
                 <div class="flex-1">
                   <div class="flex items-center gap-2 mb-2">
                     <span class="optimization-badge">提案 ${i + 1}</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">${s.serviceType}</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${s.departure} 発</span>
                     <span class="text-xs text-emerald-600 font-medium">-${s.improvement}分</span>
                   </div>
                   <p class="text-sm text-ink mb-2">${s.reason}</p>
