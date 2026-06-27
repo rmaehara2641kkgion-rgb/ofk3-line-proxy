@@ -266,7 +266,7 @@
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">LINE ID</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">電話番号</th>
-                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証番号</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">Transport ID</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">QRコード</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">連携状態</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">メモ</th>
@@ -1570,10 +1570,10 @@
         if (matchedIndex >= 0) driverName = name;
       }
 
-      // Also check by license number
+      // Also check by Transport ID
       if (!driverName) {
-        for (const [name, licNum] of Object.entries(licenseNumbers)) {
-          if (licNum && decodedText.replace(/[\s\-]/g, '') === licNum.replace(/[\s\-]/g, '')) {
+        for (const [name, tid] of Object.entries(transportIDs)) {
+          if (tid && decodedText.replace(/[\s\-]/g, '') === tid.replace(/[\s\-]/g, '')) {
             matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
             if (matchedIndex >= 0) { driverName = name; break; }
           }
@@ -1841,7 +1841,7 @@
     let lineMapping = JSON.parse(localStorage.getItem('lineMapping') || '{}');
     let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
     let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
-    let licenseNumbers = JSON.parse(localStorage.getItem('licenseNumbers') || '{}');
+    let transportIDs = JSON.parse(localStorage.getItem('transportIDs') || '{}');
 
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
@@ -1936,7 +1936,7 @@
               onchange="updatePhone('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-4 py-2.5">
-            <input type="text" value="${(licenseNumbers[name] || '').replace(/"/g, '&quot;')}" placeholder="免許証番号"
+            <input type="text" value="${(transportIDs[name] || '').replace(/"/g, '&quot;')}" placeholder="Transport ID"
               class="border border-border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-accent"
               onchange="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
@@ -1983,21 +1983,21 @@
     function updateLicenseNumber(name, value) {
       value = value.trim();
       if (value) {
-        licenseNumbers[name] = value;
+        transportIDs[name] = value;
       } else {
-        delete licenseNumbers[name];
+        delete transportIDs[name];
       }
-      localStorage.setItem('licenseNumbers', JSON.stringify(licenseNumbers));
+      localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
       renderMasterTable();
     }
 
     // ===== QR Code Generation =====
     function showDriverQR(name) {
-      const licNum = licenseNumbers[name];
-      const qrData = licNum ? licNum : 'OFK3_LICENSE:' + name;
+      const tid = transportIDs[name];
+      const qrData = tid ? tid : 'OFK3_DRIVER:' + name;
       const modal = document.getElementById('qr-modal');
       document.getElementById('qr-modal-name').textContent = name;
-      document.getElementById('qr-modal-data').textContent = licNum ? '免許証番号: ' + licNum : 'ドライバー名で生成';
+      document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
       const canvas = document.getElementById('qr-modal-canvas');
@@ -2015,10 +2015,17 @@
     }
 
     function downloadQR(name) {
-      const canvas = document.getElementById('qr-modal-canvas');
+      const src = document.getElementById('qr-modal-canvas');
+      // 白背景付きのcanvasを生成して真っ黒防止
+      const c = document.createElement('canvas');
+      c.width = src.width; c.height = src.height;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(src, 0, 0);
       const link = document.createElement('a');
       link.download = 'QR_' + name + '.png';
-      link.href = canvas.toDataURL('image/png');
+      link.href = c.toDataURL('image/png');
       link.click();
     }
 
@@ -2036,16 +2043,16 @@
     }
 
     function printAllQR() {
-      const drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...licenseNumbers });
+      const drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...transportIDs });
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
       const qrPromises = drivers.map(name => {
-        const licNum = licenseNumbers[name];
-        const qrData = licNum ? licNum : 'OFK3_LICENSE:' + name;
+        const tid = transportIDs[name];
+        const qrData = tid ? tid : 'OFK3_DRIVER:' + name;
         return new Promise(resolve => {
           const canvas = document.createElement('canvas');
           QRCode.toCanvas(canvas, qrData, { width: 200, margin: 2 }, () => {
-            resolve({ name, imgData: canvas.toDataURL('image/png'), licNum });
+            resolve({ name, imgData: canvas.toDataURL('image/png'), tid });
           });
         });
       });
@@ -2056,7 +2063,7 @@
           <div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">
             <img src="${r.imgData}" style="width:150px;height:150px">
             <div style="font-weight:bold;margin-top:8px;font-size:14px">${r.name}</div>
-            <div style="color:#666;font-size:10px">${r.licNum || 'OFK3'}</div>
+            <div style="color:#666;font-size:10px">${r.tid || 'OFK3'}</div>
           </div>
         `).join('');
         win.document.write(`
