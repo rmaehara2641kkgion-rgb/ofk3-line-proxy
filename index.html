@@ -2000,13 +2000,23 @@
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
-      const canvas = document.getElementById('qr-modal-canvas');
-      QRCode.toCanvas(canvas, qrData, {
+      QRCode.toDataURL(qrData, {
         width: 280,
         margin: 2,
         color: { dark: '#000000', light: '#ffffff' }
-      }, function (err) {
-        if (err) console.error(err);
+      }, function (err, url) {
+        if (err) { console.error(err); return; }
+        var container = document.getElementById('qr-modal-canvas').parentElement;
+        document.getElementById('qr-modal-canvas').style.display = 'none';
+        var img = document.getElementById('qr-modal-img');
+        if (!img) {
+          img = document.createElement('img');
+          img.id = 'qr-modal-img';
+          img.className = 'mx-auto';
+          container.appendChild(img);
+        }
+        img.src = url;
+        img.style.display = 'block';
       });
     }
 
@@ -2015,23 +2025,20 @@
     }
 
     function downloadQR(name) {
-      const canvas = document.getElementById('qr-modal-canvas');
-      const dataURL = canvas.toDataURL('image/png');
-      fetch(dataURL).then(function(res){ return res.blob(); }).then(function(blob){
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = 'QR_' + name + '.png';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      });
+      var img = document.getElementById('qr-modal-img');
+      if (!img || !img.src) { alert('QRコードを先に表示してください'); return; }
+      var a = document.createElement('a');
+      a.href = img.src;
+      a.download = 'QR_' + name + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
 
     function printQR(name) {
-      const canvas = document.getElementById('qr-modal-canvas');
-      const imgData = canvas.toDataURL('image/png');
+      var img = document.getElementById('qr-modal-img');
+      if (!img || !img.src) { alert('QRコードを先に表示してください'); return; }
+      var imgData = img.src;
       const win = window.open('', '_blank', 'width=400,height=500');
       win.document.write(`
         <!DOCTYPE html><html><head><title>QR - ${name}</title>
