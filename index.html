@@ -322,6 +322,15 @@
           </div>
         </div>
 
+        <!-- カメラ設定 -->
+        <div class="flex items-center gap-3 mb-4 p-3 bg-surface rounded-lg border border-border">
+          <span class="text-xs font-medium text-ink-lighter">📷 使用カメラ:</span>
+          <select id="camera-select" class="text-xs border border-border rounded px-2 py-1 flex-1 max-w-xs" onchange="saveSelectedCamera(this.value)">
+            <option value="">読み込み中...</option>
+          </select>
+          <button class="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer" onclick="refreshCameraList()">🔄 更新</button>
+        </div>
+
         <!-- Tenko Summary Cards -->
         <div class="grid grid-cols-4 gap-4 mb-6" id="tenko-summary">
           <div class="card p-4">
@@ -1411,7 +1420,9 @@
       modal.classList.remove('hidden');
 
       const video = document.getElementById('camera-video');
-      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })
+      var camConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      if (selectedCameraId) camConstraints.deviceId = { exact: selectedCameraId };
+      navigator.mediaDevices.getUserMedia({ video: camConstraints })
         .then(stream => {
           cameraStream = stream;
           video.srcObject = stream;
@@ -1638,6 +1649,46 @@
       }
     }
 
+    // --- カメラ設定 ---
+    var selectedCameraId = localStorage.getItem('selectedCameraId') || '';
+
+    function refreshCameraList() {
+      Html5Qrcode.getCameras().then(function(devices) {
+        var select = document.getElementById('camera-select');
+        if (!select) return;
+        select.innerHTML = '<option value="">自動選択</option>';
+        devices.forEach(function(device) {
+          var opt = document.createElement('option');
+          opt.value = device.id;
+          opt.textContent = device.label || ('カメラ ' + device.id.substring(0, 8));
+          if (device.id === selectedCameraId) opt.selected = true;
+          select.appendChild(opt);
+        });
+        if (devices.length === 0) {
+          select.innerHTML = '<option value="">カメラが見つかりません</option>';
+        }
+      }).catch(function(err) {
+        console.error('カメラ一覧取得失敗:', err);
+        var select = document.getElementById('camera-select');
+        if (select) select.innerHTML = '<option value="">カメラ取得失敗</option>';
+      });
+    }
+
+    function saveSelectedCamera(cameraId) {
+      selectedCameraId = cameraId;
+      localStorage.setItem('selectedCameraId', cameraId);
+    }
+
+    function getCameraConfig() {
+      if (selectedCameraId) {
+        return selectedCameraId; // デバイスIDを直接指定
+      }
+      return { facingMode: 'environment' }; // デフォルトは背面カメラ
+    }
+
+    // ページ読み込み時にカメラ一覧を取得
+    setTimeout(refreshCameraList, 1000);
+
     // --- QR Code Scanning ---
     function startQrScan() {
       stopOcrScan();
@@ -1646,7 +1697,7 @@
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         html5QrCode.start(
-          { facingMode: 'user' },
+          getCameraConfig(),
           { fps: 10, qrbox: { width: 250, height: 250 } },
           onQrCodeScanned,
           () => {} // ignore scan failures
@@ -1722,7 +1773,9 @@
 
       const video = document.getElementById('ocr-display-video');
       try {
-        ocrStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+        var videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+        if (selectedCameraId) videoConstraints.deviceId = { exact: selectedCameraId };
+        ocrStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
         video.srcObject = ocrStream;
         video.play();
       } catch (err) {
