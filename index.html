@@ -1735,11 +1735,11 @@
       if (!driverName) {
         var cleanQR = decodedText.replace(/[^a-zA-Z0-9\u3000-\u9fff\uff00-\uffef]/g, '').toLowerCase();
         for (var i = 0; i < tenkoSchedule.length; i++) {
-          var d = tenkoSchedule[i];
-          var cleanName = d.name.replace(/[\s　]/g, '').toLowerCase();
+          var td = tenkoSchedule[i];
+          var cleanName = td.name.replace(/[\s　]/g, '').toLowerCase();
           if (cleanQR.indexOf(cleanName) >= 0 || cleanName.indexOf(cleanQR) >= 0) {
             matchedIndex = i;
-            driverName = d.name;
+            driverName = td.name;
             break;
           }
         }
