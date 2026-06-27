@@ -1718,23 +1718,55 @@
     }
 
     function onQrCodeScanned(decodedText) {
-      // QR format: "OFK3_LICENSE:{driverName}" or just the license number
       let driverName = null;
       let matchedIndex = -1;
 
-      // Check if QR matches a registered driver
-      if (decodedText.startsWith('OFK3_LICENSE:')) {
-        const name = decodedText.replace('OFK3_LICENSE:', '');
+      // Normalize: trim whitespace
+      decodedText = decodedText.trim();
+
+      // Check OFK3_DRIVER: or OFK3_LICENSE: format
+      if (decodedText.startsWith('OFK3_DRIVER:') || decodedText.startsWith('OFK3_LICENSE:')) {
+        const name = decodedText.replace(/^OFK3_(DRIVER|LICENSE):/, '');
         matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
         if (matchedIndex >= 0) driverName = name;
       }
 
-      // Also check by Transport ID
+      // Fuzzy match: QR data contains driver name or driver name contains QR data
       if (!driverName) {
+        var cleanQR = decodedText.replace(/[^a-zA-Z0-9\u3000-\u9fff\uff00-\uffef]/g, '').toLowerCase();
+        for (var i = 0; i < tenkoSchedule.length; i++) {
+          var d = tenkoSchedule[i];
+          var cleanName = d.name.replace(/[\s　]/g, '').toLowerCase();
+          if (cleanQR.indexOf(cleanName) >= 0 || cleanName.indexOf(cleanQR) >= 0) {
+            matchedIndex = i;
+            driverName = d.name;
+            break;
+          }
+        }
+      }
+
+      // Check by Transport ID (exact or fuzzy)
+      if (!driverName) {
+        var cleanQR2 = decodedText.replace(/[\s\-]/g, '');
         for (const [name, tid] of Object.entries(transportIDs)) {
-          if (tid && decodedText.replace(/[\s\-]/g, '') === tid.replace(/[\s\-]/g, '')) {
-            matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
-            if (matchedIndex >= 0) { driverName = name; break; }
+          if (tid) {
+            var cleanTid = tid.replace(/[\s\-]/g, '');
+            // 完全一致 or 含まれている
+            if (cleanQR2 === cleanTid || cleanQR2.indexOf(cleanTid) >= 0 || cleanTid.indexOf(cleanQR2) >= 0) {
+              matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
+              if (matchedIndex >= 0) { driverName = name; break; }
+            }
+          }
+        }
+      }
+
+      // Also match by driver name directly (QR = name itself)
+      if (!driverName) {
+        for (var i = 0; i < tenkoSchedule.length; i++) {
+          if (tenkoSchedule[i].name === decodedText) {
+            matchedIndex = i;
+            driverName = decodedText;
+            break;
           }
         }
       }
@@ -2159,7 +2191,7 @@
     }
 
     function generateQRDataURL(text, size) {
-      var qr = new QRious({ value: text, size: size || 300, level: 'H', background: '#ffffff', foreground: '#000000' });
+      var qr = new QRious({ value: text, size: size || 300, level: 'H', background: '#ffffff', foreground: '#000000', padding: 20 });
       return qr.toDataURL('image/png');
     }
 
