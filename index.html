@@ -404,7 +404,8 @@
         </div>
         <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
         <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
-        <canvas id="qr-modal-canvas" class="mx-auto"></canvas>
+        <canvas id="qr-modal-canvas" class="mx-auto" style="display:none"></canvas>
+        <img id="qr-modal-img" class="mx-auto" style="display:block">
         <div class="flex gap-2 mt-4">
           <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">📥 ダウンロード</button>
           <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">🖨 印刷</button>
@@ -2006,17 +2007,7 @@
         color: { dark: '#000000', light: '#ffffff' }
       }, function (err, url) {
         if (err) { console.error(err); return; }
-        var container = document.getElementById('qr-modal-canvas').parentElement;
-        document.getElementById('qr-modal-canvas').style.display = 'none';
-        var img = document.getElementById('qr-modal-img');
-        if (!img) {
-          img = document.createElement('img');
-          img.id = 'qr-modal-img';
-          img.className = 'mx-auto';
-          container.appendChild(img);
-        }
-        img.src = url;
-        img.style.display = 'block';
+        document.getElementById('qr-modal-img').src = url;
       });
     }
 
