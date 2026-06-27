@@ -404,7 +404,8 @@
         </div>
         <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
         <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
-        <canvas id="qr-modal-canvas" class="mx-auto" style="display:block;max-width:250px;max-height:250px"></canvas>
+        <canvas id="qr-modal-canvas" class="mx-auto" style="display:none"></canvas>
+        <img id="qr-modal-img" class="mx-auto" style="width:250px;height:250px">
         <div class="flex gap-2 mt-4" style="position:relative;z-index:52">
           <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer">📥 ダウンロード</button>
           <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors cursor-pointer">🖨 印刷</button>
@@ -1997,7 +1998,8 @@
       return tid ? tid : 'OFK3_DRIVER:' + name;
     }
 
-    var qrOpts = { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } };
+    // 現在表示中のQRデータURL保存用
+    var currentQRDataURL = '';
 
     function showDriverQR(name) {
       var qrData = getQRData(name);
@@ -2006,10 +2008,26 @@
       document.getElementById('qr-modal-name').textContent = name;
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
+      currentQRDataURL = '';
 
-      var canvas = document.getElementById('qr-modal-canvas');
-      QRCode.toCanvas(canvas, qrData, qrOpts, function(err) {
-        if (err) console.error('QR生成エラー:', err);
+      // コールバック方式でDataURL生成
+      QRCode.toDataURL(qrData, {
+        width: 280, margin: 2,
+        color: { dark: '#000000', light: '#ffffff' }
+      }, function(err, url) {
+        if (err) {
+          console.error('QR生成エラー:', err);
+          // フォールバック: canvas方式を試す
+          var c = document.createElement('canvas');
+          QRCode.toCanvas(c, qrData, { width: 280, margin: 2 }, function(err2) {
+            if (err2) { console.error('canvas QRエラー:', err2); return; }
+            currentQRDataURL = c.toDataURL('image/png');
+            document.getElementById('qr-modal-img').src = currentQRDataURL;
+          });
+          return;
+        }
+        currentQRDataURL = url;
+        document.getElementById('qr-modal-img').src = url;
       });
     }
 
@@ -2017,22 +2035,10 @@
       document.getElementById('qr-modal').classList.add('hidden');
     }
 
-    function getCanvasDataURL() {
-      var src = document.getElementById('qr-modal-canvas');
-      var c = document.createElement('canvas');
-      c.width = src.width;
-      c.height = src.height;
-      var ctx = c.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.drawImage(src, 0, 0);
-      return c.toDataURL('image/png');
-    }
-
     function downloadQR(name) {
-      var dataURL = getCanvasDataURL();
+      if (!currentQRDataURL) { alert('QRコード生成中です。少し待ってからもう一度押してください。'); return; }
       var a = document.createElement('a');
-      a.href = dataURL;
+      a.href = currentQRDataURL;
       a.download = 'QR_' + name + '.png';
       document.body.appendChild(a);
       a.click();
@@ -2040,13 +2046,13 @@
     }
 
     function printQR(name) {
-      var imgData = getCanvasDataURL();
+      if (!currentQRDataURL) { alert('QRコード生成中です。少し待ってからもう一度押してください。'); return; }
       var win = window.open('', '_blank', 'width=400,height=500');
       win.document.write(
         '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
         '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
         'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
-        '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + imgData + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
+        '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + currentQRDataURL + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
       );
       win.document.close();
     }
