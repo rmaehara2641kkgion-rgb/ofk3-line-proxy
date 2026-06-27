@@ -104,6 +104,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
 
       <!-- Dashboard Tab -->
@@ -408,6 +409,78 @@
         </div>
       </div>
 
+      <!-- Billing Tab -->
+      <div id="panel-billing" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">請求金額照合</h2>
+            <p class="text-sm text-ink-lighter">個人事業主ドライバーへの請求金額通知・LINE一斉送信</p>
+          </div>
+          <div class="flex gap-2">
+            <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
+              📂 請求Excel読込
+              <input type="file" accept=".xlsx,.xls" onchange="handleBillingUpload(event)" class="hidden">
+            </label>
+          </div>
+        </div>
+
+        <!-- 請求月表示 -->
+        <div id="billing-summary" class="hidden mb-4">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-blue-600" id="billing-total-count">0</div>
+              <div class="text-xs text-ink-lighter">対象者数</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-green-600" id="billing-total-amount">¥0</div>
+              <div class="text-xs text-ink-lighter">合計金額(税込)</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-purple-600" id="billing-line-count">0</div>
+              <div class="text-xs text-ink-lighter">LINE送信可能</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 一斉送信ボタン -->
+        <div id="billing-actions" class="hidden mb-4 flex gap-2">
+          <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
+          <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
+        </div>
+
+        <!-- 送信ログ -->
+        <div id="billing-send-log" class="hidden mb-4 card p-3">
+          <h4 class="text-xs font-bold text-ink-lighter mb-2">送信ログ</h4>
+          <div id="billing-log-entries" class="space-y-1 max-h-32 overflow-y-auto"></div>
+        </div>
+
+        <!-- 請求一覧テーブル -->
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">選択</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">宛名</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">稼働日数</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">チャーター</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">走行距離</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">控除</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">税別</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">税</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter font-bold">合計</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">LINE</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">状態</th>
+                </tr>
+              </thead>
+              <tbody id="billing-table-body">
+                <tr><td colspan="11" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </main>
 
     <!-- QR Code Modal -->
@@ -661,11 +734,12 @@
     // ===== Tab Navigation =====
     function switchTab(tab) {
       currentTab = tab;
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'billing'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
       if (tab === 'master') renderMasterTable();
+      if (tab === 'billing') renderBillingTable();
     }
 
     // ===== File Upload - Assignment Data =====
@@ -2690,6 +2764,255 @@
         </html>
       `);
       printWindow.document.close();
+    }
+
+    // ===== 請求金額照合 =====
+    var billingData = [];
+    var billingSent = {}; // { "宛名": true }
+
+    function handleBillingUpload(event) {
+      var file = event.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var data = new Uint8Array(e.target.result);
+        var workbook = XLSX.read(data, { type: 'array' });
+        var sheet = workbook.Sheets[workbook.SheetNames[0]];
+        var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        parseBillingData(json);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function parseBillingData(rows) {
+      billingData = [];
+      billingSent = {};
+      // Row 1 = header (row index 1 in 0-based = row 2 in Excel)
+      // Data starts from row index 3 (row 4 in Excel)
+      for (var i = 3; i < rows.length; i++) {
+        var row = rows[i];
+        if (!row || !row[0]) continue;
+
+        var driverKey = (row[0] || '').toString().trim(); // Column A: ドライバー名(英語/混在)
+        var name = (row[2] || '').toString().trim(); // Column C: 宛名
+        if (!name) continue;
+
+        // 稼働日数を集計 (D-K列 = index 3-10)
+        var workDays = 0;
+        for (var c = 3; c <= 10; c++) {
+          var v = parseInt(row[c]) || 0;
+          workDays += v;
+        }
+
+        // 稼働内訳
+        var breakdown = [];
+        var labels = ['11B', '8B', 'B1', 'B2', 'biker', '嘉麻応援', 'C1', 'C3'];
+        for (var c = 3; c <= 10; c++) {
+          var v = parseInt(row[c]) || 0;
+          if (v > 0) breakdown.push(labels[c - 3] + ': ' + v + '日');
+        }
+
+        var sysUsage = (row[11] || '').toString().trim(); // システム使用料
+        var sundayBonus = (row[12] || '').toString().trim(); // 日曜日手当
+        var charter = parseNum(row[13]); // チャーター料金
+        var mileage = parseNum(row[14]); // 走行距離連動日
+        var deduction = parseNum(row[15]); // 控除
+        var subtotal = parseNum(row[16]); // 税別
+        var tax = parseNum(row[17]); // 税
+        var total = parseNum(row[18]); // 合計
+
+        if (total === 0 && subtotal === 0) continue; // 金額0は除外
+
+        billingData.push({
+          driverKey: driverKey,
+          name: name,
+          workDays: workDays,
+          breakdown: breakdown,
+          sysUsage: sysUsage,
+          sundayBonus: sundayBonus,
+          charter: charter,
+          mileage: mileage,
+          deduction: deduction,
+          subtotal: subtotal,
+          tax: tax,
+          total: total,
+          selected: true
+        });
+      }
+
+      renderBillingTable();
+      document.getElementById('billing-summary').classList.remove('hidden');
+      document.getElementById('billing-actions').classList.remove('hidden');
+    }
+
+    function parseNum(val) {
+      if (!val) return 0;
+      var s = val.toString().replace(/[¥,\s]/g, '');
+      return parseInt(s) || 0;
+    }
+
+    function renderBillingTable() {
+      var tbody = document.getElementById('billing-table-body');
+      if (!tbody) return;
+      if (billingData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>';
+        return;
+      }
+
+      var totalAmount = 0;
+      var lineCount = 0;
+      var selectedCount = 0;
+
+      tbody.innerHTML = billingData.map(function(d, i) {
+        totalAmount += d.total;
+        // LINE送信可能かチェック（マスタのlineMappingからUser IDを探す）
+        var userId = findLineUserId(d.driverKey, d.name);
+        var hasLine = userId && userId.indexOf('U') === 0;
+        if (hasLine) lineCount++;
+        if (d.selected) selectedCount++;
+
+        var sent = billingSent[d.name];
+        var statusHtml = sent
+          ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">送信済</span>'
+          : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
+
+        var lineHtml = hasLine
+          ? '<span class="text-xs text-green-600">✅ 登録済</span>'
+          : '<span class="text-xs text-gray-400">未登録</span>';
+
+        return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
+          '<td class="px-3 py-2"><input type="checkbox" ' + (d.selected ? 'checked' : '') + ' onchange="toggleBillingSelect(' + i + ', this.checked)" class="cursor-pointer"></td>' +
+          '<td class="px-3 py-2 font-medium">' + d.name + '</td>' +
+          '<td class="px-3 py-2 text-right">' + d.workDays + '日</td>' +
+          '<td class="px-3 py-2 text-right">' + formatYen(d.charter) + '</td>' +
+          '<td class="px-3 py-2 text-right">' + formatYen(d.mileage) + '</td>' +
+          '<td class="px-3 py-2 text-right ' + (d.deduction < 0 ? 'text-red-600' : '') + '">' + formatYen(d.deduction) + '</td>' +
+          '<td class="px-3 py-2 text-right">' + formatYen(d.subtotal) + '</td>' +
+          '<td class="px-3 py-2 text-right">' + formatYen(d.tax) + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + formatYen(d.total) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + lineHtml + '</td>' +
+          '<td class="px-3 py-2 text-center">' + statusHtml + '</td>' +
+        '</tr>';
+      }).join('');
+
+      document.getElementById('billing-total-count').textContent = billingData.length;
+      document.getElementById('billing-total-amount').textContent = formatYen(totalAmount);
+      document.getElementById('billing-line-count').textContent = lineCount;
+    }
+
+    function formatYen(n) {
+      if (n === 0) return '¥0';
+      return '¥' + n.toLocaleString();
+    }
+
+    function toggleBillingSelect(index, checked) {
+      billingData[index].selected = checked;
+    }
+
+    function findLineUserId(driverKey, name) {
+      // まずドライバーキー(英語名)でマッチ
+      if (lineMapping[driverKey]) return lineMapping[driverKey];
+      // 宛名でマッチ
+      if (lineMapping[name]) return lineMapping[name];
+      // 宛名から空白除去してマッチ
+      var cleanName = name.replace(/[\s　]/g, '');
+      for (var key in lineMapping) {
+        if (key.replace(/[\s　]/g, '') === cleanName) return lineMapping[key];
+      }
+      return null;
+    }
+
+    function buildBillingMessage(d) {
+      var now = new Date();
+      var monthStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月度';
+
+      var msg = '📋 【' + monthStr + ' 請求金額のご確認】\n\n';
+      msg += d.name + ' 様\n\n';
+      msg += '━━━━━━━━━━━━━━━\n';
+      msg += '■ 稼働実績\n';
+      msg += '  稼働日数: ' + d.workDays + '日\n';
+      if (d.breakdown.length > 0) {
+        msg += '  内訳: ' + d.breakdown.join(', ') + '\n';
+      }
+      if (d.charter > 0) msg += '  チャーター料金: ' + formatYen(d.charter) + '\n';
+      if (d.mileage > 0) msg += '  走行距離連動: ' + formatYen(d.mileage) + '\n';
+      if (d.sysUsage === '○') msg += '  システム使用料: あり\n';
+      if (d.sundayBonus === '○') msg += '  日曜日手当: あり\n';
+      if (d.deduction !== 0) msg += '  控除: ' + formatYen(d.deduction) + '\n';
+      msg += '━━━━━━━━━━━━━━━\n';
+      msg += '■ ご請求金額\n';
+      msg += '  税別: ' + formatYen(d.subtotal) + '\n';
+      msg += '  消費税: ' + formatYen(d.tax) + '\n';
+      msg += '  ━━━━━━━━━━━\n';
+      msg += '  合計(税込): ' + formatYen(d.total) + '\n';
+      msg += '━━━━━━━━━━━━━━━\n\n';
+      msg += 'ご確認をお願いいたします。\n';
+      msg += '内容に相違がある場合はご連絡ください。';
+
+      return msg;
+    }
+
+    function previewBillingMessage() {
+      if (billingData.length === 0) { alert('請求データを読み込んでください'); return; }
+      var sample = billingData[0];
+      var msg = buildBillingMessage(sample);
+      alert('=== メッセージプレビュー ===\n（1件目: ' + sample.name + '）\n\n' + msg);
+    }
+
+    async function sendAllBillingLine() {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) { alert('LINE設定でProxy URLを設定してください'); return; }
+
+      var targets = billingData.filter(function(d) {
+        if (!d.selected) return false;
+        if (billingSent[d.name]) return false;
+        var userId = findLineUserId(d.driverKey, d.name);
+        return userId && userId.indexOf('U') === 0;
+      });
+
+      if (targets.length === 0) {
+        alert('送信対象がいません。\nLINE ID未登録か、既に送信済みです。');
+        return;
+      }
+
+      if (!confirm(targets.length + '名にLINE送信します。\n\n' + targets.map(function(d) { return '・' + d.name + '（' + formatYen(d.total) + '）'; }).join('\n') + '\n\n送信しますか？')) return;
+
+      document.getElementById('billing-send-log').classList.remove('hidden');
+      var logEl = document.getElementById('billing-log-entries');
+
+      var successCount = 0;
+      for (var i = 0; i < targets.length; i++) {
+        var d = targets[i];
+        var userId = findLineUserId(d.driverKey, d.name);
+        var msg = buildBillingMessage(d);
+
+        try {
+          await fetch(proxyUrl, {
+            method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: userId, messages: [{ type: 'text', text: msg }] })
+          });
+          billingSent[d.name] = true;
+          successCount++;
+          var entry = document.createElement('div');
+          entry.className = 'text-xs py-1 text-green-600';
+          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + ' 送信完了';
+          logEl.insertBefore(entry, logEl.firstChild);
+        } catch(e) {
+          var entry = document.createElement('div');
+          entry.className = 'text-xs py-1 text-red-600';
+          entry.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' 送信失敗: ' + e.message;
+          logEl.insertBefore(entry, logEl.firstChild);
+        }
+
+        // 連続送信の間隔
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+
+      renderBillingTable();
+      alert('送信完了: ' + successCount + '/' + targets.length + '名');
     }
 
     // ===== 点呼LINE自動通知 =====
