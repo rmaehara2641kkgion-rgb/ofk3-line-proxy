@@ -1993,22 +1993,23 @@
     }
 
     // ===== QR Code Generation =====
+    function getQRData(name) {
+      var tid = transportIDs[name];
+      return tid ? tid : 'OFK3_DRIVER:' + name;
+    }
+
     function showDriverQR(name) {
-      const tid = transportIDs[name];
-      const qrData = tid ? tid : 'OFK3_DRIVER:' + name;
-      const modal = document.getElementById('qr-modal');
+      var qrData = getQRData(name);
+      var modal = document.getElementById('qr-modal');
+      var tid = transportIDs[name];
       document.getElementById('qr-modal-name').textContent = name;
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
-      QRCode.toDataURL(qrData, {
-        width: 280,
-        margin: 2,
-        color: { dark: '#000000', light: '#ffffff' }
-      }, function (err, url) {
-        if (err) { console.error(err); return; }
-        document.getElementById('qr-modal-img').src = url;
-      });
+      var img = document.getElementById('qr-modal-img');
+      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
+        .then(function(url) { img.src = url; })
+        .catch(function(e) { console.error(e); });
     }
 
     function closeQrModal() {
@@ -2016,28 +2017,33 @@
     }
 
     function downloadQR(name) {
-      var img = document.getElementById('qr-modal-img');
-      if (!img || !img.src || img.src.indexOf('data:') === -1) { alert('QRコードを先に表示してください'); return; }
-      var a = document.createElement('a');
-      a.href = img.src;
-      a.download = 'QR_' + name + '.png';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      var qrData = getQRData(name);
+      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
+        .then(function(url) {
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = 'QR_' + name + '.png';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        })
+        .catch(function(e) { alert('QR生成エラー: ' + e); });
     }
 
     function printQR(name) {
-      var img = document.getElementById('qr-modal-img');
-      if (!img || !img.src) { alert('QRコードを先に表示してください'); return; }
-      var imgData = img.src;
-      const win = window.open('', '_blank', 'width=400,height=500');
-      win.document.write(`
-        <!DOCTYPE html><html><head><title>QR - ${name}</title>
-        <style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}
-        img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>
-        <body><h2>${name}</h2><p>OFK3 点呼認証用QRコード</p><img src="${imgData}"><script>window.onload=function(){window.print()}<\/script></body></html>
-      `);
-      win.document.close();
+      var qrData = getQRData(name);
+      QRCode.toDataURL(qrData, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
+        .then(function(imgData) {
+          var win = window.open('', '_blank', 'width=400,height=500');
+          win.document.write(
+            '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
+            '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
+            'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
+            '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + imgData + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
+          );
+          win.document.close();
+        })
+        .catch(function(e) { alert('QR生成エラー: ' + e); });
     }
 
     function printAllQR() {
