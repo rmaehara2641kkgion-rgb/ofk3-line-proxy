@@ -262,6 +262,7 @@
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">LINE ID</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">電話番号</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証番号</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">連携状態</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">メモ</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">操作</th>
@@ -345,6 +346,7 @@
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証認証</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">メンター認証</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">ステータス</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">操作</th>
                 </tr>
               </thead>
               <tbody id="tenko-table-body">
@@ -359,6 +361,26 @@
       </div>
 
     </main>
+
+    <!-- Camera Authentication Modal -->
+    <div id="camera-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">点呼認証</h3>
+          <button onclick="closeCameraModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+        <p class="text-sm text-ink-lighter mb-1">ドライバー: <span id="camera-driver-name" class="font-bold text-ink"></span></p>
+        <p id="camera-auth-type" class="text-base font-bold mb-3 text-blue-600"></p>
+        <div class="bg-black rounded-lg overflow-hidden mb-3">
+          <video id="camera-video" class="w-full" autoplay playsinline muted></video>
+        </div>
+        <div id="camera-result" class="text-sm mt-2"></div>
+        <div class="flex gap-2 mt-4">
+          <button id="camera-confirm-btn" onclick="confirmCameraAuth()" class="flex-1 py-3 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors text-lg">認証OK</button>
+          <button onclick="closeCameraModal()" class="px-4 py-3 rounded-lg text-sm font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">閉じる</button>
+        </div>
+      </div>
+    </div>
 
     <!-- LINE Notification Modal -->
     <div id="line-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
@@ -1149,6 +1171,148 @@
       renderTenkoTable();
     }
 
+    function forceComplete(index) {
+      if (index < 0 || index >= tenkoSchedule.length) return;
+      tenkoSchedule[index].licenseAuth = true;
+      tenkoSchedule[index].mentorAuth = true;
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      renderTenkoTable();
+    }
+
+    function undoComplete(index) {
+      if (index < 0 || index >= tenkoSchedule.length) return;
+      tenkoSchedule[index].licenseAuth = false;
+      tenkoSchedule[index].mentorAuth = false;
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      renderTenkoTable();
+    }
+
+    // ===== Camera License Authentication =====
+    let cameraStream = null;
+    let cameraDriverIndex = -1;
+    let cameraAuthType = 'license'; // 'license' or 'mentor'
+
+    // Sound effects using Web Audio API
+    function playSound(type) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (type === 'success') {
+        // Single chime for license auth
+        [523, 659].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.4);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(ctx.currentTime + i * 0.15);
+          osc.stop(ctx.currentTime + i * 0.15 + 0.4);
+        });
+      } else if (type === 'complete') {
+        // Triumphant 3-note chime for both complete
+        [523, 659, 784].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.35, ctx.currentTime + i * 0.2);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.6);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(ctx.currentTime + i * 0.2);
+          osc.stop(ctx.currentTime + i * 0.2 + 0.6);
+        });
+      } else if (type === 'error') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = 200;
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.5);
+      }
+    }
+
+    function openLicenseCamera(index) {
+      const d = tenkoSchedule[index];
+      if (!d) return;
+      // Determine which auth to do next
+      if (!d.licenseAuth) {
+        cameraAuthType = 'license';
+      } else if (!d.mentorAuth) {
+        cameraAuthType = 'mentor';
+      } else return;
+
+      cameraDriverIndex = index;
+      const modal = document.getElementById('camera-modal');
+      document.getElementById('camera-driver-name').textContent = d.name;
+      document.getElementById('camera-auth-type').textContent = cameraAuthType === 'license' ? '🪪 免許証をかざしてください' : '📱 メンター起動画面をかざしてください';
+      document.getElementById('camera-confirm-btn').textContent = cameraAuthType === 'license' ? '免許証 認証OK' : 'メンター 認証OK';
+      document.getElementById('camera-result').textContent = '';
+      document.getElementById('camera-result').className = 'text-sm mt-2';
+      modal.classList.remove('hidden');
+
+      const video = document.getElementById('camera-video');
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } })
+        .then(stream => {
+          cameraStream = stream;
+          video.srcObject = stream;
+          video.play();
+        })
+        .catch(err => {
+          document.getElementById('camera-result').textContent = 'カメラの起動に失敗しました: ' + err.message;
+          document.getElementById('camera-result').className = 'text-sm mt-2 text-red-500';
+        });
+    }
+
+    function closeCameraModal() {
+      document.getElementById('camera-modal').classList.add('hidden');
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+      }
+      document.getElementById('camera-video').srcObject = null;
+      cameraDriverIndex = -1;
+    }
+
+    function confirmCameraAuth() {
+      const d = tenkoSchedule[cameraDriverIndex];
+      if (!d) return;
+      const resultEl = document.getElementById('camera-result');
+
+      if (cameraAuthType === 'license') {
+        d.licenseAuth = true;
+        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+
+        if (d.mentorAuth) {
+          // Both done!
+          resultEl.textContent = '✅ 免許証認証OK → 両方完了！';
+          resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
+          playSound('complete');
+          setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+        } else {
+          // License done, move to mentor
+          resultEl.textContent = '✅ 免許証認証OK → 続いてメンター認証へ';
+          resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
+          playSound('success');
+          setTimeout(() => {
+            cameraAuthType = 'mentor';
+            document.getElementById('camera-auth-type').textContent = '📱 メンター起動画面をかざしてください';
+            document.getElementById('camera-confirm-btn').textContent = 'メンター 認証OK';
+            resultEl.textContent = '';
+            resultEl.className = 'text-sm mt-2';
+          }, 1500);
+        }
+      } else if (cameraAuthType === 'mentor') {
+        d.mentorAuth = true;
+        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        resultEl.textContent = '🎉 メンター認証OK — 点呼完了！';
+        resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold text-lg';
+        playSound('complete');
+        setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+      }
+    }
+
     function renderTenkoTable() {
       const tbody = document.getElementById('tenko-table-body');
       const emptyEl = document.getElementById('tenko-empty');
@@ -1193,12 +1357,21 @@
           ? `<button onclick="toggleAuth(${i},'mentor')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full bg-emerald-500"></span><span class="text-xs text-emerald-600">済</span></button>`
           : `<button onclick="toggleAuth(${i},'mentor')" class="inline-flex items-center gap-1 cursor-pointer hover:opacity-70"><span class="inline-block w-3 h-3 rounded-full ${oneDone ? 'bg-red-500' : 'bg-gray-300'}"></span><span class="text-xs ${oneDone ? 'text-red-500' : 'text-ink-lighter'}">${oneDone ? '待ち' : '未'}</span></button>`;
 
+        const forceBtn = bothDone
+          ? `<button onclick="undoComplete(${i})" class="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors" title="認証を戻す">戻す</button>`
+          : `<button onclick="forceComplete(${i})" class="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors" title="強制完了">強制</button>`;
+
+        const cameraBtn = bothDone
+          ? ''
+          : `<button onclick="openLicenseCamera(${i})" class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors ml-1" title="カメラ認証">📷</button>`;
+
         return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
           <td class="px-4 py-2.5 text-sm font-medium">${d.name}</td>
           <td class="px-4 py-2.5 text-center text-sm font-mono">${d.arrivalTime}${overdueIcon}</td>
           <td class="px-4 py-2.5 text-center">${licDot}</td>
           <td class="px-4 py-2.5 text-center">${menDot}</td>
           <td class="px-4 py-2.5 text-center ${statusClass}">${status}</td>
+          <td class="px-4 py-2.5 text-center">${forceBtn}${cameraBtn}</td>
         </tr>`;
       }).join('');
 
@@ -1380,6 +1553,7 @@
     let lineMapping = JSON.parse(localStorage.getItem('lineMapping') || '{}');
     let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
     let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
+    let licenseNumbers = JSON.parse(localStorage.getItem('licenseNumbers') || '{}');
 
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
@@ -1431,7 +1605,7 @@
       document.getElementById('master-unlinked').textContent = `未紐付け: ${unlinked}名`;
 
       if (drivers.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-ink-lighter">
+        tbody.innerHTML = `<tr><td colspan="8" class="px-4 py-12 text-center text-sm text-ink-lighter">
           ドライバーが登録されていません<br>
           <span class="text-xs">アサインデータのアップロードまたは手動追加で登録できます</span>
         </td></tr>`;
@@ -1474,6 +1648,11 @@
               onchange="updatePhone('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-4 py-2.5">
+            <input type="text" value="${(licenseNumbers[name] || '').replace(/"/g, '&quot;')}" placeholder="免許証番号"
+              class="border border-border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-accent"
+              onchange="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5">
             <span class="text-xs px-2 py-0.5 rounded ${statusClass} font-medium">${statusLabel}</span>
           </td>
           <td class="px-4 py-2.5">
@@ -1507,6 +1686,17 @@
         delete phoneMapping[name];
       }
       localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      renderMasterTable();
+    }
+
+    function updateLicenseNumber(name, value) {
+      value = value.trim();
+      if (value) {
+        licenseNumbers[name] = value;
+      } else {
+        delete licenseNumbers[name];
+      }
+      localStorage.setItem('licenseNumbers', JSON.stringify(licenseNumbers));
       renderMasterTable();
     }
 
