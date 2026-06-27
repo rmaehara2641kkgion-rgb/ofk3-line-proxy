@@ -322,15 +322,6 @@
           </div>
         </div>
 
-        <!-- カメラ設定 -->
-        <div class="flex items-center gap-3 mb-4 p-3 bg-surface rounded-lg border border-border">
-          <span class="text-xs font-medium text-ink-lighter">📷 使用カメラ:</span>
-          <select id="camera-select" class="text-xs border border-border rounded px-2 py-1 flex-1 max-w-xs" onchange="saveSelectedCamera(this.value)">
-            <option value="">読み込み中...</option>
-          </select>
-          <button class="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 cursor-pointer" onclick="refreshCameraList()">🔄 更新</button>
-        </div>
-
         <!-- Tenko Summary Cards -->
         <div class="grid grid-cols-4 gap-4 mb-6" id="tenko-summary">
           <div class="card p-4">
@@ -357,7 +348,7 @@
             <div class="flex items-center justify-between mb-3">
               <div>
                 <h3 id="scan-status-title" class="text-base font-bold text-blue-600">🪪 QRコードをかざしてください</h3>
-                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">QRコードをカメラに向けてください</p>
+                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">免許証QRコードをカメラに向けてください</p>
               </div>
               <div id="scan-driver-badge" class="hidden px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-sm font-bold"></div>
             </div>
@@ -1420,9 +1411,7 @@
       modal.classList.remove('hidden');
 
       const video = document.getElementById('camera-video');
-      var camConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
-      if (selectedCameraId) camConstraints.deviceId = { exact: selectedCameraId };
-      navigator.mediaDevices.getUserMedia({ video: camConstraints })
+      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })
         .then(stream => {
           cameraStream = stream;
           video.srcObject = stream;
@@ -1631,7 +1620,7 @@
       const detail = document.getElementById('scan-status-detail');
       const badge = document.getElementById('scan-driver-badge');
       if (phase === 'qr') {
-        title.textContent = '🪪 QRコードをかざしてください';
+        title.textContent = '🪪 免許証QRコードをかざしてください';
         title.className = 'text-base font-bold text-blue-600';
         detail.textContent = '登録済みQRコードをカメラに向けてください';
         badge.classList.add('hidden');
@@ -1649,46 +1638,6 @@
       }
     }
 
-    // --- カメラ設定 ---
-    var selectedCameraId = localStorage.getItem('selectedCameraId') || '';
-
-    function refreshCameraList() {
-      Html5Qrcode.getCameras().then(function(devices) {
-        var select = document.getElementById('camera-select');
-        if (!select) return;
-        select.innerHTML = '<option value="">自動選択</option>';
-        devices.forEach(function(device) {
-          var opt = document.createElement('option');
-          opt.value = device.id;
-          opt.textContent = device.label || ('カメラ ' + device.id.substring(0, 8));
-          if (device.id === selectedCameraId) opt.selected = true;
-          select.appendChild(opt);
-        });
-        if (devices.length === 0) {
-          select.innerHTML = '<option value="">カメラが見つかりません</option>';
-        }
-      }).catch(function(err) {
-        console.error('カメラ一覧取得失敗:', err);
-        var select = document.getElementById('camera-select');
-        if (select) select.innerHTML = '<option value="">カメラ取得失敗</option>';
-      });
-    }
-
-    function saveSelectedCamera(cameraId) {
-      selectedCameraId = cameraId;
-      localStorage.setItem('selectedCameraId', cameraId);
-    }
-
-    function getCameraConfig() {
-      if (selectedCameraId) {
-        return selectedCameraId; // デバイスIDを直接指定
-      }
-      return { facingMode: 'environment' }; // デフォルトは背面カメラ
-    }
-
-    // ページ読み込み時にカメラ一覧を取得
-    setTimeout(refreshCameraList, 1000);
-
     // --- QR Code Scanning ---
     function startQrScan() {
       stopOcrScan();
@@ -1697,8 +1646,8 @@
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         html5QrCode.start(
-          getCameraConfig(),
-          { fps: 15, qrbox: { width: 300, height: 300 }, aspectRatio: 1.0 },
+          { facingMode: 'user' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
           onQrCodeScanned,
           () => {} // ignore scan failures
         ).catch(err => {
@@ -1718,55 +1667,23 @@
     }
 
     function onQrCodeScanned(decodedText) {
+      // QR format: "OFK3_LICENSE:{driverName}" or just the license number
       let driverName = null;
       let matchedIndex = -1;
 
-      // Normalize: trim whitespace
-      decodedText = decodedText.trim();
-
-      // Check OFK3_DRIVER: or OFK3_LICENSE: format
-      if (decodedText.startsWith('OFK3_DRIVER:') || decodedText.startsWith('OFK3_LICENSE:')) {
-        const name = decodedText.replace(/^OFK3_(DRIVER|LICENSE):/, '');
+      // Check if QR matches a registered driver
+      if (decodedText.startsWith('OFK3_LICENSE:')) {
+        const name = decodedText.replace('OFK3_LICENSE:', '');
         matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
         if (matchedIndex >= 0) driverName = name;
       }
 
-      // Fuzzy match: QR data contains driver name or driver name contains QR data
+      // Also check by Transport ID
       if (!driverName) {
-        var cleanQR = decodedText.replace(/[^a-zA-Z0-9\u3000-\u9fff\uff00-\uffef]/g, '').toLowerCase();
-        for (var i = 0; i < tenkoSchedule.length; i++) {
-          var td = tenkoSchedule[i];
-          var cleanName = td.name.replace(/[\s　]/g, '').toLowerCase();
-          if (cleanQR.indexOf(cleanName) >= 0 || cleanName.indexOf(cleanQR) >= 0) {
-            matchedIndex = i;
-            driverName = td.name;
-            break;
-          }
-        }
-      }
-
-      // Check by Transport ID (exact or fuzzy)
-      if (!driverName) {
-        var cleanQR2 = decodedText.replace(/[\s\-]/g, '');
         for (const [name, tid] of Object.entries(transportIDs)) {
-          if (tid) {
-            var cleanTid = tid.replace(/[\s\-]/g, '');
-            // 完全一致 or 含まれている
-            if (cleanQR2 === cleanTid || cleanQR2.indexOf(cleanTid) >= 0 || cleanTid.indexOf(cleanQR2) >= 0) {
-              matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
-              if (matchedIndex >= 0) { driverName = name; break; }
-            }
-          }
-        }
-      }
-
-      // Also match by driver name directly (QR = name itself)
-      if (!driverName) {
-        for (var i = 0; i < tenkoSchedule.length; i++) {
-          if (tenkoSchedule[i].name === decodedText) {
-            matchedIndex = i;
-            driverName = decodedText;
-            break;
+          if (tid && decodedText.replace(/[\s\-]/g, '') === tid.replace(/[\s\-]/g, '')) {
+            matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
+            if (matchedIndex >= 0) { driverName = name; break; }
           }
         }
       }
@@ -1805,9 +1722,7 @@
 
       const video = document.getElementById('ocr-display-video');
       try {
-        var videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
-        if (selectedCameraId) videoConstraints.deviceId = { exact: selectedCameraId };
-        ocrStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+        ocrStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
         video.srcObject = ocrStream;
         video.play();
       } catch (err) {
@@ -2014,7 +1929,7 @@
             </div>
           `).join('')}
         </div>
-      `;`
+      `;
     }
 
     function closeModal() {
@@ -2191,7 +2106,7 @@
     }
 
     function generateQRDataURL(text, size) {
-      var qr = new QRious({ value: text, size: size || 300, level: 'H', background: '#ffffff', foreground: '#000000', padding: 20 });
+      var qr = new QRious({ value: text, size: size || 300, level: 'H', background: '#ffffff', foreground: '#000000' });
       return qr.toDataURL('image/png');
     }
 
