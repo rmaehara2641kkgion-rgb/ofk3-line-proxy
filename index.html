@@ -6,6 +6,9 @@
   <title>配送管理 - OFK3</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -208,6 +211,7 @@
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">実績データ更新</button>
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
+            <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
           </div>
         </div>
         <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
@@ -263,6 +267,7 @@
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">LINE ID</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">電話番号</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証番号</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">QRコード</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">連携状態</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">メモ</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">操作</th>
@@ -311,6 +316,7 @@
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">シフトデータ読み込み</button>
             <input type="file" id="shift-file-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftUpload(event)">
+            <button id="auto-scan-btn" class="text-xs px-4 py-1.5 rounded font-bold bg-blue-500 text-white hover:bg-blue-600 transition-colors" onclick="toggleAutoScan()">🔄 自動認証モード</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="resetTenkoStatus()">認証リセット</button>
           </div>
         </div>
@@ -332,6 +338,33 @@
           <div class="card p-4">
             <div class="text-xs text-ink-lighter">未実施</div>
             <div class="text-2xl font-bold mt-1 text-ink-lighter" id="tenko-pending">0</div>
+          </div>
+        </div>
+
+        <!-- Auto Scan Camera Panel -->
+        <div id="auto-scan-panel" class="hidden mb-6">
+          <div class="card p-4">
+            <div class="flex items-center justify-between mb-3">
+              <div>
+                <h3 id="scan-status-title" class="text-base font-bold text-blue-600">🪪 QRコードをかざしてください</h3>
+                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">免許証QRコードをカメラに向けてください</p>
+              </div>
+              <div id="scan-driver-badge" class="hidden px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-sm font-bold"></div>
+            </div>
+            <div class="flex gap-4">
+              <div class="flex-1">
+                <div id="qr-reader" style="width:100%;max-width:480px" class="rounded-lg overflow-hidden"></div>
+                <canvas id="ocr-canvas" class="hidden"></canvas>
+                <video id="ocr-video" class="hidden" autoplay playsinline muted></video>
+                <div id="ocr-preview" class="hidden rounded-lg overflow-hidden mt-2" style="max-width:480px">
+                  <video id="ocr-display-video" class="w-full" autoplay playsinline muted></video>
+                </div>
+              </div>
+              <div id="scan-log" class="flex-1 max-h-64 overflow-y-auto">
+                <h4 class="text-xs font-bold text-ink-lighter mb-2">認証ログ</h4>
+                <div id="scan-log-entries" class="space-y-1 text-xs"></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -361,6 +394,24 @@
       </div>
 
     </main>
+
+    <!-- QR Code Modal -->
+    <div id="qr-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4 p-6 text-center">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold">点呼認証QRコード</h3>
+          <button onclick="closeQrModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+        <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
+        <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
+        <canvas id="qr-modal-canvas" class="mx-auto"></canvas>
+        <div class="flex gap-2 mt-4">
+          <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">📥 ダウンロード</button>
+          <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">🖨 印刷</button>
+          <button onclick="closeQrModal()" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors">閉じる</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Camera Authentication Modal -->
     <div id="camera-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1253,7 +1304,7 @@
       modal.classList.remove('hidden');
 
       const video = document.getElementById('camera-video');
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } })
+      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })
         .then(stream => {
           cameraStream = stream;
           video.srcObject = stream;
@@ -1403,6 +1454,243 @@
     setInterval(() => {
       if (tenkoSchedule.length > 0 && currentTab === 'tenko') renderTenkoTable();
     }, 60000);
+
+    // ===== Auto Scan Mode =====
+    let autoScanActive = false;
+    let html5QrCode = null;
+    let ocrScanning = false;
+    let currentScanPhase = 'qr'; // 'qr' or 'ocr'
+    let lastQrDriver = null;
+    let ocrStream = null;
+    let ocrInterval = null;
+    let tesseractWorker = null;
+
+    function addScanLog(message, type) {
+      const log = document.getElementById('scan-log-entries');
+      const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const color = type === 'success' ? 'text-emerald-600' : type === 'error' ? 'text-red-500' : type === 'warn' ? 'text-amber-600' : 'text-ink-lighter';
+      log.innerHTML = `<div class="${color}"><span class="text-gray-400">${time}</span> ${message}</div>` + log.innerHTML;
+    }
+
+    async function toggleAutoScan() {
+      if (autoScanActive) {
+        stopAutoScan();
+      } else {
+        startAutoScan();
+      }
+    }
+
+    async function startAutoScan() {
+      if (tenkoSchedule.length === 0) {
+        alert('先にシフトデータを読み込んでください');
+        return;
+      }
+      autoScanActive = true;
+      currentScanPhase = 'qr';
+      lastQrDriver = null;
+      document.getElementById('auto-scan-panel').classList.remove('hidden');
+      document.getElementById('auto-scan-btn').textContent = '⏹ 自動認証を停止';
+      document.getElementById('auto-scan-btn').className = 'text-xs px-4 py-1.5 rounded font-bold bg-red-500 text-white hover:bg-red-600 transition-colors';
+      document.getElementById('scan-log-entries').innerHTML = '';
+      addScanLog('自動認証モード開始', 'info');
+      updateScanStatus('qr');
+      startQrScan();
+    }
+
+    function stopAutoScan() {
+      autoScanActive = false;
+      document.getElementById('auto-scan-btn').textContent = '🔄 自動認証モード';
+      document.getElementById('auto-scan-btn').className = 'text-xs px-4 py-1.5 rounded font-bold bg-blue-500 text-white hover:bg-blue-600 transition-colors';
+      stopQrScan();
+      stopOcrScan();
+      document.getElementById('auto-scan-panel').classList.add('hidden');
+      addScanLog('自動認証モード停止', 'info');
+    }
+
+    function updateScanStatus(phase, driverName) {
+      const title = document.getElementById('scan-status-title');
+      const detail = document.getElementById('scan-status-detail');
+      const badge = document.getElementById('scan-driver-badge');
+      if (phase === 'qr') {
+        title.textContent = '🪪 免許証QRコードをかざしてください';
+        title.className = 'text-base font-bold text-blue-600';
+        detail.textContent = '登録済みQRコードをカメラに向けてください';
+        badge.classList.add('hidden');
+      } else if (phase === 'ocr') {
+        title.textContent = '📱 メンター起動画面をかざしてください';
+        title.className = 'text-base font-bold text-amber-600';
+        detail.textContent = '「ルート終了」の表示がある画面をカメラに向けてください';
+        badge.textContent = driverName;
+        badge.classList.remove('hidden');
+      } else if (phase === 'complete') {
+        title.textContent = '✅ 認証完了！次のドライバーのQRをかざしてください';
+        title.className = 'text-base font-bold text-emerald-600';
+        detail.textContent = '';
+        badge.classList.add('hidden');
+      }
+    }
+
+    // --- QR Code Scanning ---
+    function startQrScan() {
+      stopOcrScan();
+      document.getElementById('qr-reader').classList.remove('hidden');
+      document.getElementById('ocr-preview').classList.add('hidden');
+      try {
+        html5QrCode = new Html5Qrcode('qr-reader');
+        html5QrCode.start(
+          { facingMode: 'user' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          onQrCodeScanned,
+          () => {} // ignore scan failures
+        ).catch(err => {
+          addScanLog('カメラ起動失敗: ' + err.message, 'error');
+        });
+      } catch (e) {
+        addScanLog('QRスキャナー初期化失敗: ' + e.message, 'error');
+      }
+    }
+
+    function stopQrScan() {
+      if (html5QrCode) {
+        html5QrCode.stop().catch(() => {});
+        html5QrCode.clear();
+        html5QrCode = null;
+      }
+    }
+
+    function onQrCodeScanned(decodedText) {
+      // QR format: "OFK3_LICENSE:{driverName}" or just the license number
+      let driverName = null;
+      let matchedIndex = -1;
+
+      // Check if QR matches a registered driver
+      if (decodedText.startsWith('OFK3_LICENSE:')) {
+        const name = decodedText.replace('OFK3_LICENSE:', '');
+        matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
+        if (matchedIndex >= 0) driverName = name;
+      }
+
+      // Also check by license number
+      if (!driverName) {
+        for (const [name, licNum] of Object.entries(licenseNumbers)) {
+          if (licNum && decodedText.replace(/[\s\-]/g, '') === licNum.replace(/[\s\-]/g, '')) {
+            matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
+            if (matchedIndex >= 0) { driverName = name; break; }
+          }
+        }
+      }
+
+      if (!driverName || matchedIndex < 0) {
+        addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
+        return;
+      }
+
+      const d = tenkoSchedule[matchedIndex];
+      if (d.licenseAuth && d.mentorAuth) {
+        addScanLog(`${driverName} — 既に完了済み`, 'info');
+        return;
+      }
+
+      if (!d.licenseAuth) {
+        d.licenseAuth = true;
+        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        renderTenkoTable();
+        playSound('success');
+        addScanLog(`✅ ${driverName} — 免許証認証OK`, 'success');
+
+        // Move to OCR phase for mentor
+        lastQrDriver = { name: driverName, index: matchedIndex };
+        currentScanPhase = 'ocr';
+        updateScanStatus('ocr', driverName);
+        stopQrScan();
+        startOcrScan(matchedIndex);
+      }
+    }
+
+    // --- OCR Mentor Screen Scanning ---
+    async function startOcrScan(driverIndex) {
+      document.getElementById('qr-reader').classList.add('hidden');
+      document.getElementById('ocr-preview').classList.remove('hidden');
+
+      const video = document.getElementById('ocr-display-video');
+      try {
+        ocrStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+        video.srcObject = ocrStream;
+        video.play();
+      } catch (err) {
+        addScanLog('カメラ起動失敗: ' + err.message, 'error');
+        return;
+      }
+
+      addScanLog('📱 メンター画面スキャン中...', 'info');
+
+      // Initialize Tesseract worker if needed
+      if (!tesseractWorker) {
+        addScanLog('OCRエンジン初期化中...（初回のみ時間がかかります）', 'info');
+        tesseractWorker = await Tesseract.createWorker('jpn', 1, {
+          logger: () => {}
+        });
+        addScanLog('OCRエンジン準備完了', 'success');
+      }
+
+      ocrScanning = true;
+      runOcrLoop(driverIndex);
+    }
+
+    async function runOcrLoop(driverIndex) {
+      if (!ocrScanning || !autoScanActive) return;
+
+      const video = document.getElementById('ocr-display-video');
+      const canvas = document.getElementById('ocr-canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      try {
+        const { data: { text } } = await tesseractWorker.recognize(canvas);
+        const cleanText = text.replace(/\s/g, '');
+
+        if (cleanText.includes('ルート終了') || cleanText.includes('ルート終') || cleanText.includes('ート終了') || (cleanText.includes('mentor') && cleanText.includes('ルート'))) {
+          // Mentor screen verified!
+          ocrScanning = false;
+          const d = tenkoSchedule[driverIndex];
+          d.mentorAuth = true;
+          localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+          renderTenkoTable();
+          playSound('complete');
+          addScanLog(`🎉 ${d.name} — メンター認証OK → 点呼完了！`, 'success');
+
+          // Return to QR mode for next driver
+          stopOcrScan();
+          updateScanStatus('complete');
+          setTimeout(() => {
+            if (autoScanActive) {
+              currentScanPhase = 'qr';
+              updateScanStatus('qr');
+              startQrScan();
+            }
+          }, 2000);
+          return;
+        } else {
+          // Keep scanning
+          if (ocrScanning) setTimeout(() => runOcrLoop(driverIndex), 2000);
+        }
+      } catch (e) {
+        addScanLog('OCRエラー: ' + e.message, 'error');
+        if (ocrScanning) setTimeout(() => runOcrLoop(driverIndex), 3000);
+      }
+    }
+
+    function stopOcrScan() {
+      ocrScanning = false;
+      if (ocrStream) {
+        ocrStream.getTracks().forEach(t => t.stop());
+        ocrStream = null;
+      }
+      const video = document.getElementById('ocr-display-video');
+      if (video) video.srcObject = null;
+    }
 
     // ===== Optimization =====
     function runOptimization() {
@@ -1605,7 +1893,7 @@
       document.getElementById('master-unlinked').textContent = `未紐付け: ${unlinked}名`;
 
       if (drivers.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="8" class="px-4 py-12 text-center text-sm text-ink-lighter">
+        tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-12 text-center text-sm text-ink-lighter">
           ドライバーが登録されていません<br>
           <span class="text-xs">アサインデータのアップロードまたは手動追加で登録できます</span>
         </td></tr>`;
@@ -1651,6 +1939,9 @@
             <input type="text" value="${(licenseNumbers[name] || '').replace(/"/g, '&quot;')}" placeholder="免許証番号"
               class="border border-border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-accent"
               onchange="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5 text-center">
+            <button onclick="showDriverQR('${name.replace(/'/g, "\\'")}')" class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">QR表示</button>
           </td>
           <td class="px-4 py-2.5">
             <span class="text-xs px-2 py-0.5 rounded ${statusClass} font-medium">${statusLabel}</span>
@@ -1698,6 +1989,88 @@
       }
       localStorage.setItem('licenseNumbers', JSON.stringify(licenseNumbers));
       renderMasterTable();
+    }
+
+    // ===== QR Code Generation =====
+    function showDriverQR(name) {
+      const licNum = licenseNumbers[name];
+      const qrData = licNum ? licNum : 'OFK3_LICENSE:' + name;
+      const modal = document.getElementById('qr-modal');
+      document.getElementById('qr-modal-name').textContent = name;
+      document.getElementById('qr-modal-data').textContent = licNum ? '免許証番号: ' + licNum : 'ドライバー名で生成';
+      modal.classList.remove('hidden');
+
+      const canvas = document.getElementById('qr-modal-canvas');
+      QRCode.toCanvas(canvas, qrData, {
+        width: 280,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' }
+      }, function (err) {
+        if (err) console.error(err);
+      });
+    }
+
+    function closeQrModal() {
+      document.getElementById('qr-modal').classList.add('hidden');
+    }
+
+    function downloadQR(name) {
+      const canvas = document.getElementById('qr-modal-canvas');
+      const link = document.createElement('a');
+      link.download = 'QR_' + name + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function printQR(name) {
+      const canvas = document.getElementById('qr-modal-canvas');
+      const imgData = canvas.toDataURL('image/png');
+      const win = window.open('', '_blank', 'width=400,height=500');
+      win.document.write(`
+        <!DOCTYPE html><html><head><title>QR - ${name}</title>
+        <style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}
+        img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>
+        <body><h2>${name}</h2><p>OFK3 点呼認証用QRコード</p><img src="${imgData}"><script>window.onload=function(){window.print()}<\/script></body></html>
+      `);
+      win.document.close();
+    }
+
+    function printAllQR() {
+      const drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...licenseNumbers });
+      if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
+
+      const qrPromises = drivers.map(name => {
+        const licNum = licenseNumbers[name];
+        const qrData = licNum ? licNum : 'OFK3_LICENSE:' + name;
+        return new Promise(resolve => {
+          const canvas = document.createElement('canvas');
+          QRCode.toCanvas(canvas, qrData, { width: 200, margin: 2 }, () => {
+            resolve({ name, imgData: canvas.toDataURL('image/png'), licNum });
+          });
+        });
+      });
+
+      Promise.all(qrPromises).then(results => {
+        const win = window.open('', '_blank', 'width=800,height=600');
+        const cards = results.map(r => `
+          <div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">
+            <img src="${r.imgData}" style="width:150px;height:150px">
+            <div style="font-weight:bold;margin-top:8px;font-size:14px">${r.name}</div>
+            <div style="color:#666;font-size:10px">${r.licNum || 'OFK3'}</div>
+          </div>
+        `).join('');
+        win.document.write(`
+          <!DOCTYPE html><html><head><title>QR一覧 - OFK3</title>
+          <style>body{font-family:sans-serif;padding:20px}
+          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+          h1{font-size:18px;margin-bottom:16px}
+          @media print{.no-print{display:none}}</style></head>
+          <body><h1>OFK3 点呼認証QRコード一覧</h1>
+          <button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>
+          <div class="grid">${cards}</div></body></html>
+        `);
+        win.document.close();
+      });
     }
 
     function updateMasterNote(name, value) {
