@@ -2017,7 +2017,7 @@
 
     function downloadQR(name) {
       var img = document.getElementById('qr-modal-img');
-      if (!img || !img.src) { alert('QRコードを先に表示してください'); return; }
+      if (!img || !img.src || img.src.indexOf('data:') === -1) { alert('QRコードを先に表示してください'); return; }
       var a = document.createElement('a');
       a.href = img.src;
       a.download = 'QR_' + name + '.png';
