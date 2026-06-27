@@ -468,13 +468,14 @@
                   <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">控除</th>
                   <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">税別</th>
                   <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">税</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">システム使用料</th>
                   <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter font-bold">合計</th>
                   <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">LINE</th>
                   <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">状態</th>
                 </tr>
               </thead>
               <tbody id="billing-table-body">
-                <tr><td colspan="11" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>
+                <tr><td colspan="12" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>
               </tbody>
             </table>
           </div>
@@ -2787,13 +2788,19 @@
     function parseBillingData(rows) {
       billingData = [];
       billingSent = {};
-      // Row 1 = header (row index 1 in 0-based = row 2 in Excel)
-      // Data starts from row index 3 (row 4 in Excel)
-      for (var i = 3; i < rows.length; i++) {
+      // ヘッダー行を探す（「宛名」を含む行）
+      var startRow = 2; // デフォルト: Row3(index 2)からデータ
+      for (var h = 0; h < Math.min(rows.length, 5); h++) {
+        if (rows[h] && rows[h].join && rows[h].join('').indexOf('宛名') >= 0) {
+          startRow = h + 1; // ヘッダーの次の行からデータ
+          break;
+        }
+      }
+      for (var i = startRow; i < rows.length; i++) {
         var row = rows[i];
         if (!row || !row[0]) continue;
 
-        var driverKey = (row[0] || '').toString().trim(); // Column A: ドライバー名(英語/混在)
+        var driverKey = (row[0] || '').toString().trim(); // Column A: ドライバー名
         var name = (row[2] || '').toString().trim(); // Column C: 宛名
         if (!name) continue;
 
@@ -2812,21 +2819,23 @@
           if (v > 0) breakdown.push(labels[c - 3] + ': ' + v + '日');
         }
 
-        var sysUsage = (row[11] || '').toString().trim(); // システム使用料
-        var sundayBonus = (row[12] || '').toString().trim(); // 日曜日手当
+        var sysUsageFlag = (row[11] || '').toString().trim(); // システム使用料フラグ(○/×)
+        var sundayBonus = (row[12] || '').toString().trim(); // 日曜日手当(○/×)
         var charter = parseNum(row[13]); // チャーター料金
         var mileage = parseNum(row[14]); // 走行距離連動日
         var deduction = parseNum(row[15]); // 控除
         var subtotal = parseNum(row[16]); // 税別
         var tax = parseNum(row[17]); // 税
-        var total = parseNum(row[18]); // 合計
+        var sysUsageFee = parseNum(row[18]); // システム使用料(金額)
+        var total = parseNum(row[19]); // 合計
 
         billingData.push({
           driverKey: driverKey,
           name: name,
           workDays: workDays,
           breakdown: breakdown,
-          sysUsage: sysUsage,
+          sysUsageFlag: sysUsageFlag,
+          sysUsageFee: sysUsageFee,
           sundayBonus: sundayBonus,
           charter: charter,
           mileage: mileage,
@@ -2887,6 +2896,7 @@
           '<td class="px-3 py-2 text-right ' + (d.deduction < 0 ? 'text-red-600' : '') + '">' + formatYen(d.deduction) + '</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.subtotal) + '</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.tax) + '</td>' +
+          '<td class="px-3 py-2 text-right">' + formatYen(d.sysUsageFee) + '</td>' +
           '<td class="px-3 py-2 text-right font-bold">' + formatYen(d.total) + '</td>' +
           '<td class="px-3 py-2 text-center">' + lineHtml + '</td>' +
           '<td class="px-3 py-2 text-center">' + statusHtml + '</td>' +
@@ -2934,13 +2944,14 @@
       }
       if (d.charter > 0) msg += '  チャーター料金: ' + formatYen(d.charter) + '\n';
       if (d.mileage > 0) msg += '  走行距離連動: ' + formatYen(d.mileage) + '\n';
-      if (d.sysUsage === '○') msg += '  システム使用料: あり\n';
+      if (d.sysUsageFlag === '○') msg += '  システム使用料: あり\n';
       if (d.sundayBonus === '○') msg += '  日曜日手当: あり\n';
       if (d.deduction !== 0) msg += '  控除: ' + formatYen(d.deduction) + '\n';
       msg += '━━━━━━━━━━━━━━━\n';
       msg += '■ ご請求金額\n';
       msg += '  税別: ' + formatYen(d.subtotal) + '\n';
       msg += '  消費税: ' + formatYen(d.tax) + '\n';
+      if (d.sysUsageFee > 0) msg += '  システム使用料: ' + formatYen(d.sysUsageFee) + '\n';
       msg += '  ━━━━━━━━━━━\n';
       msg += '  合計(税込): ' + formatYen(d.total) + '\n';
       msg += '━━━━━━━━━━━━━━━\n\n';
@@ -2952,9 +2963,64 @@
 
     function previewBillingMessage() {
       if (billingData.length === 0) { alert('請求データを読み込んでください'); return; }
-      var sample = billingData[0];
-      var msg = buildBillingMessage(sample);
-      alert('=== メッセージプレビュー ===\n（1件目: ' + sample.name + '）\n\n' + msg);
+
+      // プレビューモーダルを作成
+      var existing = document.getElementById('billing-preview-modal');
+      if (existing) existing.remove();
+
+      var modal = document.createElement('div');
+      modal.id = 'billing-preview-modal';
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+      modal.style.cssText = 'overflow-y:auto;padding:20px';
+
+      // ドライバー選択タブ + メッセージプレビュー
+      var selected = billingData.filter(function(d) { return d.selected; });
+      if (selected.length === 0) selected = billingData;
+
+      var tabsHtml = selected.map(function(d, i) {
+        return '<button onclick="showBillingPreview(' + i + ')" id="bp-tab-' + i + '" class="text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer ' + (i === 0 ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200') + '">' + d.name + '</button>';
+      }).join('');
+
+      var firstMsg = buildBillingMessage(selected[0]);
+
+      modal.innerHTML =
+        '<div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-auto" style="max-height:90vh;display:flex;flex-direction:column">' +
+          '<div class="flex items-center justify-between p-4 border-b border-border">' +
+            '<h3 class="text-base font-bold">📋 メッセージテンプレート プレビュー</h3>' +
+            '<button onclick="document.getElementById(\'billing-preview-modal\').remove()" class="text-gray-400 hover:text-gray-600 text-2xl cursor-pointer">&times;</button>' +
+          '</div>' +
+          '<div class="p-3 border-b border-border overflow-x-auto"><div class="flex gap-2" id="bp-tabs">' + tabsHtml + '</div></div>' +
+          '<div class="p-4 flex-1 overflow-y-auto">' +
+            '<div id="bp-message" class="bg-green-50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed" style="max-height:60vh;overflow-y:auto">' + escapeHtml(firstMsg) + '</div>' +
+          '</div>' +
+          '<div class="p-3 border-t border-border flex justify-end gap-2">' +
+            '<span class="text-xs text-ink-lighter self-center mr-auto">💡 このメッセージがLINEで送信されます</span>' +
+            '<button onclick="document.getElementById(\'billing-preview-modal\').remove()" class="btn-secondary text-xs px-4 py-2 rounded cursor-pointer">閉じる</button>' +
+          '</div>' +
+        '</div>';
+
+      document.body.appendChild(modal);
+
+      // プレビュー切替用のグローバル変数
+      window._billingPreviewData = selected;
+    }
+
+    function showBillingPreview(index) {
+      var data = window._billingPreviewData;
+      if (!data || !data[index]) return;
+      var msg = buildBillingMessage(data[index]);
+      document.getElementById('bp-message').textContent = msg;
+      // タブのスタイル切替
+      var tabs = document.getElementById('bp-tabs').children;
+      for (var i = 0; i < tabs.length; i++) {
+        tabs[i].className = i === index
+          ? 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-blue-500 text-white'
+          : 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-gray-100 text-gray-600 hover:bg-gray-200';
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     async function sendAllBillingLine() {
