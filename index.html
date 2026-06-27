@@ -1450,9 +1450,10 @@
       }
     }
 
-    // Auto-refresh overdue highlights every minute
+    // Auto-refresh overdue highlights every minute + LINE auto-notify check
     setInterval(() => {
       if (tenkoSchedule.length > 0 && currentTab === 'tenko') renderTenkoTable();
+      checkTenkoLineNotify();
     }, 60000);
 
     // ===== Auto Scan Mode =====
@@ -2676,10 +2677,100 @@
       printWindow.document.close();
     }
 
+    // ===== 点呼LINE自動通知 =====
+    // 送信済み追跡（ブラウザセッション中のみ。リロードでリセット）
+    var tenkoNotifySent = {}; // { "driverName_5min": true, "admin_HH:MM": true }
+
+    function checkTenkoLineNotify() {
+      if (tenkoSchedule.length === 0) return;
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return;
+
+      var now = new Date();
+      var currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+      var incompleteAtDeadline = {}; // arrivalTime -> [names]
+
+      tenkoSchedule.forEach(function(d) {
+        var bothDone = d.licenseAuth && d.mentorAuth;
+        if (bothDone) return; // 認証完了済みはスキップ
+
+        // === 5分前通知（ドライバー本人へ） ===
+        var fiveMinBefore = d.arrivalMinutes - 5;
+        if (currentMinutes >= fiveMinBefore && currentMinutes < d.arrivalMinutes) {
+          var key5 = d.name + '_5min';
+          if (!tenkoNotifySent[key5]) {
+            var userId = lineMapping[d.name];
+            if (userId && userId.indexOf('U') === 0) {
+              // LINE User IDが登録されてる場合のみ送信
+              var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + d.arrivalTime + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
+              pushTenkoNotify(userId, msg);
+              tenkoNotifySent[key5] = true;
+              addTenkoNotifyLog(d.name, '5分前リマインダー送信');
+            }
+          }
+        }
+
+        // === 定刻通知（管理者へ、同じ着車時間のドライバーをまとめる） ===
+        if (currentMinutes >= d.arrivalMinutes) {
+          if (!incompleteAtDeadline[d.arrivalTime]) incompleteAtDeadline[d.arrivalTime] = [];
+          incompleteAtDeadline[d.arrivalTime].push(d);
+        }
+      });
+
+      // 定刻になった未完了ドライバーを管理者に通知
+      Object.keys(incompleteAtDeadline).forEach(function(arrTime) {
+        var adminKey = 'admin_' + arrTime;
+        if (tenkoNotifySent[adminKey]) return;
+
+        var drivers = incompleteAtDeadline[arrTime];
+        var list = drivers.map(function(d) {
+          return '・' + d.name + '（🪪' + (d.licenseAuth ? '✅' : '❌') + ' 👨‍🏫' + (d.mentorAuth ? '✅' : '❌') + '）';
+        }).join('\n');
+
+        var adminMsg = '🚨 点呼未完了通知\n\n着車時間 ' + arrTime + ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' + list + '\n\n未完了: ' + drivers.length + '名';
+
+        // 管理者に送信（__admin__はサーバー側でADMIN_LINE_IDに変換）
+        pushTenkoNotify('__admin__', adminMsg);
+        tenkoNotifySent[adminKey] = true;
+        addTenkoNotifyLog('管理者', '着車 ' + arrTime + ' 未完了 ' + drivers.length + '名 通知送信');
+      });
+    }
+
+    async function pushTenkoNotify(to, text) {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return;
+      try {
+        await fetch(proxyUrl, {
+          method: 'POST',
+          mode: 'cors',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: to, messages: [{ type: 'text', text: text }] })
+        });
+      } catch(e) {
+        console.error('点呼LINE通知エラー:', e);
+      }
+    }
+
+    function addTenkoNotifyLog(name, action) {
+      console.log('[点呼LINE通知]', name, action);
+      // スキャンログがあればそこにも表示
+      var log = document.getElementById('scan-log-entries');
+      if (log) {
+        var entry = document.createElement('div');
+        entry.className = 'text-xs py-1 border-b border-gray-100 text-blue-600';
+        entry.textContent = new Date().toLocaleTimeString() + ' 📩 ' + name + ' - ' + action;
+        log.insertBefore(entry, log.firstChild);
+      }
+    }
+
     // Initialize
     renderDriverTable();
     initLineSettings();
     loadTenkoData();
+    // 起動時にも1回チェック
+    setTimeout(checkTenkoLineNotify, 3000);
   </script>
 </body>
 </html>
