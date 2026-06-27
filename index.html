@@ -8,7 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -404,8 +404,14 @@
           </div>
         </div>
 
-        <div id="tenko-empty" class="text-center py-16">
-          <p class="text-sm text-ink-lighter">シフトデータをアップロードすると、当日の点呼スケジュールが表示されます</p>
+        <div id="tenko-empty" class="text-center py-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+          onclick="document.getElementById('shift-file-input').click()"
+          ondragover="event.preventDefault(); this.classList.add('border-blue-400','bg-blue-50')"
+          ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
+          ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handleDropFile(event, 'shift')">
+          <div class="text-4xl mb-3">📋</div>
+          <p class="text-sm font-medium text-ink-lighter">シフトExcelをドラッグ＆ドロップ</p>
+          <p class="text-xs text-gray-400 mt-1">またはクリックしてファイルを選択</p>
         </div>
       </div>
 
@@ -419,9 +425,20 @@
           <div class="flex gap-2">
             <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
               📂 請求Excel読込
-              <input type="file" accept=".xlsx,.xls" onchange="handleBillingUpload(event)" class="hidden">
+              <input type="file" accept=".xlsx,.xls" onchange="handleBillingUpload(event)" class="hidden" id="billing-file-input">
             </label>
           </div>
+        </div>
+
+        <!-- ドロップゾーン（データなし時） -->
+        <div id="billing-dropzone" class="text-center py-16 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-green-400 hover:bg-green-50/50 transition-colors"
+          onclick="document.getElementById('billing-file-input').click()"
+          ondragover="event.preventDefault(); this.classList.add('border-green-400','bg-green-50')"
+          ondragleave="this.classList.remove('border-green-400','bg-green-50')"
+          ondrop="event.preventDefault(); this.classList.remove('border-green-400','bg-green-50'); handleDropFile(event, 'billing')">
+          <div class="text-4xl mb-3">💰</div>
+          <p class="text-sm font-medium text-ink-lighter">請求Excelをドラッグ＆ドロップ</p>
+          <p class="text-xs text-gray-400 mt-1">またはクリックしてファイルを選択</p>
         </div>
 
         <!-- 請求月表示 -->
@@ -2082,13 +2099,16 @@
       renderMasterTable();
     }
 
-    // ===== QR Code Generation (qrcodejs) =====
+    // ===== QR Code Generation (QRious) =====
     function getQRData(name) {
       var tid = transportIDs[name];
       return tid ? tid : 'OFK3_DRIVER:' + name;
     }
 
-    var currentQRInstance = null;
+    function generateQRDataURL(text, size) {
+      var qr = new QRious({ value: text, size: size || 300, level: 'H', background: '#ffffff', foreground: '#000000' });
+      return qr.toDataURL('image/png');
+    }
 
     function showDriverQR(name) {
       var qrData = getQRData(name);
@@ -2099,18 +2119,7 @@
       modal.classList.remove('hidden');
 
       var img = document.getElementById('qr-modal-img');
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) {
-          console.error(err);
-          alert("QRコード生成エラー");
-          return;
-        }
-        img.src = url;
-      });
+      img.src = generateQRDataURL(qrData, 300);
     }
 
     function closeQrModal() {
@@ -2119,70 +2128,52 @@
 
     function downloadQR(name) {
       var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) { alert("QR生成失敗"); return; }
-        var link = document.createElement('a');
-        link.href = url;
-        link.download = 'QR_' + name + '.png';
-        link.click();
-      });
+      var dataURL = generateQRDataURL(qrData, 300);
+      var link = document.createElement('a');
+      link.href = dataURL;
+      link.download = 'QR_' + name + '.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
 
     function printQR(name) {
       var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) { alert("QR生成失敗"); return; }
-        var win = window.open('', '_blank', 'width=400,height=500');
-        win.document.write(
-          '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
-          '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
-          'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
-          '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + url + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
-        );
-        win.document.close();
-      });
+      var dataURL = generateQRDataURL(qrData, 300);
+      var win = window.open('', '_blank', 'width=400,height=500');
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
+        '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
+        'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
+        '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + dataURL + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
+      );
+      win.document.close();
     }
 
     function printAllQR() {
       var drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...transportIDs });
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
-      var cards = [];
-      var done = 0;
-      drivers.forEach(function(name) {
+      var html = drivers.map(function(name) {
         var tid = transportIDs[name];
         var qrData = tid ? tid : 'OFK3_DRIVER:' + name;
-        QRCode.toDataURL(qrData, { errorCorrectionLevel: 'H', margin: 2, width: 200 }, function(err, url) {
-          cards.push({ name: name, imgData: err ? '' : url, tid: tid || 'OFK3' });
-          done++;
-          if (done === drivers.length) {
-            var win = window.open('', '_blank', 'width=800,height=600');
-            var html = cards.map(function(r) {
-              return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
-                '<img src="' + r.imgData + '" style="width:150px;height:150px">' +
-                '<div style="font-weight:bold;margin-top:8px;font-size:14px">' + r.name + '</div>' +
-                '<div style="color:#666;font-size:10px">' + r.tid + '</div></div>';
-            }).join('');
-            win.document.write(
-              '<!DOCTYPE html><html><head><title>QR一覧 - OFK3</title>' +
-              '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
-              'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
-              '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
-              '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
-              '<div class="grid">' + html + '</div></body></html>'
-            );
-            win.document.close();
-          }
-        });
-      });
+        var imgData = generateQRDataURL(qrData, 200);
+        return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
+          '<img src="' + imgData + '" style="width:150px;height:150px">' +
+          '<div style="font-weight:bold;margin-top:8px;font-size:14px">' + name + '</div>' +
+          '<div style="color:#666;font-size:10px">' + (tid || 'OFK3') + '</div></div>';
+      }).join('');
+
+      var win = window.open('', '_blank', 'width=800,height=600');
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>QR一覧 - OFK3</title>' +
+        '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
+        'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
+        '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
+        '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
+        '<div class="grid">' + html + '</div></body></html>'
+      );
+      win.document.close();
     }
 
     function updateMasterNote(name, value) {
@@ -2758,6 +2749,21 @@
     var billingData = [];
     var billingSent = {}; // { "宛名": true }
 
+    // ドラッグ＆ドロップ共通ハンドラー
+    function handleDropFile(event, type) {
+      var file = event.dataTransfer.files[0];
+      if (!file) return;
+      if (!file.name.match(/\.xlsx?$/i)) { alert('Excelファイル(.xlsx/.xls)を選択してください'); return; }
+      if (type === 'shift') {
+        // シフトデータ用
+        var fakeEvent = { target: { files: [file] } };
+        handleShiftUpload(fakeEvent);
+      } else if (type === 'billing') {
+        var fakeEvent = { target: { files: [file] } };
+        handleBillingUpload(fakeEvent);
+      }
+    }
+
     function handleBillingUpload(event) {
       var file = event.target.files[0];
       if (!file) return;
@@ -2837,6 +2843,7 @@
       renderBillingTable();
       document.getElementById('billing-summary').classList.remove('hidden');
       document.getElementById('billing-actions').classList.remove('hidden');
+      document.getElementById('billing-dropzone').classList.add('hidden');
     }
 
     function parseNum(val) {
