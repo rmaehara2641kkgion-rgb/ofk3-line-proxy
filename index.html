@@ -8,7 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -369,21 +369,6 @@
           </div>
         </div>
 
-        <!-- LINE自動通知コントロール -->
-        <div class="card p-4 mb-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-bold flex items-center gap-2">📩 LINE自動通知</h3>
-            <span id="line-notify-master-status" class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
-          </div>
-          <div id="line-notify-slots" class="space-y-2">
-            <!-- JS側で動的に生成 -->
-          </div>
-          <div id="line-notify-log" class="mt-3 max-h-32 overflow-y-auto hidden">
-            <h4 class="text-xs font-bold text-ink-lighter mb-1">送信ログ</h4>
-            <div id="line-notify-log-entries" class="space-y-1"></div>
-          </div>
-        </div>
-
         <!-- Tenko Schedule Table -->
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
@@ -419,12 +404,21 @@
           <div class="flex gap-2">
             <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
               📂 請求Excel読込
-              <input type="file" accept=".xlsx,.xls" onchange="handleBillingUpload(event)" class="hidden">
+              <input type="file" accept=".xlsx,.xls" onchange="handleBillingUpload(event)" class="hidden" id="billing-file-input">
             </label>
           </div>
         </div>
 
-        <!-- 請求月表示 -->
+        <div id="billing-dropzone" class="text-center py-16 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-green-400 hover:bg-green-50/50 transition-colors"
+          onclick="document.getElementById('billing-file-input').click()"
+          ondragover="event.preventDefault(); this.classList.add('border-green-400','bg-green-50')"
+          ondragleave="this.classList.remove('border-green-400','bg-green-50')"
+          ondrop="event.preventDefault(); this.classList.remove('border-green-400','bg-green-50'); handleDropFile(event, 'billing')">
+          <div class="text-4xl mb-3">💰</div>
+          <p class="text-sm font-medium text-ink-lighter">請求Excelをドラッグ＆ドロップ</p>
+          <p class="text-xs text-gray-400 mt-1">またはクリックしてファイルを選択</p>
+        </div>
+
         <div id="billing-summary" class="hidden mb-4">
           <div class="grid grid-cols-3 gap-3">
             <div class="card p-3 text-center">
@@ -442,19 +436,16 @@
           </div>
         </div>
 
-        <!-- 一斉送信ボタン -->
         <div id="billing-actions" class="hidden mb-4 flex gap-2">
           <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
           <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
         </div>
 
-        <!-- 送信ログ -->
         <div id="billing-send-log" class="hidden mb-4 card p-3">
           <h4 class="text-xs font-bold text-ink-lighter mb-2">送信ログ</h4>
           <div id="billing-log-entries" class="space-y-1 max-h-32 overflow-y-auto"></div>
         </div>
 
-        <!-- 請求一覧テーブル -->
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -493,7 +484,7 @@
         </div>
         <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
         <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
-        <img id="qr-modal-img" class="mx-auto" style="width:250px;height:250px">
+        <div id="qr-modal-render" class="mx-auto" style="display:inline-block"></div>
         <div class="flex gap-2 mt-4" style="position:relative;z-index:52">
           <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer">📥 ダウンロード</button>
           <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors cursor-pointer">🖨 印刷</button>
@@ -1540,10 +1531,9 @@
       }
     }
 
-    // Auto-refresh overdue highlights every minute + LINE auto-notify check
+    // Auto-refresh overdue highlights every minute
     setInterval(() => {
       if (tenkoSchedule.length > 0 && currentTab === 'tenko') renderTenkoTable();
-      checkTenkoLineNotify();
     }, 60000);
 
     // ===== Auto Scan Mode =====
@@ -2098,18 +2088,15 @@
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
-      var img = document.getElementById('qr-modal-img');
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) {
-          console.error(err);
-          alert("QRコード生成エラー");
-          return;
-        }
-        img.src = url;
+      var container = document.getElementById('qr-modal-render');
+      container.innerHTML = '';
+      currentQRInstance = new QRCode(container, {
+        text: qrData,
+        width: 250,
+        height: 250,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
       });
     }
 
@@ -2117,53 +2104,69 @@
       document.getElementById('qr-modal').classList.add('hidden');
     }
 
+    function getQRImageSrc() {
+      var container = document.getElementById('qr-modal-render');
+      var img = container.querySelector('img');
+      if (img) return img.src;
+      var canvas = container.querySelector('canvas');
+      if (canvas) return canvas.toDataURL('image/png');
+      return '';
+    }
+
     function downloadQR(name) {
-      var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) { alert("QR生成失敗"); return; }
-        var link = document.createElement('a');
-        link.href = url;
-        link.download = 'QR_' + name + '.png';
-        link.click();
-      });
+      var src = getQRImageSrc();
+      if (!src) { alert('QRコードが生成されていません'); return; }
+      var a = document.createElement('a');
+      a.href = src;
+      a.download = 'QR_' + name + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
 
     function printQR(name) {
-      var qrData = getQRData(name);
-      QRCode.toDataURL(qrData, {
-        errorCorrectionLevel: 'H',
-        margin: 2,
-        width: 300
-      }, function(err, url) {
-        if (err) { alert("QR生成失敗"); return; }
-        var win = window.open('', '_blank', 'width=400,height=500');
-        win.document.write(
-          '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
-          '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
-          'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
-          '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + url + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
-        );
-        win.document.close();
-      });
+      var imgData = getQRImageSrc();
+      if (!imgData) { alert('QRコードが生成されていません'); return; }
+      var win = window.open('', '_blank', 'width=400,height=500');
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>QR - ' + name + '</title>' +
+        '<style>body{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;margin:0}' +
+        'img{width:250px;height:250px}h2{margin:20px 0 5px;font-size:18px}p{color:#666;font-size:12px}</style></head>' +
+        '<body><h2>' + name + '</h2><p>OFK3 点呼認証用QRコード</p><img src="' + imgData + '"><script>window.onload=function(){window.print()}<\/script></body></html>'
+      );
+      win.document.close();
     }
 
     function printAllQR() {
       var drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...transportIDs });
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
+      // 一時的にQRを生成して画像を収集
+      var tempDiv = document.createElement('div');
+      tempDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px';
+      document.body.appendChild(tempDiv);
+
       var cards = [];
       var done = 0;
       drivers.forEach(function(name) {
         var tid = transportIDs[name];
         var qrData = tid ? tid : 'OFK3_DRIVER:' + name;
-        QRCode.toDataURL(qrData, { errorCorrectionLevel: 'H', margin: 2, width: 200 }, function(err, url) {
-          cards.push({ name: name, imgData: err ? '' : url, tid: tid || 'OFK3' });
+        var qrDiv = document.createElement('div');
+        tempDiv.appendChild(qrDiv);
+        new QRCode(qrDiv, { text: qrData, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff' });
+
+        // qrcodejsは内部でcanvasまたはimgを生成するので少し待つ
+        setTimeout(function() {
+          var img = qrDiv.querySelector('img');
+          var imgSrc = img ? img.src : '';
+          if (!imgSrc) {
+            var c = qrDiv.querySelector('canvas');
+            if (c) imgSrc = c.toDataURL('image/png');
+          }
+          cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3' });
           done++;
           if (done === drivers.length) {
+            document.body.removeChild(tempDiv);
             var win = window.open('', '_blank', 'width=800,height=600');
             var html = cards.map(function(r) {
               return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
@@ -2181,7 +2184,7 @@
             );
             win.document.close();
           }
-        });
+        }, 500);
       });
     }
 
@@ -2754,9 +2757,27 @@
       printWindow.document.close();
     }
 
-    // ===== 請求金額照合 =====
+    // Initialize
+    renderDriverTable();
+    initLineSettings();
+    loadTenkoData();
+
+    // ===== 請求照合機能 =====
     var billingData = [];
-    var billingSent = {}; // { "宛名": true }
+    var billingSent = {};
+
+    function handleDropFile(event, type) {
+      var file = event.dataTransfer.files[0];
+      if (!file) return;
+      if (!file.name.match(/\.xlsx?$/i)) { alert('Excelファイル(.xlsx/.xls)を選択してください'); return; }
+      if (type === 'shift') {
+        var fakeEvent = { target: { files: [file] } };
+        handleShiftUpload(fakeEvent);
+      } else if (type === 'billing') {
+        var fakeEvent2 = { target: { files: [file] } };
+        handleBillingUpload(fakeEvent2);
+      }
+    }
 
     function handleBillingUpload(event) {
       var file = event.target.files[0];
@@ -2775,11 +2796,10 @@
     function parseBillingData(rows) {
       billingData = [];
       billingSent = {};
-      // ヘッダー行を探す（「宛名」を含む行）
-      var startRow = 2; // デフォルト: Row3(index 2)からデータ
+      var startRow = 2;
       for (var h = 0; h < Math.min(rows.length, 5); h++) {
         if (rows[h] && rows[h].join && rows[h].join('').indexOf('宛名') >= 0) {
-          startRow = h + 1; // ヘッダーの次の行からデータ
+          startRow = h + 1;
           break;
         }
       }
@@ -2787,34 +2807,32 @@
         var row = rows[i];
         if (!row || !row[0]) continue;
 
-        var driverKey = (row[0] || '').toString().trim(); // Column A: ドライバー名
-        var name = (row[2] || '').toString().trim(); // Column C: 宛名
+        var driverKey = (row[0] || '').toString().trim();
+        var name = (row[2] || '').toString().trim();
         if (!name) continue;
 
-        // 稼働日数を集計 (D-K列 = index 3-10)
         var workDays = 0;
         for (var c = 3; c <= 10; c++) {
           var v = parseInt(row[c]) || 0;
           workDays += v;
         }
 
-        // 稼働内訳
         var breakdown = [];
         var labels = ['11B', '8B', 'B1', 'B2', 'biker', '嘉麻応援', 'C1', 'C3'];
-        for (var c = 3; c <= 10; c++) {
-          var v = parseInt(row[c]) || 0;
-          if (v > 0) breakdown.push(labels[c - 3] + ': ' + v + '日');
+        for (var c2 = 3; c2 <= 10; c2++) {
+          var v2 = parseInt(row[c2]) || 0;
+          if (v2 > 0) breakdown.push(labels[c2 - 3] + ': ' + v2 + '日');
         }
 
-        var sysUsageFlag = (row[11] || '').toString().trim(); // システム使用料フラグ(○/×)
-        var sundayBonus = (row[12] || '').toString().trim(); // 日曜日手当(○/×)
-        var charter = parseNum(row[13]); // チャーター料金
-        var mileage = parseNum(row[14]); // 走行距離連動日
-        var deduction = parseNum(row[15]); // 控除
-        var subtotal = parseNum(row[16]); // 税別
-        var tax = parseNum(row[17]); // 税
-        var sysUsageFee = parseNum(row[18]); // システム使用料(金額)
-        var total = parseNum(row[19]); // 合計
+        var sysUsageFlag = (row[11] || '').toString().trim();
+        var sundayBonus = (row[12] || '').toString().trim();
+        var charter = parseNum(row[13]);
+        var mileage = parseNum(row[14]);
+        var deduction = parseNum(row[15]);
+        var subtotal = parseNum(row[16]);
+        var tax = parseNum(row[17]);
+        var sysUsageFee = parseNum(row[18]);
+        var total = parseNum(row[19]);
 
         billingData.push({
           driverKey: driverKey,
@@ -2837,6 +2855,7 @@
       renderBillingTable();
       document.getElementById('billing-summary').classList.remove('hidden');
       document.getElementById('billing-actions').classList.remove('hidden');
+      document.getElementById('billing-dropzone').classList.add('hidden');
     }
 
     function parseNum(val) {
@@ -2845,11 +2864,16 @@
       return parseInt(s) || 0;
     }
 
+    function formatYen(n) {
+      if (n === 0) return '¥0';
+      return '¥' + n.toLocaleString();
+    }
+
     function renderBillingTable() {
       var tbody = document.getElementById('billing-table-body');
       if (!tbody) return;
       if (billingData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>';
         return;
       }
 
@@ -2859,7 +2883,6 @@
 
       tbody.innerHTML = billingData.map(function(d, i) {
         totalAmount += d.total;
-        // LINE送信可能かチェック（マスタのlineMappingからUser IDを探す）
         var userId = findLineUserId(d.driverKey, d.name);
         var hasLine = userId && userId.indexOf('U') === 0;
         if (hasLine) lineCount++;
@@ -2895,21 +2918,13 @@
       document.getElementById('billing-line-count').textContent = lineCount;
     }
 
-    function formatYen(n) {
-      if (n === 0) return '¥0';
-      return '¥' + n.toLocaleString();
-    }
-
     function toggleBillingSelect(index, checked) {
       billingData[index].selected = checked;
     }
 
     function findLineUserId(driverKey, name) {
-      // まずドライバーキー(英語名)でマッチ
       if (lineMapping[driverKey]) return lineMapping[driverKey];
-      // 宛名でマッチ
       if (lineMapping[name]) return lineMapping[name];
-      // 宛名から空白除去してマッチ
       var cleanName = name.replace(/[\s　]/g, '');
       for (var key in lineMapping) {
         if (key.replace(/[\s　]/g, '') === cleanName) return lineMapping[key];
@@ -2948,10 +2963,13 @@
       return msg;
     }
 
+    function escapeHtmlBilling(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
     function previewBillingMessage() {
       if (billingData.length === 0) { alert('請求データを読み込んでください'); return; }
 
-      // プレビューモーダルを作成
       var existing = document.getElementById('billing-preview-modal');
       if (existing) existing.remove();
 
@@ -2960,7 +2978,6 @@
       modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
       modal.style.cssText = 'overflow-y:auto;padding:20px';
 
-      // ドライバー選択タブ + メッセージプレビュー
       var selected = billingData.filter(function(d) { return d.selected; });
       if (selected.length === 0) selected = billingData;
 
@@ -2978,7 +2995,7 @@
           '</div>' +
           '<div class="p-3 border-b border-border overflow-x-auto"><div class="flex gap-2" id="bp-tabs">' + tabsHtml + '</div></div>' +
           '<div class="p-4 flex-1 overflow-y-auto">' +
-            '<div id="bp-message" class="bg-green-50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed" style="max-height:60vh;overflow-y:auto">' + escapeHtml(firstMsg) + '</div>' +
+            '<div id="bp-message" class="bg-green-50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed" style="max-height:60vh;overflow-y:auto">' + escapeHtmlBilling(firstMsg) + '</div>' +
           '</div>' +
           '<div class="p-3 border-t border-border flex justify-end gap-2">' +
             '<span class="text-xs text-ink-lighter self-center mr-auto">💡 このメッセージがLINEで送信されます</span>' +
@@ -2987,8 +3004,6 @@
         '</div>';
 
       document.body.appendChild(modal);
-
-      // プレビュー切替用のグローバル変数
       window._billingPreviewData = selected;
     }
 
@@ -2997,17 +3012,12 @@
       if (!data || !data[index]) return;
       var msg = buildBillingMessage(data[index]);
       document.getElementById('bp-message').textContent = msg;
-      // タブのスタイル切替
       var tabs = document.getElementById('bp-tabs').children;
       for (var i = 0; i < tabs.length; i++) {
         tabs[i].className = i === index
           ? 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-blue-500 text-white'
           : 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-gray-100 text-gray-600 hover:bg-gray-200';
       }
-    }
-
-    function escapeHtml(str) {
-      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     async function sendAllBillingLine() {
@@ -3052,202 +3062,18 @@
           entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + ' 送信完了';
           logEl.insertBefore(entry, logEl.firstChild);
         } catch(e) {
-          var entry = document.createElement('div');
-          entry.className = 'text-xs py-1 text-red-600';
-          entry.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' 送信失敗: ' + e.message;
-          logEl.insertBefore(entry, logEl.firstChild);
+          var entry2 = document.createElement('div');
+          entry2.className = 'text-xs py-1 text-red-600';
+          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' 送信失敗: ' + e.message;
+          logEl.insertBefore(entry2, logEl.firstChild);
         }
 
-        // 連続送信の間隔
         await new Promise(function(r) { setTimeout(r, 500); });
       }
 
       renderBillingTable();
       alert('送信完了: ' + successCount + '/' + targets.length + '名');
     }
-
-    // ===== 点呼LINE自動通知 =====
-    // 固定の3つの着車時間スロット
-    var NOTIFY_SLOTS = [
-      { time: '09:00', minutes: 540 },
-      { time: '11:00', minutes: 660 },
-      { time: '14:40', minutes: 880 }
-    ];
-
-    // 状態管理
-    var tenkoNotifySent = {}; // { "driver_5min_09:00": true, "admin_09:00": true }
-    var tenkoNotifyDisabled = JSON.parse(localStorage.getItem('tenkoNotifyDisabled') || '{}'); // { "09:00": true }
-    var tenkoNotifyLogs = JSON.parse(localStorage.getItem('tenkoNotifyLogs') || '[]');
-
-    function renderNotifySlots() {
-      var container = document.getElementById('line-notify-slots');
-      if (!container) return;
-
-      var now = new Date();
-      var currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-      container.innerHTML = NOTIFY_SLOTS.map(function(slot) {
-        var disabled = tenkoNotifyDisabled[slot.time];
-        var sent = tenkoNotifySent['admin_' + slot.time];
-        var isPast = currentMinutes >= slot.minutes;
-
-        var statusText, statusClass;
-        if (disabled) {
-          statusText = '解除済み';
-          statusClass = 'bg-gray-100 text-gray-500';
-        } else if (sent) {
-          statusText = '送信済み ✅';
-          statusClass = 'bg-green-100 text-green-700';
-        } else if (isPast) {
-          statusText = '対象者なし';
-          statusClass = 'bg-gray-100 text-gray-500';
-        } else {
-          statusText = '待機中';
-          statusClass = 'bg-yellow-100 text-yellow-700';
-        }
-
-        // 該当時間のドライバー数を数える
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
-        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
-
-        var btnHtml;
-        if (disabled) {
-          btnHtml = '<button onclick="enableNotifySlot(\'' + slot.time + '\')" class="text-xs px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 cursor-pointer">有効化</button>';
-        } else {
-          btnHtml = '<button onclick="disableNotifySlot(\'' + slot.time + '\')" class="text-xs px-3 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer">解除</button>';
-        }
-
-        return '<div class="flex items-center justify-between py-2 px-3 rounded ' + (disabled ? 'bg-gray-50 opacity-60' : 'bg-white border border-border') + '">' +
-          '<div class="flex items-center gap-3">' +
-            '<span class="font-mono font-bold text-sm">' + slot.time + '</span>' +
-            '<span class="text-xs px-2 py-0.5 rounded-full ' + statusClass + '">' + statusText + '</span>' +
-            '<span class="text-xs text-ink-lighter">' + driversAtSlot.length + '名' + (incomplete.length > 0 ? '（未完了' + incomplete.length + '名）' : '') + '</span>' +
-          '</div>' +
-          btnHtml +
-        '</div>';
-      }).join('');
-
-      // 送信ログ表示
-      var logContainer = document.getElementById('line-notify-log');
-      var logEntries = document.getElementById('line-notify-log-entries');
-      if (logContainer && logEntries && tenkoNotifyLogs.length > 0) {
-        logContainer.classList.remove('hidden');
-        logEntries.innerHTML = tenkoNotifyLogs.slice(-20).reverse().map(function(log) {
-          return '<div class="text-xs py-1 border-b border-gray-100 ' + (log.type === 'admin' ? 'text-red-600' : 'text-blue-600') + '">' +
-            '<span class="text-ink-lighter">' + log.time + '</span> ' + log.icon + ' ' + log.message + '</div>';
-        }).join('');
-      }
-    }
-
-    function disableNotifySlot(time) {
-      tenkoNotifyDisabled[time] = true;
-      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
-      addNotifyLog('system', '🚫', time + ' の自動通知を解除しました');
-      renderNotifySlots();
-    }
-
-    function enableNotifySlot(time) {
-      delete tenkoNotifyDisabled[time];
-      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
-      addNotifyLog('system', '✅', time + ' の自動通知を有効化しました');
-      renderNotifySlots();
-    }
-
-    function addNotifyLog(type, icon, message) {
-      var entry = {
-        time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
-        type: type,
-        icon: icon,
-        message: message
-      };
-      tenkoNotifyLogs.push(entry);
-      // 最大50件保持
-      if (tenkoNotifyLogs.length > 50) tenkoNotifyLogs = tenkoNotifyLogs.slice(-50);
-      localStorage.setItem('tenkoNotifyLogs', JSON.stringify(tenkoNotifyLogs));
-
-      // スキャンログにも表示
-      var scanLog = document.getElementById('scan-log-entries');
-      if (scanLog) {
-        var el = document.createElement('div');
-        el.className = 'text-xs py-1 border-b border-gray-100 ' + (type === 'admin' ? 'text-red-600' : 'text-blue-600');
-        el.textContent = entry.time + ' ' + icon + ' ' + message;
-        scanLog.insertBefore(el, scanLog.firstChild);
-      }
-    }
-
-    function checkTenkoLineNotify() {
-      if (tenkoSchedule.length === 0) return;
-      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
-      if (!proxyUrl) return;
-
-      var now = new Date();
-      var currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-      NOTIFY_SLOTS.forEach(function(slot) {
-        // 解除されてるスロットはスキップ
-        if (tenkoNotifyDisabled[slot.time]) return;
-
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
-        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
-
-        // === 5分前通知（ドライバー本人へ） ===
-        var fiveMinBefore = slot.minutes - 5;
-        if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
-          incomplete.forEach(function(d) {
-            var key5 = d.name + '_5min_' + slot.time;
-            if (tenkoNotifySent[key5]) return;
-            var userId = lineMapping[d.name];
-            if (userId && userId.indexOf('U') === 0) {
-              var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + slot.time + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
-              pushTenkoNotify(userId, msg);
-              tenkoNotifySent[key5] = true;
-              addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
-            }
-          });
-        }
-
-        // === 定刻通知（管理者へ） ===
-        if (currentMinutes >= slot.minutes) {
-          var adminKey = 'admin_' + slot.time;
-          if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
-            var list = incomplete.map(function(d) {
-              return '・' + d.name + '（🪪' + (d.licenseAuth ? '✅' : '❌') + ' 👨‍🏫' + (d.mentorAuth ? '✅' : '❌') + '）';
-            }).join('\n');
-
-            var adminMsg = '🚨 点呼未完了通知\n\n着車時間 ' + slot.time + ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' + list + '\n\n未完了: ' + incomplete.length + '名';
-
-            pushTenkoNotify('__admin__', adminMsg);
-            tenkoNotifySent[adminKey] = true;
-            addNotifyLog('admin', '🚨', '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知');
-          }
-        }
-      });
-
-      renderNotifySlots();
-    }
-
-    async function pushTenkoNotify(to, text) {
-      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
-      if (!proxyUrl) return;
-      try {
-        await fetch(proxyUrl, {
-          method: 'POST',
-          mode: 'cors',
-          credentials: 'omit',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to: to, messages: [{ type: 'text', text: text }] })
-        });
-      } catch(e) {
-        console.error('点呼LINE通知エラー:', e);
-      }
-    }
-
-    // Initialize
-    renderDriverTable();
-    initLineSettings();
-    loadTenkoData();
-    // 起動時にUI描画 + 3秒後にチェック
-    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); }, 3000);
   </script>
 </body>
 </html>
