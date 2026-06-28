@@ -1819,33 +1819,66 @@
     async function runOcrLoop(driverIndex) {
       if (!ocrScanning || !autoScanActive) return;
 
-      const video = document.getElementById('ocr-display-video');
-      const canvas = document.getElementById('ocr-canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      var video = document.getElementById('ocr-display-video');
+      var canvas = document.getElementById('ocr-canvas');
+
+      // ① 高解像度でキャプチャ（最低1280x720）
+      var vw = video.videoWidth || 1280;
+      var vh = video.videoHeight || 720;
+      canvas.width = vw;
+      canvas.height = vh;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, vw, vh);
+
+      // ② 画面下半分の中央だけ切り抜き（「ルート終了」ボタンがある領域）
+      var cropX = Math.floor(vw * 0.15);
+      var cropY = Math.floor(vh * 0.4);
+      var cropW = Math.floor(vw * 0.7);
+      var cropH = Math.floor(vh * 0.35);
+
+      var cropCanvas = document.createElement('canvas');
+      cropCanvas.width = cropW;
+      cropCanvas.height = cropH;
+      var cropCtx = cropCanvas.getContext('2d');
+      cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      // ③ 前処理：グレースケール→コントラスト強調→二値化
+      var imgData = cropCtx.getImageData(0, 0, cropW, cropH);
+      var pixels = imgData.data;
+      for (var i = 0; i < pixels.length; i += 4) {
+        // グレースケール
+        var gray = pixels[i] * 0.299 + pixels[i+1] * 0.587 + pixels[i+2] * 0.114;
+        // コントラスト強調
+        gray = ((gray - 128) * 1.5) + 128;
+        gray = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
+        // 二値化（閾値128）
+        var bw = gray > 128 ? 255 : 0;
+        pixels[i] = bw;
+        pixels[i+1] = bw;
+        pixels[i+2] = bw;
+      }
+      cropCtx.putImageData(imgData, 0, 0);
 
       try {
-        const { data: { text } } = await tesseractWorker.recognize(canvas);
-        // 空白・記号の揺れを吸収して「ルート終了」だけを検出
+        var result = await tesseractWorker.recognize(cropCanvas);
+        var text = result.data.text;
+        // ④ 空白・記号の揺れを吸収して「ルート終了」だけを検出
         var normalized = text.replace(/\s/g, '').replace(/ー/g, '－').replace(/[一―─]/g, '－');
-        addScanLog('OCR読取: ' + text.replace(/\s+/g, ' ').slice(0, 40), 'info');
+        addScanLog('OCR読取: ' + text.replace(/\s+/g, ' ').slice(0, 50), 'info');
 
-        if (normalized.indexOf('ルート終了') >= 0 || normalized.indexOf('ルート終') >= 0 || normalized.indexOf('ート終了') >= 0 || normalized.indexOf('ﾙｰﾄ終了') >= 0) {
+        if (normalized.indexOf('ルート終了') >= 0 || normalized.indexOf('ルート終') >= 0 || normalized.indexOf('ート終了') >= 0 || normalized.indexOf('ﾙｰﾄ終了') >= 0 || normalized.indexOf('ル-ト終了') >= 0) {
           // Mentor screen verified!
           ocrScanning = false;
-          const d = tenkoSchedule[driverIndex];
+          var d = tenkoSchedule[driverIndex];
           d.mentorAuth = true;
           localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
           renderTenkoTable();
           playSound('complete');
-          addScanLog(`🎉 ${d.name} — メンター認証OK → 点呼完了！`, 'success');
+          addScanLog('🎉 ' + d.name + ' — メンター認証OK → 点呼完了！', 'success');
 
-          // Return to QR mode for next driver
           stopOcrScan();
           updateScanStatus('complete');
-          setTimeout(() => {
+          setTimeout(function() {
             if (autoScanActive) {
               currentScanPhase = 'qr';
               updateScanStatus('qr');
@@ -1854,12 +1887,11 @@
           }, 2000);
           return;
         } else {
-          // Keep scanning
-          if (ocrScanning) setTimeout(() => runOcrLoop(driverIndex), 2000);
+          if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
         }
       } catch (e) {
         addScanLog('OCRエラー: ' + e.message, 'error');
-        if (ocrScanning) setTimeout(() => runOcrLoop(driverIndex), 3000);
+        if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 3000);
       }
     }
 
