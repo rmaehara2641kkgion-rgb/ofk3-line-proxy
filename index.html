@@ -369,6 +369,20 @@
           </div>
         </div>
 
+        <!-- LINE自動通知コントロール -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold flex items-center gap-2">📩 LINE自動通知</h3>
+            <span id="line-notify-master-status" class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
+          </div>
+          <div id="line-notify-slots" class="space-y-2">
+          </div>
+          <div id="line-notify-log" class="mt-3 max-h-32 overflow-y-auto hidden">
+            <h4 class="text-xs font-bold text-ink-lighter mb-1">送信ログ</h4>
+            <div id="line-notify-log-entries" class="space-y-1"></div>
+          </div>
+        </div>
+
         <!-- Tenko Schedule Table -->
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
@@ -2856,10 +2870,179 @@
       printWindow.document.close();
     }
 
+    // ===== 点呼LINE自動通知 =====
+    var NOTIFY_SLOTS = [
+      { time: '09:00', minutes: 540 },
+      { time: '11:00', minutes: 660 },
+      { time: '14:40', minutes: 880 }
+    ];
+
+    var tenkoNotifySent = {};
+    var tenkoNotifyDisabled = JSON.parse(localStorage.getItem('tenkoNotifyDisabled') || '{}');
+    var tenkoNotifyLogs = JSON.parse(localStorage.getItem('tenkoNotifyLogs') || '[]');
+
+    function renderNotifySlots() {
+      var container = document.getElementById('line-notify-slots');
+      if (!container) return;
+
+      var now = new Date();
+      var currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+      container.innerHTML = NOTIFY_SLOTS.map(function(slot) {
+        var disabled = tenkoNotifyDisabled[slot.time];
+        var sent = tenkoNotifySent['admin_' + slot.time];
+        var isPast = currentMinutes >= slot.minutes;
+
+        var statusText, statusClass;
+        if (disabled) {
+          statusText = '解除済み';
+          statusClass = 'bg-gray-100 text-gray-500';
+        } else if (sent) {
+          statusText = '送信済み ✅';
+          statusClass = 'bg-green-100 text-green-700';
+        } else if (isPast) {
+          statusText = '対象者なし';
+          statusClass = 'bg-gray-100 text-gray-500';
+        } else {
+          statusText = '待機中';
+          statusClass = 'bg-yellow-100 text-yellow-700';
+        }
+
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
+        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
+
+        var btnHtml;
+        if (disabled) {
+          btnHtml = '<button onclick="enableNotifySlot(\'' + slot.time + '\')" class="text-xs px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 cursor-pointer">有効化</button>';
+        } else {
+          btnHtml = '<button onclick="disableNotifySlot(\'' + slot.time + '\')" class="text-xs px-3 py-1 rounded bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer">解除</button>';
+        }
+
+        return '<div class="flex items-center justify-between py-2 px-3 rounded ' + (disabled ? 'bg-gray-50 opacity-60' : 'bg-white border border-border') + '">' +
+          '<div class="flex items-center gap-3">' +
+            '<span class="font-mono font-bold text-sm">' + slot.time + '</span>' +
+            '<span class="text-xs px-2 py-0.5 rounded-full ' + statusClass + '">' + statusText + '</span>' +
+            '<span class="text-xs text-ink-lighter">' + driversAtSlot.length + '名' + (incomplete.length > 0 ? '（未完了' + incomplete.length + '名）' : '') + '</span>' +
+          '</div>' +
+          btnHtml +
+        '</div>';
+      }).join('');
+
+      var logContainer = document.getElementById('line-notify-log');
+      var logEntries = document.getElementById('line-notify-log-entries');
+      if (logContainer && logEntries && tenkoNotifyLogs.length > 0) {
+        logContainer.classList.remove('hidden');
+        logEntries.innerHTML = tenkoNotifyLogs.slice(-20).reverse().map(function(log) {
+          return '<div class="text-xs py-1 border-b border-gray-100 ' + (log.type === 'admin' ? 'text-red-600' : 'text-blue-600') + '">' +
+            '<span class="text-ink-lighter">' + log.time + '</span> ' + log.icon + ' ' + log.message + '</div>';
+        }).join('');
+      }
+    }
+
+    function disableNotifySlot(time) {
+      tenkoNotifyDisabled[time] = true;
+      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+      addNotifyLog('system', '🚫', time + ' の自動通知を解除しました');
+      renderNotifySlots();
+    }
+
+    function enableNotifySlot(time) {
+      delete tenkoNotifyDisabled[time];
+      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+      addNotifyLog('system', '✅', time + ' の自動通知を有効化しました');
+      renderNotifySlots();
+    }
+
+    function addNotifyLog(type, icon, message) {
+      var entry = {
+        time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+        type: type,
+        icon: icon,
+        message: message
+      };
+      tenkoNotifyLogs.push(entry);
+      if (tenkoNotifyLogs.length > 50) tenkoNotifyLogs = tenkoNotifyLogs.slice(-50);
+      localStorage.setItem('tenkoNotifyLogs', JSON.stringify(tenkoNotifyLogs));
+
+      var scanLog = document.getElementById('scan-log-entries');
+      if (scanLog) {
+        var el = document.createElement('div');
+        el.className = 'text-xs py-1 border-b border-gray-100 ' + (type === 'admin' ? 'text-red-600' : 'text-blue-600');
+        el.textContent = entry.time + ' ' + icon + ' ' + message;
+        scanLog.insertBefore(el, scanLog.firstChild);
+      }
+    }
+
+    function checkTenkoLineNotify() {
+      if (tenkoSchedule.length === 0) return;
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return;
+
+      var now = new Date();
+      var currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+      NOTIFY_SLOTS.forEach(function(slot) {
+        if (tenkoNotifyDisabled[slot.time]) return;
+
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
+        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
+
+        var fiveMinBefore = slot.minutes - 5;
+        if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
+          incomplete.forEach(function(d) {
+            var key5 = d.name + '_5min_' + slot.time;
+            if (tenkoNotifySent[key5]) return;
+            var userId = lineMapping[d.name];
+            if (userId && userId.indexOf('U') === 0) {
+              var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + slot.time + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
+              pushTenkoNotify(userId, msg);
+              tenkoNotifySent[key5] = true;
+              addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
+            }
+          });
+        }
+
+        if (currentMinutes >= slot.minutes) {
+          var adminKey = 'admin_' + slot.time;
+          if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
+            var list = incomplete.map(function(d) {
+              return '・' + d.name + '（🪪' + (d.licenseAuth ? '✅' : '❌') + ' 👨‍🏫' + (d.mentorAuth ? '✅' : '❌') + '）';
+            }).join('\n');
+
+            var adminMsg = '🚨 点呼未完了通知\n\n着車時間 ' + slot.time + ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' + list + '\n\n未完了: ' + incomplete.length + '名';
+
+            pushTenkoNotify('__admin__', adminMsg);
+            tenkoNotifySent[adminKey] = true;
+            addNotifyLog('admin', '🚨', '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知');
+          }
+        }
+      });
+
+      renderNotifySlots();
+    }
+
+    async function pushTenkoNotify(to, text) {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return;
+      try {
+        await fetch(proxyUrl, {
+          method: 'POST',
+          mode: 'cors',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: to, messages: [{ type: 'text', text: text }] })
+        });
+      } catch(e) {
+        console.error('点呼LINE通知エラー:', e);
+      }
+    }
+
     // Initialize
     renderDriverTable();
     initLineSettings();
     loadTenkoData();
+    // 起動時にUI描画 + 3秒後にチェック
+    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); }, 3000);
 
     // ===== 請求照合機能 =====
     var billingData = [];
