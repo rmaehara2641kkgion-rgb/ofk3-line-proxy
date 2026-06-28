@@ -348,7 +348,7 @@
             <div class="flex items-center justify-between mb-3">
               <div>
                 <h3 id="scan-status-title" class="text-base font-bold text-blue-600">🪪 QRコードをかざしてください</h3>
-                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">免許証QRコードをカメラに向けてください</p>
+                <p id="scan-status-detail" class="text-xs text-ink-lighter mt-1">ドライバーのQRコードをカメラに向けてください</p>
               </div>
               <div id="scan-driver-badge" class="hidden px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-sm font-bold"></div>
             </div>
@@ -391,7 +391,7 @@
                 <tr class="border-b border-border bg-surface">
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">着車時間</th>
-                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証認証</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">QR認証</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">メンター認証</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">ステータス</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">操作</th>
@@ -516,8 +516,8 @@
         </div>
         <p class="text-sm text-ink-lighter mb-1">ドライバー: <span id="camera-driver-name" class="font-bold text-ink"></span></p>
         <p id="camera-auth-type" class="text-base font-bold mb-3 text-blue-600"></p>
-        <div class="bg-black rounded-lg overflow-hidden mb-3">
-          <video id="camera-video" class="w-full" autoplay playsinline muted></video>
+        <div class="bg-black rounded-lg overflow-hidden mb-3" style="aspect-ratio:1/1;max-width:400px;margin:0 auto">
+          <video id="camera-video" class="w-full h-full" style="object-fit:cover" autoplay playsinline muted></video>
         </div>
         <div id="camera-result" class="text-sm mt-2"></div>
         <div class="flex gap-2 mt-4">
@@ -1392,8 +1392,8 @@
       cameraDriverIndex = index;
       const modal = document.getElementById('camera-modal');
       document.getElementById('camera-driver-name').textContent = d.name;
-      document.getElementById('camera-auth-type').textContent = cameraAuthType === 'license' ? '🪪 免許証をかざしてください' : '📱 メンター起動画面をかざしてください';
-      document.getElementById('camera-confirm-btn').textContent = cameraAuthType === 'license' ? '免許証 認証OK' : 'メンター 認証OK';
+      document.getElementById('camera-auth-type').textContent = cameraAuthType === 'license' ? '📷 QRコードをかざしてください' : '📱 メンター起動画面をかざしてください';
+      document.getElementById('camera-confirm-btn').textContent = cameraAuthType === 'license' ? 'QR 認証OK' : 'メンター 認証OK';
       document.getElementById('camera-result').textContent = '';
       document.getElementById('camera-result').className = 'text-sm mt-2';
       modal.classList.remove('hidden');
@@ -1470,13 +1470,13 @@
 
         if (d.mentorAuth) {
           // Both done!
-          resultEl.textContent = '✅ 免許証認証OK → 両方完了！';
+          resultEl.textContent = '✅ QR認証OK → 両方完了！';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('complete');
           setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
         } else {
           // License done, move to mentor
-          resultEl.textContent = '✅ 免許証認証OK → 続いてメンター認証へ';
+          resultEl.textContent = '✅ QR認証OK → 続いてメンター認証へ';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('success');
           setTimeout(() => {
@@ -1523,7 +1523,7 @@
         let status, statusClass;
         if (bothDone) { status = '完了'; statusClass = 'text-emerald-600 font-medium'; done++; }
         else if (oneDone) {
-          status = d.licenseAuth ? 'メンター待ち' : '免許証待ち';
+          status = d.licenseAuth ? 'メンター待ち' : 'QR待ち';
           statusClass = 'text-amber-500 font-medium'; progress++;
         }
         else { status = '未開始'; statusClass = 'text-ink-lighter'; pending++; }
@@ -1645,7 +1645,7 @@
       const detail = document.getElementById('scan-status-detail');
       const badge = document.getElementById('scan-driver-badge');
       if (phase === 'qr') {
-        title.textContent = '🪪 免許証QRコードをかざしてください';
+        title.textContent = '📷 QRコードをかざしてください';
         title.className = 'text-base font-bold text-blue-600';
         detail.textContent = '登録済みQRコードをカメラに向けてください';
         badge.classList.add('hidden');
@@ -1754,7 +1754,7 @@
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
         renderTenkoTable();
         playSound('success');
-        addScanLog('✅ ' + driverName + ' — 免許証認証OK', 'success');
+        addScanLog('✅ ' + driverName + ' — QR認証OK', 'success');
 
         lastQrDriver = { name: driverName, index: matchedIndex };
         currentScanPhase = 'ocr';
