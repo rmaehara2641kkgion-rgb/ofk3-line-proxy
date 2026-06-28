@@ -1671,12 +1671,15 @@
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         selectBestCamera().then(function(deviceId) {
-          var cameraConfig = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+          var videoConst = { width: { ideal: 1280 }, height: { ideal: 720 }, focusMode: 'continuous' };
+          if (deviceId) {
+            videoConst.deviceId = { exact: deviceId };
+          }
           return html5QrCode.start(
-            cameraConfig,
-            { fps: 15, qrbox: { width: 300, height: 300 }, aspectRatio: 1.777, disableFlip: false, videoConstraints: { width: { ideal: 1280 }, height: { ideal: 720 }, focusMode: 'continuous' } },
+            deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
+            { fps: 15, qrbox: { width: 300, height: 300 }, aspectRatio: 1.777, disableFlip: false },
             onQrCodeScanned,
-            function() {} // ignore scan failures
+            function() {}
           );
         }).catch(function(err) {
           addScanLog('カメラ起動失敗: ' + err.message, 'error');
