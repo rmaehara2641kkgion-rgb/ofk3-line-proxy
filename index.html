@@ -1828,9 +1828,11 @@
 
       try {
         const { data: { text } } = await tesseractWorker.recognize(canvas);
-        const cleanText = text.replace(/\s/g, '');
+        // 空白・記号の揺れを吸収して「ルート終了」だけを検出
+        var normalized = text.replace(/\s/g, '').replace(/ー/g, '－').replace(/[一―─]/g, '－');
+        addScanLog('OCR読取: ' + text.replace(/\s+/g, ' ').slice(0, 40), 'info');
 
-        if (cleanText.includes('ルート終了') || cleanText.includes('ルート終') || cleanText.includes('ート終了') || (cleanText.includes('mentor') && cleanText.includes('ルート'))) {
+        if (normalized.indexOf('ルート終了') >= 0 || normalized.indexOf('ルート終') >= 0 || normalized.indexOf('ート終了') >= 0 || normalized.indexOf('ﾙｰﾄ終了') >= 0) {
           // Mentor screen verified!
           ocrScanning = false;
           const d = tenkoSchedule[driverIndex];
