@@ -498,7 +498,7 @@
         </div>
         <p id="qr-modal-name" class="text-base font-bold mb-1"></p>
         <p id="qr-modal-data" class="text-xs text-ink-lighter mb-4"></p>
-        <div id="qr-modal-render" class="mx-auto" style="display:inline-block"></div>
+        <div id="qr-modal-render" class="mx-auto" style="display:inline-block;padding:24px;background:#fff;border-radius:8px"></div>
         <div class="flex gap-2 mt-4" style="position:relative;z-index:52">
           <button onclick="downloadQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors cursor-pointer">📥 ダウンロード</button>
           <button onclick="printQR(document.getElementById('qr-modal-name').textContent)" class="flex-1 py-2 rounded text-xs font-medium bg-gray-100 text-ink hover:bg-gray-200 transition-colors cursor-pointer">🖨 印刷</button>
@@ -2324,8 +2324,8 @@
       document.body.removeChild(tempDiv);
       var win = window.open('', '_blank', 'width=800,height=600');
       var html = cards.map(function(r) {
-        return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
-          '<img src="' + r.imgData + '" style="width:150px;height:150px">' +
+        return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid;background:#fff">' +
+          '<div style="padding:16px;background:#fff;display:inline-block"><img src="' + r.imgData + '" style="width:150px;height:150px"></div>' +
           '<div style="font-weight:bold;margin-top:8px;font-size:14px">' + r.name + '</div>' +
           '<div style="color:#666;font-size:10px">' + r.tid + '</div></div>';
       }).join('');
