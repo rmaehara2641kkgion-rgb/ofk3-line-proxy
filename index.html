@@ -2138,7 +2138,12 @@
     }
 
     function printAllQR() {
-      var drivers = Object.keys({ ...lineMapping, ...phoneMapping, ...transportIDs });
+      var drivers = [...new Set([
+        ...Object.keys(driverDB),
+        ...Object.keys(lineMapping),
+        ...Object.keys(phoneMapping),
+        ...Object.keys(transportIDs)
+      ])].sort((a, b) => a.localeCompare(b, 'ja'));
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
       // 一時的にQRを生成して画像を収集
