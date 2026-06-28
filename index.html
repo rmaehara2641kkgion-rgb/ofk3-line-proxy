@@ -1822,7 +1822,6 @@
       var video = document.getElementById('ocr-display-video');
       var canvas = document.getElementById('ocr-canvas');
 
-      // ① 高解像度でキャプチャ（最低1280x720）
       var vw = video.videoWidth || 1280;
       var vh = video.videoHeight || 720;
       canvas.width = vw;
@@ -1830,68 +1829,58 @@
       var ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, vw, vh);
 
-      // ② 画面下半分の中央だけ切り抜き（「ルート終了」ボタンがある領域）
-      var cropX = Math.floor(vw * 0.15);
-      var cropY = Math.floor(vh * 0.4);
-      var cropW = Math.floor(vw * 0.7);
-      var cropH = Math.floor(vh * 0.35);
+      // 「ルート終了」ボタンの領域（画面中央〜下部）
+      var cropX = Math.floor(vw * 0.1);
+      var cropY = Math.floor(vh * 0.3);
+      var cropW = Math.floor(vw * 0.8);
+      var cropH = Math.floor(vh * 0.4);
 
-      var cropCanvas = document.createElement('canvas');
-      cropCanvas.width = cropW;
-      cropCanvas.height = cropH;
-      var cropCtx = cropCanvas.getContext('2d');
-      cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-      // ③ 前処理：グレースケール→コントラスト強調→二値化
-      var imgData = cropCtx.getImageData(0, 0, cropW, cropH);
+      var imgData = ctx.getImageData(cropX, cropY, cropW, cropH);
       var pixels = imgData.data;
+
+      // 紫色ピクセルをカウント（Mentorの「ルート終了」ボタンの色）
+      var purpleCount = 0;
+      var totalPixels = cropW * cropH;
+
       for (var i = 0; i < pixels.length; i += 4) {
-        // グレースケール
-        var gray = pixels[i] * 0.299 + pixels[i+1] * 0.587 + pixels[i+2] * 0.114;
-        // コントラスト強調
-        gray = ((gray - 128) * 1.5) + 128;
-        gray = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
-        // 二値化（閾値128）
-        var bw = gray > 128 ? 255 : 0;
-        pixels[i] = bw;
-        pixels[i+1] = bw;
-        pixels[i+2] = bw;
-      }
-      cropCtx.putImageData(imgData, 0, 0);
+        var r = pixels[i];
+        var g = pixels[i + 1];
+        var b = pixels[i + 2];
 
-      try {
-        var result = await tesseractWorker.recognize(cropCanvas);
-        var text = result.data.text;
-        // ④ 空白・記号の揺れを吸収して「ルート終了」だけを検出
-        var normalized = text.replace(/\s/g, '').replace(/ー/g, '－').replace(/[一―─]/g, '－');
-        addScanLog('OCR読取: ' + text.replace(/\s+/g, ' ').slice(0, 50), 'info');
-
-        if (normalized.indexOf('ルート終了') >= 0 || normalized.indexOf('ルート終') >= 0 || normalized.indexOf('ート終了') >= 0 || normalized.indexOf('ﾙｰﾄ終了') >= 0 || normalized.indexOf('ル-ト終了') >= 0) {
-          // Mentor screen verified!
-          ocrScanning = false;
-          var d = tenkoSchedule[driverIndex];
-          d.mentorAuth = true;
-          localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
-          renderTenkoTable();
-          playSound('complete');
-          addScanLog('🎉 ' + d.name + ' — メンター認証OK → 点呼完了！', 'success');
-
-          stopOcrScan();
-          updateScanStatus('complete');
-          setTimeout(function() {
-            if (autoScanActive) {
-              currentScanPhase = 'qr';
-              updateScanStatus('qr');
-              startQrScan();
-            }
-          }, 2000);
-          return;
-        } else {
-          if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
+        // 紫〜青紫の範囲を広めに取る
+        if (r >= 50 && r <= 200 && g >= 10 && g <= 130 && b >= 90 && b <= 255 && b > r * 0.6 && b > g * 1.2) {
+          purpleCount++;
         }
-      } catch (e) {
-        addScanLog('OCRエラー: ' + e.message, 'error');
-        if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 3000);
+      }
+
+      var purpleRatio = purpleCount / totalPixels;
+      var percentText = (purpleRatio * 100).toFixed(1);
+
+      if (purpleRatio >= 0.08) {
+        // 紫色が8%以上 → 「ルート終了」ボタンが表示されている
+        ocrScanning = false;
+        var d = tenkoSchedule[driverIndex];
+        d.mentorAuth = true;
+        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        renderTenkoTable();
+        playSound('complete');
+        addScanLog('🎉 ' + d.name + ' — メンター認証OK（紫検出' + percentText + '%）→ 点呼完了！', 'success');
+
+        stopOcrScan();
+        updateScanStatus('complete');
+        setTimeout(function() {
+          if (autoScanActive) {
+            currentScanPhase = 'qr';
+            updateScanStatus('qr');
+            startQrScan();
+          }
+        }, 2000);
+        return;
+      } else {
+        if (purpleRatio >= 0.03) {
+          addScanLog('紫検出' + percentText + '% — もう少し近づけてください', 'info');
+        }
+        if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 800);
       }
     }
 
