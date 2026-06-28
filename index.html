@@ -1691,9 +1691,14 @@
 
     function stopQrScan() {
       if (html5QrCode) {
-        html5QrCode.stop().catch(() => {});
-        html5QrCode.clear();
-        html5QrCode = null;
+        html5QrCode.stop().then(function() {
+          if (html5QrCode) {
+            html5QrCode.clear();
+            html5QrCode = null;
+          }
+        }).catch(function() {
+          html5QrCode = null;
+        });
       }
     }
 
@@ -1777,7 +1782,9 @@
     // --- OCR Mentor Screen Scanning ---
     async function startOcrScan(driverIndex) {
       document.getElementById('qr-reader').classList.add('hidden');
-      document.getElementById('ocr-preview').classList.remove('hidden');
+      var ocrPreview = document.getElementById('ocr-preview');
+      ocrPreview.classList.remove('hidden');
+      ocrPreview.style.display = 'block';
 
       const video = document.getElementById('ocr-display-video');
       try {
