@@ -1656,12 +1656,15 @@
       document.getElementById('ocr-preview').classList.add('hidden');
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
-        html5QrCode.start(
-          { facingMode: 'user' },
-          { fps: 10, qrbox: { width: 250, height: 250 } },
-          onQrCodeScanned,
-          () => {} // ignore scan failures
-        ).catch(err => {
+        selectBestCamera().then(function(deviceId) {
+          var cameraConfig = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+          return html5QrCode.start(
+            cameraConfig,
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            onQrCodeScanned,
+            function() {} // ignore scan failures
+          );
+        }).catch(function(err) {
           addScanLog('カメラ起動失敗: ' + err.message, 'error');
         });
       } catch (e) {
@@ -1733,7 +1736,12 @@
 
       const video = document.getElementById('ocr-display-video');
       try {
-        ocrStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
+        var bestDeviceId = await selectBestCamera();
+        var constraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
+        if (bestDeviceId) {
+          constraints.video.deviceId = { exact: bestDeviceId };
+        }
+        ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = ocrStream;
         video.play();
       } catch (err) {
