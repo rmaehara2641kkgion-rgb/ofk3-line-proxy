@@ -2178,14 +2178,15 @@
       container.innerHTML = '';
       try {
         var canvas = document.createElement('canvas');
+        canvas.style.cssText = 'padding:20px;background:#fff';
         container.appendChild(canvas);
         currentQRInstance = new QRious({
           element: canvas,
           value: qrData,
-          size: 250,
+          size: 400,
           foreground: '#000000',
           background: '#ffffff',
-          level: 'M'
+          level: 'H'
         });
       } catch(e) {
         container.innerHTML = '<p class="text-red-500 text-sm">QR生成エラー: データが長すぎます</p>';
@@ -2260,7 +2261,7 @@
         try {
           var qrCanvas = document.createElement('canvas');
           qrDiv.appendChild(qrCanvas);
-          new QRious({ element: qrCanvas, value: qrData, size: 200, foreground: '#000000', background: '#ffffff' });
+          new QRious({ element: qrCanvas, value: qrData, size: 250, foreground: '#000000', background: '#ffffff', level: 'H' });
         } catch(e) {
           console.error('QR error for ' + name, e);
           done++;
