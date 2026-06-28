@@ -1385,16 +1385,54 @@
       modal.classList.remove('hidden');
 
       const video = document.getElementById('camera-video');
-      navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })
-        .then(stream => {
+      // USBカメラ優先: USB → 内蔵 → その他
+      selectBestCamera().then(function(deviceId) {
+        var constraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
+        if (deviceId) {
+          constraints.video.deviceId = { exact: deviceId };
+        }
+        return navigator.mediaDevices.getUserMedia(constraints);
+      })
+        .then(function(stream) {
           cameraStream = stream;
           video.srcObject = stream;
           video.play();
         })
-        .catch(err => {
+        .catch(function(err) {
           document.getElementById('camera-result').textContent = 'カメラの起動に失敗しました: ' + err.message;
           document.getElementById('camera-result').className = 'text-sm mt-2 text-red-500';
         });
+    }
+
+    // USBカメラ優先選択: USB → 内蔵 → その他デバイス
+    function selectBestCamera() {
+      return navigator.mediaDevices.enumerateDevices().then(function(devices) {
+        var videoDevices = devices.filter(function(d) { return d.kind === 'videoinput'; });
+        if (videoDevices.length === 0) return null;
+
+        // USBカメラを探す（ラベルにUSB/Webcam/外付けなどが含まれる）
+        var usbCamera = null;
+        var builtinCamera = null;
+        var otherCamera = null;
+
+        for (var i = 0; i < videoDevices.length; i++) {
+          var label = (videoDevices[i].label || '').toLowerCase();
+          if (label.indexOf('usb') >= 0 || label.indexOf('webcam') >= 0 || label.indexOf('external') >= 0 || label.indexOf('logitech') >= 0 || label.indexOf('buffalo') >= 0 || label.indexOf('elecom') >= 0) {
+            if (!usbCamera) usbCamera = videoDevices[i];
+          } else if (label.indexOf('integrated') >= 0 || label.indexOf('built') >= 0 || label.indexOf('internal') >= 0 || label.indexOf('front') >= 0 || label.indexOf('back') >= 0 || label.indexOf('facing') >= 0) {
+            if (!builtinCamera) builtinCamera = videoDevices[i];
+          } else {
+            if (!otherCamera) otherCamera = videoDevices[i];
+          }
+        }
+
+        // 優先順: USB → 内蔵 → その他 → リスト最初
+        var selected = usbCamera || builtinCamera || otherCamera || videoDevices[0];
+        console.log('カメラ選択:', selected.label || '(ラベルなし)', '| 全デバイス:', videoDevices.map(function(d) { return d.label || d.deviceId; }).join(', '));
+        return selected.deviceId;
+      }).catch(function() {
+        return null;
+      });
     }
 
     function closeCameraModal() {
