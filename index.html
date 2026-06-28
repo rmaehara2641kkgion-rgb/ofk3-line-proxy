@@ -2084,13 +2084,23 @@
       var qrData = getQRData(name);
       var modal = document.getElementById('qr-modal');
       var tid = transportIDs[name];
+      // Transport IDが長すぎる場合はクリーンアップ
+      if (tid && String(tid).length > 50) {
+        console.warn('Transport ID too long for ' + name + ': ' + String(tid).length + ' chars');
+        delete transportIDs[name];
+        localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+        qrData = 'OFK3_DRIVER:' + name;
+        tid = null;
+        alert(name + ' のTransport IDが異常データでした。リセットしました。再度設定してください。');
+      }
       document.getElementById('qr-modal-name').textContent = name;
       document.getElementById('qr-modal-data').textContent = tid ? 'Transport ID: ' + tid : 'ドライバー名で生成';
       modal.classList.remove('hidden');
 
       var container = document.getElementById('qr-modal-render');
       container.innerHTML = '';
-      currentQRInstance = new QRCode(container, {
+      try {
+        currentQRInstance = new QRCode(container, {
         text: qrData,
         width: 250,
         height: 250,
@@ -2098,6 +2108,10 @@
         colorLight: '#ffffff',
         correctLevel: QRCode.CorrectLevel.M
       });
+      } catch(e) {
+        container.innerHTML = '<p class="text-red-500 text-sm">QR生成エラー: データが長すぎます</p>';
+        console.error('QR error for ' + name + ':', e);
+      }
     }
 
     function closeQrModal() {
@@ -2155,10 +2169,23 @@
       var done = 0;
       drivers.forEach(function(name) {
         var tid = transportIDs[name];
+        // 異常データをスキップ
+        if (tid && String(tid).length > 50) {
+          done++;
+          if (done === drivers.length) { finishPrintQR(cards, tempDiv); }
+          return;
+        }
         var qrData = tid ? tid : 'OFK3_DRIVER:' + name;
         var qrDiv = document.createElement('div');
         tempDiv.appendChild(qrDiv);
-        new QRCode(qrDiv, { text: qrData, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff' });
+        try {
+          new QRCode(qrDiv, { text: qrData, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff' });
+        } catch(e) {
+          console.error('QR error for ' + name, e);
+          done++;
+          if (done === drivers.length) { finishPrintQR(cards, tempDiv); }
+          return;
+        }
 
         // qrcodejsは内部でcanvasまたはimgを生成するので少し待つ
         setTimeout(function() {
@@ -2171,26 +2198,30 @@
           cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3' });
           done++;
           if (done === drivers.length) {
-            document.body.removeChild(tempDiv);
-            var win = window.open('', '_blank', 'width=800,height=600');
-            var html = cards.map(function(r) {
-              return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
-                '<img src="' + r.imgData + '" style="width:150px;height:150px">' +
-                '<div style="font-weight:bold;margin-top:8px;font-size:14px">' + r.name + '</div>' +
-                '<div style="color:#666;font-size:10px">' + r.tid + '</div></div>';
-            }).join('');
-            win.document.write(
-              '<!DOCTYPE html><html><head><title>QR一覧 - OFK3</title>' +
-              '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
-              'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
-              '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
-              '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
-              '<div class="grid">' + html + '</div></body></html>'
-            );
-            win.document.close();
+            finishPrintQR(cards, tempDiv);
           }
         }, 500);
       });
+    }
+
+    function finishPrintQR(cards, tempDiv) {
+      document.body.removeChild(tempDiv);
+      var win = window.open('', '_blank', 'width=800,height=600');
+      var html = cards.map(function(r) {
+        return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid">' +
+          '<img src="' + r.imgData + '" style="width:150px;height:150px">' +
+          '<div style="font-weight:bold;margin-top:8px;font-size:14px">' + r.name + '</div>' +
+          '<div style="color:#666;font-size:10px">' + r.tid + '</div></div>';
+      }).join('');
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>QR一覧 - OFK3</title>' +
+        '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
+        'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
+        '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
+        '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
+        '<div class="grid">' + html + '</div></body></html>'
+      );
+      win.document.close();
     }
 
     function updateMasterNote(name, value) {
