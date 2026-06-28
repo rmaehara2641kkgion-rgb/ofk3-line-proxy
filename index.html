@@ -1460,31 +1460,37 @@
     }
 
     function confirmCameraAuth() {
-      const d = tenkoSchedule[cameraDriverIndex];
+      var d = tenkoSchedule[cameraDriverIndex];
       if (!d) return;
-      const resultEl = document.getElementById('camera-result');
+      var resultEl = document.getElementById('camera-result');
+      var confirmBtn = document.getElementById('camera-confirm-btn');
+
+      // 二重押し防止
+      if (confirmBtn.disabled) return;
 
       if (cameraAuthType === 'license') {
         d.licenseAuth = true;
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
 
         if (d.mentorAuth) {
-          // Both done!
           resultEl.textContent = '✅ QR認証OK → 両方完了！';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('complete');
-          setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+          confirmBtn.disabled = true;
+          setTimeout(function() { closeCameraModal(); renderTenkoTable(); }, 1500);
         } else {
-          // License done, move to mentor
           resultEl.textContent = '✅ QR認証OK → 続いてメンター認証へ';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('success');
-          setTimeout(() => {
+          confirmBtn.disabled = true;
+          setTimeout(function() {
             cameraAuthType = 'mentor';
             document.getElementById('camera-auth-type').textContent = '📱 メンター起動画面をかざしてください';
-            document.getElementById('camera-confirm-btn').textContent = 'メンター 認証OK';
-            resultEl.textContent = '';
-            resultEl.className = 'text-sm mt-2';
+            confirmBtn.textContent = 'メンター 認証OK';
+            confirmBtn.disabled = false;
+            confirmBtn.className = 'flex-1 py-3 rounded-lg text-sm font-bold bg-purple-500 text-white hover:bg-purple-600 transition-colors text-lg';
+            resultEl.textContent = 'メンターアプリの「ルート終了」画面をカメラに見せてください';
+            resultEl.className = 'text-sm mt-2 text-purple-600 font-medium';
           }, 1500);
         }
       } else if (cameraAuthType === 'mentor') {
@@ -1493,7 +1499,8 @@
         resultEl.textContent = '🎉 メンター認証OK — 点呼完了！';
         resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold text-lg';
         playSound('complete');
-        setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+        confirmBtn.disabled = true;
+        setTimeout(function() { closeCameraModal(); renderTenkoTable(); }, 1500);
       }
     }
 
