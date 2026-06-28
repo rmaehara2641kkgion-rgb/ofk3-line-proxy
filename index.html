@@ -1715,6 +1715,17 @@
         if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
       }
 
+      // OFK3_D0001 形式（自動生成ID）
+      if (!driverName && decodedText.indexOf('OFK3_D') === 0 && decodedText.length <= 12) {
+        var keys = Object.keys(driverDB).sort();
+        var idxNum = parseInt(decodedText.replace('OFK3_D', ''));
+        if (idxNum > 0 && idxNum <= keys.length) {
+          var name3 = keys[idxNum - 1];
+          matchedIndex = findTenkoDriver(name3);
+          if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
+        }
+      }
+
       // Transport ID で照合
       if (!driverName) {
         var cleanDecoded = decodedText.replace(/[\s\-]/g, '');
@@ -2156,17 +2167,24 @@
     function getQRData(name) {
       var tid = transportIDs[name];
 
-      if (typeof tid !== "string") {
-        return "OFK3_DRIVER:" + name;
+      // Transport IDがあればIDのみ（日本語なし＝読み取り安定）
+      if (typeof tid === "string") {
+        tid = tid.trim();
+        if (tid.length > 0 && tid.length <= 100) {
+          return tid;
+        }
       }
 
-      tid = tid.trim();
-
-      if (tid.length === 0 || tid.length > 100) {
-        return "OFK3_DRIVER:" + name;
+      // Transport ID未登録の場合はASCII形式のフォールバック
+      // driverDB からインデックスを生成
+      var keys = Object.keys(driverDB).sort();
+      var idx = keys.indexOf(name);
+      if (idx >= 0) {
+        return "OFK3_D" + ("0000" + (idx + 1)).slice(-4);
       }
 
-      return tid;
+      // どこにもなければ名前ベース（最終手段）
+      return "OFK3_DRIVER:" + name;
     }
 
     var currentQRInstance = null;
