@@ -2075,15 +2075,32 @@
     // ===== QR Code Generation (qrcodejs) =====
     function getQRData(name) {
       var tid = transportIDs[name];
-      return tid ? tid : 'OFK3_DRIVER:' + name;
+
+      if (typeof tid !== "string") {
+        return "OFK3_DRIVER:" + name;
+      }
+
+      tid = tid.trim();
+
+      if (tid.length === 0 || tid.length > 100) {
+        return "OFK3_DRIVER:" + name;
+      }
+
+      return tid;
     }
 
     var currentQRInstance = null;
 
     function showDriverQR(name) {
-      var qrData = getQRData(name);
-      var modal = document.getElementById('qr-modal');
       var tid = transportIDs[name];
+
+      console.log("名前:", name);
+      console.log("TransportID:", tid);
+      console.log("型:", typeof tid);
+      console.log("String:", String(tid));
+      console.log("長さ:", String(tid).length);
+
+      var qrData = getQRData(name);
       // Transport IDが長すぎる場合はクリーンアップ
       if (tid && String(tid).length > 50) {
         console.warn('Transport ID too long for ' + name + ': ' + String(tid).length + ' chars');
