@@ -1674,7 +1674,7 @@
           var cameraConfig = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
           return html5QrCode.start(
             cameraConfig,
-            { fps: 10, qrbox: { width: 250, height: 250 } },
+            { fps: 15, qrbox: { width: 350, height: 350 } },
             onQrCodeScanned,
             function() {} // ignore scan failures
           );
@@ -1695,23 +1695,31 @@
     }
 
     function onQrCodeScanned(decodedText) {
-      // QR format: "OFK3_LICENSE:{driverName}" or just the license number
-      let driverName = null;
-      let matchedIndex = -1;
+      var driverName = null;
+      var matchedIndex = -1;
 
-      // Check if QR matches a registered driver
-      if (decodedText.startsWith('OFK3_LICENSE:')) {
-        const name = decodedText.replace('OFK3_LICENSE:', '');
-        matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
-        if (matchedIndex >= 0) driverName = name;
+      // OFK3_LICENSE: 形式
+      if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
+        var name1 = decodedText.replace('OFK3_LICENSE:', '');
+        matchedIndex = findTenkoDriver(name1);
+        if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
       }
 
-      // Also check by Transport ID
+      // OFK3_DRIVER: 形式
+      if (!driverName && decodedText.indexOf('OFK3_DRIVER:') === 0) {
+        var name2 = decodedText.replace('OFK3_DRIVER:', '');
+        matchedIndex = findTenkoDriver(name2);
+        if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
+      }
+
+      // Transport ID で照合
       if (!driverName) {
-        for (const [name, tid] of Object.entries(transportIDs)) {
-          if (tid && decodedText.replace(/[\s\-]/g, '') === tid.replace(/[\s\-]/g, '')) {
-            matchedIndex = tenkoSchedule.findIndex(d => d.name === name);
-            if (matchedIndex >= 0) { driverName = name; break; }
+        var cleanDecoded = decodedText.replace(/[\s\-]/g, '');
+        for (var tName in transportIDs) {
+          var tid = transportIDs[tName];
+          if (tid && cleanDecoded === tid.toString().replace(/[\s\-]/g, '')) {
+            matchedIndex = findTenkoDriver(tName);
+            if (matchedIndex >= 0) { driverName = tenkoSchedule[matchedIndex].name; break; }
           }
         }
       }
@@ -1721,9 +1729,9 @@
         return;
       }
 
-      const d = tenkoSchedule[matchedIndex];
+      var d = tenkoSchedule[matchedIndex];
       if (d.licenseAuth && d.mentorAuth) {
-        addScanLog(`${driverName} — 既に完了済み`, 'info');
+        addScanLog(driverName + ' — 既に完了済み', 'info');
         return;
       }
 
@@ -1732,15 +1740,24 @@
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
         renderTenkoTable();
         playSound('success');
-        addScanLog(`✅ ${driverName} — 免許証認証OK`, 'success');
+        addScanLog('✅ ' + driverName + ' — 免許証認証OK', 'success');
 
-        // Move to OCR phase for mentor
         lastQrDriver = { name: driverName, index: matchedIndex };
         currentScanPhase = 'ocr';
         updateScanStatus('ocr', driverName);
         stopQrScan();
         startOcrScan(matchedIndex);
       }
+    }
+
+    // ファジーマッチ: スペース・全角半角を無視して点呼スケジュールから検索
+    function findTenkoDriver(name) {
+      var clean = name.replace(/[\s　]/g, '');
+      for (var i = 0; i < tenkoSchedule.length; i++) {
+        if (tenkoSchedule[i].name === name) return i;
+        if (tenkoSchedule[i].name.replace(/[\s　]/g, '') === clean) return i;
+      }
+      return -1;
     }
 
     // --- OCR Mentor Screen Scanning ---
