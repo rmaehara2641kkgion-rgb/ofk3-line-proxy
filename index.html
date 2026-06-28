@@ -8,7 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -2117,14 +2117,16 @@
       var container = document.getElementById('qr-modal-render');
       container.innerHTML = '';
       try {
-        currentQRInstance = new QRCode(container, {
-        text: qrData,
-        width: 250,
-        height: 250,
-        colorDark: '#000000',
-        colorLight: '#ffffff',
-        correctLevel: QRCode.CorrectLevel.M
-      });
+        var canvas = document.createElement('canvas');
+        container.appendChild(canvas);
+        currentQRInstance = new QRious({
+          element: canvas,
+          value: qrData,
+          size: 250,
+          foreground: '#000000',
+          background: '#ffffff',
+          level: 'M'
+        });
       } catch(e) {
         container.innerHTML = '<p class="text-red-500 text-sm">QR生成エラー: データが長すぎます</p>';
         console.error('QR error for ' + name + ':', e);
@@ -2196,7 +2198,9 @@
         var qrDiv = document.createElement('div');
         tempDiv.appendChild(qrDiv);
         try {
-          new QRCode(qrDiv, { text: qrData, width: 200, height: 200, colorDark: '#000000', colorLight: '#ffffff' });
+          var qrCanvas = document.createElement('canvas');
+          qrDiv.appendChild(qrCanvas);
+          new QRious({ element: qrCanvas, value: qrData, size: 200, foreground: '#000000', background: '#ffffff' });
         } catch(e) {
           console.error('QR error for ' + name, e);
           done++;
@@ -2204,14 +2208,10 @@
           return;
         }
 
-        // qrcodejsは内部でcanvasまたはimgを生成するので少し待つ
+        // QRiousはcanvasに即座に描画するので短い待機でOK
         setTimeout(function() {
-          var img = qrDiv.querySelector('img');
-          var imgSrc = img ? img.src : '';
-          if (!imgSrc) {
-            var c = qrDiv.querySelector('canvas');
-            if (c) imgSrc = c.toDataURL('image/png');
-          }
+          var c = qrDiv.querySelector('canvas');
+          var imgSrc = c ? c.toDataURL('image/png') : '';
           cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3' });
           done++;
           if (done === drivers.length) {
