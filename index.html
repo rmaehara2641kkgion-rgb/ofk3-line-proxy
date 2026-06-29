@@ -3043,55 +3043,88 @@
       }
     }
 
-    function checkTenkoLineNotify() {
-      if (tenkoSchedule.length === 0) return;
-      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
-      if (!proxyUrl) return;
+   function checkTenkoLineNotify() {
+  if (tenkoSchedule.length === 0) return;
+  var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+  if (!proxyUrl) return;
 
-      var now = new Date();
-      var currentMinutes = now.getHours() * 60 + now.getMinutes();
+  var now = new Date();
+  var currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-      NOTIFY_SLOTS.forEach(function(slot) {
-        if (tenkoNotifyDisabled[slot.time]) return;
+  NOTIFY_SLOTS.forEach(function(slot) {
+    if (tenkoNotifyDisabled[slot.time]) return;
 
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalMinutes <= slot.minutes; });
-        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
+    var driversAtSlot = tenkoSchedule.filter(function(d) {
+      return d.arrivalMinutes <= slot.minutes;
+    });
+    var incomplete = driversAtSlot.filter(function(d) {
+      return !d.licenseAuth || !d.mentorAuth;
+    });
 
-        var fiveMinBefore = slot.minutes - 5;
-        if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
-          incomplete.forEach(function(d) {
-            var key5 = d.name + '_5min_' + slot.time;
-            if (tenkoNotifySent[key5]) return;
-            var userId = lineMapping[d.name];
-            if (userId && userId.indexOf('U') === 0) {
-              var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + slot.time + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
-              pushTenkoNotify(userId, msg);
-              tenkoNotifySent[key5] = true;
-              addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
-            }
-          });
-        }
+    var fiveMinBefore = slot.minutes - 5;
 
-        if (currentMinutes >= slot.minutes) {
-          var adminKey = 'admin_' + slot.time;
-          if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
-            var list = incomplete.map(function(d) {
-              return '・' + d.name + '（🪪' + (d.licenseAuth ? '✅' : '❌') + ' 👨‍🏫' + (d.mentorAuth ? '✅' : '❌') + '）';
-            }).join('\n');
+    if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
+      incomplete.forEach(function(d) {
+        var key5 = d.name + '_5min_' + slot.time;
+        if (tenkoNotifySent[key5]) return;
 
-            var adminMsg = '🚨 点呼未完了通知\n\n着車時間 ' + slot.time + ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' + list + '\n\n未完了: ' + incomplete.length + '名';
+        var userId = lineMapping[d.name];
+        if (userId && userId.indexOf('U') === 0) {
+          var msg =
+            '⚠️ 点呼リマインダー\n\n' +
+            d.name +
+            'さん、着車時間 ' +
+            slot.time +
+            ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' +
+            (d.licenseAuth ? '✅' : '❌') +
+            '\n👨‍🏫 メンター認証: ' +
+            (d.mentorAuth ? '✅' : '❌');
 
-            pushTenkoNotify('__admin__', adminMsg);
-            tenkoNotifySent[adminKey] = true;
-            addNotifyLog('admin', '🚨', '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知');
-          }
+          pushTenkoNotify(userId, msg);
+          tenkoNotifySent[key5] = true;
+          addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
         }
       });
-
-      renderNotifySlots();
-      setInterval(function() { checkTenkoLineNotify(); renderNotifySlots(); }, 60000);
     }
 
+    if (currentMinutes >= slot.minutes) {
+      var adminKey = 'admin_' + slot.time;
+
+      if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
+        var list = incomplete.map(function(d) {
+          return (
+            '・' +
+            d.name +
+            '（🪪' +
+            (d.licenseAuth ? '✅' : '❌') +
+            ' 👨‍🏫' +
+            (d.mentorAuth ? '✅' : '❌') +
+            '）'
+          );
+        }).join('\n');
+
+        var adminMsg =
+          '🚨 点呼未完了通知\n\n着車時間 ' +
+          slot.time +
+          ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' +
+          list +
+          '\n\n未完了: ' +
+          incomplete.length +
+          '名';
+
+        pushTenkoNotify('__admin__', adminMsg);
+        tenkoNotifySent[adminKey] = true;
+        addNotifyLog(
+          'admin',
+          '🚨',
+          '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知'
+        );
+      }
+    }
+  });
+
+  renderNotifySlots();
+}
     async function pushTenkoNotify(to, text) {
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) return;
@@ -3109,11 +3142,21 @@
     }
 
     // Initialize
-    renderDriverTable();
-    initLineSettings();
-    loadTenkoData();
-    // 起動時にUI描画 + 3秒後にチェック
-    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); }, 3000);
+renderDriverTable();
+initLineSettings();
+loadTenkoData();
+
+// 起動時に1回実行
+setTimeout(function () {
+  renderNotifySlots();
+  checkTenkoLineNotify();
+}, 3000);
+
+// 以降は1分ごとに実行
+setInterval(function () {
+  checkTenkoLineNotify();
+  renderNotifySlots();
+}, 60000);
 
     // ===== 請求照合機能 =====
     var billingData = [];
