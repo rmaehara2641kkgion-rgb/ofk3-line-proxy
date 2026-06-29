@@ -2978,7 +2978,7 @@
           statusClass = 'bg-yellow-100 text-yellow-700';
         }
 
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalMinutes <= slot.minutes; });
         var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
 
         var btnHtml;
@@ -3054,7 +3054,7 @@
       NOTIFY_SLOTS.forEach(function(slot) {
         if (tenkoNotifyDisabled[slot.time]) return;
 
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalMinutes <= slot.minutes; });
         var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
 
         var fiveMinBefore = slot.minutes - 5;
