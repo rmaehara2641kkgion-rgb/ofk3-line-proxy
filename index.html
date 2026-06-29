@@ -3112,7 +3112,9 @@
           incomplete.length +
           '名';
 
-        pushTenkoNotify('__admin__', adminMsg);
+        var adminIdRaw = (lineSettings.adminLineId || '').trim();
+var adminIds = adminIdRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+adminIds.forEach(function(adminId) { pushTenkoNotify(adminId, adminMsg); });
         tenkoNotifySent[adminKey] = true;
         addNotifyLog(
           'admin',
