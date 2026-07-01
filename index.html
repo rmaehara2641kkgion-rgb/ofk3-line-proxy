@@ -264,10 +264,12 @@
               <thead>
                 <tr class="border-b border-border bg-surface">
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ステータス</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">名前（日本語）</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー名</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">LINE ID</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">電話番号</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">Transport ID</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">所属</th>
                   <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">QRコード</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">連携状態</th>
                   <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">メモ</th>
@@ -2073,6 +2075,9 @@
     let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
     let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
     let transportIDs = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+    let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
+    let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
+    const DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
 
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
@@ -2151,9 +2156,21 @@
              </button>`
           : '';
 
+        const dept = driverDepartments[name] || '';
+        const optionsHtml = DEPARTMENTS.map(function(d) {
+          return '<option value="' + d.replace(/"/g, '&quot;') + '" ' + (dept === d ? 'selected' : '') + '>' + d + '</option>';
+        }).join('');
+
+        const jname = driverJapaneseNames[name] || '';
+
         return `<tr class="border-b border-border hover:bg-surface/50 transition-colors">
           <td class="px-4 py-2.5 text-center">
             <span class="${dotClass} text-lg" title="${statusLabel}">●</span>
+          </td>
+          <td class="px-4 py-2.5">
+            <input type="text" value="${jname.replace(/"/g, '&quot;')}" placeholder="山田 太郎"
+              class="border border-border rounded px-2 py-1 text-xs w-32 focus:outline-none focus:border-accent"
+              onchange="updateJapaneseName('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-4 py-2.5 font-medium text-ink inline-flex items-center">${name}${addBtn}</td>
           <td class="px-4 py-2.5">
@@ -2170,6 +2187,13 @@
             <input type="text" value="${(transportIDs[name] || '').replace(/"/g, '&quot;')}" placeholder="Transport ID"
               class="border border-border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:border-accent"
               onchange="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
+          </td>
+          <td class="px-4 py-2.5">
+            <select class="border border-border rounded px-2 py-1 text-xs w-32 focus:outline-none focus:border-accent bg-white"
+              onchange="updateDepartment('${name.replace(/'/g, "\\'")}', this.value)">
+              <option value="">-- 所属 --</option>
+              ${optionsHtml}
+            </select>
           </td>
           <td class="px-4 py-2.5 text-center">
             <button onclick="showDriverQR('${name.replace(/'/g, "\\'")}')" class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">QR表示</button>
@@ -2219,6 +2243,28 @@
         delete transportIDs[name];
       }
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+      renderMasterTable();
+    }
+
+    function updateDepartment(name, value) {
+      value = value.trim();
+      if (value) {
+        driverDepartments[name] = value;
+      } else {
+        delete driverDepartments[name];
+      }
+      localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+      renderMasterTable();
+    }
+
+    function updateJapaneseName(name, value) {
+      value = value.trim();
+      if (value) {
+        driverJapaneseNames[name] = value;
+      } else {
+        delete driverJapaneseNames[name];
+      }
+      localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       renderMasterTable();
     }
 
@@ -2431,14 +2477,20 @@
     }
 
     function deleteDriver(name) {
-      if (!confirm(`「${name}」を削除しますか？\nドライバーDB・LINE紐付け・電話番号・メモすべて削除されます。`)) return;
+      if (!confirm(`「${name}」を削除しますか？\nドライバーDB・LINE紐付け・電話番号・所属・メモすべて削除されます。`)) return;
       delete driverDB[name];
       delete lineMapping[name];
       delete phoneMapping[name];
+      delete transportIDs[name];
+      delete driverDepartments[name];
+      delete driverJapaneseNames[name];
       delete masterNotes[name];
       localStorage.setItem('driverDB', JSON.stringify(driverDB));
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
       localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+      localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+      localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
       renderMasterTable();
     }
@@ -2450,12 +2502,14 @@
         ...Object.keys(phoneMapping),
         ...assignmentData.map(r => r.driverName).filter(Boolean)
       ]);
-      const rows = [['ドライバー名', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
+      const rows = [['ドライバー名', '名前（日本語）', '所属', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
 
       [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja')).forEach(name => {
         const db = driverDB[name] || {};
         rows.push([
           name,
+          driverJapaneseNames[name] || '',
+          driverDepartments[name] || '',
           lineMapping[name] || '',
           phoneMapping[name] || '',
           db.packagesPerHour || '',
