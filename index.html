@@ -2171,7 +2171,7 @@
         }).join('');
 
         const jname = driverJapaneseNames[name] || '';
-        const lineId = lineMapping[name] || '';
+        // 既存の lineId を使用（再宣言しない）
         const profile = lineId && lineId.indexOf('U') === 0 ? lineProfileCache[lineId] : null;
         const pictureUrl = profile ? profile.pictureUrl : '';
         const displayName = profile ? profile.displayName : '';
