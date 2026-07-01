@@ -2138,7 +2138,7 @@
       document.getElementById('master-unlinked').textContent = `未紐付け: ${unlinked}名`;
 
       if (drivers.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-12 text-center text-sm text-ink-lighter">
+        tbody.innerHTML = `<tr><td colspan="11" class="px-4 py-12 text-center text-sm text-ink-lighter">
           ドライバーが登録されていません<br>
           <span class="text-xs">アサインデータのアップロードまたは手動追加で登録できます</span>
         </td></tr>`;
@@ -2175,7 +2175,7 @@
         const profile = lineId && lineId.indexOf('U') === 0 ? lineProfileCache[lineId] : null;
         const pictureUrl = profile ? profile.pictureUrl : '';
         const displayName = profile ? profile.displayName : '';
-        const fallbackIcon = 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'%23ccc\'><path d=\'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z\'/></svg>';
+        const fallbackIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2NjYyI+PHBhdGggZD0iTTEyIDEyYzIuMjEgMCA0LTEuNzkgNC00cy0xLjc5LTQtNC00LTQgMS43OS00IDQgMS43OSA0IDQgNHptMCAyYy0yLjY3IDAtOCAxLjM0LTggNHYyaDE2di0yYzAtMi42Ni01LjMzLTQtOC00eiIvPjwvc3ZnPg==';
         const avatarHtml = '<img src="' + (pictureUrl || fallbackIcon).replace(/"/g, '&quot;') + '" class="w-8 h-8 rounded-full border border-border object-cover flex-shrink-0" alt="LINEアイコン">';
 
         return `<tr class="border-b border-border hover:bg-surface/50 transition-colors">
@@ -2192,7 +2192,7 @@
               ${avatarHtml}
               <div class="flex flex-col leading-tight">
                 <span class="inline-flex items-center">${name}${addBtn}</span>
-                ${displayName ? '<span class="text-xs text-ink-lighter font-normal">' + displayName.replace(/"/g, '&quot;') + '</span>' : ''}
+                ${displayName ? '<span class="text-xs text-ink-lighter font-normal">' + displayName.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span>' : ''}
               </div>
             </div>
           </td>
