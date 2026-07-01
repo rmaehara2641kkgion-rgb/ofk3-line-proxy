@@ -66,6 +66,46 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// LINEプロフィール取得
+app.get('/proxy', async (req, res) => {
+  try {
+    if (req.query.action !== 'getProfile') {
+      return res.status(404).json({ status: 'error', message: 'Unknown action' });
+    }
+
+    const userId = req.query.userId;
+    if (!userId) {
+      return res.status(400).json({ status: 'error', message: 'userId required' });
+    }
+
+    if (!CHANNEL_ACCESS_TOKEN) {
+      return res.status(500).json({ status: 'error', message: 'CHANNEL_ACCESS_TOKEN not configured' });
+    }
+
+    const response = await axios.get(
+      'https://api.line.me/v2/bot/profile/' + encodeURIComponent(userId),
+      {
+        headers: {
+          Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN
+        }
+      }
+    );
+
+    res.json({
+      status: 'ok',
+      displayName: response.data.displayName,
+      pictureUrl: response.data.pictureUrl || '',
+      statusMessage: response.data.statusMessage || ''
+    });
+  } catch (err) {
+    log('Profile error:', err.response && err.response.data ? err.response.data : err.message);
+    res.status(500).json({
+      status: 'error',
+      message: err.response && err.response.data ? err.response.data : err.message
+    });
+  }
+});
+
 // LINE proxy（フロントエンドからの送信）
 app.post('/proxy', async (req, res) => {
   try {
