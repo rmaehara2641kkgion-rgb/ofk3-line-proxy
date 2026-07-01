@@ -746,7 +746,10 @@
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
-      if (tab === 'master') renderMasterTable();
+      if (tab === 'master') {
+        renderMasterTable();
+        refreshAllLineProfiles();
+      }
       if (tab === 'billing') renderBillingTable();
     }
 
@@ -2079,6 +2082,12 @@
     let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
     const DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
 
+    // LINE profile cache: { userId: { displayName, pictureUrl, statusMessage, fetchedAt } }
+    let lineProfileCache = JSON.parse(localStorage.getItem('lineProfileCache') || '{}');
+
+    // 24-hour cache threshold in ms
+    var PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000;
+
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
     if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
@@ -2162,6 +2171,12 @@
         }).join('');
 
         const jname = driverJapaneseNames[name] || '';
+        const lineId = lineMapping[name] || '';
+        const profile = lineId && lineId.indexOf('U') === 0 ? lineProfileCache[lineId] : null;
+        const pictureUrl = profile ? profile.pictureUrl : '';
+        const displayName = profile ? profile.displayName : '';
+        const fallbackIcon = 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'%23ccc\'><path d=\'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z\'/></svg>';
+        const avatarHtml = '<img src="' + (pictureUrl || fallbackIcon).replace(/"/g, '&quot;') + '" class="w-8 h-8 rounded-full border border-border object-cover flex-shrink-0" alt="LINEアイコン">';
 
         return `<tr class="border-b border-border hover:bg-surface/50 transition-colors">
           <td class="px-4 py-2.5 text-center">
@@ -2172,7 +2187,15 @@
               class="border border-border rounded px-2 py-1 text-xs w-32 focus:outline-none focus:border-accent"
               onchange="updateJapaneseName('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
-          <td class="px-4 py-2.5 font-medium text-ink inline-flex items-center">${name}${addBtn}</td>
+          <td class="px-4 py-2.5 font-medium text-ink">
+            <div class="flex items-center gap-2">
+              ${avatarHtml}
+              <div class="flex flex-col leading-tight">
+                <span class="inline-flex items-center">${name}${addBtn}</span>
+                ${displayName ? '<span class="text-xs text-ink-lighter font-normal">' + displayName.replace(/"/g, '&quot;') + '</span>' : ''}
+              </div>
+            </div>
+          </td>
           <td class="px-4 py-2.5">
             <input type="text" value="${lineId}" placeholder="LINE User ID"
               class="border border-border rounded px-2 py-1 text-xs w-40 focus:outline-none focus:border-accent"
@@ -2221,7 +2244,14 @@
         delete lineMapping[name];
       }
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+
+      // 新しいLINE IDが設定されたら即座にプロフィール取得（Uから始まる場合）
+      if (value && value.indexOf('U') === 0) {
+        refreshLineProfile(value);
+      }
+
       renderMasterTable();
+      renderLineMappings();
     }
 
     function updatePhone(name, value) {
@@ -2266,6 +2296,83 @@
       }
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       renderMasterTable();
+    }
+
+    // ===== LINE Profile Cache =====
+    function isProfileCacheExpired(profile) {
+      if (!profile || !profile.fetchedAt) return true;
+      return (Date.now() - profile.fetchedAt) > PROFILE_CACHE_TTL;
+    }
+
+    function saveProfileCache() {
+      localStorage.setItem('lineProfileCache', JSON.stringify(lineProfileCache));
+    }
+
+    async function fetchLineProfile(userId) {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return null;
+      if (userId.indexOf('U') !== 0) return null;
+
+      var url = proxyUrl + (proxyUrl.indexOf('?') >= 0 ? '&' : '?') + 'action=getProfile&userId=' + encodeURIComponent(userId);
+
+      try {
+        var response = await fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' });
+        var data = await response.json().catch(function() { return null; });
+        if (!data || data.status === 'error' || !data.userId) return null;
+        return {
+          userId: data.userId,
+          displayName: data.displayName || '',
+          pictureUrl: data.pictureUrl || '',
+          statusMessage: data.statusMessage || '',
+          fetchedAt: Date.now()
+        };
+      } catch(e) {
+        console.error('LINEプロフィール取得エラー:', e);
+        return null;
+      }
+    }
+
+    async function refreshLineProfile(userId) {
+      if (!userId || userId.indexOf('U') !== 0) return;
+      var cached = lineProfileCache[userId];
+      if (cached && !isProfileCacheExpired(cached)) return;
+
+      var profile = await fetchLineProfile(userId);
+      if (profile) {
+        lineProfileCache[userId] = profile;
+        saveProfileCache();
+        if (currentTab === 'master') renderMasterTable();
+      }
+    }
+
+    function refreshAllLineProfiles() {
+      var targets = [];
+      for (var name in lineMapping) {
+        var userId = lineMapping[name];
+        if (userId && userId.indexOf('U') === 0) {
+          targets.push(userId);
+        }
+      }
+      if (targets.length === 0) return;
+
+      // 重複排除
+      var seen = {};
+      targets = targets.filter(function(userId) {
+        if (seen[userId]) return false;
+        seen[userId] = true;
+        return true;
+      });
+
+      // 順番に取得（同時実行しすぎないよう200ms間隔）
+      var i = 0;
+      function next() {
+        if (i >= targets.length) return;
+        var userId = targets[i++];
+        refreshLineProfile(userId).then(function() {
+          setTimeout(next, 200);
+        });
+      }
+      next();
     }
 
     // ===== QR Code Generation (qrcodejs) =====
@@ -2622,6 +2729,9 @@
 
       lineMapping[name] = lineId;
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      if (lineId.indexOf('U') === 0) {
+        refreshLineProfile(lineId);
+      }
       renderLineMappings();
     }
 
@@ -3195,7 +3305,7 @@
     initLineSettings();
     loadTenkoData();
     // 起動時にUI描画 + 3秒後にチェック
-    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); }, 3000);
+    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); refreshAllLineProfiles(); }, 3000);
 
     // ===== 請求照合機能 =====
     var billingData = [];
