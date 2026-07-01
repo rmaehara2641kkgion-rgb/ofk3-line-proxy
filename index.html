@@ -1743,10 +1743,45 @@
         }
       }
 
-      if (!driverName || matchedIndex < 0) {
-        addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
-        return;
-      }
+     // シフトにいない場合は臨時点呼として自動追加
+if (!driverName || matchedIndex < 0) {
+
+  // driverDBに存在する名前を取得
+  var tempName = null;
+
+  if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
+    tempName = decodedText.replace('OFK3_LICENSE:', '');
+  } else if (decodedText.indexOf('OFK3_DRIVER:') === 0) {
+    tempName = decodedText.replace('OFK3_DRIVER:', '');
+  }
+
+  // driverDBに登録されていれば臨時追加
+  if (tempName && driverDB[tempName]) {
+
+    tenkoSchedule.push({
+      name: tempName,
+      arrival: '臨時',
+      arrivalMinutes: 9999,
+      licenseAuth: false,
+      mentorAuth: false,
+      temporary: true
+    });
+
+    matchedIndex = tenkoSchedule.length - 1;
+    driverName = tempName;
+
+    localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+    renderTenkoTable();
+
+    addScanLog('🟠 ' + driverName + ' を臨時点呼として追加しました', 'info');
+
+  } else {
+
+    addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
+    return;
+
+  }
+}
 
       var d = tenkoSchedule[matchedIndex];
       if (d.licenseAuth && d.mentorAuth) {
