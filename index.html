@@ -1398,7 +1398,15 @@
       document.getElementById('camera-result').className = 'text-sm mt-2';
       modal.classList.remove('hidden');
 
-      const video = document.getElementById('camera-video');
+      var confirmBtn = document.getElementById('camera-confirm-btn');
+      confirmBtn.disabled = false;
+      if (cameraAuthType === 'license') {
+        confirmBtn.className = 'flex-1 py-3 rounded-lg text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors text-lg';
+      } else {
+        confirmBtn.className = 'flex-1 py-3 rounded-lg text-sm font-bold bg-purple-500 text-white hover:bg-purple-600 transition-colors text-lg';
+      }
+
+      var video = document.getElementById('camera-video');
       // USBカメラ優先: USB → 内蔵 → その他
       selectBestCamera().then(function(deviceId) {
         var constraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
@@ -1460,31 +1468,37 @@
     }
 
     function confirmCameraAuth() {
-      const d = tenkoSchedule[cameraDriverIndex];
+      var d = tenkoSchedule[cameraDriverIndex];
       if (!d) return;
-      const resultEl = document.getElementById('camera-result');
+      var resultEl = document.getElementById('camera-result');
+      var confirmBtn = document.getElementById('camera-confirm-btn');
+
+      // 二重押し防止
+      if (confirmBtn.disabled) return;
 
       if (cameraAuthType === 'license') {
         d.licenseAuth = true;
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
 
         if (d.mentorAuth) {
-          // Both done!
           resultEl.textContent = '✅ QR認証OK → 両方完了！';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('complete');
-          setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+          confirmBtn.disabled = true;
+          setTimeout(function() { closeCameraModal(); renderTenkoTable(); }, 1500);
         } else {
-          // License done, move to mentor
           resultEl.textContent = '✅ QR認証OK → 続いてメンター認証へ';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('success');
-          setTimeout(() => {
+          confirmBtn.disabled = true;
+          setTimeout(function() {
             cameraAuthType = 'mentor';
             document.getElementById('camera-auth-type').textContent = '📱 メンター起動画面をかざしてください';
-            document.getElementById('camera-confirm-btn').textContent = 'メンター 認証OK';
-            resultEl.textContent = '';
-            resultEl.className = 'text-sm mt-2';
+            confirmBtn.textContent = 'メンター 認証OK';
+            confirmBtn.disabled = false;
+            confirmBtn.className = 'flex-1 py-3 rounded-lg text-sm font-bold bg-purple-500 text-white hover:bg-purple-600 transition-colors text-lg';
+            resultEl.textContent = 'メンターアプリの「ルート終了」画面をカメラに見せてください';
+            resultEl.className = 'text-sm mt-2 text-purple-600 font-medium';
           }, 1500);
         }
       } else if (cameraAuthType === 'mentor') {
@@ -1493,7 +1507,8 @@
         resultEl.textContent = '🎉 メンター認証OK — 点呼完了！';
         resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold text-lg';
         playSound('complete');
-        setTimeout(() => { closeCameraModal(); renderTenkoTable(); }, 1500);
+        confirmBtn.disabled = true;
+        setTimeout(function() { closeCameraModal(); renderTenkoTable(); }, 1500);
       }
     }
 
@@ -1671,13 +1686,13 @@
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         selectBestCamera().then(function(deviceId) {
-          var videoConst = { width: { ideal: 1280 }, height: { ideal: 720 }, focusMode: 'continuous' };
+          var videoConst = { width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 1.333 }, focusMode: 'continuous' };
           if (deviceId) {
             videoConst.deviceId = { exact: deviceId };
           }
           return html5QrCode.start(
             deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
-            { fps: 15, qrbox: { width: 300, height: 300 }, aspectRatio: 1.777, disableFlip: false },
+            { fps: 15, qrbox: { width: 300, height: 300 }, disableFlip: false },
             onQrCodeScanned,
             function() {}
           );
@@ -1703,85 +1718,30 @@
     }
 
     function onQrCodeScanned(decodedText) {
-      var driverName = null;
-      var matchedIndex = -1;
+      var driverName = findDriverByQr(decodedText);
 
-      // OFK3_LICENSE: 形式
-      if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
-        var name1 = decodedText.replace('OFK3_LICENSE:', '');
-        matchedIndex = findTenkoDriver(name1);
-        if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
-      }
-
-      // OFK3_DRIVER: 形式
-      if (!driverName && decodedText.indexOf('OFK3_DRIVER:') === 0) {
-        var name2 = decodedText.replace('OFK3_DRIVER:', '');
-        matchedIndex = findTenkoDriver(name2);
-        if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
-      }
-
-      // OFK3_D0001 形式（自動生成ID）
-      if (!driverName && decodedText.indexOf('OFK3_D') === 0 && decodedText.length <= 12) {
-        var keys = Object.keys(driverDB).sort();
-        var idxNum = parseInt(decodedText.replace('OFK3_D', ''));
-        if (idxNum > 0 && idxNum <= keys.length) {
-          var name3 = keys[idxNum - 1];
-          matchedIndex = findTenkoDriver(name3);
-          if (matchedIndex >= 0) driverName = tenkoSchedule[matchedIndex].name;
-        }
-      }
-
-      // Transport ID で照合
       if (!driverName) {
-        var cleanDecoded = decodedText.replace(/[\s\-]/g, '');
-        for (var tName in transportIDs) {
-          var tid = transportIDs[tName];
-          if (tid && cleanDecoded === tid.toString().replace(/[\s\-]/g, '')) {
-            matchedIndex = findTenkoDriver(tName);
-            if (matchedIndex >= 0) { driverName = tenkoSchedule[matchedIndex].name; break; }
-          }
-        }
+        addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
+        return;
       }
 
-     // シフトにいない場合は臨時点呼として自動追加
-if (!driverName || matchedIndex < 0) {
+      var matchedIndex = findTenkoDriver(driverName);
 
-  // driverDBに存在する名前を取得
-  var tempName = null;
-
-  if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
-    tempName = decodedText.replace('OFK3_LICENSE:', '');
-  } else if (decodedText.indexOf('OFK3_DRIVER:') === 0) {
-    tempName = decodedText.replace('OFK3_DRIVER:', '');
-  }
-
-  // driverDBに登録されていれば臨時追加
-  if (tempName && driverDB[tempName]) {
-
-    tenkoSchedule.push({
-      name: tempName,
-      arrival: '臨時',
-      arrivalMinutes: 9999,
-      licenseAuth: false,
-      mentorAuth: false,
-      temporary: true
-    });
-
-    matchedIndex = tenkoSchedule.length - 1;
-    driverName = tempName;
-
-    localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
-    renderTenkoTable();
-
-    addScanLog('🟠 ' + driverName + ' を臨時点呼として追加しました', 'info');
-
-  } else {
-
-    addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
-    return;
-
-  }
-}
+      // シフト外なら臨時点呼として自動追加
+      if (matchedIndex < 0) {
+        tenkoSchedule.push({
+          name: driverName,
+          arrivalTime: '臨時',
+          arrivalMinutes: 9999,
+          licenseAuth: false,
+          mentorAuth: false,
+          temporary: true
+        });
+        matchedIndex = tenkoSchedule.length - 1;
+        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        renderTenkoTable();
+        addScanLog('🟠 臨時点呼追加：' + driverName, 'info');
+      }
 
       var d = tenkoSchedule[matchedIndex];
       if (d.licenseAuth && d.mentorAuth) {
@@ -1802,6 +1762,40 @@ if (!driverName || matchedIndex < 0) {
         stopQrScan();
         startOcrScan(matchedIndex);
       }
+    }
+
+    function findDriverByQr(decodedText) {
+      // OFK3_LICENSE: 形式
+      if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
+        return decodedText.replace('OFK3_LICENSE:', '').trim();
+      }
+
+      // OFK3_DRIVER: 形式
+      if (decodedText.indexOf('OFK3_DRIVER:') === 0) {
+        return decodedText.replace('OFK3_DRIVER:', '').trim();
+      }
+
+      // OFK3_D0001 形式（自動生成ID）
+      // 注意：driverDBの並び順に依存するため、長期運用では推奨されません
+      // 新規発行は OFK3_DRIVER:名前 の形式を推奨します
+      if (decodedText.indexOf('OFK3_D') === 0 && decodedText.length <= 12) {
+        var keys = Object.keys(driverDB).sort();
+        var idx = parseInt(decodedText.replace('OFK3_D', ''), 10);
+        if (idx > 0 && idx <= keys.length) {
+          return keys[idx - 1];
+        }
+      }
+
+      // Transport ID で照合
+      var clean = decodedText.replace(/[\s\-]/g, '');
+      for (var name in transportIDs) {
+        if (!transportIDs[name]) continue;
+        if (clean === transportIDs[name].toString().replace(/[\s\-]/g, '')) {
+          return name;
+        }
+      }
+
+      return null;
     }
 
     // ファジーマッチ: スペース・全角半角を無視して点呼スケジュールから検索
@@ -3013,7 +3007,7 @@ if (!driverName || matchedIndex < 0) {
           statusClass = 'bg-yellow-100 text-yellow-700';
         }
 
-        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalMinutes <= slot.minutes; });
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
         var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
 
         var btnHtml;
@@ -3078,90 +3072,54 @@ if (!driverName || matchedIndex < 0) {
       }
     }
 
-   function checkTenkoLineNotify() {
-  if (tenkoSchedule.length === 0) return;
-  var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
-  if (!proxyUrl) return;
+    function checkTenkoLineNotify() {
+      if (tenkoSchedule.length === 0) return;
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) return;
 
-  var now = new Date();
-  var currentMinutes = now.getHours() * 60 + now.getMinutes();
+      var now = new Date();
+      var currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  NOTIFY_SLOTS.forEach(function(slot) {
-    if (tenkoNotifyDisabled[slot.time]) return;
+      NOTIFY_SLOTS.forEach(function(slot) {
+        if (tenkoNotifyDisabled[slot.time]) return;
 
-    var driversAtSlot = tenkoSchedule.filter(function(d) {
-      return d.arrivalMinutes <= slot.minutes;
-    });
-    var incomplete = driversAtSlot.filter(function(d) {
-      return !d.licenseAuth || !d.mentorAuth;
-    });
+        var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
+        var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
 
-    var fiveMinBefore = slot.minutes - 5;
+        var fiveMinBefore = slot.minutes - 5;
+        if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
+          incomplete.forEach(function(d) {
+            var key5 = d.name + '_5min_' + slot.time;
+            if (tenkoNotifySent[key5]) return;
+            var userId = lineMapping[d.name];
+            if (userId && userId.indexOf('U') === 0) {
+              var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + slot.time + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
+              pushTenkoNotify(userId, msg);
+              tenkoNotifySent[key5] = true;
+              addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
+            }
+          });
+        }
 
-    if (currentMinutes >= fiveMinBefore && currentMinutes < slot.minutes) {
-      incomplete.forEach(function(d) {
-        var key5 = d.name + '_5min_' + slot.time;
-        if (tenkoNotifySent[key5]) return;
+        if (currentMinutes >= slot.minutes) {
+          var adminKey = 'admin_' + slot.time;
+          if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
+            var list = incomplete.map(function(d) {
+              return '・' + d.name + '（🪪' + (d.licenseAuth ? '✅' : '❌') + ' 👨‍🏫' + (d.mentorAuth ? '✅' : '❌') + '）';
+            }).join('\n');
 
-        var userId = lineMapping[d.name];
-        if (userId && userId.indexOf('U') === 0) {
-          var msg =
-            '⚠️ 点呼リマインダー\n\n' +
-            d.name +
-            'さん、着車時間 ' +
-            slot.time +
-            ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' +
-            (d.licenseAuth ? '✅' : '❌') +
-            '\n👨‍🏫 メンター認証: ' +
-            (d.mentorAuth ? '✅' : '❌');
+            var adminMsg = '🚨 点呼未完了通知\n\n着車時間 ' + slot.time + ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' + list + '\n\n未完了: ' + incomplete.length + '名';
 
-          pushTenkoNotify(userId, msg);
-          tenkoNotifySent[key5] = true;
-          addNotifyLog('driver', '📩', d.name + ' に5分前リマインダー送信');
+            pushTenkoNotify('__admin__', adminMsg);
+            tenkoNotifySent[adminKey] = true;
+            addNotifyLog('admin', '🚨', '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知');
+          }
         }
       });
+
+      renderNotifySlots();
     }
 
-    if (currentMinutes >= slot.minutes) {
-      var adminKey = 'admin_' + slot.time;
-
-      if (!tenkoNotifySent[adminKey] && incomplete.length > 0) {
-        var list = incomplete.map(function(d) {
-          return (
-            '・' +
-            d.name +
-            '（🪪' +
-            (d.licenseAuth ? '✅' : '❌') +
-            ' 👨‍🏫' +
-            (d.mentorAuth ? '✅' : '❌') +
-            '）'
-          );
-        }).join('\n');
-
-        var adminMsg =
-          '🚨 点呼未完了通知\n\n着車時間 ' +
-          slot.time +
-          ' を過ぎましたが、以下のドライバーの点呼が完了していません。\n\n' +
-          list +
-          '\n\n未完了: ' +
-          incomplete.length +
-          '名';
-
-        var adminIdRaw = (lineSettings.adminLineId || '').trim();
-var adminIds = adminIdRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-adminIds.forEach(function(adminId) { pushTenkoNotify(adminId, adminMsg); });
-        tenkoNotifySent[adminKey] = true;
-        addNotifyLog(
-          'admin',
-          '🚨',
-          '着車 ' + slot.time + ' 未完了 ' + incomplete.length + '名 → 管理者通知'
-        );
-      }
-    }
-  });
-
-  renderNotifySlots();
-}
     async function pushTenkoNotify(to, text) {
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) return;
@@ -3179,21 +3137,11 @@ adminIds.forEach(function(adminId) { pushTenkoNotify(adminId, adminMsg); });
     }
 
     // Initialize
-renderDriverTable();
-initLineSettings();
-loadTenkoData();
-
-// 起動時に1回実行
-setTimeout(function () {
-  renderNotifySlots();
-  checkTenkoLineNotify();
-}, 3000);
-
-// 以降は1分ごとに実行
-setInterval(function () {
-  checkTenkoLineNotify();
-  renderNotifySlots();
-}, 60000);
+    renderDriverTable();
+    initLineSettings();
+    loadTenkoData();
+    // 起動時にUI描画 + 3秒後にチェック
+    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); }, 3000);
 
     // ===== 請求照合機能 =====
     var billingData = [];
