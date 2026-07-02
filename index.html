@@ -322,7 +322,7 @@
             <p class="text-xs text-ink-lighter mt-1">シフトデータから当日の点呼スケジュールを生成し、認証状況をリアルタイム管理</p>
           </div>
           <div class="flex gap-2">
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">シフトデータ読み込み</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">スケジュールUI読み込み</button>
             <input type="file" id="shift-file-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftUpload(event)">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-master-input').click()">📋 シフト表読み込み</button>
             <input type="file" id="shift-master-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftMasterUpload(event)">
@@ -823,7 +823,15 @@
     // ドライバーアイコン共通関数
     function getDriverIcon(name, sizeClass) {
       sizeClass = sizeClass || 'w-8 h-8';
+      // 日本語名→元名の逆引きも試す
       var lid = lineMapping[name] || '';
+      if (!lid) {
+        for (var origName in driverJapaneseNames) {
+          if (driverJapaneseNames[origName] === name && lineMapping[origName]) {
+            lid = lineMapping[origName]; break;
+          }
+        }
+      }
       var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
       var pUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
       var fallback = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2NjYyI+PHBhdGggZD0iTTEyIDEyYzIuMjEgMCA0LTEuNzkgNC00cy0xLjc5LTQtNC00LTQgMS43OS00IDQgMS43OSA0IDQgNHptMCAyYy0yLjY3IDAtOCAxLjM0LTggNHYyaDE2di0yYzAtMi42Ni01LjMzLTQtOC00eiIvPjwvc3ZnPg==';
