@@ -729,6 +729,34 @@
     let driverDB = {};
     let currentTab = 'dashboard';
 
+    // Master Management state (moved early for getDriverIcon availability)
+    let lineMapping = JSON.parse(localStorage.getItem('lineMapping') || '{}');
+    let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
+    let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
+    let transportIDs = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+    let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
+    let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
+    var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
+
+    // LINE profile cache
+    let lineProfileCache = JSON.parse(localStorage.getItem('lineProfileCache') || '{}');
+    var PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000;
+
+    // Pre-register admin
+    if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
+    if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
+    if (!masterNotes['前原雷蔵']) { masterNotes['前原雷蔵'] = '管理者'; localStorage.setItem('masterNotes', JSON.stringify(masterNotes)); }
+
+    // ドライバーアイコン共通関数
+    function getDriverIcon(name, sizeClass) {
+      sizeClass = sizeClass || 'w-8 h-8';
+      var lid = lineMapping[name] || '';
+      var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
+      var pUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
+      var fallback = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2NjYyI+PHBhdGggZD0iTTEyIDEyYzIuMjEgMCA0LTEuNzkgNC00cy0xLjc5LTQtNC00LTQgMS43OS00IDQgMS43OSA0IDQgNHptMCAyYy0yLjY3IDAtOCAxLjM0LTggNHYyaDE2di0yYzAtMi42Ni01LjMzLTQtOC00eiIvPjwvc3ZnPg==';
+      return '<img src="' + (pUrl || fallback).replace(/"/g, '&quot;') + '" class="' + sizeClass + ' rounded-full border border-border object-cover flex-shrink-0" alt="LINEアイコン">';
+    }
+
     // Initialize
     document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 
@@ -2072,24 +2100,8 @@
     }
 
     // ===== Master Management =====
-    let lineMapping = JSON.parse(localStorage.getItem('lineMapping') || '{}');
-    let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
-    let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
-    let transportIDs = JSON.parse(localStorage.getItem('transportIDs') || '{}');
-    let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
-    let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
-    const DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
-
-    // LINE profile cache: { userId: { displayName, pictureUrl, statusMessage, fetchedAt } }
-    let lineProfileCache = JSON.parse(localStorage.getItem('lineProfileCache') || '{}');
-
-    // 24-hour cache threshold in ms
-    var PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000;
-
-    // Pre-register admin
-    if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
-    if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
-    if (!masterNotes['前原雷蔵']) { masterNotes['前原雷蔵'] = '管理者'; localStorage.setItem('masterNotes', JSON.stringify(masterNotes)); }
+    // (lineMapping, masterNotes, phoneMapping, transportIDs, driverDepartments, driverJapaneseNames,
+    //  DEPARTMENTS, lineProfileCache, PROFILE_CACHE_TTL, admin pre-register は State セクションに移動済み)
 
     function getLineQrUrl(basicId) {
       // LINE official account QR code URL pattern
@@ -2169,9 +2181,7 @@
         }).join('');
 
         const jname = driverJapaneseNames[name] || '';
-        // 既存の lineId を使用（再宣言しない）
         const profile = lineId && lineId.indexOf('U') === 0 ? lineProfileCache[lineId] : null;
-        const pictureUrl = profile ? profile.pictureUrl : '';
         const displayName = profile ? profile.displayName : '';
         const avatarHtml = getDriverIcon(name, 'w-8 h-8');
 
@@ -2370,16 +2380,6 @@
         });
       }
       next();
-    }
-
-    // ドライバーアイコン（LINEプロフィール画像 or フォールバック）をHTML文字列で返す
-    function getDriverIcon(name, sizeClass) {
-      sizeClass = sizeClass || 'w-8 h-8';
-      var lineId = lineMapping[name] || '';
-      var profile = lineId && lineProfileCache[lineId] ? lineProfileCache[lineId] : null;
-      var pictureUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
-      var fallbackIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2NjYyI+PHBhdGggZD0iTTEyIDEyYzIuMjEgMCA0LTEuNzkgNC00cy0xLjc5LTQtNC00LTQgMS43OS00IDQgMS43OSA0IDQgNHptMCAyYy0yLjY3IDAtOCAxLjM0LTggNHYyaDE2di0yYzAtMi42Ni01LjMzLTQtOC00eiIvPjwvc3ZnPg==';
-      return '<img src="' + (pictureUrl || fallbackIcon).replace(/"/g, '&quot;') + '" class="' + sizeClass + ' rounded-full border border-border object-cover flex-shrink-0" alt="LINEアイコン">';
     }
 
     // ===== QR Code Generation (qrcodejs) =====
@@ -3424,7 +3424,7 @@
     function renderBillingTable() {
       var tbody = document.getElementById('billing-table-body');
       if (!tbody) return;
-      if (billingData.length === 0) {
+      if (!billingData || billingData.length === 0) {
         tbody.innerHTML = '<tr><td colspan="12" class="text-center py-8 text-ink-lighter text-sm">請求Excelを読み込んでください</td></tr>';
         return;
       }
