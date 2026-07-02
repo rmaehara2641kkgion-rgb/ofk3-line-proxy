@@ -126,6 +126,7 @@ function getLineProfile(userId) {
 
     var data = JSON.parse(body);
     var profile = {
+      status: 'ok',
       userId: data.userId || userId,
       displayName: data.displayName || '',
       pictureUrl: data.pictureUrl || '',
