@@ -4781,22 +4781,14 @@
               for (var si = 0; si < workbook.SheetNames.length; si++) {
                 var sheet = workbook.Sheets[workbook.SheetNames[si]];
                 var rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                // ヘッダー行から住所列を探す
-                var addrColIdx = -1;
-                if (rows.length > 0) {
-                  for (var ci = 0; ci < rows[0].length; ci++) {
-                    var colName = String(rows[0][ci] || '');
-                    if (colName.indexOf('住所') >= 0 || colName.indexOf('Address') >= 0 || colName.indexOf('address') >= 0) {
-                      addrColIdx = ci;
-                      break;
-                    }
-                  }
-                }
-                if (addrColIdx < 0) continue;
-                for (var ri = 1; ri < rows.length; ri++) {
-                  var rawAddr = rows[ri][addrColIdx];
-                  if (!rawAddr) continue;
-                  var normAddr = normalizeAddress(String(rawAddr));
+                // CYCLEファイル形式: Row1="Route for XXX", Row2=ヘッダー, Row3以降=データ, Column F(index5)=住所
+                // Row3(index2)以降、Column F(index5)から住所を取得
+                for (var ri = 2; ri < rows.length; ri++) {
+                  var row = rows[ri];
+                  if (!row || !row[5]) continue;
+                  var rawAddr = String(row[5]).trim();
+                  if (!rawAddr || rawAddr.indexOf('OFK') >= 0) continue;
+                  var normAddr = normalizeAddress(rawAddr);
                   if (!normAddr) continue;
                   if (addrMaster[normAddr]) {
                     addrMaster[normAddr].hitCount = (addrMaster[normAddr].hitCount || 1) + 1;
