@@ -4454,8 +4454,8 @@
             allLatLngs.push([gc.lat, gc.lng]);
           }
           countEl.textContent = (p + 1) + '/' + pendingAddresses.length;
-          // Nominatimの利用規約対策（1秒待機）
-          if (p % 5 === 4) await new Promise(function(r) { setTimeout(r, 1000); });
+          // Nominatim利用規約対策＋429回避
+          await new Promise(function(r) { setTimeout(r, 1200); });
         }
         loadingEl.classList.add('hidden');
       }
