@@ -20,6 +20,9 @@ const PORT = process.env.PORT || 3000;
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
 
+// 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
+const geocodeCache = {};
+
 // 静的ファイル配信（index.html, logo.pngなど）
 app.use(express.static(path.join(__dirname)));
 
@@ -118,6 +121,16 @@ app.get('/geocode', async (req, res) => {
       });
     }
 
+    // キャッシュヒット
+    if (geocodeCache[address]) {
+      return res.json({
+        status: 'ok',
+        lat: geocodeCache[address].lat,
+        lng: geocodeCache[address].lng,
+        cached: true
+      });
+    }
+
     const response = await axios.get(
       'https://nominatim.openstreetmap.org/search',
       {
@@ -138,13 +151,19 @@ app.get('/geocode', async (req, res) => {
       });
     }
 
-    res.json({
-      status: 'ok',
+    // キャッシュ保存
+    geocodeCache[address] = {
       lat: Number(response.data[0].lat),
       lng: Number(response.data[0].lon)
+    };
+
+    res.json({
+      status: 'ok',
+      lat: geocodeCache[address].lat,
+      lng: geocodeCache[address].lng
     });
   } catch (e) {
-    console.error(e.message);
+    console.error(e.response?.data || e.message);
     res.status(500).json({
       status: 'error',
       message: e.message
