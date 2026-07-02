@@ -107,6 +107,39 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+// Geocoding proxy（Nominatim経由、将来Google Geocoding APIへ切替可能）
+app.get('/geocode', async (req, res) => {
+  try {
+    const addr = req.query.address;
+    if (!addr) {
+      return res.status(400).json({ status: 'error', message: 'address required' });
+    }
+
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(addr) + '&limit=1';
+    const response = await axios.get(url, {
+      headers: {
+        'Accept-Language': 'ja',
+        'User-Agent': 'OFK3 Delivery Map (Render)'
+      },
+      timeout: 10000
+    });
+
+    const data = response.data;
+    if (!data || data.length === 0) {
+      return res.status(404).json({ status: 'not_found' });
+    }
+
+    res.json({
+      status: 'ok',
+      lat: parseFloat(data[0].lat),
+      lng: parseFloat(data[0].lon)
+    });
+  } catch (err) {
+    log('Geocode error:', err.message);
+    res.status(502).json({ status: 'error', message: err.message });
+  }
+});
+
 // LINE proxy（フロントエンドからの送信）
 app.post('/proxy', async (req, res) => {
   try {
