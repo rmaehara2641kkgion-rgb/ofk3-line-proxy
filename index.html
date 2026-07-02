@@ -4356,19 +4356,18 @@
       return coord;
     }
 
-    // Nominatim ジオコーディング（getLatLngからのみ呼ばれる）
+    // Nominatim ジオコーディング（Renderプロキシ経由）
+    // 将来 Google Geocoding API へ切り替える場合は Render 側 /geocode の中身だけ変更
     async function geocodeWithNominatim(addr) {
       try {
-        var url = 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(addr) + '&limit=1';
-        var response = await fetch(url, {
-          headers: { 'Accept-Language': 'ja', 'User-Agent': 'OFK3 Delivery Map' }
-        });
+        var url = '/geocode?address=' + encodeURIComponent(addr);
+        var response = await fetch(url);
         var data = await response.json();
-        if (data && data.length > 0) {
-          return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
+          return { lat: data.lat, lng: data.lng };
         }
       } catch (e) {
-        console.warn('Nominatim geocode failed:', addr, e);
+        console.warn('Geocode proxy failed:', addr, e);
       }
       return null;
     }
