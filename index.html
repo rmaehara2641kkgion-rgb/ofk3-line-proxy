@@ -4329,19 +4329,17 @@
       localStorage.setItem('addressCache', JSON.stringify(addressCache));
     }
 
-    // 住所を正規化（号室・部屋番号を除去し、キャッシュキーにする）
+    // 住所を正規化（号室・部屋番号を除去し、番地は保持）
     function normalizeAddress(addr) {
       if (!addr) return '';
       var s = String(addr);
       // 全角スペースを半角に、カンマ統一、前後空白削除
       s = s.replace(/\u3000/g, ' ').replace(/，/g, ',').replace(/\s+/g, ' ').trim();
-      // 号室・部屋番号を除去
-      s = s
-        .replace(/\s*\d+\s*号室?/g, '')
-        .replace(/\s*[A-Za-z]?\d{1,4}\s*号室?/g, '')
-        .replace(/\s*\d{1,4}(?:\-\d+)?\s*$/g, '')
-        .trim();
-      return s;
+      // 号室だけ削除（例：302号室、1114号、A101号室）
+      s = s.replace(/\s*[A-Za-z]?\d{1,4}\s*号室?/g, '');
+      // 末尾の3〜4桁部屋番号も削除（号室のない場合）
+      s = s.replace(/\s+\d{3,4}$/g, '');
+      return s.trim();
     }
 
     // 汎用座標取得関数：将来 Google Geocoding API へ差し替え可能
@@ -4375,55 +4373,16 @@
       return null;
     }
 
-    function initDeliveryMap(routeCode, addresses, routeInfo) {
-      // 既存マップ破棄
-      if (deliveryMapInstance) {
-        deliveryMapInstance.remove();
-        deliveryMapInstance = null;
-      }
-      deliveryMapMarkers = [];
-
-      // マップ初期化
-      deliveryMapInstance = L.map('delivery-map').setView([33.58, 130.34], 13);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap',
-        maxZoom: 18
-      }).addTo(deliveryMapInstance);
-
-      // 住所をエリア別にグルーピング
-      var areaGroups = {};
-      for (var i = 0; i < addresses.length; i++) {
-        var areaName = extractAreaName(addresses[i]);
-        if (!areaName) areaName = '不明';
-        if (!areaGroups[areaName]) areaGroups[areaName] = { count: 0, addresses: [] };
-        areaGroups[areaName].count++;
-        areaGroups[areaName].addresses.push(addresses[i]);
-      }
-
-      // エリアにカラー割り当て
-      var areaList = Object.keys(areaGroups).sort(function(a,b) { return areaGroups[b].count - areaGroups[a].count; });
-      var areaColorMap = {};
-      for (var ai = 0; ai < areaList.length; ai++) {
-        areaColorMap[areaList[ai]] = mapAreaColors[ai % mapAreaColors.length];
-      }
-
-      // エリアタグ表示
-      var tagsHtml = '';
-      for (var ti = 0; ti < areaList.length; ti++) {
-        var tagArea = areaList[ti];
-        var tagColor = areaColorMap[tagArea];
-        tagsHtml += '<span style="background:' + tagColor + '20;color:' + tagColor + ';border:1px solid ' + tagColor + '40;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + tagArea + ' ' + areaGroups[tagArea].count + '件</span>';
-      }
-      document.getElementById('map-area-tags').innerHTML = tagsHtml;
-    }
-
-    function cachedOrFallbackCoord(addr, area) {
+    function cachedOrFallbackCoord(addr) {
       var key = normalizeAddress(addr);
       if (addressCache[key]) return addressCache[key];
-      return guessCoordFromAddress(addr, area);
+      return null; // キャッシュがない場合はNominatim取得へ
     }
 
     async function initDeliveryMap(routeCode, addresses, routeInfo) {
+      // デバッグ：渡ってきた住所データを確認
+      console.log('initDeliveryMap addresses:', addresses);
+      console.log('addressCache keys count:', Object.keys(addressCache).length);
       // 既存マップ破棄
       if (deliveryMapInstance) {
         deliveryMapInstance.remove();
@@ -4472,7 +4431,7 @@
         var area = extractAreaName(addr);
         if (!area) area = '不明';
         var color = areaColorMap[area] || '#6b7280';
-        var coord = cachedOrFallbackCoord(addr, area);
+        var coord = cachedOrFallbackCoord(addr);
         if (coord) {
           drawPin(coord.lat, coord.lng, color);
           allLatLngs.push([coord.lat, coord.lng]);
@@ -4551,8 +4510,8 @@
           return postalCoords[postal2];
         }
       }
-      // デフォルト: 福岡市西区中心
-      return { lat: 33.575, lng: 130.335 };
+      // キャッシュがない場合はnullを返し、Nominatim取得へ進む
+      return null;
     }
 
     function getAreaCenter(areaName) {
