@@ -324,6 +324,8 @@
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">シフトデータ読み込み</button>
             <input type="file" id="shift-file-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftUpload(event)">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-master-input').click()">📋 シフト表読み込み</button>
+            <input type="file" id="shift-master-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftMasterUpload(event)">
             <button id="auto-scan-btn" class="text-xs px-4 py-1.5 rounded font-bold bg-blue-500 text-white hover:bg-blue-600 transition-colors" onclick="toggleAutoScan()">🔄 自動認証モード</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="resetTenkoStatus()">認証リセット</button>
           </div>
@@ -3493,6 +3495,102 @@
     setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); refreshAllLineProfiles(); }, 3000);
 
     // ===== 点呼照合機能 =====
+
+    // シフト表（★DAシフト★）読み込み
+    function handleShiftMasterUpload(event) {
+      var file = event.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var data = new Uint8Array(e.target.result);
+          var workbook = XLSX.read(data, { type: 'array' });
+          // 「メイン」シートを探す
+          var sheetName = null;
+          for (var i = 0; i < workbook.SheetNames.length; i++) {
+            if (workbook.SheetNames[i] === 'メイン') { sheetName = 'メイン'; break; }
+          }
+          if (!sheetName) sheetName = workbook.SheetNames[0];
+          var sheet = workbook.Sheets[sheetName];
+          var json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          processShiftMaster(json);
+        } catch (err) {
+          alert('シフト表の読み込みに失敗しました: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      event.target.value = '';
+    }
+
+    function processShiftMaster(rows) {
+      // 構造: 行3 = ヘッダー（社名, 名前, 回数, 1, 2, ...31, ローマ字名）
+      // 行5〜 = データ（会社, 名前, 回数, 日ごとのシフトコード）
+      // 日付列: D列(index 3) = 1日, E列(index 4) = 2日, ...
+      var today = new Date();
+      var dayOfMonth = today.getDate();
+      var todayCol = dayOfMonth + 2; // 列index: 0=社名, 1=名前, 2=回数, 3=1日, 4=2日, ...
+
+      // ヘッダー行（行3, index 2）から日付列を確認
+      var headerRow = rows[2] || [];
+      // ヘッダーが数字で日付を示している場合、正しい列を探す
+      var dateCol = -1;
+      for (var c = 3; c < headerRow.length; c++) {
+        var headerVal = String(headerRow[c] || '').trim();
+        if (headerVal === String(dayOfMonth)) { dateCol = c; break; }
+      }
+      if (dateCol < 0) dateCol = todayCol;
+
+      tenkoSchedule = [];
+      var count = 0;
+
+      for (var r = 4; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row) continue;
+        var company = String(row[0] || '').trim();
+        var name = String(row[1] || '').trim();
+        if (!name) continue;
+
+        var shiftCode = String(row[dateCol] || '').trim();
+        if (!shiftCode || shiftCode === '休') continue;
+
+        // 全角を半角に正規化（ｂ1→b1, ｂ2→b2, Ｃ1→C1 等）
+        var normalizedCode = shiftCode
+          .replace(/ｂ/g, 'b')
+          .replace(/Ｃ/g, 'C')
+          .replace(/０/g, '0').replace(/１/g, '1').replace(/２/g, '2').replace(/３/g, '3');
+
+        // SHIFT_MASTERから着車時間を取得
+        var masterEntry = SHIFT_MASTER[normalizedCode] || SHIFT_MASTER[shiftCode] || null;
+        var arrivalDisplay = masterEntry && masterEntry.arrival ? masterEntry.arrival : '不明';
+        var arrivalMinutes = masterEntry && masterEntry.minutes != null ? masterEntry.minutes : 9999;
+
+        // 所属会社も一緒に保存（Phase2 集計用）
+        if (company && !driverDepartments[name]) {
+          driverDepartments[name] = company;
+          localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+        }
+
+        tenkoSchedule.push({
+          name: name,
+          shiftCode: normalizedCode || shiftCode,
+          arrivalTime: arrivalDisplay,
+          arrivalMinutes: arrivalMinutes,
+          licenseAuth: false,
+          mentorAuth: false,
+          temporary: false,
+          company: company
+        });
+        count++;
+      }
+
+      // 着車時間順にソート
+      tenkoSchedule.sort(function(a, b) { return a.arrivalMinutes - b.arrivalMinutes; });
+
+      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      renderTenkoTable();
+      alert('シフト表を読み込みました。本日（' + dayOfMonth + '日）の出勤者: ' + count + '名');
+    }
+
     function renderTenkoMatchTable() {
       var tbody = document.getElementById('match-table-body');
       if (!tbody) return;
