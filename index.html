@@ -8,6 +8,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script>
     tailwind.config = {
@@ -196,6 +199,7 @@
                     <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-16">出発</th>
                     <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-20">予測終了</th>
                     <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider w-24">ステータス</th>
+                    <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider w-12">MAP</th>
                   </tr>
                 </thead>
                 <tbody id="route-table-body">
@@ -603,6 +607,31 @@
     </div>
 
     <!-- LINE Notification Modal -->
+    <!-- Delivery MAP Modal -->
+    <div id="map-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/40" onclick="closeMapModal()"></div>
+      <div class="relative bg-white rounded-xl w-full max-w-2xl mx-4 shadow-2xl fade-in" style="max-height:90vh;overflow-y:auto;">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-bold" id="map-modal-title">配送MAP</h3>
+            <p class="text-xs text-gray-500 mt-0.5" id="map-modal-subtitle"></p>
+          </div>
+          <button onclick="closeMapModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div class="p-4">
+          <div class="flex flex-wrap gap-2 mb-3" id="map-area-tags"></div>
+          <div id="delivery-map" style="height:400px;border-radius:10px;overflow:hidden;z-index:1;"></div>
+          <div class="flex gap-2 mt-4">
+            <button onclick="sendMapToLine()" class="flex-1 py-3 rounded-lg text-white font-bold text-sm flex items-center justify-center gap-2" style="background:#06c755;">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 5.58 2 10c0 2.24 1.12 4.24 2.88 5.66-.18.66-.7 2.44-.82 2.82-.14.48.18.47.38.34.15-.1 2.42-1.64 3.42-2.32.68.12 1.4.18 2.14.18 5.52 0 10-3.58 10-8S17.52 2 12 2z"/></svg>
+              LINE送信
+            </button>
+            <button onclick="closeMapModal()" class="px-6 py-3 rounded-lg bg-gray-100 text-gray-600 font-bold text-sm hover:bg-gray-200">閉じる</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="line-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/30" onclick="closeModal()"></div>
       <div class="relative bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl fade-in">
@@ -1048,6 +1077,9 @@
               ${statusText}
             </span>
           </td>
+          <td class="px-4 py-2.5 text-center">
+            <button onclick="openDeliveryMap('${route.routeCode}')" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors" title="配送MAP">🗺</button>
+          </td>
         </tr>`;
       }).join('');
     }
@@ -1062,7 +1094,7 @@
     }
 
     // ===== Area Management =====
-    let cycleData = {}; // routeCode -> array of addresses
+    let cycleData = JSON.parse(localStorage.getItem('cycleData') || '{}'); // routeCode -> array of addresses
     let routeAreas = JSON.parse(localStorage.getItem('routeAreas') || '{}');
 
     function updateArea(index, value) {
@@ -1157,7 +1189,7 @@
               const addresses = [];
               for (let i = 2; i < json.length; i++) {
                 const row = json[i];
-                if (row && row[5] && String(row[5]).includes('区')) {
+                if (row && row[5] && String(row[5]).trim() && String(row[5]).indexOf('OFK') < 0) {
                   addresses.push(String(row[5]));
                 }
               }
@@ -1174,6 +1206,7 @@
         });
 
         localStorage.setItem('routeAreas', JSON.stringify(routeAreas));
+        localStorage.setItem('cycleData', JSON.stringify(cycleData));
         document.getElementById('cycle-status').textContent = `✓ ${routeCount}ルートのエリア情報読込済み`;
         document.getElementById('cycle-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
         alert(`${routeCount}ルートのエリア情報を読み取りました`);
@@ -4153,6 +4186,317 @@
 
       renderBillingTable();
       alert('送信完了: ' + successCount + '/' + targets.length + '名');
+    }
+
+    // ===== 配送MAP機能 =====
+    var deliveryMapInstance = null;
+    var deliveryMapMarkers = [];
+    var currentMapRouteCode = '';
+
+    // 福岡エリアの郵便番号→座標マスタ（主要エリア）
+    var postalCoords = {
+      '819-0002': { lat: 33.5825, lng: 130.3355, name: '姪の浜' },
+      '819-0015': { lat: 33.5755, lng: 130.3400, name: '愛宕' },
+      '819-0006': { lat: 33.5785, lng: 130.3420, name: '姪浜駅南' },
+      '819-0013': { lat: 33.5850, lng: 130.3280, name: '愛宕浜' },
+      '819-0005': { lat: 33.5810, lng: 130.3405, name: '内浜' },
+      '819-0014': { lat: 33.5865, lng: 130.3310, name: '豊浜' },
+      '819-0022': { lat: 33.5612, lng: 130.3245, name: '福重' },
+      '819-0041': { lat: 33.5722, lng: 130.3181, name: '石丸' },
+      '819-0054': { lat: 33.5685, lng: 130.3050, name: '野方' },
+      '819-0373': { lat: 33.5580, lng: 130.2100, name: '志摩師吉' },
+      '819-1304': { lat: 33.5505, lng: 130.2050, name: '志摩野北' },
+      '819-1305': { lat: 33.5420, lng: 130.1950, name: '志摩桜井' },
+      '819-0043': { lat: 33.5580, lng: 130.2890, name: '今宿' },
+      '819-0167': { lat: 33.5400, lng: 130.2350, name: '潤' },
+      '819-0042': { lat: 33.5565, lng: 130.2850, name: '今宿駅前' },
+      '819-0045': { lat: 33.5545, lng: 130.2780, name: '横浜' },
+      '819-0046': { lat: 33.5530, lng: 130.2920, name: '西都' },
+      '814-0001': { lat: 33.5560, lng: 130.3580, name: '早良区百道' },
+      '814-0006': { lat: 33.5500, lng: 130.3450, name: '早良区百道浜' },
+      '814-0011': { lat: 33.5630, lng: 130.3620, name: '早良区藤崎' },
+      '814-0015': { lat: 33.5570, lng: 130.3500, name: '早良区室見' },
+      '814-0032': { lat: 33.5430, lng: 130.3560, name: '早良区小田部' },
+      '814-0022': { lat: 33.5450, lng: 130.3620, name: '早良区原' },
+      '819-0001': { lat: 33.5870, lng: 130.3350, name: '姪の浜' },
+      '819-0003': { lat: 33.5790, lng: 130.3380, name: '姪浜' },
+      '819-0016': { lat: 33.5740, lng: 130.3350, name: '室見ヶ丘' },
+      '812-0011': { lat: 33.5900, lng: 130.4150, name: '博多区博多駅前' },
+      '810-0041': { lat: 33.5890, lng: 130.3980, name: '中央区大名' },
+      '810-0042': { lat: 33.5850, lng: 130.3850, name: '中央区赤坂' },
+      '810-0044': { lat: 33.5830, lng: 130.3750, name: '中央区六本松' },
+      '810-0033': { lat: 33.5910, lng: 130.3900, name: '中央区大手門' },
+      '810-0034': { lat: 33.5830, lng: 130.3820, name: '中央区笹丘' },
+      '810-0023': { lat: 33.5750, lng: 130.3700, name: '中央区警固' },
+      '814-0002': { lat: 33.5585, lng: 130.3480, name: '早良区西新' },
+      '814-0004': { lat: 33.5520, lng: 130.3520, name: '早良区曙' },
+      '814-0005': { lat: 33.5610, lng: 130.3550, name: '早良区祖原' },
+      '819-0168': { lat: 33.5320, lng: 130.2280, name: '曽根' },
+      '819-0165': { lat: 33.5360, lng: 130.2420, name: '篠原東' },
+      '819-1116': { lat: 33.5280, lng: 130.2180, name: '有田中央' },
+      '819-0052': { lat: 33.5510, lng: 130.2960, name: '徳永北' },
+      '819-0051': { lat: 33.5540, lng: 130.2830, name: '拾六町' }
+    };
+
+    // 住所からエリア名を抽出
+    function extractAreaName(addr) {
+      if (!addr) return '';
+      var normalized = addr.replace(/福岡市\s*/g, '').replace(/福岡県\s*/g, '');
+      // 「X区Y...」パターン
+      var match = normalized.match(/([\u4e00-\u9fff\u3000-\u303f]+?[区])([\u4e00-\u9fff\u3000-\u303f]+?)[\d\uff10-\uff19丁,\s]/);
+      if (match) return match[2].replace(/[\s\u3000]/g, '');
+      // 「糸島市X...」パターン
+      var match2 = normalized.match(/(糸島市)([\u4e00-\u9fff\u3000-\u303f]+?)[\d\uff10-\uff19丁,\s]/);
+      if (match2) return match2[2].replace(/[\s\u3000]/g, '');
+      return '';
+    }
+
+    // エリアカラーパレット
+    var mapAreaColors = ['#ef4444','#f59e0b','#3b82f6','#8b5cf6','#06b6d4','#10b981','#ec4899','#6366f1','#14b8a6','#f97316'];
+
+    function openDeliveryMap(routeCode) {
+      var addresses = cycleData[routeCode];
+      if (!addresses || addresses.length === 0) {
+        alert('このルートの住所データがありません。\n先に住所データ（コース詳細）をアップロードしてください。');
+        return;
+      }
+
+      currentMapRouteCode = routeCode;
+
+      // ルート情報を取得
+      var routeInfo = null;
+      for (var ri = 0; ri < assignmentData.length; ri++) {
+        if (assignmentData[ri].routeCode === routeCode) { routeInfo = assignmentData[ri]; break; }
+      }
+
+      // タイトル
+      var driverName = routeInfo ? (driverJapaneseNames[routeInfo.driverName] || routeInfo.driverName || '未割当') : '未割当';
+      document.getElementById('map-modal-title').textContent = driverName + ' - 配送MAP';
+      var subtitle = routeCode;
+      if (routeInfo) subtitle += ' | ' + routeInfo.totalDeliveries + '件 | 出発 ' + routeInfo.departure;
+      document.getElementById('map-modal-subtitle').textContent = subtitle;
+
+      // モーダル表示
+      document.getElementById('map-modal').classList.remove('hidden');
+
+      // 少し遅らせてマップ初期化（DOM描画待ち）
+      setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
+    }
+
+    function initDeliveryMap(routeCode, addresses, routeInfo) {
+      // 既存マップ破棄
+      if (deliveryMapInstance) {
+        deliveryMapInstance.remove();
+        deliveryMapInstance = null;
+      }
+      deliveryMapMarkers = [];
+
+      // マップ初期化
+      deliveryMapInstance = L.map('delivery-map').setView([33.58, 130.34], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap',
+        maxZoom: 18
+      }).addTo(deliveryMapInstance);
+
+      // 住所をエリア別にグルーピング
+      var areaGroups = {};
+      for (var i = 0; i < addresses.length; i++) {
+        var areaName = extractAreaName(addresses[i]);
+        if (!areaName) areaName = '不明';
+        if (!areaGroups[areaName]) areaGroups[areaName] = { count: 0, addresses: [] };
+        areaGroups[areaName].count++;
+        areaGroups[areaName].addresses.push(addresses[i]);
+      }
+
+      // エリアにカラー割り当て
+      var areaList = Object.keys(areaGroups).sort(function(a,b) { return areaGroups[b].count - areaGroups[a].count; });
+      var areaColorMap = {};
+      for (var ai = 0; ai < areaList.length; ai++) {
+        areaColorMap[areaList[ai]] = mapAreaColors[ai % mapAreaColors.length];
+      }
+
+      // エリアタグ表示
+      var tagsHtml = '';
+      for (var ti = 0; ti < areaList.length; ti++) {
+        var tagArea = areaList[ti];
+        var tagColor = areaColorMap[tagArea];
+        tagsHtml += '<span style="background:' + tagColor + '20;color:' + tagColor + ';border:1px solid ' + tagColor + '40;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + tagArea + ' ' + areaGroups[tagArea].count + '件</span>';
+      }
+      document.getElementById('map-area-tags').innerHTML = tagsHtml;
+
+      // 郵便番号でマッチング or Nominatim
+      // まず住所からおおよそ座標を割り当て
+      var allLatLngs = [];
+      var pinsByArea = {};
+
+      for (var j = 0; j < addresses.length; j++) {
+        var addr = addresses[j];
+        var area = extractAreaName(addr);
+        if (!area) area = '不明';
+        var color = areaColorMap[area] || '#6b7280';
+
+        // 郵便番号から座標を探す or 住所テキストからエリア推定
+        var coord = guessCoordFromAddress(addr, area);
+        if (!coord) continue;
+
+        // 同じ座標に重ならないよう微小オフセット
+        var offsetLat = (Math.random() - 0.5) * 0.003;
+        var offsetLng = (Math.random() - 0.5) * 0.003;
+        var lat = coord.lat + offsetLat;
+        var lng = coord.lng + offsetLng;
+
+        var icon = L.divIcon({
+          className: 'dpin',
+          html: '<div style="width:10px;height:10px;background:' + color + ';border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
+          iconSize: [10, 10],
+          iconAnchor: [5, 5]
+        });
+
+        var marker = L.marker([lat, lng], { icon: icon }).addTo(deliveryMapInstance);
+        deliveryMapMarkers.push(marker);
+        allLatLngs.push([lat, lng]);
+      }
+
+      // エリア中心にラベル表示
+      for (var li = 0; li < areaList.length; li++) {
+        var labelArea = areaList[li];
+        var labelCoord = getAreaCenter(labelArea);
+        if (labelCoord) {
+          var labelColor = areaColorMap[labelArea];
+          var labelIcon = L.divIcon({
+            className: 'area-label',
+            html: '<div style="background:' + labelColor + ';color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.3);">' + labelArea + ' ' + areaGroups[labelArea].count + '件</div>',
+            iconSize: [0, 0],
+            iconAnchor: [0, 0]
+          });
+          L.marker([labelCoord.lat, labelCoord.lng], { icon: labelIcon }).addTo(deliveryMapInstance);
+          deliveryMapMarkers.push(L.marker([labelCoord.lat, labelCoord.lng]));
+        }
+      }
+
+      // 範囲に合わせる
+      if (allLatLngs.length > 0) {
+        deliveryMapInstance.fitBounds(allLatLngs, { padding: [30, 30], maxZoom: 15 });
+      }
+    }
+
+    // 住所から座標を推定（郵便番号マスタ or エリア名ベース）
+    function guessCoordFromAddress(addr, areaName) {
+      // 郵便番号パターンを住所から抽出するのは難しいのでエリア名ベースで
+      // postalCoordsの中からエリア名が一致するものを探す
+      for (var postal in postalCoords) {
+        if (postalCoords[postal].name === areaName) {
+          return postalCoords[postal];
+        }
+      }
+      // 部分一致
+      for (var postal2 in postalCoords) {
+        if (areaName.indexOf(postalCoords[postal2].name) >= 0 || postalCoords[postal2].name.indexOf(areaName) >= 0) {
+          return postalCoords[postal2];
+        }
+      }
+      // デフォルト: 福岡市西区中心
+      return { lat: 33.575, lng: 130.335 };
+    }
+
+    function getAreaCenter(areaName) {
+      return guessCoordFromAddress('', areaName);
+    }
+
+    function closeMapModal() {
+      document.getElementById('map-modal').classList.add('hidden');
+      if (deliveryMapInstance) {
+        deliveryMapInstance.remove();
+        deliveryMapInstance = null;
+      }
+      deliveryMapMarkers = [];
+    }
+
+    // LINE送信（テキスト + 地図画像）
+    async function sendMapToLine() {
+      var routeInfo = null;
+      for (var ri = 0; ri < assignmentData.length; ri++) {
+        if (assignmentData[ri].routeCode === currentMapRouteCode) { routeInfo = assignmentData[ri]; break; }
+      }
+      if (!routeInfo) { alert('ルート情報が見つかりません'); return; }
+
+      var driverName = routeInfo.driverName;
+      if (!driverName) { alert('ドライバーが割り当てられていません'); return; }
+
+      var userId = lineMapping[driverName];
+      if (!userId) {
+        // 日本語名から逆引き
+        for (var origName in driverJapaneseNames) {
+          if (driverJapaneseNames[origName] === driverName && lineMapping[origName]) {
+            userId = lineMapping[origName]; break;
+          }
+        }
+      }
+      if (!userId) { alert(driverName + ' のLINE IDが未登録です'); return; }
+
+      var proxyUrl = lineSettings.gasProxyUrl;
+      if (!proxyUrl) { alert('GASプロキシURLが設定されていません'); return; }
+
+      // エリア情報テキスト生成
+      var addresses = cycleData[currentMapRouteCode] || [];
+      var areaGroups = {};
+      for (var i = 0; i < addresses.length; i++) {
+        var area = extractAreaName(addresses[i]);
+        if (!area) area = '不明';
+        if (!areaGroups[area]) areaGroups[area] = 0;
+        areaGroups[area]++;
+      }
+      var sortedAreas = Object.entries(areaGroups).sort(function(a,b) { return b[1] - a[1]; });
+
+      var japName = driverJapaneseNames[driverName] || driverName;
+      var msg = '\uD83D\uDE9A OFK3 \u914D\u9001\u60C5\u5831\n\n';
+      msg += '\u25A0 \u62C5\u5F53: ' + japName + '\n';
+      msg += '\u25A0 \u30EB\u30FC\u30C8: ' + routeInfo.routeCode + '\n';
+      msg += '\u25A0 \u4EF6\u6570: ' + routeInfo.totalDeliveries + '\u4EF6\n';
+      msg += '\u25A0 \u51FA\u767A: ' + routeInfo.departure + '\n';
+      if (routeInfo.predictedEnd) msg += '\u25A0 \u7D42\u4E86\u4E88\u6E2C: ' + routeInfo.predictedEnd + '\n';
+      msg += '\n\uD83D\uDCCD \u914D\u9001\u30A8\u30EA\u30A2\n';
+      for (var si = 0; si < sortedAreas.length; si++) {
+        msg += '\u3000\uD83D\uDCCD ' + sortedAreas[si][0] + '(' + sortedAreas[si][1] + '\u4EF6)\n';
+      }
+      msg += '\n\u203B Amazon\u30A2\u30D7\u30EA\u306F\u73FE\u5730\u5230\u7740\u5F8C\u306B\u8D77\u52D5\u3057\u3066\u304F\u3060\u3055\u3044';
+
+      // 地図画像キャプチャ
+      var mapContainer = document.getElementById('delivery-map');
+      var imageUrl = '';
+      try {
+        var canvas = await html2canvas(mapContainer, { useCORS: true, allowTaint: true, scale: 2 });
+        // canvasをblobに変換してRenderサーバーにアップロード
+        var blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/png'); });
+        var formData = new FormData();
+        formData.append('image', blob, 'map.png');
+
+        // Renderサーバーに画像アップロードエンドポイントがあればそこへ
+        // なければテキストのみ送信
+        imageUrl = ''; // 画像URLは後で実装
+      } catch (e) {
+        console.log('Map capture failed:', e);
+      }
+
+      // テキスト送信
+      try {
+        var response = await fetch(proxyUrl, {
+          method: 'POST',
+          mode: 'cors',
+          redirect: 'follow',
+          credentials: 'omit',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: userId, messages: [{ type: 'text', text: msg }] })
+        });
+        var data = await response.json().catch(function() { return {}; });
+        if (response.ok) {
+          alert(japName + ' \u3055\u3093\u306BLINE\u9001\u4FE1\u3057\u307E\u3057\u305F\uFF01');
+        } else {
+          alert('\u9001\u4FE1\u30A8\u30E9\u30FC: ' + JSON.stringify(data));
+        }
+      } catch (e) {
+        alert('\u9001\u4FE1\u5931\u6557: ' + (e.message || e));
+      }
     }
   </script>
 </body>
