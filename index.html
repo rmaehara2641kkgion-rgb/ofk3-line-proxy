@@ -108,6 +108,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko-match')" id="tab-tenko-match">点呼照合</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
 
@@ -566,6 +567,81 @@
         </div>
       </div>
 
+      <!-- MAP管理 Tab -->
+      <div id="panel-map-master" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">MAP管理 - 住所マスター</h2>
+            <p class="text-sm text-ink-lighter">住所キャッシュの管理・CYCLEデータ一括取り込み・ジオコーディング</p>
+          </div>
+        </div>
+
+        <!-- 統計カード -->
+        <div class="grid grid-cols-3 gap-3 mb-4">
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold text-blue-600" id="addrmaster-total">0</div>
+            <div class="text-xs text-ink-lighter">登録住所数</div>
+          </div>
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold text-green-600" id="addrmaster-geocoded">0</div>
+            <div class="text-xs text-ink-lighter">座標取得済み</div>
+          </div>
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold text-orange-500" id="addrmaster-pending">0</div>
+            <div class="text-xs text-ink-lighter">未取得</div>
+          </div>
+        </div>
+
+        <!-- アクションボタン -->
+        <div class="flex flex-wrap gap-2 mb-4">
+          <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
+            📂 CYCLEファイル取り込み
+            <input type="file" accept=".xlsx,.xls" multiple onchange="handleCycleImport(event)" class="hidden" id="cycle-import-input">
+          </label>
+          <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
+            📥 住所マスターJSON読込
+            <input type="file" accept=".json" onchange="handleAddrMasterImport(event)" class="hidden">
+          </label>
+          <button onclick="downloadAddrMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">💾 住所マスターDL</button>
+          <button onclick="startBatchGeocode()" class="bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-600 cursor-pointer" id="btn-batch-geocode">🌍 未取得を一括ジオコーディング</button>
+        </div>
+
+        <!-- 取り込みログ -->
+        <div id="addr-import-log" class="hidden mb-4 card p-3">
+          <h4 class="text-xs font-bold text-ink-lighter mb-2">取り込みログ</h4>
+          <div id="addr-log-entries" class="space-y-1 max-h-32 overflow-y-auto text-xs"></div>
+        </div>
+
+        <!-- ジオコーディング進捗 -->
+        <div id="geocode-progress" class="hidden mb-4 card p-3">
+          <h4 class="text-xs font-bold text-ink-lighter mb-2">ジオコーディング進捗</h4>
+          <div class="w-full bg-gray-200 rounded-full h-3 mb-2">
+            <div id="geocode-progress-bar" class="bg-green-500 h-3 rounded-full transition-all" style="width:0%"></div>
+          </div>
+          <p class="text-xs text-ink-lighter" id="geocode-progress-text">0 / 0</p>
+        </div>
+
+        <!-- 住所一覧テーブル -->
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">住所（正規化）</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">緯度</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">経度</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">状態</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">登録日</th>
+                </tr>
+              </thead>
+              <tbody id="addrmaster-table-body">
+                <tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、住所マスターJSONを読み込んでください</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </main>
 
     <!-- QR Code Modal -->
@@ -886,7 +962,7 @@
     // ===== Tab Navigation =====
     function switchTab(tab) {
       currentTab = tab;
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
@@ -4612,6 +4688,305 @@
         alert('\u9001\u4FE1\u5931\u6557: ' + (e.message || e));
       }
     }
+
+    // ===== MAP管理 - 住所マスター機能 =====
+    var addrMaster = JSON.parse(localStorage.getItem('addrMaster') || '{}');
+
+    function saveAddrMaster() {
+      localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+    }
+
+    function updateAddrMasterStats() {
+      var keys = Object.keys(addrMaster);
+      var total = keys.length;
+      var geocoded = 0;
+      var pending = 0;
+      for (var i = 0; i < keys.length; i++) {
+        if (addrMaster[keys[i]].lat && addrMaster[keys[i]].lng) {
+          geocoded++;
+        } else {
+          pending++;
+        }
+      }
+      var elTotal = document.getElementById('addrmaster-total');
+      var elGeocoded = document.getElementById('addrmaster-geocoded');
+      var elPending = document.getElementById('addrmaster-pending');
+      if (elTotal) elTotal.textContent = total;
+      if (elGeocoded) elGeocoded.textContent = geocoded;
+      if (elPending) elPending.textContent = pending;
+    }
+
+    function renderAddrMasterTable() {
+      var tbody = document.getElementById('addrmaster-table-body');
+      if (!tbody) return;
+      var keys = Object.keys(addrMaster);
+      if (keys.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、住所マスターJSONを読み込んでください</td></tr>';
+        return;
+      }
+      // 最新登録順にソート
+      keys.sort(function(a, b) {
+        var da = addrMaster[a].registeredAt || '';
+        var db = addrMaster[b].registeredAt || '';
+        return db > da ? 1 : (db < da ? -1 : 0);
+      });
+      // 最大200件表示
+      var displayKeys = keys.slice(0, 200);
+      var html = '';
+      for (var i = 0; i < displayKeys.length; i++) {
+        var k = displayKeys[i];
+        var entry = addrMaster[k];
+        var hasCoord = entry.lat && entry.lng;
+        var statusBadge = hasCoord
+          ? '<span class="text-green-600 text-xs font-bold">✅ 取得済</span>'
+          : '<span class="text-orange-500 text-xs font-bold">⏳ 未取得</span>';
+        var latStr = hasCoord ? Number(entry.lat).toFixed(6) : '-';
+        var lngStr = hasCoord ? Number(entry.lng).toFixed(6) : '-';
+        var dateStr = entry.registeredAt ? entry.registeredAt.substring(0, 10) : '-';
+        html = html + '<tr class="border-b border-border hover:bg-surface/50">'
+          + '<td class="px-3 py-2 text-xs">' + k + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + latStr + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + lngStr + '</td>'
+          + '<td class="px-3 py-2 text-xs text-center">' + statusBadge + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + dateStr + '</td>'
+          + '</tr>';
+      }
+      if (keys.length > 200) {
+        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (keys.length - 200) + ' 件</td></tr>';
+      }
+      tbody.innerHTML = html;
+    }
+
+    // CYCLEファイル一括取り込み
+    function handleCycleImport(event) {
+      var files = event.target.files;
+      if (!files || files.length === 0) return;
+      var logDiv = document.getElementById('addr-import-log');
+      var logEntries = document.getElementById('addr-log-entries');
+      if (logDiv) logDiv.classList.remove('hidden');
+      if (logEntries) logEntries.innerHTML = '';
+
+      var totalNew = 0;
+      var totalDup = 0;
+      var processed = 0;
+
+      for (var fi = 0; fi < files.length; fi++) {
+        (function(file) {
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            try {
+              var workbook = XLSX.read(e.target.result, { type: 'array' });
+              var newCount = 0;
+              var dupCount = 0;
+              for (var si = 0; si < workbook.SheetNames.length; si++) {
+                var sheet = workbook.Sheets[workbook.SheetNames[si]];
+                var rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                // ヘッダー行から住所列を探す
+                var addrColIdx = -1;
+                if (rows.length > 0) {
+                  for (var ci = 0; ci < rows[0].length; ci++) {
+                    var colName = String(rows[0][ci] || '');
+                    if (colName.indexOf('住所') >= 0 || colName.indexOf('Address') >= 0 || colName.indexOf('address') >= 0) {
+                      addrColIdx = ci;
+                      break;
+                    }
+                  }
+                }
+                if (addrColIdx < 0) continue;
+                for (var ri = 1; ri < rows.length; ri++) {
+                  var rawAddr = rows[ri][addrColIdx];
+                  if (!rawAddr) continue;
+                  var normAddr = normalizeAddress(String(rawAddr));
+                  if (!normAddr) continue;
+                  if (addrMaster[normAddr]) {
+                    addrMaster[normAddr].hitCount = (addrMaster[normAddr].hitCount || 1) + 1;
+                    dupCount++;
+                  } else {
+                    addrMaster[normAddr] = {
+                      lat: null,
+                      lng: null,
+                      registeredAt: new Date().toISOString(),
+                      hitCount: 1,
+                      source: file.name
+                    };
+                    newCount++;
+                  }
+                }
+              }
+              totalNew = totalNew + newCount;
+              totalDup = totalDup + dupCount;
+              if (logEntries) {
+                logEntries.innerHTML = logEntries.innerHTML + '<div class="text-green-700">' + file.name + ': 新規 ' + newCount + '件 / 重複 ' + dupCount + '件</div>';
+              }
+            } catch (err) {
+              if (logEntries) {
+                logEntries.innerHTML = logEntries.innerHTML + '<div class="text-red-600">' + file.name + ': エラー - ' + err.message + '</div>';
+              }
+            }
+            processed++;
+            if (processed >= files.length) {
+              saveAddrMaster();
+              // addressCacheにも座標済みを同期
+              syncAddrMasterToCache();
+              updateAddrMasterStats();
+              renderAddrMasterTable();
+              if (logEntries) {
+                logEntries.innerHTML = logEntries.innerHTML + '<div class="font-bold mt-1">合計: 新規 ' + totalNew + '件 / 重複 ' + totalDup + '件</div>';
+              }
+            }
+          };
+          reader.readAsArrayBuffer(file);
+        })(files[fi]);
+      }
+      event.target.value = '';
+    }
+
+    // 住所マスターJSON読込
+    function handleAddrMasterImport(event) {
+      var file = event.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var imported = JSON.parse(e.target.result);
+          var keys = Object.keys(imported);
+          var newCount = 0;
+          var updateCount = 0;
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var entry = imported[k];
+            if (!addrMaster[k]) {
+              addrMaster[k] = entry;
+              newCount++;
+            } else {
+              // 座標があればマージ
+              if (entry.lat && entry.lng && !addrMaster[k].lat) {
+                addrMaster[k].lat = entry.lat;
+                addrMaster[k].lng = entry.lng;
+                updateCount++;
+              }
+              addrMaster[k].hitCount = (addrMaster[k].hitCount || 0) + (entry.hitCount || 0);
+            }
+          }
+          saveAddrMaster();
+          syncAddrMasterToCache();
+          updateAddrMasterStats();
+          renderAddrMasterTable();
+          alert('読込完了: 新規 ' + newCount + '件 / 座標更新 ' + updateCount + '件');
+        } catch (err) {
+          alert('JSONの読込に失敗しました: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    // 住所マスターJSONダウンロード
+    function downloadAddrMaster() {
+      var jsonStr = JSON.stringify(addrMaster, null, 2);
+      var blob = new Blob([jsonStr], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'address_master_' + new Date().toISOString().substring(0, 10) + '.json';
+      a.click();
+    }
+
+    // addrMasterの座標済みをaddressCacheに同期
+    function syncAddrMasterToCache() {
+      var keys = Object.keys(addrMaster);
+      for (var i = 0; i < keys.length; i++) {
+        var entry = addrMaster[keys[i]];
+        if (entry.lat && entry.lng) {
+          addressCache[keys[i]] = { lat: entry.lat, lng: entry.lng };
+        }
+      }
+      saveAddressCache();
+    }
+
+    // 未取得住所を一括ジオコーディング
+    var batchGeocodeRunning = false;
+    function startBatchGeocode() {
+      if (batchGeocodeRunning) {
+        alert('ジオコーディング実行中です');
+        return;
+      }
+      var pendingKeys = [];
+      var keys = Object.keys(addrMaster);
+      for (var i = 0; i < keys.length; i++) {
+        if (!addrMaster[keys[i]].lat || !addrMaster[keys[i]].lng) {
+          pendingKeys.push(keys[i]);
+        }
+      }
+      if (pendingKeys.length === 0) {
+        alert('未取得の住所はありません');
+        return;
+      }
+      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\nNominatimの制限(1秒1件)のため、' + Math.ceil(pendingKeys.length * 1.5 / 60) + '分程度かかります。\n実行しますか？')) {
+        return;
+      }
+      batchGeocodeRunning = true;
+      var progressDiv = document.getElementById('geocode-progress');
+      var progressBar = document.getElementById('geocode-progress-bar');
+      var progressText = document.getElementById('geocode-progress-text');
+      if (progressDiv) progressDiv.classList.remove('hidden');
+      var btn = document.getElementById('btn-batch-geocode');
+      if (btn) btn.disabled = true;
+
+      var total = pendingKeys.length;
+      var done = 0;
+      var success = 0;
+      var fail = 0;
+
+      function processNext() {
+        if (done >= total) {
+          batchGeocodeRunning = false;
+          saveAddrMaster();
+          syncAddrMasterToCache();
+          updateAddrMasterStats();
+          renderAddrMasterTable();
+          if (btn) btn.disabled = false;
+          if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+          return;
+        }
+        var addr = pendingKeys[done];
+        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (' + addr.substring(0, 20) + '...)';
+        if (progressBar) progressBar.style.width = Math.round((done + 1) / total * 100) + '%';
+
+        getLatLng(addr).then(function(coord) {
+          if (coord) {
+            addrMaster[addr].lat = coord.lat;
+            addrMaster[addr].lng = coord.lng;
+            success++;
+          } else {
+            fail++;
+          }
+          done++;
+          // 5件ごとに保存
+          if (done % 5 === 0) {
+            saveAddrMaster();
+            syncAddrMasterToCache();
+          }
+          // 1.5秒待って次へ（Nominatim制限対応）
+          setTimeout(processNext, 1500);
+        });
+      }
+      processNext();
+    }
+
+    // MAP管理タブ表示時にテーブル更新
+    var origSwitchTab = switchTab;
+    // switchTabの拡張（map-master選択時に更新）
+    (function() {
+      var oldFn = switchTab;
+      switchTab = function(tab) {
+        oldFn(tab);
+        if (tab === 'map-master') {
+          updateAddrMasterStats();
+          renderAddrMasterTable();
+        }
+      };
+    })();
+
   </script>
 </body>
 </html>
