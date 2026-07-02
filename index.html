@@ -919,11 +919,11 @@
         const statusText = route.status === 'risk' ? '遅延リスク' : route.status === 'warning' ? '注意' : '正常';
         const capDisplay = route.capability ? route.capability.toFixed(1) : '<span class="text-ink-lighter">-</span>';
         const rowBg = i % 2 === 0 ? '' : 'bg-surface/50';
-        const lineIcon = route.driverName ? '<svg class="w-4 h-4 flex-shrink-0 inline-block" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>' : '';
+        const driverIcon = route.driverName ? getDriverIcon(route.driverName, 'w-6 h-6') : '';
         const originalIdx = assignmentData.indexOf(route);
 
         return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
-          <td class="px-4 py-2.5 text-sm"><span class="inline-flex items-center gap-1.5">${lineIcon}${route.driverName || '<span class="text-ink-lighter">未割当</span>'}</span></td>
+          <td class="px-4 py-2.5 text-sm"><span class="inline-flex items-center gap-1.5">${driverIcon}${route.driverName || '<span class="text-ink-lighter">未割当</span>'}</span></td>
           <td class="px-4 py-2.5 font-mono text-xs font-medium">${route.routeCode}</td>
           <td class="px-4 py-2.5 text-xs"><input type="text" value="${route.area || ''}" placeholder="クリックで入力" class="w-full bg-transparent border-b border-dashed border-border focus:border-accent focus:outline-none px-0 py-0.5 text-xs" onchange="updateArea(${originalIdx}, this.value)"></td>
           <td class="px-4 py-2.5 text-xs text-ink-light">${shortenService(route.serviceType)}</td>
@@ -1173,10 +1173,8 @@
         const rateColor = d.deliveryRate >= 98 ? 'text-emerald-600' : d.deliveryRate >= 95 ? 'text-ink' : 'text-accent';
         const misRate = d.misdeliveryRate != null ? d.misdeliveryRate : (d.totalPackages > 0 ? Math.round(d.incidents / d.totalPackages * 10000) / 100 : null);
         const misRateColor = misRate != null ? (misRate <= 0.5 ? 'text-emerald-600' : misRate <= 1.0 ? 'text-ink' : 'text-accent') : '';
-        const lineIcon = '<svg class="w-4 h-4 flex-shrink-0 inline-block" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>';
-
         return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
-          <td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">${lineIcon}${name}</span></td>
+          <td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">${getDriverIcon(name, 'w-6 h-6')}${name}</span></td>
           <td class="px-4 py-2.5 text-right font-mono text-sm font-medium">${d.packagesPerHour || '-'}</td>
           <td class="px-4 py-2.5 text-right font-mono text-sm ${rateColor}">${d.deliveryRate ? d.deliveryRate.toFixed(1) + '%' : '-'}</td>
           <td class="px-4 py-2.5 text-right font-mono text-sm ${misRateColor}">${misRate != null ? misRate.toFixed(2) + '%' : '-'}</td>
@@ -1570,7 +1568,7 @@
           : `<button onclick="openLicenseCamera(${i})" class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors ml-1" title="カメラ認証">📷</button>`;
 
         return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
-          <td class="px-4 py-2.5 text-sm font-medium">${d.name}</td>
+          <td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">${getDriverIcon(d.name, 'w-6 h-6')}${d.name}</span></td>
           <td class="px-4 py-2.5 text-center text-sm font-mono">${d.arrivalTime}${overdueIcon}</td>
           <td class="px-4 py-2.5 text-center">${licDot}</td>
           <td class="px-4 py-2.5 text-center">${menDot}</td>
