@@ -107,36 +107,48 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
-// Geocoding proxy（Nominatim経由、将来Google Geocoding APIへ切替可能）
+// 住所→緯度経度取得
 app.get('/geocode', async (req, res) => {
   try {
-    const addr = req.query.address;
-    if (!addr) {
-      return res.status(400).json({ status: 'error', message: 'address required' });
+    const address = req.query.address;
+    if (!address) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'address required'
+      });
     }
 
-    const url = 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(addr) + '&limit=1';
-    const response = await axios.get(url, {
-      headers: {
-        'Accept-Language': 'ja',
-        'User-Agent': 'OFK3 Delivery Map (Render)'
-      },
-      timeout: 10000
-    });
+    const response = await axios.get(
+      'https://nominatim.openstreetmap.org/search',
+      {
+        params: {
+          q: address,
+          format: 'json',
+          limit: 1
+        },
+        headers: {
+          'User-Agent': 'OFK3 Delivery System'
+        }
+      }
+    );
 
-    const data = response.data;
-    if (!data || data.length === 0) {
-      return res.status(404).json({ status: 'not_found' });
+    if (!response.data.length) {
+      return res.json({
+        status: 'notfound'
+      });
     }
 
     res.json({
       status: 'ok',
-      lat: parseFloat(data[0].lat),
-      lng: parseFloat(data[0].lon)
+      lat: Number(response.data[0].lat),
+      lng: Number(response.data[0].lon)
     });
-  } catch (err) {
-    log('Geocode error:', err.message);
-    res.status(502).json({ status: 'error', message: err.message });
+  } catch (e) {
+    console.error(e.message);
+    res.status(500).json({
+      status: 'error',
+      message: e.message
+    });
   }
 });
 
