@@ -1410,8 +1410,11 @@
         // 着車時間からデフォルトシフトコード判定
         var autoShiftCode = guessShiftCodePrecise(arrivalTime.minutes);
 
+        // マスタの日本語名があれば変換（DAシフト表との名前一致用）
+        var dispName = driverJapaneseNames[name] || name;
+
         tenkoSchedule.push({
-          name: name,
+          name: dispName,
           shiftCode: autoShiftCode,
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
