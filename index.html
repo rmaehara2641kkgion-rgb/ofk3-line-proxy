@@ -104,6 +104,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko-match')" id="tab-tenko-match">点呼照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
 
@@ -411,6 +412,66 @@
 
         <div id="tenko-empty" class="text-center py-16">
           <p class="text-sm text-ink-lighter">シフトデータをアップロードすると、当日の点呼スケジュールが表示されます</p>
+        </div>
+      </div>
+
+      <!-- Tenko Match (点呼照合) Tab -->
+      <div id="panel-tenko-match" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">点呼照合</h2>
+            <p class="text-xs text-ink-lighter mt-1">シフトデータと点呼実績の照合</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportTenkoLog()">ログエクスポート</button>
+          </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-4 gap-4 mb-4">
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter mb-1">シフト人数</div>
+            <div class="text-2xl font-bold text-ink" id="match-total">-</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter mb-1">点呼済</div>
+            <div class="text-2xl font-bold text-emerald-600" id="match-done">0</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter mb-1">未点呼</div>
+            <div class="text-2xl font-bold text-accent" id="match-pending">0</div>
+          </div>
+          <div class="card p-4">
+            <div class="text-xs text-ink-lighter mb-1">臨時点呼</div>
+            <div class="text-2xl font-bold text-amber-500" id="match-temp">0</div>
+          </div>
+        </div>
+
+        <!-- Shift Breakdown -->
+        <div class="card p-4 mb-4">
+          <h3 class="text-xs font-medium text-ink-lighter mb-3">シフト別集計</h3>
+          <div class="flex flex-wrap gap-3" id="match-shift-summary"></div>
+        </div>
+
+        <!-- Match Table -->
+        <div class="card overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">ドライバー</th>
+                  <th class="px-4 py-2.5 text-left text-xs font-medium text-ink-lighter uppercase tracking-wider">シフト</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">着車予定</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">点呼時間</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">免許証</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">メンター</th>
+                  <th class="px-4 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider">状態</th>
+                </tr>
+              </thead>
+              <tbody id="match-table-body">
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -774,7 +835,7 @@
     // ===== Tab Navigation =====
     function switchTab(tab) {
       currentTab = tab;
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'billing'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
@@ -782,6 +843,7 @@
         renderMasterTable();
         refreshAllLineProfiles();
       }
+      if (tab === 'tenko-match') renderTenkoMatchTable();
       if (tab === 'billing') renderBillingTable();
     }
 
@@ -1226,7 +1288,23 @@
     }
 
     // ===== Tenko (Roll Call) Management =====
-    let tenkoSchedule = []; // { name, arrivalTime, arrivalMinutes, licenseAuth, mentorAuth }
+    let tenkoSchedule = []; // { name, arrivalTime, arrivalMinutes, licenseAuth, mentorAuth, shiftCode, temporary }
+
+    // シフトマスタ（シフトコード → 着車時間）
+    var SHIFT_MASTER = {
+      'bike': { arrival: '09:00', minutes: 540 },
+      'b1':   { arrival: '09:00', minutes: 540 },
+      '\u3007': { arrival: '11:00', minutes: 660 },  // 〇
+      'C1':   { arrival: '11:00', minutes: 660 },
+      '\u277D': { arrival: '14:40', minutes: 880 },  // ❽
+      'b2':   { arrival: '15:00', minutes: 900 },
+      'C2':   { arrival: '18:30', minutes: 1110 },
+      'C3':   { arrival: '18:30', minutes: 1110 },
+      '\u5609': { arrival: null, minutes: null, note: '他拠点応援の為着車時間まちまち' }  // 嘉
+    };
+
+    // 点呼ログ（日別履歴）— localStorage保存、将来GAS/スプレッドシート連携用フラット構造
+    var tenkoLog = JSON.parse(localStorage.getItem('tenkoLog') || '[]');
 
     function handleShiftUpload(event) {
       if (!event.target.files.length) return;
@@ -1294,16 +1372,27 @@
         const cellValue = String(rows[r]?.[todayCol] || '').trim();
         if (!cellValue) continue; // Not working today
 
+        // シフトコード抽出
+        const shiftCode = parseShiftCode(cellValue);
+
         // Parse arrival time from cell: "Standard Parcel\n11:00午前 • 6時間 30 m"
-        const arrivalTime = parseArrivalTime(cellValue);
+        var arrivalTime = parseArrivalTime(cellValue);
+
+        // SHIFT_MASTERからの着車時間フォールバック
+        if (!arrivalTime && shiftCode && SHIFT_MASTER[shiftCode] && SHIFT_MASTER[shiftCode].minutes != null) {
+          arrivalTime = { display: SHIFT_MASTER[shiftCode].arrival, minutes: SHIFT_MASTER[shiftCode].minutes };
+        }
+
         if (!arrivalTime) continue;
 
         tenkoSchedule.push({
           name: name,
+          shiftCode: shiftCode || '',
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
           licenseAuth: false,
-          mentorAuth: false
+          mentorAuth: false,
+          temporary: false
         });
       }
 
@@ -1336,10 +1425,66 @@
       return null;
     }
 
+    // セルテキストからシフトコードを抽出
+    // セル形式例: "Standard Parcel\n11:00午前 • 6時間 30 m" → SHIFT_MASTERと着車時間で逆引き
+    // または直接シフトコード名が含まれる場合
+    function parseShiftCode(cellText) {
+      if (!cellText) return '';
+      var text = String(cellText).trim();
+
+      // SHIFT_MASTERのキーと直接一致するか確認
+      for (var code in SHIFT_MASTER) {
+        if (text === code || text.indexOf(code) === 0) return code;
+      }
+
+      // 着車時間から逆引き
+      var arrival = parseArrivalTime(text);
+      if (arrival) {
+        for (var code2 in SHIFT_MASTER) {
+          if (SHIFT_MASTER[code2].minutes === arrival.minutes) return code2;
+        }
+      }
+
+      return '';
+    }
+
+    // 点呼ログ保存（点呼完了時に呼び出す）
+    function saveTenkoLog(d) {
+      var now = new Date();
+      var todayStr = now.toISOString().slice(0, 10);
+      var timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+      var record = {
+        date: todayStr,
+        driverName: d.name,
+        shiftCode: d.shiftCode || '',
+        scheduledArrival: d.arrivalTime || '',
+        completedAt: timeStr,
+        licenseAuth: !!d.licenseAuth,
+        mentorAuth: !!d.mentorAuth,
+        isTemporary: !!d.temporary
+      };
+
+      // 同日同ドライバーの既存レコードを更新（上書き）
+      var found = false;
+      for (var i = 0; i < tenkoLog.length; i++) {
+        if (tenkoLog[i].date === todayStr && tenkoLog[i].driverName === d.name) {
+          tenkoLog[i] = record;
+          found = true;
+          break;
+        }
+      }
+      if (!found) tenkoLog.push(record);
+
+      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+    }
+
     function toggleAuth(index, type) {
       if (index < 0 || index >= tenkoSchedule.length) return;
       if (type === 'license') tenkoSchedule[index].licenseAuth = !tenkoSchedule[index].licenseAuth;
       if (type === 'mentor') tenkoSchedule[index].mentorAuth = !tenkoSchedule[index].mentorAuth;
+      var d = tenkoSchedule[index];
+      if (d.licenseAuth && d.mentorAuth) saveTenkoLog(d);
       const todayStr = new Date().toISOString().slice(0, 10);
       localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
       renderTenkoTable();
@@ -1356,6 +1501,7 @@
       if (index < 0 || index >= tenkoSchedule.length) return;
       tenkoSchedule[index].licenseAuth = true;
       tenkoSchedule[index].mentorAuth = true;
+      saveTenkoLog(tenkoSchedule[index]);
       localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
       renderTenkoTable();
     }
@@ -1516,6 +1662,7 @@
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
 
         if (d.mentorAuth) {
+          saveTenkoLog(d);
           resultEl.textContent = '✅ QR認証OK → 両方完了！';
           resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold';
           playSound('complete');
@@ -1538,6 +1685,7 @@
         }
       } else if (cameraAuthType === 'mentor') {
         d.mentorAuth = true;
+        saveTenkoLog(d);
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
         resultEl.textContent = '🎉 メンター認証OK — 点呼完了！';
         resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold text-lg';
@@ -1766,6 +1914,7 @@
       if (matchedIndex < 0) {
         tenkoSchedule.push({
           name: driverName,
+          shiftCode: '',
           arrivalTime: '臨時',
           arrivalMinutes: 9999,
           licenseAuth: false,
@@ -1925,6 +2074,7 @@
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
+        saveTenkoLog(d);
         localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
         renderTenkoTable();
         playSound('complete');
@@ -3341,6 +3491,146 @@
     loadTenkoData();
     // 起動時にUI描画 + 3秒後にチェック
     setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); refreshAllLineProfiles(); }, 3000);
+
+    // ===== 点呼照合機能 =====
+    function renderTenkoMatchTable() {
+      var tbody = document.getElementById('match-table-body');
+      if (!tbody) return;
+
+      var todayStr = new Date().toISOString().slice(0, 10);
+
+      // tenkoSchedule（シフト登録者）+ 臨時点呼をマージ
+      var allEntries = [];
+      var doneCount = 0, pendingCount = 0, tempCount = 0;
+      var shiftBreakdown = {}; // { shiftCode: { total: N, done: N } }
+
+      for (var i = 0; i < tenkoSchedule.length; i++) {
+        var d = tenkoSchedule[i];
+        var bothDone = d.licenseAuth && d.mentorAuth;
+        var oneDone = d.licenseAuth || d.mentorAuth;
+        var isTemp = !!d.temporary;
+
+        // 点呼ログから完了時刻を取得
+        var logEntry = null;
+        for (var j = 0; j < tenkoLog.length; j++) {
+          if (tenkoLog[j].date === todayStr && tenkoLog[j].driverName === d.name) {
+            logEntry = tenkoLog[j];
+            break;
+          }
+        }
+
+        var status, statusClass, statusIcon;
+        if (isTemp && bothDone) {
+          status = '臨時点呼'; statusClass = 'bg-amber-50 text-amber-700'; statusIcon = '⚠';
+          tempCount++;
+        } else if (bothDone) {
+          status = '点呼済'; statusClass = 'bg-emerald-50 text-emerald-700'; statusIcon = '✅';
+          doneCount++;
+        } else if (oneDone) {
+          status = '認証未完了'; statusClass = 'bg-amber-50 text-amber-700'; statusIcon = '⚠';
+          pendingCount++;
+        } else {
+          status = '未点呼'; statusClass = 'bg-red-50 text-red-700'; statusIcon = '❌';
+          pendingCount++;
+        }
+
+        // シフト別集計
+        var sc = d.shiftCode || (isTemp ? '臨時' : '不明');
+        if (!shiftBreakdown[sc]) shiftBreakdown[sc] = { total: 0, done: 0 };
+        shiftBreakdown[sc].total++;
+        if (bothDone) shiftBreakdown[sc].done++;
+
+        allEntries.push({
+          name: d.name,
+          shiftCode: d.shiftCode || '',
+          arrivalTime: d.arrivalTime || '',
+          completedAt: logEntry ? logEntry.completedAt : '',
+          licenseAuth: d.licenseAuth,
+          mentorAuth: d.mentorAuth,
+          status: status,
+          statusClass: statusClass,
+          statusIcon: statusIcon,
+          isTemp: isTemp
+        });
+      }
+
+      // サマリー更新
+      var totalCount = tenkoSchedule.filter(function(d) { return !d.temporary; }).length;
+      document.getElementById('match-total').textContent = totalCount;
+      document.getElementById('match-done').textContent = doneCount;
+      document.getElementById('match-pending').textContent = pendingCount;
+      document.getElementById('match-temp').textContent = tempCount;
+
+      // シフト別集計表示
+      var summaryEl = document.getElementById('match-shift-summary');
+      var summaryHtml = '';
+      var shiftOrder = ['bike', 'b1', '\u3007', 'C1', '\u277D', 'b2', 'C2', 'C3', '\u5609', '臨時', '不明'];
+      for (var s = 0; s < shiftOrder.length; s++) {
+        var code = shiftOrder[s];
+        if (!shiftBreakdown[code]) continue;
+        var bd = shiftBreakdown[code];
+        var allDone = bd.done === bd.total && bd.total > 0;
+        var borderColor = allDone ? 'border-emerald-300 bg-emerald-50' : 'border-border bg-white';
+        summaryHtml += '<div class="border rounded-lg px-3 py-2 text-center min-w-[80px] ' + borderColor + '">';
+        summaryHtml += '<div class="text-sm font-bold text-ink">' + code + '</div>';
+        summaryHtml += '<div class="text-xs text-ink-lighter mt-1">' + bd.total + '名</div>';
+        summaryHtml += '<div class="text-xs ' + (allDone ? 'text-emerald-600' : 'text-ink-lighter') + '">点呼 ' + bd.done + '名</div>';
+        summaryHtml += '</div>';
+      }
+      // SHIFT_MASTERにないコードも表示
+      for (var code3 in shiftBreakdown) {
+        if (shiftOrder.indexOf(code3) < 0) {
+          var bd2 = shiftBreakdown[code3];
+          var allDone2 = bd2.done === bd2.total && bd2.total > 0;
+          var borderColor2 = allDone2 ? 'border-emerald-300 bg-emerald-50' : 'border-border bg-white';
+          summaryHtml += '<div class="border rounded-lg px-3 py-2 text-center min-w-[80px] ' + borderColor2 + '">';
+          summaryHtml += '<div class="text-sm font-bold text-ink">' + code3 + '</div>';
+          summaryHtml += '<div class="text-xs text-ink-lighter mt-1">' + bd2.total + '名</div>';
+          summaryHtml += '<div class="text-xs ' + (allDone2 ? 'text-emerald-600' : 'text-ink-lighter') + '">点呼 ' + bd2.done + '名</div>';
+          summaryHtml += '</div>';
+        }
+      }
+      summaryEl.innerHTML = summaryHtml;
+
+      // テーブル描画
+      if (allEntries.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-12 text-center text-sm text-ink-lighter">シフトデータをアップロードしてください</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = allEntries.map(function(e) {
+        var iconHtml = getDriverIcon(e.name, 'w-6 h-6');
+        var licIcon = e.licenseAuth ? '<span class="text-emerald-500">✅</span>' : '<span class="text-gray-300">—</span>';
+        var menIcon = e.mentorAuth ? '<span class="text-emerald-500">✅</span>' : '<span class="text-gray-300">—</span>';
+        var tempBg = e.isTemp ? ' bg-amber-50/50' : '';
+        return '<tr class="border-b border-border hover:bg-surface/50 transition-colors' + tempBg + '">' +
+          '<td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">' + iconHtml + e.name + '</span></td>' +
+          '<td class="px-4 py-2.5 text-sm">' + (e.shiftCode || (e.isTemp ? '<span class="text-amber-500 text-xs">臨時</span>' : '-')) + '</td>' +
+          '<td class="px-4 py-2.5 text-center font-mono text-sm">' + (e.arrivalTime === '臨時' ? '-' : e.arrivalTime) + '</td>' +
+          '<td class="px-4 py-2.5 text-center font-mono text-sm">' + (e.completedAt || '<span class="text-ink-lighter">-</span>') + '</td>' +
+          '<td class="px-4 py-2.5 text-center">' + licIcon + '</td>' +
+          '<td class="px-4 py-2.5 text-center">' + menIcon + '</td>' +
+          '<td class="px-4 py-2.5 text-center"><span class="text-xs px-2 py-0.5 rounded font-medium ' + e.statusClass + '">' + e.statusIcon + ' ' + e.status + '</span></td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    // 点呼ログエクスポート（CSV）
+    function exportTenkoLog() {
+      if (tenkoLog.length === 0) { alert('点呼ログがありません'); return; }
+      var header = '日付,ドライバー名,シフト,着車予定,点呼完了時間,免許証認証,メンター認証,臨時\n';
+      var csv = header + tenkoLog.map(function(r) {
+        return [r.date, r.driverName, r.shiftCode, r.scheduledArrival, r.completedAt,
+                r.licenseAuth ? '済' : '未', r.mentorAuth ? '済' : '未', r.isTemporary ? '臨時' : '通常'].join(',');
+      }).join('\n');
+      var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'tenko_log_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
 
     // ===== 請求照合機能 =====
     var billingData = [];
