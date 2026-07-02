@@ -620,6 +620,12 @@
         </div>
         <div class="p-4">
           <div class="flex flex-wrap gap-2 mb-3" id="map-area-tags"></div>
+          <div id="map-loading" class="hidden mb-2 text-sm text-blue-600 font-medium">
+            <span class="inline-flex items-center gap-2">
+              <span class="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin inline-block"></span>
+              住所から座標を取得中... <span id="map-loading-count">0/0</span>
+            </span>
+          </div>
           <div id="delivery-map" style="height:400px;border-radius:10px;overflow:hidden;z-index:1;"></div>
           <div class="flex gap-2 mt-4">
             <button onclick="sendMapToLine()" class="flex-1 py-3 rounded-lg text-white font-bold text-sm flex items-center justify-center gap-2" style="background:#06c755;">
@@ -3198,13 +3204,13 @@
         }
       }
 
-      // 1. ドライバーに個別送信（自分のコースと物量のみ）
+      // 1. ドライバーに個別送信（自分のコースと物量＋配送エリア情報を1通にまとめる）
       for (const route of assignmentData) {
         if (!route.driverName) continue;
         const userId = lineMapping[route.driverName];
         if (!userId) { skipped++; continue; }
 
-        const message = template
+        var message = template
           .replace('{driver}', route.driverName)
           .replace('{route}', route.routeCode)
           .replace('{area}', route.area || '未設定')
@@ -3212,6 +3218,24 @@
           .replace('{destinations}', route.allDestinations)
           .replace('{departure}', route.departure)
           .replace('{predicted_end}', route.predictedEnd);
+
+        // 配送エリア情報を追加（cycleDataがあれば）
+        var routeAddresses = cycleData[route.routeCode];
+        if (routeAddresses && routeAddresses.length > 0) {
+          var areaCount = {};
+          for (var ai = 0; ai < routeAddresses.length; ai++) {
+            var aName = extractAreaName(routeAddresses[ai]);
+            if (!aName) aName = '不明';
+            if (!areaCount[aName]) areaCount[aName] = 0;
+            areaCount[aName]++;
+          }
+          var sortedMapAreas = Object.entries(areaCount).sort(function(a,b) { return b[1] - a[1]; });
+          message += '\n\n\uD83D\uDCCD \u914D\u9001\u30A8\u30EA\u30A2';
+          for (var mi = 0; mi < sortedMapAreas.length; mi++) {
+            message += '\n\u3000\uD83D\uDCCD ' + sortedMapAreas[mi][0] + '(' + sortedMapAreas[mi][1] + '\u4EF6)';
+          }
+          message += '\n\n\u203B Amazon\u30A2\u30D7\u30EA\u306F\u73FE\u5730\u5230\u7740\u5F8C\u306B\u8D77\u52D5\u3057\u3066\u304F\u3060\u3055\u3044';
+        }
 
         try {
           const { ok, status, data } = await pushViaProxy(userId, [{ type: 'text', text: message }]);
@@ -4283,6 +4307,74 @@
       setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
     }
 
+    // ===== 住所キャッシュ管理（将来DB/JSON移行対応の独立レイヤー） =====
+    var addressCache = JSON.parse(localStorage.getItem('addressCache') || '{}');
+
+    // 旧geoCacheからの移行（互換性）
+    (function migrateGeoCache() {
+      var old = localStorage.getItem('geoCache');
+      if (old) {
+        try {
+          var oldObj = JSON.parse(old);
+          for (var k in oldObj) {
+            if (!addressCache[k]) addressCache[k] = oldObj[k];
+          }
+          saveAddressCache();
+          localStorage.removeItem('geoCache');
+        } catch (e) {}
+      }
+    })();
+
+    function saveAddressCache() {
+      localStorage.setItem('addressCache', JSON.stringify(addressCache));
+    }
+
+    // 住所を正規化（号室・部屋番号を除去し、キャッシュキーにする）
+    function normalizeAddress(addr) {
+      if (!addr) return '';
+      var s = String(addr);
+      // 全角スペースを半角に、カンマ統一、前後空白削除
+      s = s.replace(/\u3000/g, ' ').replace(/，/g, ',').replace(/\s+/g, ' ').trim();
+      // 号室・部屋番号を除去
+      s = s
+        .replace(/\s*\d+\s*号室?/g, '')
+        .replace(/\s*[A-Za-z]?\d{1,4}\s*号室?/g, '')
+        .replace(/\s*\d{1,4}(?:\-\d+)?\s*$/g, '')
+        .trim();
+      return s;
+    }
+
+    // 汎用座標取得関数：将来 Google Geocoding API へ差し替え可能
+    async function getLatLng(addr) {
+      var key = normalizeAddress(addr);
+      if (!key) return null;
+      if (addressCache[key]) return addressCache[key];
+
+      var coord = await geocodeWithNominatim(addr);
+      if (coord) {
+        addressCache[key] = coord;
+        saveAddressCache();
+      }
+      return coord;
+    }
+
+    // Nominatim ジオコーディング（getLatLngからのみ呼ばれる）
+    async function geocodeWithNominatim(addr) {
+      try {
+        var url = 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(addr) + '&limit=1';
+        var response = await fetch(url, {
+          headers: { 'Accept-Language': 'ja', 'User-Agent': 'OFK3 Delivery Map' }
+        });
+        var data = await response.json();
+        if (data && data.length > 0) {
+          return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        }
+      } catch (e) {
+        console.warn('Nominatim geocode failed:', addr, e);
+      }
+      return null;
+    }
+
     function initDeliveryMap(routeCode, addresses, routeInfo) {
       // 既存マップ破棄
       if (deliveryMapInstance) {
@@ -4323,38 +4415,91 @@
         tagsHtml += '<span style="background:' + tagColor + '20;color:' + tagColor + ';border:1px solid ' + tagColor + '40;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + tagArea + ' ' + areaGroups[tagArea].count + '件</span>';
       }
       document.getElementById('map-area-tags').innerHTML = tagsHtml;
+    }
 
-      // 郵便番号でマッチング or Nominatim
-      // まず住所からおおよそ座標を割り当て
+    function cachedOrFallbackCoord(addr, area) {
+      var key = normalizeAddress(addr);
+      if (addressCache[key]) return addressCache[key];
+      return guessCoordFromAddress(addr, area);
+    }
+
+    async function initDeliveryMap(routeCode, addresses, routeInfo) {
+      // 既存マップ破棄
+      if (deliveryMapInstance) {
+        deliveryMapInstance.remove();
+        deliveryMapInstance = null;
+      }
+      deliveryMapMarkers = [];
+
+      // マップ初期化
+      deliveryMapInstance = L.map('delivery-map').setView([33.58, 130.34], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap',
+        maxZoom: 18
+      }).addTo(deliveryMapInstance);
+
+      // 住所をエリア別にグルーピング
+      var areaGroups = {};
+      for (var i = 0; i < addresses.length; i++) {
+        var areaName = extractAreaName(addresses[i]);
+        if (!areaName) areaName = '不明';
+        if (!areaGroups[areaName]) areaGroups[areaName] = { count: 0, addresses: [] };
+        areaGroups[areaName].count++;
+        areaGroups[areaName].addresses.push(addresses[i]);
+      }
+
+      // エリアにカラー割り当て
+      var areaList = Object.keys(areaGroups).sort(function(a,b) { return areaGroups[b].count - areaGroups[a].count; });
+      var areaColorMap = {};
+      for (var ai = 0; ai < areaList.length; ai++) {
+        areaColorMap[areaList[ai]] = mapAreaColors[ai % mapAreaColors.length];
+      }
+
+      // エリアタグ表示
+      var tagsHtml = '';
+      for (var ti = 0; ti < areaList.length; ti++) {
+        var tagArea = areaList[ti];
+        var tagColor = areaColorMap[tagArea];
+        tagsHtml += '<span style="background:' + tagColor + '20;color:' + tagColor + ';border:1px solid ' + tagColor + '40;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + tagArea + ' ' + areaGroups[tagArea].count + '件</span>';
+      }
+      document.getElementById('map-area-tags').innerHTML = tagsHtml;
+
+      // 既知の座標を先に表示（キャッシュ or 郵便番号マスタ）
       var allLatLngs = [];
-      var pinsByArea = {};
-
+      var pendingAddresses = [];
       for (var j = 0; j < addresses.length; j++) {
         var addr = addresses[j];
         var area = extractAreaName(addr);
         if (!area) area = '不明';
         var color = areaColorMap[area] || '#6b7280';
+        var coord = cachedOrFallbackCoord(addr, area);
+        if (coord) {
+          drawPin(coord.lat, coord.lng, color);
+          allLatLngs.push([coord.lat, coord.lng]);
+        } else {
+          pendingAddresses.push({ addr: addr, area: area, color: color });
+        }
+      }
 
-        // 郵便番号から座標を探す or 住所テキストからエリア推定
-        var coord = guessCoordFromAddress(addr, area);
-        if (!coord) continue;
+      // 未取得の住所をNominatimでジオコーディング
+      if (pendingAddresses.length > 0) {
+        var loadingEl = document.getElementById('map-loading');
+        var countEl = document.getElementById('map-loading-count');
+        loadingEl.classList.remove('hidden');
+        countEl.textContent = '0/' + pendingAddresses.length;
 
-        // 同じ座標に重ならないよう微小オフセット
-        var offsetLat = (Math.random() - 0.5) * 0.003;
-        var offsetLng = (Math.random() - 0.5) * 0.003;
-        var lat = coord.lat + offsetLat;
-        var lng = coord.lng + offsetLng;
-
-        var icon = L.divIcon({
-          className: 'dpin',
-          html: '<div style="width:10px;height:10px;background:' + color + ';border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
-          iconSize: [10, 10],
-          iconAnchor: [5, 5]
-        });
-
-        var marker = L.marker([lat, lng], { icon: icon }).addTo(deliveryMapInstance);
-        deliveryMapMarkers.push(marker);
-        allLatLngs.push([lat, lng]);
+        for (var p = 0; p < pendingAddresses.length; p++) {
+          var item = pendingAddresses[p];
+          var gc = await getLatLng(item.addr);
+          if (gc) {
+            drawPin(gc.lat, gc.lng, item.color);
+            allLatLngs.push([gc.lat, gc.lng]);
+          }
+          countEl.textContent = (p + 1) + '/' + pendingAddresses.length;
+          // Nominatimの利用規約対策（1秒待機）
+          if (p % 5 === 4) await new Promise(function(r) { setTimeout(r, 1000); });
+        }
+        loadingEl.classList.add('hidden');
       }
 
       // エリア中心にラベル表示
@@ -4378,6 +4523,17 @@
       if (allLatLngs.length > 0) {
         deliveryMapInstance.fitBounds(allLatLngs, { padding: [30, 30], maxZoom: 15 });
       }
+    }
+
+    function drawPin(lat, lng, color) {
+      var icon = L.divIcon({
+        className: 'dpin',
+        html: '<div style="width:10px;height:10px;background:' + color + ';border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
+        iconSize: [10, 10],
+        iconAnchor: [5, 5]
+      });
+      var marker = L.marker([lat, lng], { icon: icon }).addTo(deliveryMapInstance);
+      deliveryMapMarkers.push(marker);
     }
 
     // 住所から座標を推定（郵便番号マスタ or エリア名ベース）
