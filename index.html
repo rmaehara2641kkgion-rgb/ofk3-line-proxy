@@ -38,127 +38,132 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    /* === Tab Gradient Backgrounds === */
-    body { background: #0f172a; min-height: 100vh; transition: background 0.5s ease; }
-    body.tab-dashboard { background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 40%, #1a4b6e 70%, #0f172a 100%); }
-    body.tab-drivers { background: linear-gradient(135deg, #0f172a 0%, #1b3a4f 40%, #1a3d5c 70%, #0f172a 100%); }
-    body.tab-master { background: linear-gradient(135deg, #0f172a 0%, #1a3352 40%, #24406a 70%, #0f172a 100%); }
-    body.tab-optimization { background: linear-gradient(135deg, #0f172a 0%, #2d1b4e 40%, #1f2b5e 70%, #0f172a 100%); }
-    body.tab-tenko { background: linear-gradient(135deg, #0f172a 0%, #1b4332 40%, #164e3a 70%, #0f172a 100%); }
-    body.tab-tenko-match { background: linear-gradient(135deg, #0f172a 0%, #1a3c34 40%, #1b4a40 70%, #0f172a 100%); }
-    body.tab-map-master { background: linear-gradient(135deg, #0f172a 0%, #312e81 40%, #1e3a5f 70%, #0f172a 100%); }
-    body.tab-billing { background: linear-gradient(135deg, #0f172a 0%, #3b1d4e 40%, #2d1b4e 70%, #0f172a 100%); }
+    /* === Tab Gradient Backgrounds (soft pastel + warm tones) === */
+    body { background: #f8fafc; min-height: 100vh; transition: background 0.6s ease; }
+    body.tab-dashboard { background: linear-gradient(160deg, #f0f9ff 0%, #e0f2fe 45%, #dbeafe 70%, #eff6ff 100%); }
+    body.tab-drivers { background: linear-gradient(160deg, #fff7ed 0%, #ffedd5 45%, #fed7aa 75%, #fff7ed 100%); }
+    body.tab-master { background: linear-gradient(160deg, #f5f3ff 0%, #ede9fe 45%, #ddd6fe 75%, #f5f3ff 100%); }
+    body.tab-optimization { background: linear-gradient(160deg, #fffbeb 0%, #fef3c7 45%, #fde68a 75%, #fffbeb 100%); }
+    body.tab-tenko { background: linear-gradient(160deg, #f0fdf4 0%, #dcfce7 45%, #bbf7d0 75%, #f0fdf4 100%); }
+    body.tab-tenko-match { background: linear-gradient(160deg, #f0f9ff 0%, #e0f2fe 45%, #bae6fd 75%, #f0f9ff 100%); }
+    body.tab-map-master { background: linear-gradient(160deg, #fff1f2 0%, #ffe4e6 45%, #fecdd3 75%, #fff1f2 100%); }
+    body.tab-billing { background: linear-gradient(160deg, #f0fdfa 0%, #ccfbf1 45%, #99f6e4 75%, #f0fdfa 100%); }
 
-    /* === Glassmorphism Cards === */
+    /* === Body text color === */
+    body { color: #1e293b; }
+
+    /* === Glassmorphism Cards (soft light) === */
     .card {
-      background: rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.65);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.7);
       border-radius: 12px;
       transition: box-shadow 0.3s, border-color 0.3s;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
     }
     .card:hover {
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-      border-color: rgba(255, 255, 255, 0.2);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      border-color: rgba(255, 255, 255, 0.9);
     }
 
-    /* === Header === */
+    /* === Header (light translucent) === */
     header#app-header {
-      background: rgba(15, 23, 42, 0.7);
+      background: rgba(255, 255, 255, 0.72);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
     }
 
-    /* === Text Colors for Dark Theme === */
-    .text-ink { color: #e2e8f0; }
-    .text-ink-light { color: #94a3b8; }
-    .text-ink-lighter { color: #64748b; }
+    /* === Text Colors (light theme) === */
+    .text-ink { color: #1e293b; }
+    .text-ink-light { color: #475569; }
+    .text-ink-lighter { color: #94a3b8; }
 
-    /* === Tabs === */
+    /* === Tabs (amber accent) === */
     .tab-active {
-      border-bottom: 2px solid rgba(129, 140, 248, 0.8);
-      color: #e2e8f0;
+      border-bottom: 2px solid #f59e0b;
+      color: #1e293b;
       font-weight: 500;
     }
     .tab-inactive {
       border-bottom: 2px solid transparent;
       color: #64748b;
     }
-    .tab-inactive:hover { color: #94a3b8; }
+    .tab-inactive:hover { color: #334155; }
 
-    /* === Buttons === */
+    /* === Buttons (warm amber) === */
     .btn-primary {
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #f59e0b, #f97316);
       color: white;
       transition: all 0.2s;
       border: none;
     }
     .btn-primary:hover {
-      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      background: linear-gradient(135deg, #d97706, #ea580c);
       transform: translateY(-1px);
-      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+      box-shadow: 0 4px 16px rgba(245, 158, 11, 0.35);
     }
     .btn-secondary {
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: #e2e8f0;
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      color: #334155;
       transition: all 0.2s;
     }
     .btn-secondary:hover {
-      border-color: rgba(129, 140, 248, 0.5);
-      color: #a5b4fc;
-      background: rgba(99, 102, 241, 0.1);
+      border-color: #f59e0b;
+      color: #d97706;
+      background: rgba(255, 255, 255, 0.9);
     }
 
-    /* === Upload Zone === */
+    /* === Upload Zone (light) === */
     .upload-zone {
-      border: 2px dashed rgba(255, 255, 255, 0.15);
-      background: rgba(255, 255, 255, 0.03);
+      border: 2px dashed rgba(0, 0, 0, 0.1);
+      background: rgba(255, 255, 255, 0.45);
       transition: all 0.3s;
     }
     .upload-zone:hover, .upload-zone.dragover {
-      border-color: rgba(129, 140, 248, 0.6);
-      background: rgba(99, 102, 241, 0.08);
+      border-color: #f59e0b;
+      background: rgba(245, 158, 11, 0.06);
     }
 
-    /* === Inputs & Selects === */
+    /* === Inputs & Selects (light warm) === */
     input[type="text"], input[type="number"], input[type="date"], input[type="time"],
     select, textarea {
-      background: rgba(255, 255, 255, 0.06) !important;
-      border-color: rgba(255, 255, 255, 0.12) !important;
-      color: #e2e8f0 !important;
+      background: rgba(255, 255, 255, 0.7) !important;
+      border-color: rgba(0, 0, 0, 0.1) !important;
+      color: #1e293b !important;
     }
-    input::placeholder, textarea::placeholder { color: #475569 !important; }
+    input::placeholder, textarea::placeholder { color: #94a3b8 !important; }
     input:focus, select:focus, textarea:focus {
-      border-color: rgba(129, 140, 248, 0.5) !important;
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15) !important;
+      border-color: #f59e0b !important;
+      box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.12) !important;
       outline: none !important;
     }
 
-    /* === Tables === */
-    thead tr { background: rgba(255, 255, 255, 0.05) !important; }
-    th { color: #94a3b8 !important; }
-    tbody tr { border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
-    tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+    /* === Tables (light) === */
+    thead tr { background: rgba(0, 0, 0, 0.02) !important; }
+    th { color: #475569 !important; }
+    tbody tr { border-bottom: 1px solid rgba(0, 0, 0, 0.04); }
+    tbody tr:hover { background: rgba(0, 0, 0, 0.015); }
 
     /* === Stat Cards / Badges === */
     .optimization-badge {
-      background: rgba(99, 102, 241, 0.15);
-      color: #a5b4fc;
-      border: 1px solid rgba(99, 102, 241, 0.3);
+      background: rgba(245, 158, 11, 0.1);
+      color: #d97706;
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 4px; font-size: 11px; padding: 2px 6px;
     }
 
     /* === Progress Bar === */
-    .progress-bar { background: rgba(255, 255, 255, 0.08); }
-    .progress-fill { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+    .progress-bar { height: 4px; border-radius: 2px; background: rgba(0, 0, 0, 0.06); }
+    .progress-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease-out; background: linear-gradient(90deg, #f59e0b, #f97316); }
 
     /* === Scrollbar === */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+    ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.2); }
 
     /* === Fade in === */
     .fade-in { animation: fadeIn 0.4s ease-out; }
@@ -167,27 +172,27 @@
 
     /* === Tooltip === */
     .tooltip { position: relative; }
-    .tooltip::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.95); color: #e2e8f0; padding: 4px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s; border: 1px solid rgba(255,255,255,0.1); }
+    .tooltip::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #1e293b; color: #e2e8f0; padding: 4px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
     .tooltip:hover::after { opacity: 1; }
     input[type="file"] { display: none; }
 
     /* === Nav border === */
-    nav.flex.gap-6 { border-color: rgba(255, 255, 255, 0.08) !important; }
+    nav.flex.gap-6 { border-color: rgba(0, 0, 0, 0.06) !important; }
 
     /* === Modal overlays === */
     .fixed.inset-0 { backdrop-filter: blur(4px); }
 
-    /* === Dark theme overrides for Tailwind utility classes === */
-    .bg-white { background: rgba(30, 41, 59, 0.95) !important; backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
-    .bg-surface { background: rgba(255, 255, 255, 0.05) !important; }
-    .bg-surface\/50 { background: rgba(255, 255, 255, 0.03) !important; }
-    .bg-gray-50 { background: rgba(255, 255, 255, 0.04) !important; }
-    .bg-gray-100 { background: rgba(255, 255, 255, 0.06) !important; color: #94a3b8 !important; }
-    .bg-red-50 { background: rgba(239, 68, 68, 0.1) !important; }
-    .bg-emerald-50 { background: rgba(16, 185, 129, 0.1) !important; }
-    .bg-blue-50 { background: rgba(59, 130, 246, 0.1) !important; }
-    .border-border { border-color: rgba(255, 255, 255, 0.08) !important; }
-    .shadow-xl, .shadow-2xl { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important; }
+    /* === Tailwind utility overrides (light) === */
+    .bg-white { background: rgba(255, 255, 255, 0.82) !important; backdrop-filter: blur(12px); }
+    .bg-surface { background: rgba(0, 0, 0, 0.02) !important; }
+    .bg-surface\/50 { background: transparent !important; }
+    .bg-gray-50 { background: rgba(0, 0, 0, 0.015) !important; }
+    .bg-gray-100 { background: rgba(0, 0, 0, 0.03) !important; color: #475569 !important; }
+    .bg-red-50 { background: rgba(239, 68, 68, 0.06) !important; }
+    .bg-emerald-50 { background: rgba(16, 185, 129, 0.06) !important; }
+    .bg-blue-50 { background: rgba(59, 130, 246, 0.06) !important; }
+    .border-border { border-color: rgba(0, 0, 0, 0.05) !important; }
+    .shadow-xl, .shadow-2xl { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1) !important; }
 
     /* === Print Styles === */
     @media print {
