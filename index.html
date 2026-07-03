@@ -963,6 +963,13 @@
               <p class="text-xs text-ink-lighter mb-2 mt-1">LINE API用のGoogle Apps Script WebアプリURLを入力してください。</p>
               <input type="text" id="gas-proxy-url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
             </div>
+
+            <!-- Address Master GAS URL -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">住所マスター GAS URL</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">住所→緯度経度のキャッシュ用Google Apps Script WebアプリURL（未設定でも動作します）。</p>
+              <input type="text" id="addr-master-gas-url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
+            </div>
           </div>
 
           <!-- General Settings -->
@@ -3262,6 +3269,9 @@
       if (lineSettings.gasProxyUrl) {
         document.getElementById('gas-proxy-url').value = lineSettings.gasProxyUrl;
       }
+      if (lineSettings.addrMasterGasUrl) {
+        document.getElementById('addr-master-gas-url').value = lineSettings.addrMasterGasUrl;
+      }
       renderLineMappings();
     }
 
@@ -3274,7 +3284,8 @@
         adminLineId: document.getElementById('line-admin-id')?.value || '',
         lineBotId: document.getElementById('line-bot-id')?.value || '',
         lineBotLogoUrl: document.getElementById('line-bot-logo-url')?.value || '',
-        gasProxyUrl: document.getElementById('gas-proxy-url')?.value || ''
+        gasProxyUrl: document.getElementById('gas-proxy-url')?.value || '',
+        addrMasterGasUrl: document.getElementById('addr-master-gas-url')?.value || ''
       };
       localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
 
@@ -4647,19 +4658,33 @@
     async function getLatLng(addr) {
       var key = normalizeAddress(addr);
       if (!key) return null;
+
+      // 1. スプレッドシート（GAS）を優先参照
+      var sheetCoord = await lookupAddrFromSheet(addr);
+      if (sheetCoord) return sheetCoord;
+
+      // 2. localキャッシュ（フォールバック）
+      if (addrMaster[key] && addrMaster[key].lat && addrMaster[key].lng) {
+        return { lat: addrMaster[key].lat, lng: addrMaster[key].lng };
+      }
       if (addressCache[key]) return addressCache[key];
 
-      var coord = await geocodeWithNominatim(addr);
+      // 3. Geocoding APIで取得
+      var coord = await geocodeWithProxy(addr);
       if (coord) {
-        addressCache[key] = coord;
-        saveAddressCache();
+        // GASスプレッドシートに保存
+        await saveAddrToSheet(addr, coord.lat, coord.lng);
+        // ローカルにもキャッシュ
+        if (!addrMaster[key]) { addrMaster[key] = {}; }
+        addrMaster[key].lat = coord.lat;
+        addrMaster[key].lng = coord.lng;
+        addrMaster[key].status = 'ok';
+        saveAddrMasterLocalOnly();
       }
       return coord;
     }
 
-    // Nominatim ジオコーディング（Renderプロキシ経由）
-    // 将来 Google Geocoding API へ切り替える場合は Render 側 /geocode の中身だけ変更
-    async function geocodeWithNominatim(addr) {
+    async function geocodeWithProxy(addr) {
       try {
         var url = '/geocode?address=' + encodeURIComponent(addr);
         var response = await fetch(url);
@@ -4671,6 +4696,35 @@
         console.warn('Geocode proxy failed:', addr, e);
       }
       return null;
+    }
+
+    async function lookupAddrFromSheet(addr) {
+      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      if (!gasUrl) return null;
+      try {
+        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr), { timeout: 8000 });
+        var data = await res.json();
+        if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
+          return { lat: data.lat, lng: data.lng };
+        }
+      } catch (e) {
+        console.warn('lookupAddrFromSheet failed:', e);
+      }
+      return null;
+    }
+
+    async function saveAddrToSheet(addr, lat, lng) {
+      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      if (!gasUrl) return;
+      try {
+        await fetch(gasUrl + '?action=save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addr, lat: lat, lng: lng })
+        });
+      } catch (e) {
+        console.warn('saveAddrToSheet failed:', e);
+      }
     }
 
     function cachedOrFallbackCoord(addr) {
@@ -4927,11 +4981,69 @@
     }
 
     // ===== MAP管理 - 住所マスター機能 =====
-    // addrMasterは上部で初期化済み
+    // addrMasterは上部で初期化済み。ローカルキャッシュ + GAS永続化
+    var addrMasterPending = {}; // GAS未保存の差分
+    var addrMasterLoadedFromGas = false;
+
+    // GASから住所マスター読み込み
+    async function loadAddrMasterFromGAS() {
+      try {
+        var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+        if (!gasUrl) { console.log('GAS URL not set, using local addrMaster'); return; }
+        var res = await fetch(gasUrl + '?action=load');
+        var data = await res.json();
+        if (data && data.status === 'ok' && data.data) {
+          addrMaster = data.data;
+          addrMasterLoadedFromGas = true;
+          localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+          updateAddrMasterStats();
+          renderAddrMasterTable();
+          console.log('addrMaster loaded from GAS:', Object.keys(addrMaster).length);
+        }
+      } catch (e) {
+        console.error('loadAddrMasterFromGAS error:', e);
+      }
+    }
+
+    // GASに差分保存
+    async function syncAddrMasterToGAS(immediate) {
+      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      if (!gasUrl) { saveAddrMasterLocalOnly(); return; }
+      var payload = immediate ? addrMaster : addrMasterPending;
+      if (Object.keys(payload).length === 0) return;
+      try {
+        var res = await fetch(gasUrl + '?action=saveBatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        var data = await res.json();
+        if (data && data.status === 'ok') {
+          addrMasterPending = {};
+          localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+        }
+      } catch (e) {
+        console.error('syncAddrMasterToGAS error:', e);
+        saveAddrMasterLocalOnly();
+      }
+    }
+
+    function saveAddrMasterLocalOnly() {
+      try {
+        localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+      } catch (e) {
+        console.error('localStorage capacity overflow:', e);
+      }
+    }
 
     function saveAddrMaster() {
-      localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+      saveAddrMasterLocalOnly();
+      // GAS保存はデバウンス（2秒後にバッチ）
+      if (addrMasterSaveTimer) clearTimeout(addrMasterSaveTimer);
+      addrMasterSaveTimer = setTimeout(function() { syncAddrMasterToGAS(true); }, 2000);
     }
+
+    var addrMasterSaveTimer = null;
 
     function updateAddrMasterStats() {
       var keys = Object.keys(addrMaster);
