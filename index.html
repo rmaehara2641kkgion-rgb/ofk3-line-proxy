@@ -4964,8 +4964,8 @@
             saveAddrMaster();
             syncAddrMasterToCache();
           }
-          // 1.5秒待って次へ（Nominatim制限対応）
-          setTimeout(processNext, 1500);
+          // Google APIは制限緩いので300ms間隔
+          setTimeout(processNext, 300);
         });
       }
       processNext();
