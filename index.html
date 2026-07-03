@@ -4383,23 +4383,15 @@
       setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
     }
 
-    // ===== 住所キャッシュ管理（将来DB/JSON移行対応の独立レイヤー） =====
-    var addressCache = JSON.parse(localStorage.getItem('addressCache') || '{}');
-
-    // 旧geoCacheからの移行（互換性）
-    (function migrateGeoCache() {
-      var old = localStorage.getItem('geoCache');
-      if (old) {
-        try {
-          var oldObj = JSON.parse(old);
-          for (var k in oldObj) {
-            if (!addressCache[k]) addressCache[k] = oldObj[k];
-          }
-          saveAddressCache();
-          localStorage.removeItem('geoCache');
-        } catch (e) {}
-      }
-    })();
+    // ===== 住所キャッシュ管理（addrMasterが本体、addressCacheは互換用） =====
+    var addressCache = {};
+    // addrMasterがあればaddressCacheのlocalStorageは不要（容量節約）
+    if (Object.keys(addrMaster).length > 0) {
+      localStorage.removeItem('addressCache');
+      localStorage.removeItem('geoCache');
+    } else {
+      addressCache = JSON.parse(localStorage.getItem('addressCache') || '{}');
+    }
 
     function saveAddressCache() {
       localStorage.setItem('addressCache', JSON.stringify(addressCache));
@@ -4456,8 +4448,12 @@
 
     function cachedOrFallbackCoord(addr) {
       var key = normalizeAddress(addr);
+      // addrMasterを優先参照
+      if (addrMaster[key] && addrMaster[key].lat && addrMaster[key].lng) {
+        return { lat: addrMaster[key].lat, lng: addrMaster[key].lng };
+      }
       if (addressCache[key]) return addressCache[key];
-      return null; // キャッシュがない場合はNominatim取得へ
+      return null;
     }
 
     async function initDeliveryMap(routeCode, addresses, routeInfo) {
@@ -4891,14 +4887,8 @@
 
     // addrMasterの座標済みをaddressCacheに同期
     function syncAddrMasterToCache() {
-      var keys = Object.keys(addrMaster);
-      for (var i = 0; i < keys.length; i++) {
-        var entry = addrMaster[keys[i]];
-        if (entry.lat && entry.lng) {
-          addressCache[keys[i]] = { lat: entry.lat, lng: entry.lng };
-        }
-      }
-      saveAddressCache();
+      // addrMasterが本体なのでaddressCacheへの全件同期は不要
+      // cachedOrFallbackCoordがaddrMasterを直接参照する
     }
 
     // 未取得住所を一括ジオコーディング
