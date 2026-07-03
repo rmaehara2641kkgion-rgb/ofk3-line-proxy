@@ -4295,6 +4295,7 @@
     var deliveryMapInstance = null;
     var deliveryMapMarkers = [];
     var currentMapRouteCode = '';
+    var mapRenderToken = 0;
 
     // 福岡エリアの郵便番号→座標マスタ（主要エリア）
     var postalCoords = {
@@ -4463,6 +4464,7 @@
       // デバッグ：渡ってきた住所データを確認
       console.log('initDeliveryMap addresses:', addresses);
       console.log('addressCache keys count:', Object.keys(addressCache).length);
+      var myToken = ++mapRenderToken;
       // 既存マップ破棄
       if (deliveryMapInstance) {
         deliveryMapInstance.remove();
@@ -4530,8 +4532,10 @@
         countEl.textContent = '0/' + pendingAddresses.length;
 
         for (var p = 0; p < pendingAddresses.length; p++) {
+          if (myToken !== mapRenderToken) return;
           var item = pendingAddresses[p];
           var gc = await getLatLng(item.addr);
+          if (myToken !== mapRenderToken) return;
           if (gc) {
             drawPin(gc.lat, gc.lng, item.color);
             allLatLngs.push([gc.lat, gc.lng]);
@@ -4561,12 +4565,14 @@
       }
 
       // 範囲に合わせる
-      if (allLatLngs.length > 0) {
+      if (myToken !== mapRenderToken) return;
+      if (allLatLngs.length > 0 && deliveryMapInstance) {
         deliveryMapInstance.fitBounds(allLatLngs, { padding: [30, 30], maxZoom: 15 });
       }
     }
 
     function drawPin(lat, lng, color) {
+      if (!deliveryMapInstance) return;
       var icon = L.divIcon({
         className: 'dpin',
         html: '<div style="width:10px;height:10px;background:' + color + ';border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
@@ -4601,6 +4607,7 @@
     }
 
     function closeMapModal() {
+      mapRenderToken++;
       document.getElementById('map-modal').classList.add('hidden');
       if (deliveryMapInstance) {
         deliveryMapInstance.remove();
