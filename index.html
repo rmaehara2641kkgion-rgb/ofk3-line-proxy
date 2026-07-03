@@ -970,6 +970,13 @@
               <p class="text-xs text-ink-lighter mb-2 mt-1">住所→緯度経度のキャッシュ用Google Apps Script WebアプリURL（未設定でも動作します）。</p>
               <input type="text" id="addr-master-gas-url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
             </div>
+
+            <!-- Address Master Rebuild Index -->
+            <div class="mt-4 pt-4 border-t border-border">
+              <label class="text-xs font-bold text-ink">住所マスター 索引</label>
+              <p class="text-xs text-ink-lighter mb-2 mt-1">大量に住所を追加した後、検索が遅い場合に索引を再構築します。</p>
+              <button type="button" class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="rebuildAddrMasterIndex()">索引を再構築</button>
+            </div>
           </div>
 
           <!-- General Settings -->
@@ -1068,9 +1075,6 @@
     // LINE profile cache
     let lineProfileCache = JSON.parse(localStorage.getItem('lineProfileCache') || '{}');
     var PROFILE_CACHE_TTL = 24 * 60 * 60 * 1000;
-
-    // 住所マスター（MAP管理機能で使用、addressCacheより先に必要）
-    var addrMaster = JSON.parse(localStorage.getItem('addrMaster') || '{}');
 
     // LINE設定（renderMasterTable等より先に必要）
     var lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
@@ -4621,40 +4625,10 @@
       setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
     }
 
-    // ===== 住所キャッシュ管理（addrMasterが本体、addressCacheは互換用） =====
-    var addressCache = {};
-    // addrMasterがあればaddressCacheのlocalStorageは不要（容量節約）
-    if (Object.keys(addrMaster).length > 0) {
-      localStorage.removeItem('addressCache');
-      localStorage.removeItem('geoCache');
-    } else {
-      addressCache = JSON.parse(localStorage.getItem('addressCache') || '{}');
-    }
+    // ===== Googleスプレッドシート住所キャッシュ（GAS連携） =====
+    var inMemoryAddrMaster = {}; // 画面表示用一時キャッシュ（ローカルには保存しない）
+    var batchGeocodeRunning = false;
 
-    function saveAddressCache() {
-      localStorage.setItem('addressCache', JSON.stringify(addressCache));
-    }
-
-    // 住所を正規化（号室・部屋番号を除去し、番地は保持）
-    function normalizeAddress(addr) {
-      if (!addr) return '';
-      var s = String(addr);
-      // 全角数字→半角数字
-      s = s.replace(/[０-９]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
-      // 全角英字→半角英字
-      s = s.replace(/[Ａ-Ｚａ-ｚ]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
-      // 全角ハイフン・ダッシュ→半角
-      s = s.replace(/[ー－—‐]/g, '-');
-      // 全角スペースを半角に、カンマ統一、前後空白削除
-      s = s.replace(/\u3000/g, ' ').replace(/，/g, ',').replace(/\s+/g, ' ').trim();
-      // 号室だけ削除（例：302号室、1114号、A101号室）
-      s = s.replace(/\s*[A-Za-z]?\d{1,4}\s*号室?/g, '');
-      // 末尾の3〜4桁部屋番号も削除（号室のない場合）
-      s = s.replace(/\s+\d{3,4}$/g, '');
-      return s.trim();
-    }
-
-    // 汎用座標取得関数：将来 Google Geocoding API へ差し替え可能
     async function getLatLng(addr) {
       var key = normalizeAddress(addr);
       if (!key) return null;
@@ -4663,46 +4637,40 @@
       var sheetCoord = await lookupAddrFromSheet(addr);
       if (sheetCoord) return sheetCoord;
 
-      // 2. localキャッシュ（フォールバック）
-      if (addrMaster[key] && addrMaster[key].lat && addrMaster[key].lng) {
-        return { lat: addrMaster[key].lat, lng: addrMaster[key].lng };
-      }
-      if (addressCache[key]) return addressCache[key];
-
-      // 3. Geocoding APIで取得
+      // 2. Geocoding APIで取得
       var coord = await geocodeWithProxy(addr);
       if (coord) {
-        // GASスプレッドシートに保存
         await saveAddrToSheet(addr, coord.lat, coord.lng);
-        // ローカルにもキャッシュ
-        if (!addrMaster[key]) { addrMaster[key] = {}; }
-        addrMaster[key].lat = coord.lat;
-        addrMaster[key].lng = coord.lng;
-        addrMaster[key].status = 'ok';
-        saveAddrMasterLocalOnly();
       }
       return coord;
     }
 
     async function geocodeWithProxy(addr) {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) {
+        console.warn('Geocode: GAS URL未設定');
+        return null;
+      }
       try {
-        var url = '/geocode?address=' + encodeURIComponent(addr);
-        var response = await fetch(url);
-        var data = await response.json();
+        var res = await fetch(gasUrl + '?action=geocode&address=' + encodeURIComponent(addr));
+        var data = await res.json();
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
         }
+        if (data && data.status === 'error') {
+          console.warn('Geocode GAS error:', data.message);
+        }
       } catch (e) {
-        console.warn('Geocode proxy failed:', addr, e);
+        console.warn('Geocode GAS failed:', addr, e);
       }
       return null;
     }
 
     async function lookupAddrFromSheet(addr) {
-      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return null;
       try {
-        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr), { timeout: 8000 });
+        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr));
         var data = await res.json();
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
@@ -4714,7 +4682,7 @@
     }
 
     async function saveAddrToSheet(addr, lat, lng) {
-      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return;
       try {
         await fetch(gasUrl + '?action=save', {
@@ -4727,20 +4695,336 @@
       }
     }
 
-    function cachedOrFallbackCoord(addr) {
-      var key = normalizeAddress(addr);
-      // addrMasterを優先参照
-      if (addrMaster[key] && addrMaster[key].lat && addrMaster[key].lng) {
-        return { lat: addrMaster[key].lat, lng: addrMaster[key].lng };
+    async function batchSaveAddrToSheet(entries) {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) return 0;
+      try {
+        var res = await fetch(gasUrl + '?action=batchSave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entries)
+        });
+        var data = await res.json();
+        return data && data.count ? data.count : 0;
+      } catch (e) {
+        console.warn('batchSaveAddrToSheet failed:', e);
       }
-      if (addressCache[key]) return addressCache[key];
-      return null;
+      return 0;
     }
+
+    async function batchUpdateCoordsToSheet(entries) {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) return 0;
+      try {
+        var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entries)
+        });
+        var data = await res.json();
+        return data && data.count ? data.count : 0;
+      } catch (e) {
+        console.warn('batchUpdateCoordsToSheet failed:', e);
+      }
+      return 0;
+    }
+
+    async function loadAddrMasterFromSheet() {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) return {};
+      try {
+        var res = await fetch(gasUrl + '?action=list');
+        var data = await res.json();
+        if (data && data.status === 'ok' && data.data) {
+          inMemoryAddrMaster = data.data;
+          return inMemoryAddrMaster;
+        }
+      } catch (e) {
+        console.error('loadAddrMasterFromSheet error:', e);
+      }
+      return {};
+    }
+
+    async function loadPendingAddrFromSheet() {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) return {};
+      try {
+        var res = await fetch(gasUrl + '?action=pending');
+        var data = await res.json();
+        if (data && data.status === 'ok' && data.data) {
+          return data.data;
+        }
+      } catch (e) {
+        console.error('loadPendingAddrFromSheet error:', e);
+      }
+      return {};
+    }
+
+    function getAddrMasterGasUrl() {
+      return (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+    }
+
+    function cachedOrFallbackCoord(addr) {
+      return null; // GAS連携に任せる
+    }
+
+    // ============== MAP管理 - 住所マスター機能 ==============
+
+    async function refreshAddrMaster() {
+      await loadAddrMasterFromSheet();
+      updateAddrMasterStats();
+      renderAddrMasterTable();
+    }
+
+    function updateAddrMasterStats() {
+      var keys = Object.keys(inMemoryAddrMaster);
+      var total = keys.length;
+      var geocoded = 0;
+      var pending = 0;
+      for (var i = 0; i < keys.length; i++) {
+        if (inMemoryAddrMaster[keys[i]].lat && inMemoryAddrMaster[keys[i]].lng) {
+          geocoded++;
+        } else {
+          pending++;
+        }
+      }
+      var elTotal = document.getElementById('addrmaster-total');
+      var elGeocoded = document.getElementById('addrmaster-geocoded');
+      var elPending = document.getElementById('addrmaster-pending');
+      if (elTotal) elTotal.textContent = total;
+      if (elGeocoded) elGeocoded.textContent = geocoded;
+      if (elPending) elPending.textContent = pending;
+    }
+
+    function renderAddrMasterTable() {
+      var tbody = document.getElementById('addrmaster-table-body');
+      if (!tbody) return;
+      var keys = Object.keys(inMemoryAddrMaster);
+      if (keys.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、リフレッシュボタンを押してください</td></tr>';
+        return;
+      }
+      keys.sort(function(a, b) {
+        var da = inMemoryAddrMaster[a].registeredAt || '';
+        var db = inMemoryAddrMaster[b].registeredAt || '';
+        return db > da ? 1 : (db < da ? -1 : 0);
+      });
+      var displayKeys = keys.slice(0, 200);
+      var html = '';
+      for (var i = 0; i < displayKeys.length; i++) {
+        var k = displayKeys[i];
+        var entry = inMemoryAddrMaster[k];
+        var hasCoord = entry.lat && entry.lng;
+        var statusBadge = hasCoord
+          ? '<span class="text-green-600 text-xs font-bold">取得済</span>'
+          : '<span class="text-orange-500 text-xs font-bold">未取得</span>';
+        var latStr = hasCoord ? Number(entry.lat).toFixed(6) : '-';
+        var lngStr = hasCoord ? Number(entry.lng).toFixed(6) : '-';
+        var dateStr = entry.registeredAt ? entry.registeredAt.substring(0, 10) : '-';
+        html = html + '<tr class="border-b border-border hover:bg-surface/50">'
+          + '<td class="px-3 py-2 text-xs">' + k + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + latStr + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + lngStr + '</td>'
+          + '<td class="px-3 py-2 text-xs text-center">' + statusBadge + '</td>'
+          + '<td class="px-3 py-2 text-xs text-right">' + dateStr + '</td>'
+          + '</tr>';
+      }
+      if (keys.length > 200) {
+        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (keys.length - 200) + ' 件</td></tr>';
+      }
+      tbody.innerHTML = html;
+    }
+
+    // CYCLEファイル一括取り込み
+    async function handleCycleImport(event) {
+      var files = event.target.files;
+      if (!files || files.length === 0) return;
+      var logDiv = document.getElementById('addr-import-log');
+      var logEntries = document.getElementById('addr-log-entries');
+      if (logDiv) logDiv.classList.remove('hidden');
+      if (logEntries) logEntries.innerHTML = '';
+
+      var totalNew = 0;
+      var totalDup = 0;
+      var processed = 0;
+      var newEntries = {};
+      var inMemKeys = Object.keys(inMemoryAddrMaster);
+
+      function log(msg) {
+        if (logEntries) logEntries.innerHTML = logEntries.innerHTML + '<div>' + msg + '</div>';
+      }
+
+      for (var fi = 0; fi < files.length; fi++) {
+        (function(file) {
+          var reader = new FileReader();
+          reader.onload = async function(e) {
+            try {
+              var workbook = XLSX.read(e.target.result, { type: 'array' });
+              var newCount = 0;
+              var dupCount = 0;
+              for (var si = 0; si < workbook.SheetNames.length; si++) {
+                var sheet = workbook.Sheets[workbook.SheetNames[si]];
+                var rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                for (var ri = 2; ri < rows.length; ri++) {
+                  var row = rows[ri];
+                  if (!row || !row[5]) continue;
+                  var rawAddr = String(row[5]).trim();
+                  if (!rawAddr || rawAddr.indexOf('OFK') >= 0) continue;
+                  var normAddr = normalizeAddress(rawAddr);
+                  if (!normAddr) continue;
+                  if (inMemoryAddrMaster[normAddr] || newEntries[normAddr]) {
+                    dupCount++;
+                  } else {
+                    newEntries[normAddr] = {
+                      lat: null,
+                      lng: null,
+                      registeredAt: new Date().toISOString()
+                    };
+                    newCount++;
+                  }
+                }
+              }
+              totalNew = totalNew + newCount;
+              totalDup = totalDup + dupCount;
+              log('<span class="text-green-700">' + file.name + ': 新規 ' + newCount + '件 / 重複 ' + dupCount + '件</span>');
+            } catch (err) {
+              log('<span class="text-red-600">' + file.name + ': エラー - ' + err.message + '</span>');
+            }
+            processed++;
+            if (processed >= files.length) {
+              var savedCount = await batchSaveAddrToSheet(newEntries);
+              log('<span class="font-bold mt-1">合計: 新規 ' + totalNew + '件 / 重複 ' + totalDup + '件 / GAS保存 ' + savedCount + '件</span>');
+              refreshAddrMaster();
+            }
+          };
+          reader.readAsArrayBuffer(file);
+        })(files[fi]);
+      }
+      event.target.value = '';
+    }
+
+    // 住所マスターJSON読込
+    async function handleAddrMasterImport(event) {
+      var file = event.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          var imported = JSON.parse(e.target.result);
+          var keys = Object.keys(imported);
+          var newCount = 0;
+          var coordUpdateCount = 0;
+          var entries = {};
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var entry = imported[k];
+            if (!inMemoryAddrMaster[k]) {
+              entries[k] = { lat: entry.lat || null, lng: entry.lng || null, registeredAt: entry.registeredAt || new Date().toISOString() };
+              newCount++;
+            } else if (entry.lat && entry.lng && !inMemoryAddrMaster[k].lat) {
+              entries[k] = { lat: entry.lat, lng: entry.lng };
+              coordUpdateCount++;
+            }
+          }
+          await batchSaveAddrToSheet(entries);
+          if (Object.keys(entries).length > 0) {
+            await batchUpdateCoordsToSheet(entries);
+          }
+          refreshAddrMaster();
+          alert('読込完了: 新規 ' + newCount + '件 / 座標更新 ' + coordUpdateCount + '件');
+        } catch (err) {
+          alert('JSONの読込に失敗しました: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    // 住所マスターJSONダウンロード
+    function downloadAddrMaster() {
+      var jsonStr = JSON.stringify(inMemoryAddrMaster, null, 2);
+      var blob = new Blob([jsonStr], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'address_master_' + new Date().toISOString().substring(0, 10) + '.json';
+      a.click();
+    }
+
+    // 未取得住所を一括ジオコーディング
+    async function startBatchGeocode() {
+      if (batchGeocodeRunning) {
+        alert('ジオコーディング実行中です');
+        return;
+      }
+      var pending = await loadPendingAddrFromSheet();
+      var pendingKeys = Object.keys(pending);
+      if (pendingKeys.length === 0) {
+        alert('未取得の住所はありません');
+        return;
+      }
+      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\n' + Math.ceil(pendingKeys.length * 0.3 / 60) + '分程度かかります。\n実行しますか？')) {
+        return;
+      }
+      batchGeocodeRunning = true;
+      var progressDiv = document.getElementById('geocode-progress');
+      var progressBar = document.getElementById('geocode-progress-bar');
+      var progressText = document.getElementById('geocode-progress-text');
+      if (progressDiv) progressDiv.classList.remove('hidden');
+      var btn = document.getElementById('btn-batch-geocode');
+      if (btn) btn.disabled = true;
+
+      var total = pendingKeys.length;
+      var done = 0;
+      var success = 0;
+      var fail = 0;
+      var updatedCoords = {};
+
+      function processNext() {
+        if (done >= total) {
+          batchGeocodeRunning = false;
+          batchUpdateCoordsToSheet(updatedCoords).then(function() {
+            refreshAddrMaster();
+            if (btn) btn.disabled = false;
+            if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+          });
+          return;
+        }
+        var addr = pendingKeys[done];
+        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (' + addr.substring(0, 20) + '...)';
+        if (progressBar) progressBar.style.width = Math.round((done + 1) / total * 100) + '%';
+
+        getLatLng(addr).then(function(coord) {
+          if (coord) {
+            updatedCoords[addr] = coord;
+            success++;
+          } else {
+            fail++;
+          }
+          done++;
+          if (done % 5 === 0) {
+            batchUpdateCoordsToSheet(updatedCoords);
+            updatedCoords = {};
+          }
+          setTimeout(processNext, 300);
+        });
+      }
+      processNext();
+    }
+
+    // MAP管理タブ表示時にリフレッシュ
+    (function() {
+      var oldFn = switchTab;
+      switchTab = function(tab) {
+        oldFn(tab);
+        if (tab === 'map-master') {
+          refreshAddrMaster();
+        }
+      };
+    })();
 
     async function initDeliveryMap(routeCode, addresses, routeInfo) {
       // デバッグ：渡ってきた住所データを確認
       console.log('initDeliveryMap addresses:', addresses);
-      console.log('addressCache keys count:', Object.keys(addressCache).length);
       var myToken = ++mapRenderToken;
       // 既存マップ破棄
       if (deliveryMapInstance) {
@@ -4980,78 +5264,42 @@
       }
     }
 
-    // ===== MAP管理 - 住所マスター機能 =====
-    // addrMasterは上部で初期化済み。ローカルキャッシュ + GAS永続化
-    var addrMasterPending = {}; // GAS未保存の差分
-    var addrMasterLoadedFromGas = false;
-
-    // GASから住所マスター読み込み
-    async function loadAddrMasterFromGAS() {
-      try {
-        var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
-        if (!gasUrl) { console.log('GAS URL not set, using local addrMaster'); return; }
-        var res = await fetch(gasUrl + '?action=load');
-        var data = await res.json();
-        if (data && data.status === 'ok' && data.data) {
-          addrMaster = data.data;
-          addrMasterLoadedFromGas = true;
-          localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
-          updateAddrMasterStats();
-          renderAddrMasterTable();
-          console.log('addrMaster loaded from GAS:', Object.keys(addrMaster).length);
-        }
-      } catch (e) {
-        console.error('loadAddrMasterFromGAS error:', e);
+    async function rebuildAddrMasterIndex() {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) {
+        alert('住所マスター GAS URLが未設定です');
+        return;
       }
-    }
-
-    // GASに差分保存
-    async function syncAddrMasterToGAS(immediate) {
-      var gasUrl = (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
-      if (!gasUrl) { saveAddrMasterLocalOnly(); return; }
-      var payload = immediate ? addrMaster : addrMasterPending;
-      if (Object.keys(payload).length === 0) return;
       try {
-        var res = await fetch(gasUrl + '?action=saveBatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+        var res = await fetch(gasUrl + '?action=rebuildIndex', { method: 'POST' });
         var data = await res.json();
         if (data && data.status === 'ok') {
-          addrMasterPending = {};
-          localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
+          alert('索引を再構築しました');
+        } else {
+          alert('索引の再構築に失敗しました: ' + (data && data.message ? data.message : ''));
         }
       } catch (e) {
-        console.error('syncAddrMasterToGAS error:', e);
-        saveAddrMasterLocalOnly();
+        alert('索引の再構築に失敗しました: ' + e.message);
       }
     }
 
-    function saveAddrMasterLocalOnly() {
-      try {
-        localStorage.setItem('addrMaster', JSON.stringify(addrMaster));
-      } catch (e) {
-        console.error('localStorage capacity overflow:', e);
-      }
-    }
+    // ============== MAP管理 - 住所マスター機能（GAS連携版）=====
+    var inMemoryAddrMaster = {}; // 画面表示用一時キャッシュ
+    var batchGeocodeRunning = false;
 
-    function saveAddrMaster() {
-      saveAddrMasterLocalOnly();
-      // GAS保存はデバウンス（2秒後にバッチ）
-      if (addrMasterSaveTimer) clearTimeout(addrMasterSaveTimer);
-      addrMasterSaveTimer = setTimeout(function() { syncAddrMasterToGAS(true); }, 2000);
+    async function refreshAddrMaster() {
+      await loadAddrMasterFromSheet();
+      updateAddrMasterStats();
+      renderAddrMasterTable();
     }
-
-    var addrMasterSaveTimer = null;
 
     function updateAddrMasterStats() {
-      var keys = Object.keys(addrMaster);
+      var keys = Object.keys(inMemoryAddrMaster);
       var total = keys.length;
       var geocoded = 0;
       var pending = 0;
       for (var i = 0; i < keys.length; i++) {
-        if (addrMaster[keys[i]].lat && addrMaster[keys[i]].lng) {
+        if (inMemoryAddrMaster[keys[i]].lat && inMemoryAddrMaster[keys[i]].lng) {
           geocoded++;
         } else {
           pending++;
@@ -5068,27 +5316,25 @@
     function renderAddrMasterTable() {
       var tbody = document.getElementById('addrmaster-table-body');
       if (!tbody) return;
-      var keys = Object.keys(addrMaster);
+      var keys = Object.keys(inMemoryAddrMaster);
       if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、住所マスターJSONを読み込んでください</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、リフレッシュボタンを押してください</td></tr>';
         return;
       }
-      // 最新登録順にソート
       keys.sort(function(a, b) {
-        var da = addrMaster[a].registeredAt || '';
-        var db = addrMaster[b].registeredAt || '';
+        var da = inMemoryAddrMaster[a].registeredAt || '';
+        var db = inMemoryAddrMaster[b].registeredAt || '';
         return db > da ? 1 : (db < da ? -1 : 0);
       });
-      // 最大200件表示
       var displayKeys = keys.slice(0, 200);
       var html = '';
       for (var i = 0; i < displayKeys.length; i++) {
         var k = displayKeys[i];
-        var entry = addrMaster[k];
+        var entry = inMemoryAddrMaster[k];
         var hasCoord = entry.lat && entry.lng;
         var statusBadge = hasCoord
-          ? '<span class="text-green-600 text-xs font-bold">✅ 取得済</span>'
-          : '<span class="text-orange-500 text-xs font-bold">⏳ 未取得</span>';
+          ? '<span class="text-green-600 text-xs font-bold">取得済</span>'
+          : '<span class="text-orange-500 text-xs font-bold">未取得</span>';
         var latStr = hasCoord ? Number(entry.lat).toFixed(6) : '-';
         var lngStr = hasCoord ? Number(entry.lng).toFixed(6) : '-';
         var dateStr = entry.registeredAt ? entry.registeredAt.substring(0, 10) : '-';
@@ -5106,8 +5352,7 @@
       tbody.innerHTML = html;
     }
 
-    // CYCLEファイル一括取り込み
-    function handleCycleImport(event) {
+    async function handleCycleImport(event) {
       var files = event.target.files;
       if (!files || files.length === 0) return;
       var logDiv = document.getElementById('addr-import-log');
@@ -5118,11 +5363,22 @@
       var totalNew = 0;
       var totalDup = 0;
       var processed = 0;
+      var newEntries = {};
+
+      function log(msg) {
+        if (logEntries) logEntries.innerHTML = logEntries.innerHTML + '<div>' + msg + '</div>';
+      }
+
+      if (!getAddrMasterGasUrl()) {
+        log('<span class="text-red-600">GAS URLが未設定です。設定画面で「住所マスターGAS URL」を設定してください。</span>');
+        event.target.value = '';
+        return;
+      }
 
       for (var fi = 0; fi < files.length; fi++) {
         (function(file) {
           var reader = new FileReader();
-          reader.onload = function(e) {
+          reader.onload = async function(e) {
             try {
               var workbook = XLSX.read(e.target.result, { type: 'array' });
               var newCount = 0;
@@ -5130,8 +5386,6 @@
               for (var si = 0; si < workbook.SheetNames.length; si++) {
                 var sheet = workbook.Sheets[workbook.SheetNames[si]];
                 var rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                // CYCLEファイル形式: Row1="Route for XXX", Row2=ヘッダー, Row3以降=データ, Column F(index5)=住所
-                // Row3(index2)以降、Column F(index5)から住所を取得
                 for (var ri = 2; ri < rows.length; ri++) {
                   var row = rows[ri];
                   if (!row || !row[5]) continue;
@@ -5139,16 +5393,13 @@
                   if (!rawAddr || rawAddr.indexOf('OFK') >= 0) continue;
                   var normAddr = normalizeAddress(rawAddr);
                   if (!normAddr) continue;
-                  if (addrMaster[normAddr]) {
-                    addrMaster[normAddr].hitCount = (addrMaster[normAddr].hitCount || 1) + 1;
+                  if (inMemoryAddrMaster[normAddr] || newEntries[normAddr]) {
                     dupCount++;
                   } else {
-                    addrMaster[normAddr] = {
+                    newEntries[normAddr] = {
                       lat: null,
                       lng: null,
-                      registeredAt: new Date().toISOString(),
-                      hitCount: 1,
-                      source: file.name
+                      registeredAt: new Date().toISOString()
                     };
                     newCount++;
                   }
@@ -5156,24 +5407,15 @@
               }
               totalNew = totalNew + newCount;
               totalDup = totalDup + dupCount;
-              if (logEntries) {
-                logEntries.innerHTML = logEntries.innerHTML + '<div class="text-green-700">' + file.name + ': 新規 ' + newCount + '件 / 重複 ' + dupCount + '件</div>';
-              }
+              log('<span class="text-green-700">' + file.name + ': 新規 ' + newCount + '件 / 重複 ' + dupCount + '件</span>');
             } catch (err) {
-              if (logEntries) {
-                logEntries.innerHTML = logEntries.innerHTML + '<div class="text-red-600">' + file.name + ': エラー - ' + err.message + '</div>';
-              }
+              log('<span class="text-red-600">' + file.name + ': エラー - ' + err.message + '</span>');
             }
             processed++;
             if (processed >= files.length) {
-              saveAddrMaster();
-              // addressCacheにも座標済みを同期
-              syncAddrMasterToCache();
-              updateAddrMasterStats();
-              renderAddrMasterTable();
-              if (logEntries) {
-                logEntries.innerHTML = logEntries.innerHTML + '<div class="font-bold mt-1">合計: 新規 ' + totalNew + '件 / 重複 ' + totalDup + '件</div>';
-              }
+              var savedCount = await batchSaveAddrToSheet(newEntries);
+              log('<span class="font-bold mt-1">合計: 新規 ' + totalNew + '件 / 重複 ' + totalDup + '件 / GAS保存 ' + savedCount + '件</span>');
+              refreshAddrMaster();
             }
           };
           reader.readAsArrayBuffer(file);
@@ -5182,38 +5424,37 @@
       event.target.value = '';
     }
 
-    // 住所マスターJSON読込
-    function handleAddrMasterImport(event) {
+    async function handleAddrMasterImport(event) {
       var file = event.target.files[0];
       if (!file) return;
       var reader = new FileReader();
-      reader.onload = function(e) {
+      reader.onload = async function(e) {
         try {
           var imported = JSON.parse(e.target.result);
           var keys = Object.keys(imported);
+          var newEntries = {};
+          var coordUpdates = {};
           var newCount = 0;
-          var updateCount = 0;
+          var coordUpdateCount = 0;
           for (var i = 0; i < keys.length; i++) {
             var k = keys[i];
             var entry = imported[k];
-            if (!addrMaster[k]) {
-              addrMaster[k] = entry;
+            if (!inMemoryAddrMaster[k]) {
+              newEntries[k] = {
+                lat: entry.lat || null,
+                lng: entry.lng || null,
+                registeredAt: entry.registeredAt || new Date().toISOString()
+              };
               newCount++;
-            } else {
-              // 座標があればマージ
-              if (entry.lat && entry.lng && !addrMaster[k].lat) {
-                addrMaster[k].lat = entry.lat;
-                addrMaster[k].lng = entry.lng;
-                updateCount++;
-              }
-              addrMaster[k].hitCount = (addrMaster[k].hitCount || 0) + (entry.hitCount || 0);
+            } else if (entry.lat && entry.lng && !inMemoryAddrMaster[k].lat) {
+              coordUpdates[k] = { lat: entry.lat, lng: entry.lng };
+              coordUpdateCount++;
             }
           }
-          saveAddrMaster();
-          syncAddrMasterToCache();
-          updateAddrMasterStats();
-          renderAddrMasterTable();
-          alert('読込完了: 新規 ' + newCount + '件 / 座標更新 ' + updateCount + '件');
+          if (Object.keys(newEntries).length > 0) await batchSaveAddrToSheet(newEntries);
+          if (Object.keys(coordUpdates).length > 0) await batchUpdateCoordsToSheet(coordUpdates);
+          refreshAddrMaster();
+          alert('読込完了: 新規 ' + newCount + '件 / 座標更新 ' + coordUpdateCount + '件');
         } catch (err) {
           alert('JSONの読込に失敗しました: ' + err.message);
         }
@@ -5222,9 +5463,8 @@
       event.target.value = '';
     }
 
-    // 住所マスターJSONダウンロード
     function downloadAddrMaster() {
-      var jsonStr = JSON.stringify(addrMaster, null, 2);
+      var jsonStr = JSON.stringify(inMemoryAddrMaster, null, 2);
       var blob = new Blob([jsonStr], { type: 'application/json' });
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -5232,31 +5472,18 @@
       a.click();
     }
 
-    // addrMasterの座標済みをaddressCacheに同期
-    function syncAddrMasterToCache() {
-      // addrMasterが本体なのでaddressCacheへの全件同期は不要
-      // cachedOrFallbackCoordがaddrMasterを直接参照する
-    }
-
-    // 未取得住所を一括ジオコーディング
-    var batchGeocodeRunning = false;
-    function startBatchGeocode() {
+    async function startBatchGeocode() {
       if (batchGeocodeRunning) {
         alert('ジオコーディング実行中です');
         return;
       }
-      var pendingKeys = [];
-      var keys = Object.keys(addrMaster);
-      for (var i = 0; i < keys.length; i++) {
-        if (!addrMaster[keys[i]].lat || !addrMaster[keys[i]].lng) {
-          pendingKeys.push(keys[i]);
-        }
-      }
+      var pending = await loadPendingAddrFromSheet();
+      var pendingKeys = Object.keys(pending);
       if (pendingKeys.length === 0) {
         alert('未取得の住所はありません');
         return;
       }
-      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\nNominatimの制限(1秒1件)のため、' + Math.ceil(pendingKeys.length * 1.5 / 60) + '分程度かかります。\n実行しますか？')) {
+      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\nGoogle Geocoding APIは秒間50件制限のため、' + Math.ceil(pendingKeys.length * 0.3 / 60) + '分程度かかります。\n実行しますか？')) {
         return;
       }
       batchGeocodeRunning = true;
@@ -5271,16 +5498,15 @@
       var done = 0;
       var success = 0;
       var fail = 0;
+      var updatedCoords = {};
 
       function processNext() {
         if (done >= total) {
-          batchGeocodeRunning = false;
-          saveAddrMaster();
-          syncAddrMasterToCache();
-          updateAddrMasterStats();
-          renderAddrMasterTable();
-          if (btn) btn.disabled = false;
-          if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+          batchUpdateCoordsToSheet(updatedCoords).then(function() {
+            refreshAddrMaster();
+            if (btn) btn.disabled = false;
+            if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+          });
           return;
         }
         var addr = pendingKeys[done];
@@ -5289,35 +5515,29 @@
 
         getLatLng(addr).then(function(coord) {
           if (coord) {
-            addrMaster[addr].lat = coord.lat;
-            addrMaster[addr].lng = coord.lng;
+            updatedCoords[addr] = coord;
             success++;
           } else {
             fail++;
           }
           done++;
-          // 5件ごとに保存
           if (done % 5 === 0) {
-            saveAddrMaster();
-            syncAddrMasterToCache();
+            batchUpdateCoordsToSheet(updatedCoords);
+            updatedCoords = {};
           }
-          // Google APIは制限緩いので300ms間隔
           setTimeout(processNext, 300);
         });
       }
       processNext();
     }
 
-    // MAP管理タブ表示時にテーブル更新
-    var origSwitchTab = switchTab;
-    // switchTabの拡張（map-master選択時に更新）
+    // MAP管理タブ表示時にGASからリフレッシュ
     (function() {
       var oldFn = switchTab;
       switchTab = function(tab) {
         oldFn(tab);
         if (tab === 'map-master') {
-          updateAddrMasterStats();
-          renderAddrMasterTable();
+          refreshAddrMaster();
         }
       };
     })();
