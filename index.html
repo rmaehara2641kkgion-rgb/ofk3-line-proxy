@@ -270,7 +270,7 @@
         <!-- Master Table -->
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
-            <table class="w-full text-sm" style="min-width:1400px">
+            <table class="w-full text-sm" style="min-width:1500px">
               <thead>
                 <tr class="border-b border-border bg-surface">
                   <th class="px-2 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider w-12">ID</th>
@@ -2624,11 +2624,11 @@
           </td>
           <td class="px-4 py-2.5">
             <input type="text" value="${note.replace(/"/g, '&quot;')}" placeholder="メモ"
-              class="border border-border rounded px-2 py-1 text-xs w-full min-w-[160px] focus:outline-none focus:border-accent"
+              class="border border-border rounded px-2 py-1 text-xs w-full min-w-[100px] focus:outline-none focus:border-accent"
               onchange="updateMasterNote('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
-          <td class="px-4 py-2.5">
-            <button class="text-xs text-red-400 hover:text-red-600 transition-colors" onclick="deleteDriver('${name.replace(/'/g, "\\'")}')">削除</button>
+          <td class="px-2 py-2.5 text-center whitespace-nowrap">
+            <button class="text-xs text-red-400 hover:text-red-600 transition-colors font-medium" onclick="deleteDriver('${name.replace(/'/g, "\\'")}')">削除</button>
           </td>
         </tr>`;
       }).join('');
