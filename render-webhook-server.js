@@ -20,6 +20,7 @@ const PORT = process.env.PORT || 3000;
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+console.log('API KEY =', GOOGLE_MAPS_API_KEY);
 
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
