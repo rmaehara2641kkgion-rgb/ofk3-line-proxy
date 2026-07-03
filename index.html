@@ -270,7 +270,7 @@
         <!-- Master Table -->
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
-            <table class="w-full text-sm" style="min-width:1200px">
+            <table class="w-full text-sm" style="min-width:1400px">
               <thead>
                 <tr class="border-b border-border bg-surface">
                   <th class="px-2 py-2.5 text-center text-xs font-medium text-ink-lighter uppercase tracking-wider w-12">ID</th>
@@ -2514,7 +2514,11 @@
         ...Object.keys(phoneMapping),
         ...assignmentData.map(r => r.driverName).filter(Boolean)
       ]);
-      let drivers = [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja'));
+      let drivers = [...allDrivers].sort(function(a, b) {
+        var idA = (driverDB[a] && driverDB[a].driverId) || 99999;
+        var idB = (driverDB[b] && driverDB[b].driverId) || 99999;
+        return idA - idB;
+      });
 
       if (searchVal) {
         drivers = drivers.filter(name => name.toLowerCase().includes(searchVal));
