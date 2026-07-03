@@ -4409,6 +4409,12 @@
     function normalizeAddress(addr) {
       if (!addr) return '';
       var s = String(addr);
+      // 全角数字→半角数字
+      s = s.replace(/[０-９]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
+      // 全角英字→半角英字
+      s = s.replace(/[Ａ-Ｚａ-ｚ]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
+      // 全角ハイフン・ダッシュ→半角
+      s = s.replace(/[ー－—‐]/g, '-');
       // 全角スペースを半角に、カンマ統一、前後空白削除
       s = s.replace(/\u3000/g, ' ').replace(/，/g, ',').replace(/\s+/g, ' ').trim();
       // 号室だけ削除（例：302号室、1114号、A101号室）
