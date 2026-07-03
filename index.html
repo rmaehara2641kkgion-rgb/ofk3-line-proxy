@@ -4471,6 +4471,8 @@
       deliveryMapMarkers = [];
 
       // マップ初期化
+      var mapEl = document.getElementById('delivery-map');
+      if (!mapEl) { console.warn('delivery-map要素が見つかりません'); return; }
       deliveryMapInstance = L.map('delivery-map').setView([33.58, 130.34], 13);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap',
