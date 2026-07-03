@@ -931,6 +931,14 @@
     // 住所マスター（MAP管理機能で使用、addressCacheより先に必要）
     var addrMaster = JSON.parse(localStorage.getItem('addrMaster') || '{}');
 
+    // LINE設定（renderMasterTable等より先に必要）
+    var lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
+    if (!lineSettings.adminLineId) { lineSettings.adminLineId = 'raizo0428gion'; }
+    if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
+    if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
+    localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
+    var notifyMode = 'notify';
+
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
     if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
@@ -973,10 +981,30 @@
           driverDB[name].driverId = driverIdCounter;
           changed = true;
         }
+        // historyを最新30件にトリム（容量節約）
+        if (driverDB[name].history && driverDB[name].history.length > 30) {
+          driverDB[name].history = driverDB[name].history.slice(-30);
+          changed = true;
+        }
       }
       if (changed) {
-        localStorage.setItem('driverDB', JSON.stringify(driverDB));
-        localStorage.setItem('driverIdCounter', String(driverIdCounter));
+        try {
+          localStorage.setItem('driverDB', JSON.stringify(driverDB));
+          localStorage.setItem('driverIdCounter', String(driverIdCounter));
+        } catch (e) {
+          // 容量超過時：historyを更に削減して再試行
+          for (var n in driverDB) {
+            if (driverDB[n].history && driverDB[n].history.length > 5) {
+              driverDB[n].history = driverDB[n].history.slice(-5);
+            }
+          }
+          try {
+            localStorage.setItem('driverDB', JSON.stringify(driverDB));
+            localStorage.setItem('driverIdCounter', String(driverIdCounter));
+          } catch (e2) {
+            alert('localStorage容量超過: driverDBの保存に失敗しました。不要なデータを削除してください。');
+          }
+        }
       }
     })();
 
@@ -3058,12 +3086,6 @@
     }
 
     // ===== LINE Integration =====
-    let lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
-    if (!lineSettings.adminLineId) { lineSettings.adminLineId = 'raizo0428gion'; }
-    if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
-    if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
-    localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
-    let notifyMode = 'notify';
 
     // Load saved settings on init
     function initLineSettings() {
