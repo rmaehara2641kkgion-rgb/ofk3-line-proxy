@@ -4629,6 +4629,16 @@
     var inMemoryAddrMaster = {}; // 画面表示用一時キャッシュ（ローカルには保存しない）
     var batchGeocodeRunning = false;
 
+    function normalizeAddress(addr) {
+      if (!addr) return '';
+      return String(addr)
+        .replace(/[０-９]/g, function(ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+        .replace(/[Ａ-Ｚａ-ｚ]/g, function(ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+        .replace(/[\uff0d\u2010\u2015\u2014\u2212]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     async function getLatLng(addr) {
       var key = normalizeAddress(addr);
       if (!key) return null;
