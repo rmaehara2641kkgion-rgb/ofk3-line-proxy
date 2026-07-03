@@ -19,6 +19,7 @@ app.use((req, res, next) => {
 const PORT = process.env.PORT || 3000;
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
@@ -131,30 +132,21 @@ app.get('/geocode', async (req, res) => {
       });
     }
 
-    const response = await axios.get(
-      'https://nominatim.openstreetmap.org/search',
-      {
-        params: {
-          q: address,
-          format: 'json',
-          limit: 1
-        },
-        headers: {
-          'User-Agent': 'OFK3 Delivery System'
-        }
-      }
-    );
+    const url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=' + GOOGLE_MAPS_API_KEY;
+    const response = await axios.get(url);
 
-    if (!response.data.length) {
+    if (response.data.status !== 'OK' || !response.data.results || response.data.results.length === 0) {
       return res.json({
         status: 'notfound'
       });
     }
 
+    var loc = response.data.results[0].geometry.location;
+
     // キャッシュ保存
     geocodeCache[address] = {
-      lat: Number(response.data[0].lat),
-      lng: Number(response.data[0].lon)
+      lat: loc.lat,
+      lng: loc.lng
     };
 
     res.json({
