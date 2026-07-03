@@ -135,9 +135,14 @@ app.get('/geocode', async (req, res) => {
     const url = 'https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(address) + '&key=' + GOOGLE_MAPS_API_KEY;
     const response = await axios.get(url);
 
+    console.log('Google Geocode Response:');
+    console.log(JSON.stringify(response.data, null, 2));
+
     if (response.data.status !== 'OK' || !response.data.results || response.data.results.length === 0) {
       return res.json({
-        status: 'notfound'
+        status: 'notfound',
+        googleStatus: response.data.status,
+        error: response.data.error_message || ''
       });
     }
 
