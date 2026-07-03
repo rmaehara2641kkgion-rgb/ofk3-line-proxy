@@ -4662,7 +4662,7 @@
         return null;
       }
       try {
-        var res = await fetch(gasUrl + '?action=geocode&address=' + encodeURIComponent(addr));
+        var res = await fetch(gasUrl + '?action=geocode&address=' + encodeURIComponent(addr), { redirect: 'follow' });
         var data = await res.json();
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
@@ -4680,7 +4680,7 @@
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return null;
       try {
-        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr));
+        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr), { redirect: 'follow' });
         var data = await res.json();
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
@@ -4697,7 +4697,8 @@
       try {
         await fetch(gasUrl + '?action=save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          redirect: 'follow',
+          headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({ address: addr, lat: lat, lng: lng })
         });
       } catch (e) {
@@ -4711,7 +4712,8 @@
       try {
         var res = await fetch(gasUrl + '?action=batchSave', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          redirect: 'follow',
+          headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify(entries)
         });
         var data = await res.json();
@@ -4728,7 +4730,8 @@
       try {
         var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          redirect: 'follow',
+          headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify(entries)
         });
         var data = await res.json();
@@ -4743,7 +4746,7 @@
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return {};
       try {
-        var res = await fetch(gasUrl + '?action=list');
+        var res = await fetch(gasUrl + '?action=list', { redirect: 'follow' });
         var data = await res.json();
         if (data && data.status === 'ok' && data.data) {
           inMemoryAddrMaster = data.data;
@@ -4759,7 +4762,7 @@
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return {};
       try {
-        var res = await fetch(gasUrl + '?action=pending');
+        var res = await fetch(gasUrl + '?action=pending', { redirect: 'follow' });
         var data = await res.json();
         if (data && data.status === 'ok' && data.data) {
           return data.data;
@@ -5281,7 +5284,7 @@
         return;
       }
       try {
-        var res = await fetch(gasUrl + '?action=rebuildIndex', { method: 'POST' });
+        var res = await fetch(gasUrl + '?action=rebuildIndex', { method: 'POST', redirect: 'follow' });
         var data = await res.json();
         if (data && data.status === 'ok') {
           alert('索引を再構築しました');
