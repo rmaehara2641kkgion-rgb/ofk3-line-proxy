@@ -200,13 +200,23 @@ app.post('/addr-master', async (req, res) => {
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
       maxRedirects: 5,
-      timeout: 55000
+      timeout: 55000,
+      validateStatus: function() { return true; }
     });
-    console.log('addr-master POST response:', JSON.stringify(response.data).substring(0, 200));
-    res.json(response.data);
+    console.log('addr-master POST response status:', response.status, 'data:', JSON.stringify(response.data).substring(0, 500));
+    res.status(response.status).json(response.data);
   } catch (e) {
-    console.error('addr-master POST error:', e.message);
-    res.status(500).json({ status: 'error', message: e.message });
+    console.error('===== ADDR MASTER ERROR =====');
+    if (e.response) {
+      console.error('Status:', e.response.status);
+      console.error('Data:', e.response.data);
+    }
+    console.error('Message:', e.message);
+    res.status(e.response && e.response.status ? e.response.status : 500).json({
+      status: 'error',
+      message: e.message,
+      data: e.response && e.response.data ? e.response.data : null
+    });
   }
 });
 
