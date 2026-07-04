@@ -169,6 +169,46 @@ app.get('/geocode', async (req, res) => {
   }
 });
 
+// 住所マスターGASプロキシ（CORS回避）
+const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
+
+app.get('/addr-master', async (req, res) => {
+  try {
+    if (!ADDR_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'ADDR_MASTER_GAS_URL not configured' });
+    }
+    var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
+    var url = ADDR_MASTER_GAS_URL + '?' + qs;
+    console.log('addr-master GET:', url);
+    var response = await axios.get(url, { maxRedirects: 5 });
+    console.log('addr-master GET response:', JSON.stringify(response.data).substring(0, 200));
+    res.json(response.data);
+  } catch (e) {
+    console.error('addr-master GET error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.post('/addr-master', async (req, res) => {
+  try {
+    if (!ADDR_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'ADDR_MASTER_GAS_URL not configured' });
+    }
+    var action = req.query.action || '';
+    var url = ADDR_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
+    console.log('addr-master POST:', url, 'body:', JSON.stringify(req.body).substring(0, 200));
+    var response = await axios.post(url, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5
+    });
+    console.log('addr-master POST response:', JSON.stringify(response.data).substring(0, 200));
+    res.json(response.data);
+  } catch (e) {
+    console.error('addr-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 // LINE proxy（フロントエンドからの送信）
 app.post('/proxy', async (req, res) => {
   try {
