@@ -4702,37 +4702,57 @@
     async function batchSaveAddrToSheet(entries) {
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return 0;
-      try {
-        var res = await fetch(gasUrl + '?action=batchSave', {
-          method: 'POST',
-          redirect: 'follow',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(entries)
-        });
-        var data = await res.json();
-        return data && data.count ? data.count : 0;
-      } catch (e) {
-        console.warn('batchSaveAddrToSheet failed:', e);
+      var keys = Object.keys(entries);
+      if (keys.length === 0) return 0;
+      var chunkSize = 100;
+      var totalCount = 0;
+      for (var i = 0; i < keys.length; i += chunkSize) {
+        var chunk = {};
+        for (var j = i; j < Math.min(i + chunkSize, keys.length); j++) {
+          chunk[keys[j]] = entries[keys[j]];
+        }
+        try {
+          var res = await fetch(gasUrl + '?action=batchSave', {
+            method: 'POST',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(chunk)
+          });
+          var data = await res.json();
+          totalCount += (data && data.count ? data.count : 0);
+        } catch (e) {
+          console.warn('batchSaveAddrToSheet chunk failed:', e);
+        }
       }
-      return 0;
+      return totalCount;
     }
 
     async function batchUpdateCoordsToSheet(entries) {
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return 0;
-      try {
-        var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
-          method: 'POST',
-          redirect: 'follow',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(entries)
-        });
-        var data = await res.json();
-        return data && data.count ? data.count : 0;
-      } catch (e) {
-        console.warn('batchUpdateCoordsToSheet failed:', e);
+      var keys = Object.keys(entries);
+      if (keys.length === 0) return 0;
+      var chunkSize = 100;
+      var totalCount = 0;
+      for (var i = 0; i < keys.length; i += chunkSize) {
+        var chunk = {};
+        for (var j = i; j < Math.min(i + chunkSize, keys.length); j++) {
+          chunk[keys[j]] = entries[keys[j]];
+        }
+        try {
+          var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
+            method: 'POST',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(chunk)
+          });
+          var data = await res.json();
+          totalCount += (data && data.count ? data.count : 0);
+        } catch (e) {
+          console.warn('batchUpdateCoordsToSheet chunk failed:', e);
+        }
       }
-      return 0;
+      return totalCount;
     }
 
     async function loadAddrMasterFromSheet() {
