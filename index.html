@@ -5010,7 +5010,7 @@
         alert('未取得の住所はありません');
         return;
       }
-      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\n' + Math.ceil(pendingKeys.length * 0.3 / 60) + '分程度かかります。\n実行しますか？')) {
+      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\n' + Math.ceil(pendingKeys.length / 60) + '分程度かかります。\n実行しますか？')) {
         return;
       }
       batchGeocodeRunning = true;
@@ -5026,11 +5026,15 @@
       var success = 0;
       var fail = 0;
       var updatedCoords = {};
+      var BATCH_SIZE = 50;
 
       function processNext() {
         if (done >= total) {
-          batchGeocodeRunning = false;
-          batchUpdateCoordsToSheet(updatedCoords).then(function() {
+          // 残りを保存
+          var remaining = Object.keys(updatedCoords);
+          var p = remaining.length > 0 ? batchUpdateCoordsToSheet(updatedCoords) : Promise.resolve();
+          p.then(function() {
+            batchGeocodeRunning = false;
             refreshAddrMaster();
             if (btn) btn.disabled = false;
             if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
@@ -5038,10 +5042,11 @@
           return;
         }
         var addr = pendingKeys[done];
-        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (' + addr.substring(0, 20) + '...)';
+        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (成功:' + success + ' 失敗:' + fail + ')';
         if (progressBar) progressBar.style.width = Math.round((done + 1) / total * 100) + '%';
 
-        getLatLng(addr).then(function(coord) {
+        // geocodeだけ（lookupとsaveはスキップ）
+        geocodeWithProxy(addr).then(function(coord) {
           if (coord) {
             updatedCoords[addr] = coord;
             success++;
@@ -5049,11 +5054,16 @@
             fail++;
           }
           done++;
-          if (done % 5 === 0) {
-            batchUpdateCoordsToSheet(updatedCoords);
+          // BATCH_SIZE件ごとにまとめて保存
+          if (Object.keys(updatedCoords).length >= BATCH_SIZE) {
+            var batch = updatedCoords;
             updatedCoords = {};
+            batchUpdateCoordsToSheet(batch).then(function() {
+              setTimeout(processNext, 200);
+            });
+          } else {
+            setTimeout(processNext, 200);
           }
-          setTimeout(processNext, 300);
         });
       }
       processNext();
@@ -5520,64 +5530,6 @@
       a.click();
     }
 
-    async function startBatchGeocode() {
-      if (batchGeocodeRunning) {
-        alert('ジオコーディング実行中です');
-        return;
-      }
-      var pending = await loadPendingAddrFromSheet();
-      var pendingKeys = Object.keys(pending);
-      if (pendingKeys.length === 0) {
-        alert('未取得の住所はありません');
-        return;
-      }
-      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\nGoogle Geocoding APIは秒間50件制限のため、' + Math.ceil(pendingKeys.length * 0.3 / 60) + '分程度かかります。\n実行しますか？')) {
-        return;
-      }
-      batchGeocodeRunning = true;
-      var progressDiv = document.getElementById('geocode-progress');
-      var progressBar = document.getElementById('geocode-progress-bar');
-      var progressText = document.getElementById('geocode-progress-text');
-      if (progressDiv) progressDiv.classList.remove('hidden');
-      var btn = document.getElementById('btn-batch-geocode');
-      if (btn) btn.disabled = true;
-
-      var total = pendingKeys.length;
-      var done = 0;
-      var success = 0;
-      var fail = 0;
-      var updatedCoords = {};
-
-      function processNext() {
-        if (done >= total) {
-          batchUpdateCoordsToSheet(updatedCoords).then(function() {
-            refreshAddrMaster();
-            if (btn) btn.disabled = false;
-            if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
-          });
-          return;
-        }
-        var addr = pendingKeys[done];
-        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (' + addr.substring(0, 20) + '...)';
-        if (progressBar) progressBar.style.width = Math.round((done + 1) / total * 100) + '%';
-
-        getLatLng(addr).then(function(coord) {
-          if (coord) {
-            updatedCoords[addr] = coord;
-            success++;
-          } else {
-            fail++;
-          }
-          done++;
-          if (done % 5 === 0) {
-            batchUpdateCoordsToSheet(updatedCoords);
-            updatedCoords = {};
-          }
-          setTimeout(processNext, 300);
-        });
-      }
-      processNext();
-    }
 
     // MAP管理タブ表示時にGASからリフレッシュ
     (function() {
