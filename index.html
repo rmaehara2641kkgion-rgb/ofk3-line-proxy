@@ -1382,7 +1382,7 @@
     }
 
     // ===== Area Management =====
-    let cycleData = JSON.parse(localStorage.getItem('cycleData') || '{}'); // routeCode -> array of addresses
+    let cycleData = {}; // routeCode -> array of addresses（メモリのみ、localStorageに保存しない）
     let routeAreas = JSON.parse(localStorage.getItem('routeAreas') || '{}');
 
     function updateArea(index, value) {
@@ -1494,7 +1494,6 @@
         });
 
         localStorage.setItem('routeAreas', JSON.stringify(routeAreas));
-        localStorage.setItem('cycleData', JSON.stringify(cycleData));
         document.getElementById('cycle-status').textContent = `✓ ${routeCount}ルートのエリア情報読込済み`;
         document.getElementById('cycle-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
         alert(`${routeCount}ルートのエリア情報を読み取りました`);
