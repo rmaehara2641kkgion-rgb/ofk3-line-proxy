@@ -739,6 +739,7 @@
           </label>
           <button onclick="downloadAddrMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">💾 住所マスターDL</button>
           <button onclick="startBatchGeocode()" class="bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-600 cursor-pointer" id="btn-batch-geocode">🌍 未取得を一括ジオコーディング</button>
+          <button onclick="startDedup()" class="bg-yellow-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-yellow-600 cursor-pointer" id="btn-dedup">🧹 重複住所を統合</button>
         </div>
 
         <!-- 取り込みログ -->
@@ -4974,6 +4975,28 @@
       a.href = URL.createObjectURL(blob);
       a.download = 'address_master_' + new Date().toISOString().substring(0, 10) + '.json';
       a.click();
+    }
+
+    // 重複住所を統合
+    async function startDedup() {
+      var btn = document.getElementById('btn-dedup');
+      btn.disabled = true;
+      btn.textContent = '🧹 統合中...';
+      try {
+        var gasUrl = getAddrMasterGasUrl();
+        var res = await fetch(gasUrl + '?action=dedup', { redirect: 'follow' });
+        var data = await res.json();
+        if (data.status === 'ok') {
+          alert('統合完了！\n削除: ' + data.removed + '件\n残り: ' + data.kept + '件');
+          loadAddrMasterStats();
+        } else {
+          alert('統合エラー: ' + (data.message || 'unknown'));
+        }
+      } catch (e) {
+        alert('統合失敗: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = '🧹 重複住所を統合';
     }
 
     // 未取得住所を一括ジオコーディング
