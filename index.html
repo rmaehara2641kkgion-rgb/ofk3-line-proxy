@@ -4656,22 +4656,15 @@
     }
 
     async function geocodeWithProxy(addr) {
-      var gasUrl = getAddrMasterGasUrl();
-      if (!gasUrl) {
-        console.warn('Geocode: GAS URL未設定');
-        return null;
-      }
       try {
-        var res = await fetch(gasUrl + '?action=geocode&address=' + encodeURIComponent(addr), { redirect: 'follow' });
-        var data = await res.json();
+        var url = '/geocode?address=' + encodeURIComponent(addr);
+        var response = await fetch(url);
+        var data = await response.json();
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
         }
-        if (data && data.status === 'error') {
-          console.warn('Geocode GAS error:', data.message);
-        }
       } catch (e) {
-        console.warn('Geocode GAS failed:', addr, e);
+        console.warn('Geocode proxy failed:', addr, e);
       }
       return null;
     }
@@ -4774,7 +4767,7 @@
     }
 
     function getAddrMasterGasUrl() {
-      return (lineSettings && lineSettings.addrMasterGasUrl) ? lineSettings.addrMasterGasUrl : '';
+      return '/addr-master';
     }
 
     function cachedOrFallbackCoord(addr) {
