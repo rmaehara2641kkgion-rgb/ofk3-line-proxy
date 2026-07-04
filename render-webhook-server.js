@@ -199,7 +199,8 @@ app.post('/addr-master', async (req, res) => {
     console.log('addr-master POST:', url, 'body:', JSON.stringify(req.body).substring(0, 200));
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
-      maxRedirects: 5
+      maxRedirects: 5,
+      timeout: 55000
     });
     console.log('addr-master POST response:', JSON.stringify(response.data).substring(0, 200));
     res.json(response.data);
