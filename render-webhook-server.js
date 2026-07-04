@@ -3,7 +3,7 @@ const axios = require('axios');
 const app = express();
 const path = require('path');
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // CORS対応
 app.use((req, res, next) => {
