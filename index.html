@@ -4691,7 +4691,7 @@
         await fetch(gasUrl + '?action=save', {
           method: 'POST',
           redirect: 'follow',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ address: addr, lat: lat, lng: lng })
         });
       } catch (e) {
@@ -4706,7 +4706,7 @@
         var res = await fetch(gasUrl + '?action=batchSave', {
           method: 'POST',
           redirect: 'follow',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(entries)
         });
         var data = await res.json();
@@ -4724,7 +4724,7 @@
         var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
           method: 'POST',
           redirect: 'follow',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(entries)
         });
         var data = await res.json();
