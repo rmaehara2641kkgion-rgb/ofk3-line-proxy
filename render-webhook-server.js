@@ -170,6 +170,36 @@ app.get('/geocode', async (req, res) => {
 });
 
 // 住所マスターGASプロキシ（CORS回避）
+
+// Static Maps画像プロキシ（LINE送信用）
+app.get('/static-map', async (req, res) => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY) {
+      return res.status(500).json({ status: 'error', message: 'GOOGLE_MAPS_API_KEY not configured' });
+    }
+    var markers = req.query.markers || '';
+    var size = req.query.size || '600x400';
+    var zoom = req.query.zoom || '';
+    var mapUrl = 'https://maps.googleapis.com/maps/api/staticmap?size=' + size + '&maptype=roadmap&language=ja&key=' + GOOGLE_MAPS_API_KEY;
+    if (zoom) mapUrl += '&zoom=' + zoom;
+    // markers can be multiple
+    if (Array.isArray(markers)) {
+      for (var i = 0; i < markers.length; i++) {
+        mapUrl += '&markers=' + encodeURIComponent(markers[i]);
+      }
+    } else if (markers) {
+      mapUrl += '&markers=' + encodeURIComponent(markers);
+    }
+    var response = await axios.get(mapUrl, { responseType: 'arraybuffer', timeout: 15000 });
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(Buffer.from(response.data));
+  } catch (e) {
+    console.error('static-map error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
 
 app.get('/addr-master', async (req, res) => {
