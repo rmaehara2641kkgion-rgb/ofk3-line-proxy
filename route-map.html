@@ -244,12 +244,29 @@ async function initMap() {
   document.getElementById('route-badge').textContent = routeCode;
 
   // クエリパラメータから配送データを取得
-  var routeDataParam = getParam('data');
-  if (routeDataParam) {
+  // 1. IDでサーバーから取得（推奨）
+  var dataId = getParam('id');
+  if (dataId) {
     try {
-      deliveryData = JSON.parse(decodeURIComponent(routeDataParam));
+      var idRes = await fetch('/route-data/' + dataId);
+      var idData = await idRes.json();
+      if (idData.status === 'ok' && idData.data && idData.data.points) {
+        deliveryData = idData.data.points;
+      }
     } catch (e) {
-      showError('データの読み込みに失敗');
+      showError('データ取得失敗: ' + e.message);
+    }
+  }
+
+  // 2. dataパラメータ（フォールバック）
+  if (deliveryData.length === 0) {
+    var routeDataParam = getParam('data');
+    if (routeDataParam) {
+      try {
+        deliveryData = JSON.parse(decodeURIComponent(routeDataParam));
+      } catch (e) {
+        showError('データの読み込みに失敗');
+      }
     }
   }
 
