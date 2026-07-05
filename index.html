@@ -305,7 +305,6 @@
             <div class="px-4 py-3 border-b border-border flex items-center justify-between">
               <h2 class="text-sm font-medium">ルート別配送予測</h2>
               <div class="flex items-center gap-2">
-                <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="document.getElementById('file-input').click()">データ更新</button>
                 <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="openPrintPreview()">
                   <span class="inline-flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
@@ -856,8 +855,8 @@
         <h3 class="text-base font-bold mb-2">配送計画を確定して通知</h3>
         <p class="text-sm text-ink-light mb-4">以下の内容でドライバーにLINE通知を送信します。</p>
 
-        <!-- Notification Mode Toggle -->
-        <div class="flex gap-2 mb-4">
+        <!-- Notification Mode (Messaging APIのみ) -->
+        <div class="flex gap-2 mb-4" style="display:none">
           <button class="text-xs px-3 py-1.5 rounded border transition-all" id="mode-notify" onclick="setNotifyMode('notify')">グループ一括（Notify）</button>
           <button class="text-xs px-3 py-1.5 rounded border transition-all" id="mode-messaging" onclick="setNotifyMode('messaging')">個別送信（Messaging API）</button>
         </div>
@@ -889,22 +888,6 @@
       <div class="relative bg-white rounded-lg p-6 max-w-2xl w-full mx-4 shadow-xl fade-in max-h-[90vh] overflow-y-auto">
         <h3 class="text-base font-bold mb-4">設定</h3>
         <div class="space-y-6">
-
-          <!-- LINE Notify Section -->
-          <div class="border border-border rounded-lg p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="#06C755"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63h2.386c.349 0 .63.285.63.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.627-.63.349 0 .631.285.631.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M12 1C5.373 1 0 5.373 0 12s5.373 11 12 11 12-4.373 12-11S18.627 1 12 1"/></svg>
-              <h4 class="text-sm font-bold">LINE Notify（グループ一括通知）</h4>
-              <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700" id="notify-status">未設定</span>
-            </div>
-            <p class="text-xs text-ink-lighter mb-3">LINEグループに全ドライバーの配送予測をまとめて投稿します。</p>
-            <div class="space-y-2">
-              <label class="text-xs font-medium text-ink-light">アクセストークン</label>
-              <input type="text" id="line-notify-token" placeholder="LINE Notify トークンを貼り付け" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
-              <p class="text-xs text-ink-lighter">取得方法: <a href="https://notify-bot.line.me/my/" target="_blank" class="text-accent underline">notify-bot.line.me</a> → トークンを発行 → グループを選択</p>
-            </div>
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded mt-3" onclick="testLineNotify()">テスト送信</button>
-          </div>
 
           <!-- LINE Messaging API Section -->
           <div class="border border-border rounded-lg p-4">
@@ -1076,7 +1059,7 @@
     if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
     if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
     localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
-    var notifyMode = 'notify';
+    var notifyMode = 'messaging';
 
     // Pre-register admin
     if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
@@ -1587,19 +1570,40 @@
         // If we already have data, calculate weighted average
         if (driverDB[name] && driverDB[name].packagesPerHour && packagesPerHour) {
           const existing = driverDB[name];
-          const totalDays = existing.workDays + workDays;
-          const weightedCapability = (existing.packagesPerHour * existing.workDays + packagesPerHour * workDays) / totalDays;
+          // 同じ日のデータなら上書き（加算しない）
+          var lastHistory = existing.history && existing.history.length > 0 ? existing.history[existing.history.length - 1] : null;
+          if (lastHistory && lastHistory.date === today) {
+            // 今日の分は上書き
+            driverDB[name] = {
+              ...existing,
+              packagesPerHour: Math.round(packagesPerHour * 10) / 10,
+              deliveryRate: deliveryRate || existing.deliveryRate,
+              misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
+              workDays: workDays,
+              totalPackages: totalPackages,
+              incidents: incidents,
+              lastUpdated: today
+            };
+            if (existing.history && existing.history.length > 0) {
+              driverDB[name].history = existing.history.slice(0, -1).concat([{ date: today, pph: packagesPerHour, days: workDays }]);
+            }
+          } else {
+            // 別日のデータなら加重平均
+            const totalDays = existing.workDays + workDays;
+            const weightedCapability = (existing.packagesPerHour * existing.workDays + packagesPerHour * workDays) / totalDays;
 
-          driverDB[name] = {
-            packagesPerHour: Math.round(weightedCapability * 10) / 10,
-            deliveryRate: deliveryRate || existing.deliveryRate,
-            misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
-            workDays: totalDays,
-            totalPackages: existing.totalPackages + totalPackages,
-            incidents: existing.incidents + incidents,
-            lastUpdated: today,
-            history: [...(existing.history || []), { date: today, pph: packagesPerHour, days: workDays }]
-          };
+            driverDB[name] = {
+              ...existing,
+              packagesPerHour: Math.round(weightedCapability * 10) / 10,
+              deliveryRate: deliveryRate || existing.deliveryRate,
+              misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
+              workDays: totalDays,
+              totalPackages: existing.totalPackages + totalPackages,
+              incidents: existing.incidents + incidents,
+              lastUpdated: today,
+              history: [...(existing.history || []), { date: today, pph: packagesPerHour, days: workDays }]
+            };
+          }
         } else {
           driverDB[name] = {
             driverId: getNextDriverId(),
