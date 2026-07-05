@@ -3461,7 +3461,7 @@
     }
 
     // ルートの配送先データを生成（マップ用）
-    function buildRouteDeliveryData(routeCode) {
+    async function buildRouteDeliveryData(routeCode) {
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) return [];
       var result = [];
@@ -3471,17 +3471,32 @@
         var coord = inMemoryAddrMaster[key];
         if (coord && coord.lat && coord.lng) {
           result.push({
-            order: result.length + 1,
             address: addresses[i],
             lat: coord.lat,
             lng: coord.lng
           });
         } else {
-          noMatch.push(key);
+          noMatch.push(addresses[i]);
         }
       }
+      // 未マッチ分はジオコーディングで補完
       if (noMatch.length > 0) {
-        console.log('住所マスター未マッチ(' + noMatch.length + '件):', noMatch.slice(0, 5));
+        console.log('住所マスター未マッチ(' + noMatch.length + '件) → ジオコーディング中...');
+        for (var j = 0; j < noMatch.length; j++) {
+          try {
+            var gc = await geocodeWithProxy(noMatch[j]);
+            if (gc) {
+              result.push({
+                address: noMatch[j],
+                lat: gc.lat,
+                lng: gc.lng
+              });
+            }
+          } catch (e) {
+            console.warn('geocode failed:', noMatch[j], e.message);
+          }
+        }
+        console.log('補完後 配送データ件数:', result.length);
       }
       return result;
     }
@@ -3563,7 +3578,7 @@
         }
 
         // ルートの配送先データを生成
-        var routeDeliveryData = buildRouteDeliveryData(route.routeCode);
+        var routeDeliveryData = await buildRouteDeliveryData(route.routeCode);
         console.log('配送データ件数:', routeDeliveryData.length);
 
         // route-map.html用のURL生成（サーバーにデータ保存して短いURLにする）
@@ -3761,7 +3776,7 @@
         try {
           var lineMessages = [{ type: 'text', text: message }];
           // インタラクティブマップ付きFlex Message
-          var routeDD = buildRouteDeliveryData(route.routeCode);
+          var routeDD = await buildRouteDeliveryData(route.routeCode);
           if (routeDD.length > 0) {
             var rmUrl = null;
             try {
