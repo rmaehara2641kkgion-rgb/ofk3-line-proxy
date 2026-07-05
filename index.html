@@ -3464,10 +3464,13 @@
     async function buildRouteMapUrl(routeCode) {
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) return null;
+      // inMemoryAddrMasterから座標取得（fetchなし）
       var coords = [];
       for (var i = 0; i < addresses.length; i++) {
-        var c = await lookupAddrFromSheet(addresses[i]);
-        if (c) coords.push(c);
+        var key = normalizeAddress(addresses[i]);
+        if (inMemoryAddrMaster[key]) {
+          coords.push(inMemoryAddrMaster[key]);
+        }
       }
       if (coords.length === 0) return null;
       return buildStaticMapUrl(coords);
