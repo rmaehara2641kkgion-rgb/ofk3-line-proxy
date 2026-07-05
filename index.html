@@ -994,19 +994,11 @@
                 <label class="text-xs font-medium text-ink-light">積み込み時間（分）</label>
                 <input type="number" value="15" min="0" max="60" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="loading-time">
               </div>
-              <div>
-                <label class="text-xs font-medium text-ink-light">往路 ステーション→配送エリア（分）</label>
-                <input type="number" value="20" min="0" max="90" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="travel-outbound">
-                <p class="text-xs text-ink-lighter mt-0.5">西区福重 → 配送先エリアまでの平均移動時間</p>
-              </div>
-              <div>
-                <label class="text-xs font-medium text-ink-light">帰庫 配送エリア→ステーション（分）</label>
-                <input type="number" value="20" min="0" max="90" class="border border-border rounded px-3 py-2 text-sm w-full focus:outline-none focus:border-accent mt-1" id="travel-return">
-                <p class="text-xs text-ink-lighter mt-0.5">配送先最終地点 → ステーションまでの平均移動時間</p>
-              </div>
             </div>
             <div class="mt-3 p-2 bg-surface rounded text-xs text-ink-light">
-              <strong>計算式:</strong> 出発時刻 + 積み込み + 往路移動 + (配達数 ÷ 能力値) + 帰庫移動
+              <strong>計算式:</strong> 出発時刻 + 積み込み + 往路移動 + (配達数 ÷ 能力値) + 帰庫移動<br>
+              <strong>📍 ステーション:</strong> 福岡市西区福重3丁目36-24<br>
+              <strong>⚡ 往路/帰庫:</strong> CYCLEデータ+住所マスターから自動計算（最寄り/最遠PINまでの距離・時速30km・道のり補正1.3倍）
             </div>
           </div>
 
@@ -1325,8 +1317,8 @@
 
     function calculateEndTime(departure, packages, capability, amazonDuration, routeCode) {
       const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
-      var travelOutbound = parseInt(document.getElementById('travel-outbound')?.value || '15');
-      var travelReturn = parseInt(document.getElementById('travel-return')?.value || '15');
+      var travelOutbound = 20;
+      var travelReturn = 20;
 
       // CYCLEデータ+住所マスターがあれば自動計算で上書き
       if (routeCode) {
