@@ -3460,6 +3460,27 @@
       return baseUrl + '&markers=' + encodeURIComponent(markersParam);
     }
 
+    // ルートの配送先データを生成（マップ用）
+    function buildRouteDeliveryData(routeCode) {
+      var addresses = cycleData[routeCode];
+      if (!addresses || addresses.length === 0) return [];
+      // inMemoryAddrMasterが空なら後で自動取得される
+      var result = [];
+      for (var i = 0; i < addresses.length; i++) {
+        var key = normalizeAddress(addresses[i]);
+        var coord = inMemoryAddrMaster[key];
+        if (coord && coord.lat && coord.lng) {
+          result.push({
+            order: result.length + 1,
+            address: addresses[i],
+            lat: coord.lat,
+            lng: coord.lng
+          });
+        }
+      }
+      return result;
+    }
+
     // ルートの住所リストからマップ画像URLと座標を生成
     async function buildRouteMapData(routeCode) {
       var addresses = cycleData[routeCode];
@@ -3528,31 +3549,36 @@
         var mapUrl = null;
         var coords_for_map = null;
         console.log('テスト送信 routeCode:', route.routeCode, 'cycleData件数:', routeAddresses ? routeAddresses.length : 0, 'inMemoryAddrMaster件数:', Object.keys(inMemoryAddrMaster).length);
-        if (routeAddresses && routeAddresses.length > 0) {
-          var mapData = await buildRouteMapData(route.routeCode);
-          if (mapData) {
-            mapUrl = mapData.url;
-            coords_for_map = mapData.coords;
+
+        // ルートの配送先データを生成
+        var routeDeliveryData = buildRouteDeliveryData(route.routeCode);
+        console.log('配送データ件数:', routeDeliveryData.length);
+
+        // route-map.html用のURL生成
+        var routeMapUrl = null;
+        if (routeDeliveryData.length > 0) {
+          var coordsJson = [];
+          for (var di = 0; di < routeDeliveryData.length; di++) {
+            coordsJson.push({ lat: routeDeliveryData[di].lat, lng: routeDeliveryData[di].lng, address: routeDeliveryData[di].address });
           }
-          console.log('mapUrl:', mapUrl ? mapUrl.substring(0, 100) : 'null', 'coords:', coords_for_map ? coords_for_map.length : 0);
-        } else {
-          console.log('cycleDataなし。CYCLEファイルを先に読み込んでください');
+          routeMapUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&coords=' + encodeURIComponent(JSON.stringify(coordsJson));
+        }
+
+        // Static Maps画像URL（プレビュー用）
+        var mapUrl = null;
+        if (routeDeliveryData.length > 0) {
+          var previewCoords = [];
+          for (var pi = 0; pi < routeDeliveryData.length; pi++) {
+            previewCoords.push({ lat: routeDeliveryData[pi].lat, lng: routeDeliveryData[pi].lng });
+          }
+          mapUrl = buildStaticMapUrl(previewCoords);
         }
 
         var messages = [{ type: 'text', text: '【テスト送信】\n' + message }];
-        if (mapUrl && coords_for_map && coords_for_map.length > 0) {
-          // Flex Messageでマップ画像+タップでGoogleMaps表示
-          var centerLat = 0, centerLng = 0;
-          for (var ci = 0; ci < coords_for_map.length; ci++) {
-            centerLat += coords_for_map[ci].lat;
-            centerLng += coords_for_map[ci].lng;
-          }
-          centerLat /= coords_for_map.length;
-          centerLng /= coords_for_map.length;
-          var gmapUrl = 'https://www.google.com/maps/@' + centerLat + ',' + centerLng + ',13z';
+        if (mapUrl && routeMapUrl) {
           messages.push({
             type: 'flex',
-            altText: '配送エリアマップ',
+            altText: '📍 配送マップ - タップで地図を開く',
             contents: {
               type: 'bubble',
               hero: {
@@ -3561,16 +3587,24 @@
                 size: 'full',
                 aspectRatio: '3:2',
                 aspectMode: 'cover',
-                action: { type: 'uri', label: 'Google Mapsで開く', uri: gmapUrl }
+                action: { type: 'uri', label: 'マップを開く', uri: routeMapUrl }
+              },
+              body: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  { type: 'text', text: '🗺 配送エリアマップ', weight: 'bold', size: 'md' },
+                  { type: 'text', text: routeDeliveryData.length + '件の配送先 / スワイプ・拡大OK', size: 'xs', color: '#888888', margin: 'sm' }
+                ]
               },
               footer: {
                 type: 'box',
                 layout: 'vertical',
                 contents: [{
                   type: 'button',
-                  action: { type: 'uri', label: '📍 Google Mapsで開く', uri: gmapUrl },
+                  action: { type: 'uri', label: '📍 マップを見る', uri: routeMapUrl },
                   style: 'primary',
-                  color: '#4285F4'
+                  color: '#e94560'
                 }]
               }
             }
@@ -3584,7 +3618,7 @@
         });
         var data = await response.json().catch(function() { return {}; });
         if (response.ok) {
-          alert('テスト送信成功！LINEを確認してください。' + (mapUrl ? '\n（マップ画像付き）' : '\n（マップ画像なし：座標データ不足）'));
+          alert('テスト送信成功！LINEを確認してください。' + (routeMapUrl ? '\n（マップ付き）' : '\n（マップなし：座標データ不足）'));
         } else {
           alert('テスト送信失敗: ' + JSON.stringify(data));
         }
@@ -3705,38 +3739,44 @@
 
         try {
           var lineMessages = [{ type: 'text', text: message }];
-          // マップ画像を追加（Flex Message + Google Mapsリンク）
-          var mapData = await buildRouteMapData(route.routeCode);
-          if (mapData && mapData.coords.length > 0) {
-            var cLat = 0, cLng = 0;
-            for (var ci = 0; ci < mapData.coords.length; ci++) {
-              cLat += mapData.coords[ci].lat;
-              cLng += mapData.coords[ci].lng;
+          // インタラクティブマップ付きFlex Message
+          var routeDD = buildRouteDeliveryData(route.routeCode);
+          if (routeDD.length > 0) {
+            var cJson = [];
+            for (var cdi = 0; cdi < routeDD.length; cdi++) {
+              cJson.push({ lat: routeDD[cdi].lat, lng: routeDD[cdi].lng, address: routeDD[cdi].address });
             }
-            cLat /= mapData.coords.length;
-            cLng /= mapData.coords.length;
-            var gmapLink = 'https://www.google.com/maps/@' + cLat + ',' + cLng + ',13z';
+            var rmUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&coords=' + encodeURIComponent(JSON.stringify(cJson));
+            var previewUrl = buildStaticMapUrl(routeDD.map(function(d) { return { lat: d.lat, lng: d.lng }; }));
             lineMessages.push({
               type: 'flex',
-              altText: '配送エリアマップ',
+              altText: '📍 配送マップ - タップで地図を開く',
               contents: {
                 type: 'bubble',
                 hero: {
                   type: 'image',
-                  url: mapData.url,
+                  url: previewUrl,
                   size: 'full',
                   aspectRatio: '3:2',
                   aspectMode: 'cover',
-                  action: { type: 'uri', label: 'Google Mapsで開く', uri: gmapLink }
+                  action: { type: 'uri', label: 'マップを開く', uri: rmUrl }
+                },
+                body: {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: [
+                    { type: 'text', text: '🗺 配送エリアマップ', weight: 'bold', size: 'md' },
+                    { type: 'text', text: routeDD.length + '件の配送先 / スワイプ・拡大OK', size: 'xs', color: '#888888', margin: 'sm' }
+                  ]
                 },
                 footer: {
                   type: 'box',
                   layout: 'vertical',
                   contents: [{
                     type: 'button',
-                    action: { type: 'uri', label: '📍 Google Mapsで開く', uri: gmapLink },
+                    action: { type: 'uri', label: '📍 マップを見る', uri: rmUrl },
                     style: 'primary',
-                    color: '#4285F4'
+                    color: '#e94560'
                   }]
                 }
               }
