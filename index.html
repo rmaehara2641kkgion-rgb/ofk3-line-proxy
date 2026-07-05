@@ -2562,73 +2562,174 @@
       renderOptimizationResults(results);
     }
 
+    function getCourseType(serviceType) {
+      if (!serviceType) return 'unknown';
+      if (serviceType.indexOf('Biker') >= 0) return 'Biker';
+      if (serviceType.indexOf('Standard') >= 0) return 'Standard';
+      if (serviceType.indexOf('Nursery') >= 0) return 'Nursery';
+      return 'other';
+    }
+
+    function departureMinutes(dep) {
+      if (!dep) return -1;
+      var parts = dep.split(':');
+      return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    }
+
+    function isSameTimeSlot(dep1, dep2) {
+      var m1 = departureMinutes(dep1);
+      var m2 = departureMinutes(dep2);
+      if (m1 < 0 || m2 < 0) return false;
+      return Math.abs(m1 - m2) <= 30;
+    }
+
     function generateOptimizationSuggestions() {
-      const suggestions = [];
+      var suggestions = [];
 
-      // Sort routes by package count (heavy first)
-      const sortedRoutes = [...assignmentData].sort((a, b) => b.totalDeliveries - a.totalDeliveries);
-
-      // Sort available drivers by capability (fast first)
-      const availableDrivers = Object.entries(driverDB)
-        .filter(([_, d]) => d.packagesPerHour)
-        .sort((a, b) => b[1].packagesPerHour - a[1].packagesPerHour);
-
-      // Current assignment analysis
-      sortedRoutes.forEach(route => {
+      // Group routes by course type
+      var bikerRoutes = [];
+      var standardRoutes = [];
+      assignmentData.forEach(function(route) {
         if (!route.driverName) return;
-        const driverInfo = findDriver(route.driverName);
-        if (!driverInfo) return;
+        var ct = getCourseType(route.serviceType);
+        if (ct === 'Biker') bikerRoutes.push(route);
+        else if (ct === 'Standard') standardRoutes.push(route);
+        // Nursery and others are excluded from optimization
+      });
 
-        // Check if there's a better match
-        const currentEfficiency = driverInfo.packagesPerHour;
-        const hoursNeeded = route.totalDeliveries / currentEfficiency;
+      // === Biker optimization (2 courses per driver, recombine pairs) ===
+      // Group biker routes by driver
+      var bikerByDriver = {};
+      bikerRoutes.forEach(function(route) {
+        if (!bikerByDriver[route.driverName]) bikerByDriver[route.driverName] = [];
+        bikerByDriver[route.driverName].push(route);
+      });
 
-        // Find if a faster driver is on a lighter route
-        const lighterRoutes = sortedRoutes.filter(r =>
-          r.routeCode !== route.routeCode &&
-          r.totalDeliveries < route.totalDeliveries * 0.7 &&
-          r.driverName
-        );
-
-        lighterRoutes.forEach(lighterRoute => {
-          const lighterDriverInfo = findDriver(lighterRoute.driverName);
-          if (!lighterDriverInfo) return;
-
-          if (lighterDriverInfo.packagesPerHour > currentEfficiency * 1.2) {
-            // Faster driver is on a lighter route — suggest swap
-            const currentEnd = route.predictedEnd;
-            const swappedHours = route.totalDeliveries / lighterDriverInfo.packagesPerHour;
-            const [depH, depM] = route.departure.split(':').map(Number);
-            const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
-            const newEndMinutes = depH * 60 + depM + (swappedHours * 60) + loadingTime;
-            const newEnd = `${String(Math.floor(newEndMinutes/60)).padStart(2,'0')}:${String(Math.round(newEndMinutes%60)).padStart(2,'0')}`;
-
-            suggestions.push({
-              type: 'swap',
-              route1: route.routeCode,
-              driver1: route.driverName,
-              route2: lighterRoute.routeCode,
-              driver2: lighterRoute.driverName,
-              currentEnd,
-              optimizedEnd: newEnd,
-              improvement: calculateTimeDiff(currentEnd, newEnd),
-              reason: `${lighterRoute.driverName}（${lighterDriverInfo.packagesPerHour}個/h）は${route.driverName}（${currentEfficiency}個/h）より高速。重いルートに再配置で${calculateTimeDiff(currentEnd, newEnd)}分短縮可能`
-            });
-          }
+      // Build biker driver pairs with combined stats
+      var bikerPairs = [];
+      Object.keys(bikerByDriver).forEach(function(driver) {
+        var routes = bikerByDriver[driver];
+        var totalPkgs = 0;
+        var routeCodes = [];
+        var latestEnd = '00:00';
+        var dep = routes[0].departure;
+        routes.forEach(function(r) {
+          totalPkgs += r.totalDeliveries;
+          routeCodes.push(r.routeCode);
+          if (r.predictedEnd > latestEnd) latestEnd = r.predictedEnd;
+        });
+        var driverInfo = findDriver(driver);
+        bikerPairs.push({
+          driverName: driver,
+          routes: routes,
+          routeCodes: routeCodes,
+          totalPkgs: totalPkgs,
+          departure: dep,
+          predictedEnd: latestEnd,
+          capability: driverInfo ? driverInfo.packagesPerHour : 0
         });
       });
 
+      // Compare biker pairs for swap optimization (same time slot)
+      for (var i = 0; i < bikerPairs.length; i++) {
+        for (var j = i + 1; j < bikerPairs.length; j++) {
+          var pA = bikerPairs[i];
+          var pB = bikerPairs[j];
+          if (!pA.capability || !pB.capability) continue;
+          if (!isSameTimeSlot(pA.departure, pB.departure)) continue;
+
+          // Check if swapping drivers improves the heavier pair's end time
+          var heavy = pA.totalPkgs >= pB.totalPkgs ? pA : pB;
+          var light = pA.totalPkgs >= pB.totalPkgs ? pB : pA;
+
+          // Only suggest if the lighter driver is faster
+          if (light.capability <= heavy.capability * 1.1) continue;
+
+          // Calculate new end time if faster driver takes heavier route set
+          var depMin = departureMinutes(heavy.departure);
+          var loadingTime = parseInt(document.getElementById('loading-time') ? document.getElementById('loading-time').value : '15');
+          var swappedHours = heavy.totalPkgs / light.capability;
+          var newEndMin = depMin + (swappedHours * 60) + loadingTime;
+          var newEnd = String(Math.floor(newEndMin / 60)).padStart(2, '0') + ':' + String(Math.round(newEndMin % 60)).padStart(2, '0');
+
+          var improvement = calculateTimeDiff(heavy.predictedEnd, newEnd);
+          if (improvement <= 0) continue;
+
+          suggestions.push({
+            type: 'swap',
+            route1: heavy.routeCodes.join('+'),
+            driver1: heavy.driverName,
+            route2: light.routeCodes.join('+'),
+            driver2: light.driverName,
+            currentEnd: heavy.predictedEnd,
+            optimizedEnd: newEnd,
+            improvement: improvement,
+            courseType: 'Biker',
+            reason: light.driverName + '（' + light.capability + '個/h）⇔ ' + heavy.driverName + '（' + heavy.capability + '個/h）入れ替えで' + improvement + '分短縮 [Biker]'
+          });
+        }
+      }
+
+      // === Standard optimization (1 course per driver, same time slot) ===
+      for (var si = 0; si < standardRoutes.length; si++) {
+        var sRoute = standardRoutes[si];
+        var sDriver = findDriver(sRoute.driverName);
+        if (!sDriver) continue;
+
+        for (var sj = si + 1; sj < standardRoutes.length; sj++) {
+          var sRoute2 = standardRoutes[sj];
+          var sDriver2 = findDriver(sRoute2.driverName);
+          if (!sDriver2) continue;
+          if (!isSameTimeSlot(sRoute.departure, sRoute2.departure)) continue;
+
+          // Determine which is heavier
+          var heavyR, lightR, heavyD, lightD;
+          if (sRoute.totalDeliveries >= sRoute2.totalDeliveries) {
+            heavyR = sRoute; lightR = sRoute2;
+            heavyD = sDriver; lightD = sDriver2;
+          } else {
+            heavyR = sRoute2; lightR = sRoute;
+            heavyD = sDriver2; lightD = sDriver;
+          }
+
+          // Only if lighter route's driver is faster
+          if (lightD.packagesPerHour <= heavyD.packagesPerHour * 1.1) continue;
+
+          var sDepMin = departureMinutes(heavyR.departure);
+          var sLoadTime = parseInt(document.getElementById('loading-time') ? document.getElementById('loading-time').value : '15');
+          var sSwapHours = heavyR.totalDeliveries / lightD.packagesPerHour;
+          var sNewEndMin = sDepMin + (sSwapHours * 60) + sLoadTime;
+          var sNewEnd = String(Math.floor(sNewEndMin / 60)).padStart(2, '0') + ':' + String(Math.round(sNewEndMin % 60)).padStart(2, '0');
+
+          var sImprovement = calculateTimeDiff(heavyR.predictedEnd, sNewEnd);
+          if (sImprovement <= 0) continue;
+
+          suggestions.push({
+            type: 'swap',
+            route1: heavyR.routeCode,
+            driver1: heavyR.driverName,
+            route2: lightR.routeCode,
+            driver2: lightR.driverName,
+            currentEnd: heavyR.predictedEnd,
+            optimizedEnd: sNewEnd,
+            improvement: sImprovement,
+            courseType: 'Standard',
+            reason: lightR.driverName + '（' + lightD.packagesPerHour + '個/h）⇔ ' + heavyR.driverName + '（' + heavyD.packagesPerHour + '個/h）入れ替えで' + sImprovement + '分短縮 [Standard]'
+          });
+        }
+      }
+
       // Deduplicate and sort by improvement
-      const seen = new Set();
+      var seen = {};
       return suggestions
-        .filter(s => {
-          const key = `${s.driver1}-${s.driver2}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
+        .filter(function(s) {
+          var key = [s.driver1, s.driver2].sort().join('-');
+          if (seen[key]) return false;
+          seen[key] = true;
           return true;
         })
-        .sort((a, b) => b.improvement - a.improvement)
-        .slice(0, 5);
+        .sort(function(a, b) { return b.improvement - a.improvement; })
+        .slice(0, 10);
     }
 
     function calculateTimeDiff(time1, time2) {
@@ -2651,32 +2752,30 @@
       empty.classList.add('hidden');
       container.classList.remove('hidden');
 
-      container.innerHTML = `
-        <div class="space-y-3">
-          ${suggestions.map((s, i) => `
-            <div class="card p-4 fade-in" style="animation-delay: ${i * 0.1}s">
-              <div class="flex items-start justify-between">
-                <div class="flex-1">
-                  <div class="flex items-center gap-2 mb-2">
-                    <span class="optimization-badge">提案 ${i + 1}</span>
-                    <span class="text-xs text-emerald-600 font-medium">-${s.improvement}分</span>
-                  </div>
-                  <p class="text-sm text-ink mb-2">${s.reason}</p>
-                  <div class="flex items-center gap-4 text-xs text-ink-light">
-                    <span>${s.route1}: ${s.driver1} → ${s.driver2}</span>
-                    <span class="text-ink-lighter">|</span>
-                    <span>${s.route2}: ${s.driver2} → ${s.driver1}</span>
-                  </div>
-                </div>
-                <div class="text-right ml-4">
-                  <p class="text-xs text-ink-lighter">終了予測</p>
-                  <p class="text-sm font-mono"><span class="line-through text-ink-lighter">${s.currentEnd}</span> → <span class="font-medium text-emerald-600">${s.optimizedEnd}</span></p>
-                </div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `;
+      var html = '<div class="space-y-3">';
+      suggestions.forEach(function(s, i) {
+        var typeBg = s.courseType === 'Biker' ? 'background:#FEF3C7;color:#92400E;' : 'background:#DBEAFE;color:#1E40AF;';
+        html += '<div class="card p-4 fade-in" style="animation-delay: ' + (i * 0.1) + 's">'
+          + '<div class="flex items-start justify-between">'
+          + '<div class="flex-1">'
+          + '<div class="flex items-center gap-2 mb-2">'
+          + '<span class="optimization-badge">提案 ' + (i + 1) + '</span>'
+          + '<span style="font-size:11px;padding:1px 6px;border-radius:4px;font-weight:500;' + typeBg + '">' + s.courseType + '</span>'
+          + '<span class="text-xs text-emerald-600 font-medium">-' + s.improvement + '分</span>'
+          + '</div>'
+          + '<p class="text-sm text-ink mb-2">' + s.reason + '</p>'
+          + '<div class="flex items-center gap-4 text-xs text-ink-light">'
+          + '<span>' + s.route1 + ': ' + s.driver1 + ' → ' + s.driver2 + '</span>'
+          + '<span class="text-ink-lighter">|</span>'
+          + '<span>' + s.route2 + ': ' + s.driver2 + ' → ' + s.driver1 + '</span>'
+          + '</div></div>'
+          + '<div class="text-right ml-4">'
+          + '<p class="text-xs text-ink-lighter">終了予測</p>'
+          + '<p class="text-sm font-mono"><span class="line-through text-ink-lighter">' + s.currentEnd + '</span> → <span class="font-medium text-emerald-600">' + s.optimizedEnd + '</span></p>'
+          + '</div></div></div>';
+      });
+      html += '</div>';
+      container.innerHTML = html;
     }
 
     function closeModal() {
