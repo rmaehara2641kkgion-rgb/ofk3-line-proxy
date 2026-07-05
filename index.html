@@ -1315,8 +1315,23 @@
       let deliveryMinutes;
 
       if (capability && capability > 0) {
-        // Use driver capability (packages/hour) — purely delivery time, no travel
-        deliveryMinutes = (packages / capability) * 60;
+        // 終了予測用の補正（能力値が低いほど上乗せ）
+        var adjusted = capability;
+        if (capability >= 30) {
+          adjusted = capability;
+        } else if (capability >= 25) {
+          adjusted = capability + 1;
+        } else if (capability >= 20) {
+          adjusted = capability + 2.5;
+        } else if (capability >= 15) {
+          adjusted = capability + 3;
+        } else if (capability >= 10) {
+          adjusted = capability + 3.5;
+        } else if (capability >= 5) {
+          adjusted = capability + 4;
+        }
+        // Use adjusted capability for delivery time calculation
+        deliveryMinutes = (packages / adjusted) * 60;
       } else {
         // Fall back to Amazon's estimate (already includes travel)
         deliveryMinutes = amazonDuration;
