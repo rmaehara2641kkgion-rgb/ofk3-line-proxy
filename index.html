@@ -3561,14 +3561,23 @@
         var routeDeliveryData = buildRouteDeliveryData(route.routeCode);
         console.log('配送データ件数:', routeDeliveryData.length);
 
-        // route-map.html用のURL生成
+        // route-map.html用のURL生成（サーバーにデータ保存して短いURLにする）
         var routeMapUrl = null;
         if (routeDeliveryData.length > 0) {
-          var coordsJson = [];
-          for (var di = 0; di < routeDeliveryData.length; di++) {
-            coordsJson.push({ lat: routeDeliveryData[di].lat, lng: routeDeliveryData[di].lng, address: routeDeliveryData[di].address });
+          try {
+            var saveRes = await fetch('/route-data', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ route: route.routeCode, points: routeDeliveryData })
+            });
+            var saveData = await saveRes.json();
+            if (saveData.status === 'ok') {
+              routeMapUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&id=' + saveData.id;
+              console.log('マップURL生成成功:', routeMapUrl);
+            }
+          } catch (e) {
+            console.error('route-data保存失敗:', e);
           }
-          routeMapUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&coords=' + encodeURIComponent(JSON.stringify(coordsJson));
         }
 
         // Static Maps画像URL（プレビュー用）
@@ -3749,13 +3758,21 @@
           // インタラクティブマップ付きFlex Message
           var routeDD = buildRouteDeliveryData(route.routeCode);
           if (routeDD.length > 0) {
-            var cJson = [];
-            for (var cdi = 0; cdi < routeDD.length; cdi++) {
-              cJson.push({ lat: routeDD[cdi].lat, lng: routeDD[cdi].lng, address: routeDD[cdi].address });
-            }
-            var rmUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&coords=' + encodeURIComponent(JSON.stringify(cJson));
-            var previewUrl = buildStaticMapUrl(routeDD.map(function(d) { return { lat: d.lat, lng: d.lng }; }));
-            lineMessages.push({
+            var rmUrl = null;
+            try {
+              var svRes = await fetch('/route-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ route: route.routeCode, points: routeDD })
+              });
+              var svData = await svRes.json();
+              if (svData.status === 'ok') {
+                rmUrl = 'https://ofk3-line-proxy-1.onrender.com/route-map.html?route=' + encodeURIComponent(route.routeCode) + '&id=' + svData.id;
+              }
+            } catch (e) { console.error('route-data save error:', e); }
+            if (rmUrl) {
+              var previewUrl = buildStaticMapUrl(routeDD.map(function(d) { return { lat: d.lat, lng: d.lng }; }));
+              lineMessages.push({
               type: 'flex',
               altText: '📍 配送マップ - タップで地図を開く',
               contents: {
@@ -3788,6 +3805,7 @@
                 }
               }
             });
+            }
           }
           const { ok, status, data } = await pushViaProxy(userId, lineMessages);
           if (ok) { sent++; } else { failed++; console.error('Driver push failed:', status, data); }
