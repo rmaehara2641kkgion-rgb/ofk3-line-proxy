@@ -3464,8 +3464,8 @@
     function buildRouteDeliveryData(routeCode) {
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) return [];
-      // inMemoryAddrMasterが空なら後で自動取得される
       var result = [];
+      var noMatch = [];
       for (var i = 0; i < addresses.length; i++) {
         var key = normalizeAddress(addresses[i]);
         var coord = inMemoryAddrMaster[key];
@@ -3476,7 +3476,12 @@
             lat: coord.lat,
             lng: coord.lng
           });
+        } else {
+          noMatch.push(key);
         }
+      }
+      if (noMatch.length > 0) {
+        console.log('住所マスター未マッチ(' + noMatch.length + '件):', noMatch.slice(0, 5));
       }
       return result;
     }
