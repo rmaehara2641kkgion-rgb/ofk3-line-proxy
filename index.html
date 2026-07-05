@@ -3550,6 +3550,13 @@
         var coords_for_map = null;
         console.log('テスト送信 routeCode:', route.routeCode, 'cycleData件数:', routeAddresses ? routeAddresses.length : 0, 'inMemoryAddrMaster件数:', Object.keys(inMemoryAddrMaster).length);
 
+        // 住所マスターが空なら自動取得
+        if (Object.keys(inMemoryAddrMaster).length === 0) {
+          console.log('inMemoryAddrMaster空 → 自動読み込み...');
+          await loadAddrMasterFromSheet();
+          console.log('読み込み完了: ' + Object.keys(inMemoryAddrMaster).length + '件');
+        }
+
         // ルートの配送先データを生成
         var routeDeliveryData = buildRouteDeliveryData(route.routeCode);
         console.log('配送データ件数:', routeDeliveryData.length);
