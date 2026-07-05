@@ -1236,7 +1236,7 @@
 
         // Calculate predicted end time
         const departure = parseDepartureTime(departureRaw);
-        const predictedEnd = calculateEndTime(departure, allDestinations, capability, routeDuration);
+        const predictedEnd = calculateEndTime(departure, allDestinations, capability, routeDuration, routeCode);
 
         // Get area from cycle data, saved areas, or empty
         const area = routeAreas[routeCode] || (cycleData[routeCode] ? extractAreaFromAddresses(cycleData[routeCode]) : '');
@@ -1284,10 +1284,59 @@
       return '09:00';
     }
 
-    function calculateEndTime(departure, packages, capability, amazonDuration) {
+    // OFK3ステーション座標
+    var STATION_LAT = 33.570156;
+    var STATION_LNG = 130.318143;
+
+    // 2点間の距離（km）- ハーバーサイン公式
+    function distanceKm(lat1, lng1, lat2, lng2) {
+      var R = 6371;
+      var dLat = (lat2 - lat1) * Math.PI / 180;
+      var dLng = (lng2 - lng1) * Math.PI / 180;
+      var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // ステーション↔配送先の往路・復路を自動計算（分）
+    function calcTravelTimes(routeCode) {
+      var addresses = cycleData[routeCode];
+      if (!addresses || addresses.length === 0 || Object.keys(inMemoryAddrMaster).length === 0) {
+        return null;
+      }
+      var minDist = Infinity;
+      var maxDist = 0;
+      for (var i = 0; i < addresses.length; i++) {
+        var key = normalizeAddress(addresses[i]);
+        var coord = inMemoryAddrMaster[key];
+        if (coord && coord.lat && coord.lng) {
+          var d = distanceKm(STATION_LAT, STATION_LNG, coord.lat, coord.lng);
+          if (d < minDist) minDist = d;
+          if (d > maxDist) maxDist = d;
+        }
+      }
+      if (minDist === Infinity) return null;
+      // 直線距離 × 1.3（道のり補正）÷ 時速30km → 分
+      var outbound = Math.round(minDist * 1.3 / 30 * 60);
+      var returnTrip = Math.round(maxDist * 1.3 / 30 * 60);
+      return { outbound: Math.max(outbound, 3), returnTrip: Math.max(returnTrip, 3) };
+    }
+
+    function calculateEndTime(departure, packages, capability, amazonDuration, routeCode) {
       const loadingTime = parseInt(document.getElementById('loading-time')?.value || '15');
-      const travelOutbound = parseInt(document.getElementById('travel-outbound')?.value || '15');
-      const travelReturn = parseInt(document.getElementById('travel-return')?.value || '15');
+      var travelOutbound = parseInt(document.getElementById('travel-outbound')?.value || '15');
+      var travelReturn = parseInt(document.getElementById('travel-return')?.value || '15');
+
+      // CYCLEデータ+住所マスターがあれば自動計算で上書き
+      if (routeCode) {
+        var auto = calcTravelTimes(routeCode);
+        if (auto) {
+          travelOutbound = auto.outbound;
+          travelReturn = auto.returnTrip;
+        }
+      }
+
       let deliveryMinutes;
 
       if (capability && capability > 0) {
