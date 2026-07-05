@@ -876,6 +876,7 @@
         </div>
 
         <div class="flex gap-2 justify-end">
+          <button class="bg-blue-500 text-white text-sm px-4 py-2 rounded hover:bg-blue-600" id="btn-test-line" onclick="sendTestLineMessage()">🧪 テスト送信（自分に）</button>
           <button class="btn-secondary text-sm px-4 py-2 rounded" onclick="closeModal()">キャンセル</button>
           <button class="btn-primary text-sm px-4 py-2 rounded" id="send-line-btn" onclick="sendLineNotification()">通知を送信</button>
         </div>
@@ -3446,6 +3447,108 @@
       document.getElementById('line-modal').classList.remove('hidden');
     }
 
+    // ルートの配送先座標からStatic Maps URLを生成
+    function buildStaticMapUrl(coords) {
+      if (!coords || coords.length === 0) return null;
+      var baseUrl = 'https://ofk3-line-proxy-1.onrender.com/static-map?size=600x400';
+      var markerParts = [];
+      for (var i = 0; i < coords.length; i++) {
+        markerParts.push(coords[i].lat + ',' + coords[i].lng);
+      }
+      // Static Maps APIのマーカーは1つのmarkersパラメータにpipe区切りで渡す
+      var markersParam = 'color:red|size:small|' + markerParts.join('|');
+      return baseUrl + '&markers=' + encodeURIComponent(markersParam);
+    }
+
+    // ルートの住所リストからマップ画像URLを生成
+    async function buildRouteMapUrl(routeCode) {
+      var addresses = cycleData[routeCode];
+      if (!addresses || addresses.length === 0) return null;
+      var coords = [];
+      for (var i = 0; i < addresses.length; i++) {
+        var c = await lookupAddrFromSheet(addresses[i]);
+        if (c) coords.push(c);
+      }
+      if (coords.length === 0) return null;
+      return buildStaticMapUrl(coords);
+    }
+
+    // テスト送信（管理者に1ルート分のテキスト+マップ画像を送信）
+    async function sendTestLineMessage() {
+      var proxyUrl = lineSettings.gasProxyUrl;
+      if (!proxyUrl) proxyUrl = '/proxy';
+      var testUserId = 'U48be7d67e979988a2298c2b9b8cb8035';
+
+      if (!assignmentData || assignmentData.length === 0) {
+        alert('先にアサインデータをアップロードしてください');
+        return;
+      }
+
+      var btn = document.getElementById('btn-test-line');
+      if (btn) { btn.disabled = true; btn.textContent = '送信中...'; }
+
+      var route = assignmentData[0]; // 最初のルートでテスト
+      var template = lineSettings.messageTemplate || '{driver}さん\nコース: {route}\nエリア: {area}\n物量: {packages}個 / {destinations}件\n出発: {departure}\n終了予測: {predicted_end}';
+      var message = template
+        .replace('{driver}', route.driverName || 'テスト')
+        .replace('{route}', route.routeCode || '-')
+        .replace('{area}', route.area || '未設定')
+        .replace('{packages}', route.totalDeliveries || 0)
+        .replace('{destinations}', route.allDestinations || 0)
+        .replace('{departure}', route.departure || '-')
+        .replace('{predicted_end}', route.predictedEnd || '-');
+
+      // 配送エリア情報
+      var routeAddresses = cycleData[route.routeCode];
+      if (routeAddresses && routeAddresses.length > 0) {
+        var areaCount = {};
+        for (var ai = 0; ai < routeAddresses.length; ai++) {
+          var aName = extractAreaName(routeAddresses[ai]);
+          if (!aName) aName = '不明';
+          if (!areaCount[aName]) areaCount[aName] = 0;
+          areaCount[aName]++;
+        }
+        var sortedMapAreas = Object.entries(areaCount).sort(function(a,b) { return b[1] - a[1]; });
+        message += '\n\n📍 配送エリア';
+        for (var mi = 0; mi < sortedMapAreas.length; mi++) {
+          message += '\n　📍 ' + sortedMapAreas[mi][0] + '(' + sortedMapAreas[mi][1] + '件)';
+        }
+      }
+
+      try {
+        // マップ画像URLを生成
+        var mapUrl = null;
+        if (routeAddresses && routeAddresses.length > 0) {
+          mapUrl = await buildRouteMapUrl(route.routeCode);
+        }
+
+        var messages = [{ type: 'text', text: '【テスト送信】\n' + message }];
+        if (mapUrl) {
+          messages.push({
+            type: 'image',
+            originalContentUrl: mapUrl,
+            previewImageUrl: mapUrl
+          });
+        }
+
+        var response = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: testUserId, messages: messages })
+        });
+        var data = await response.json().catch(function() { return {}; });
+        if (response.ok) {
+          alert('テスト送信成功！LINEを確認してください。' + (mapUrl ? '\n（マップ画像付き）' : '\n（マップ画像なし：座標データ不足）'));
+        } else {
+          alert('テスト送信失敗: ' + JSON.stringify(data));
+        }
+      } catch (e) {
+        alert('テスト送信エラー: ' + e.message);
+      }
+
+      if (btn) { btn.disabled = false; btn.textContent = '🧪 テスト送信（自分に）'; }
+    }
+
     async function sendLineNotification() {
       if (notifyMode === 'notify') {
         await sendViaNotify();
@@ -3555,7 +3658,13 @@
         }
 
         try {
-          const { ok, status, data } = await pushViaProxy(userId, [{ type: 'text', text: message }]);
+          var lineMessages = [{ type: 'text', text: message }];
+          // マップ画像を追加
+          var mapUrl = await buildRouteMapUrl(route.routeCode);
+          if (mapUrl) {
+            lineMessages.push({ type: 'image', originalContentUrl: mapUrl, previewImageUrl: mapUrl });
+          }
+          const { ok, status, data } = await pushViaProxy(userId, lineMessages);
           if (ok) { sent++; } else { failed++; console.error('Driver push failed:', status, data); }
         } catch (e) {
           failed++;
