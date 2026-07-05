@@ -281,12 +281,20 @@ app.post('/proxy', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Target not found' });
     }
 
+    // デバッグ: LINE送信ペイロードをログ
+    console.log('===== LINE PUSH PAYLOAD =====');
+    console.log('to:', target);
+    console.log('messages count:', messages.length);
+    for (var mi = 0; mi < messages.length; mi++) {
+      console.log('messages[' + mi + ']:', JSON.stringify(messages[mi]).substring(0, 500));
+    }
+
     const response = await axios.post('https://api.line.me/v2/bot/message/push', {
       to: target,
       messages: messages
     }, {
       headers: {
-        'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}`,
+        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
         'Content-Type': 'application/json'
       }
     });
@@ -294,7 +302,8 @@ app.post('/proxy', async (req, res) => {
     log('LINE push success:', target, response.status);
     res.json({ status: 'ok', lineStatus: response.status });
   } catch (err) {
-    log('Proxy error:', JSON.stringify(err.response && err.response.data ? err.response.data : err.message, null, 2));
+    console.error('===== LINE PUSH ERROR =====');
+    console.error('Error details:', JSON.stringify(err.response && err.response.data ? err.response.data : err.message, null, 2));
     res.status(502).json({ status: 'error', lineBody: err.response && err.response.data ? err.response.data : null, message: err.message });
   }
 });
