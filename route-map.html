@@ -198,13 +198,13 @@ function showError(msg) {
   setTimeout(function() { el.style.display = 'none'; }, 5000);
 }
 
-function createPinIcon(num, color) {
+function createPinIcon() {
   return L.divIcon({
     className: '',
-    html: '<div class="pin-icon pin-' + color + '">' + num + '</div>',
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -16]
+    html: '<div style="width:12px;height:12px;background:#e94560;border:2px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.4)"></div>',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+    popupAnchor: [0, -8]
   });
 }
 
@@ -212,9 +212,7 @@ function buildPopup(item) {
   var navUrl = 'https://www.google.com/maps/dir/?api=1&destination='
     + encodeURIComponent(item.lat + ',' + item.lng)
     + '&travelmode=driving';
-  var html = '<div class="popup-title">' + (item.order) + '. ' + (item.name || '配送先') + '</div>'
-    + '<div class="popup-addr">' + item.address + '</div>'
-    + '<div class="popup-order">配達順: ' + item.order + ' / ' + deliveryData.length + '</div>'
+  var html = '<div class="popup-addr">' + item.address + '</div>'
     + '<a class="popup-nav" href="' + navUrl + '" target="_blank">🧭 Googleナビ開始</a>';
   return html;
 }
@@ -313,12 +311,8 @@ async function initMap() {
     var item = deliveryData[i];
     if (!item.lat || !item.lng) continue;
 
-    var color = 'red';
-    if (item.status === 'done') color = 'green';
-    if (item.status === 'next') color = 'blue';
-
     var marker = L.marker([item.lat, item.lng], {
-      icon: createPinIcon(item.order, color)
+      icon: createPinIcon()
     }).addTo(map);
 
     marker.bindPopup(buildPopup(item), { maxWidth: 260 });
