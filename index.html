@@ -3460,8 +3460,8 @@
       return baseUrl + '&markers=' + encodeURIComponent(markersParam);
     }
 
-    // ルートの住所リストからマップ画像URLを生成
-    async function buildRouteMapUrl(routeCode) {
+    // ルートの住所リストからマップ画像URLと座標を生成
+    async function buildRouteMapData(routeCode) {
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) return null;
       // inMemoryAddrMasterから座標取得（fetchなし）
@@ -3473,7 +3473,7 @@
         }
       }
       if (coords.length === 0) return null;
-      return buildStaticMapUrl(coords);
+      return { url: buildStaticMapUrl(coords), coords: coords };
     }
 
     // テスト送信（管理者に1ルート分のテキスト+マップ画像を送信）
@@ -3521,16 +3521,54 @@
       try {
         // マップ画像URLを生成
         var mapUrl = null;
+        var coords_for_map = null;
+        console.log('テスト送信 routeCode:', route.routeCode, 'cycleData件数:', routeAddresses ? routeAddresses.length : 0, 'inMemoryAddrMaster件数:', Object.keys(inMemoryAddrMaster).length);
         if (routeAddresses && routeAddresses.length > 0) {
-          mapUrl = await buildRouteMapUrl(route.routeCode);
+          var mapData = await buildRouteMapData(route.routeCode);
+          if (mapData) {
+            mapUrl = mapData.url;
+            coords_for_map = mapData.coords;
+          }
+          console.log('mapUrl:', mapUrl ? mapUrl.substring(0, 100) : 'null', 'coords:', coords_for_map ? coords_for_map.length : 0);
+        } else {
+          console.log('cycleDataなし。CYCLEファイルを先に読み込んでください');
         }
 
         var messages = [{ type: 'text', text: '【テスト送信】\n' + message }];
-        if (mapUrl) {
+        if (mapUrl && coords_for_map && coords_for_map.length > 0) {
+          // Flex Messageでマップ画像+タップでGoogleMaps表示
+          var centerLat = 0, centerLng = 0;
+          for (var ci = 0; ci < coords_for_map.length; ci++) {
+            centerLat += coords_for_map[ci].lat;
+            centerLng += coords_for_map[ci].lng;
+          }
+          centerLat /= coords_for_map.length;
+          centerLng /= coords_for_map.length;
+          var gmapUrl = 'https://www.google.com/maps/@' + centerLat + ',' + centerLng + ',13z';
           messages.push({
-            type: 'image',
-            originalContentUrl: mapUrl,
-            previewImageUrl: mapUrl
+            type: 'flex',
+            altText: '配送エリアマップ',
+            contents: {
+              type: 'bubble',
+              hero: {
+                type: 'image',
+                url: mapUrl,
+                size: 'full',
+                aspectRatio: '3:2',
+                aspectMode: 'cover',
+                action: { type: 'uri', label: 'Google Mapsで開く', uri: gmapUrl }
+              },
+              footer: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [{
+                  type: 'button',
+                  action: { type: 'uri', label: '📍 Google Mapsで開く', uri: gmapUrl },
+                  style: 'primary',
+                  color: '#4285F4'
+                }]
+              }
+            }
           });
         }
 
@@ -3662,10 +3700,42 @@
 
         try {
           var lineMessages = [{ type: 'text', text: message }];
-          // マップ画像を追加
-          var mapUrl = await buildRouteMapUrl(route.routeCode);
-          if (mapUrl) {
-            lineMessages.push({ type: 'image', originalContentUrl: mapUrl, previewImageUrl: mapUrl });
+          // マップ画像を追加（Flex Message + Google Mapsリンク）
+          var mapData = await buildRouteMapData(route.routeCode);
+          if (mapData && mapData.coords.length > 0) {
+            var cLat = 0, cLng = 0;
+            for (var ci = 0; ci < mapData.coords.length; ci++) {
+              cLat += mapData.coords[ci].lat;
+              cLng += mapData.coords[ci].lng;
+            }
+            cLat /= mapData.coords.length;
+            cLng /= mapData.coords.length;
+            var gmapLink = 'https://www.google.com/maps/@' + cLat + ',' + cLng + ',13z';
+            lineMessages.push({
+              type: 'flex',
+              altText: '配送エリアマップ',
+              contents: {
+                type: 'bubble',
+                hero: {
+                  type: 'image',
+                  url: mapData.url,
+                  size: 'full',
+                  aspectRatio: '3:2',
+                  aspectMode: 'cover',
+                  action: { type: 'uri', label: 'Google Mapsで開く', uri: gmapLink }
+                },
+                footer: {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: [{
+                    type: 'button',
+                    action: { type: 'uri', label: '📍 Google Mapsで開く', uri: gmapLink },
+                    style: 'primary',
+                    color: '#4285F4'
+                  }]
+                }
+              }
+            });
           }
           const { ok, status, data } = await pushViaProxy(userId, lineMessages);
           if (ok) { sent++; } else { failed++; console.error('Driver push failed:', status, data); }
