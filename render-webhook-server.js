@@ -169,6 +169,24 @@ app.get('/geocode', async (req, res) => {
   }
 });
 
+// ルートデータ一時保存（LINE URL短縮用）
+var routeDataStore = {};
+app.post('/route-data', function(req, res) {
+  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  routeDataStore[id] = { data: req.body, created: Date.now() };
+  // 1時間後に自動削除
+  setTimeout(function() { delete routeDataStore[id]; }, 3600000);
+  res.json({ status: 'ok', id: id });
+});
+
+app.get('/route-data/:id', function(req, res) {
+  var entry = routeDataStore[req.params.id];
+  if (!entry) {
+    return res.status(404).json({ status: 'error', message: 'not found or expired' });
+  }
+  res.json({ status: 'ok', data: entry.data });
+});
+
 // 住所マスターGASプロキシ（CORS回避）
 
 // Static Maps画像プロキシ（LINE送信用）
@@ -276,8 +294,8 @@ app.post('/proxy', async (req, res) => {
     log('LINE push success:', target, response.status);
     res.json({ status: 'ok', lineStatus: response.status });
   } catch (err) {
-    log('Proxy error:', err.response?.data || err.message);
-    res.status(502).json({ status: 'error', lineBody: err.response?.data, message: err.message });
+    log('Proxy error:', JSON.stringify(err.response && err.response.data ? err.response.data : err.message, null, 2));
+    res.status(502).json({ status: 'error', lineBody: err.response && err.response.data ? err.response.data : null, message: err.message });
   }
 });
 
