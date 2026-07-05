@@ -5027,6 +5027,7 @@
       var fail = 0;
       var updatedCoords = {};
       var BATCH_SIZE = 50;
+      var failedAddrs = [];
 
       function processNext() {
         if (done >= total) {
@@ -5034,10 +5035,13 @@
           var remaining = Object.keys(updatedCoords);
           var p = remaining.length > 0 ? batchUpdateCoordsToSheet(updatedCoords) : Promise.resolve();
           p.then(function() {
-            batchGeocodeRunning = false;
-            refreshAddrMaster();
-            if (btn) btn.disabled = false;
-            if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+            updatedCoords = {};
+            if (failedAddrs.length > 0) {
+              if (progressText) progressText.textContent = '再試行中... ' + failedAddrs.length + '件';
+              retryFailed(0);
+            } else {
+              finishGeocode();
+            }
           });
           return;
         }
@@ -5052,6 +5056,7 @@
             success++;
           } else {
             fail++;
+            failedAddrs.push(addr);
           }
           done++;
           // BATCH_SIZE件ごとにまとめて保存
@@ -5066,6 +5071,44 @@
           }
         });
       }
+
+      function retryFailed(idx) {
+        if (idx >= failedAddrs.length) {
+          // 再試行の残りを保存
+          var remaining = Object.keys(updatedCoords);
+          var p = remaining.length > 0 ? batchUpdateCoordsToSheet(updatedCoords) : Promise.resolve();
+          p.then(function() {
+            finishGeocode();
+          });
+          return;
+        }
+        var addr = failedAddrs[idx];
+        if (progressText) progressText.textContent = '再試行 ' + (idx + 1) + ' / ' + failedAddrs.length + ' (成功:' + success + ')';
+        geocodeWithProxy(addr).then(function(coord) {
+          if (coord) {
+            updatedCoords[addr] = coord;
+            success++;
+            fail--;
+          }
+          if (Object.keys(updatedCoords).length >= BATCH_SIZE) {
+            var batch = updatedCoords;
+            updatedCoords = {};
+            batchUpdateCoordsToSheet(batch).then(function() {
+              setTimeout(function() { retryFailed(idx + 1); }, 1000);
+            });
+          } else {
+            setTimeout(function() { retryFailed(idx + 1); }, 1000);
+          }
+        });
+      }
+
+      function finishGeocode() {
+        batchGeocodeRunning = false;
+        refreshAddrMaster();
+        if (btn) btn.disabled = false;
+        if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+      }
+
       processNext();
     }
 
