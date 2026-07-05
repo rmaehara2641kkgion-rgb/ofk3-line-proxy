@@ -3464,6 +3464,11 @@
     async function buildRouteMapData(routeCode) {
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) return null;
+      // inMemoryAddrMasterが空なら自動取得
+      if (Object.keys(inMemoryAddrMaster).length === 0) {
+        console.log('inMemoryAddrMaster空 → 自動読み込み中...');
+        await loadAddrMasterFromSheet();
+      }
       // inMemoryAddrMasterから座標取得（fetchなし）
       var coords = [];
       for (var i = 0; i < addresses.length; i++) {
