@@ -5296,6 +5296,13 @@
       }).join('');
 
       var firstMsg = buildBillingMessage(selected[0]);
+      var firstPdfInfo = billingPdfMap[selected[0].name]
+        ? '<div class="mt-3 p-3 bg-blue-50 rounded-lg">'
+          + '<div class="flex items-center gap-2 mb-2"><span class="text-sm font-bold">📎 添付PDF</span></div>'
+          + '<p class="text-xs text-ink">' + billingPdfMap[selected[0].name].filename + '</p>'
+          + '<a href="#" onclick="previewPdfFile(\'' + selected[0].name.replace(/'/g, "\\'") + '\'); return false;" class="text-xs text-blue-600 underline cursor-pointer">PDFを確認する</a>'
+          + '</div>'
+        : '<div class="mt-3 p-2 bg-gray-50 rounded text-xs text-ink-lighter text-center">📎 PDF添付なし</div>';
 
       modal.innerHTML =
         '<div class="bg-white rounded-lg shadow-xl w-full max-w-lg mx-auto" style="max-height:90vh;display:flex;flex-direction:column">' +
@@ -5305,7 +5312,8 @@
           '</div>' +
           '<div class="p-3 border-b border-border overflow-x-auto"><div class="flex gap-2" id="bp-tabs">' + tabsHtml + '</div></div>' +
           '<div class="p-4 flex-1 overflow-y-auto">' +
-            '<div id="bp-message" class="bg-green-50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed" style="max-height:60vh;overflow-y:auto">' + escapeHtmlBilling(firstMsg) + '</div>' +
+            '<div id="bp-message" class="bg-green-50 rounded-lg p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed" style="max-height:45vh;overflow-y:auto">' + escapeHtmlBilling(firstMsg) + '</div>' +
+            '<div id="bp-pdf-info">' + firstPdfInfo + '</div>' +
           '</div>' +
           '<div class="p-3 border-t border-border flex justify-end gap-2">' +
             '<span class="text-xs text-ink-lighter self-center mr-auto">💡 このメッセージがLINEで送信されます</span>' +
@@ -5322,12 +5330,36 @@
       if (!data || !data[index]) return;
       var msg = buildBillingMessage(data[index]);
       document.getElementById('bp-message').textContent = msg;
+
+      // PDF添付情報更新
+      var pdfInfoEl = document.getElementById('bp-pdf-info');
+      if (pdfInfoEl) {
+        var dName = data[index].name;
+        if (billingPdfMap[dName]) {
+          pdfInfoEl.innerHTML = '<div class="mt-3 p-3 bg-blue-50 rounded-lg">'
+            + '<div class="flex items-center gap-2 mb-2"><span class="text-sm font-bold">📎 添付PDF</span></div>'
+            + '<p class="text-xs text-ink">' + billingPdfMap[dName].filename + '</p>'
+            + '<a href="#" onclick="previewPdfFile(\'' + dName.replace(/'/g, "\\'") + '\'); return false;" class="text-xs text-blue-600 underline cursor-pointer">PDFを確認する</a>'
+            + '</div>';
+        } else {
+          pdfInfoEl.innerHTML = '<div class="mt-3 p-2 bg-gray-50 rounded text-xs text-ink-lighter text-center">📎 PDF添付なし</div>';
+        }
+      }
+
       var tabs = document.getElementById('bp-tabs').children;
       for (var i = 0; i < tabs.length; i++) {
         tabs[i].className = i === index
           ? 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-blue-500 text-white'
           : 'text-xs px-3 py-1.5 rounded whitespace-nowrap cursor-pointer bg-gray-100 text-gray-600 hover:bg-gray-200';
       }
+    }
+
+    function previewPdfFile(name) {
+      var pdf = billingPdfMap[name];
+      if (!pdf) return;
+      var blob = new Blob([Uint8Array.from(atob(pdf.base64), function(c) { return c.charCodeAt(0); })], { type: 'application/pdf' });
+      var url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
     }
 
     async function sendAllBillingLine() {
