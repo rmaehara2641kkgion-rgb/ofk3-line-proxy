@@ -4155,9 +4155,13 @@
 
       // 1. ドライバーに個別送信（選択した着車時間帯のみ、送信済みスキップ）
       var filteredRoutes = getFilteredRoutes();
+      var adminIdRaw = lineSettings.adminLineId || '';
+      var adminIdList = adminIdRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
       for (const route of filteredRoutes) {
         if (!route.driverName) continue;
-        if (lineSentDrivers[route.driverName]) { skipped++; continue; }
+        // 管理者は毎回送信（スキップしない）
+        var isAdmin = adminIdList.indexOf(lineMapping[route.driverName]) >= 0;
+        if (!isAdmin && lineSentDrivers[route.driverName]) { skipped++; continue; }
         const userId = lineMapping[route.driverName];
         if (!userId) { skipped++; continue; }
 
