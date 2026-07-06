@@ -5,6 +5,14 @@ const path = require('path');
 
 app.use(express.json({ limit: '10mb' }));
 
+// PDF一時保存用
+var pdfStore = {};
+
+// body-parserでrawも受け取れるようにする
+var multer;
+try { multer = require('multer'); } catch(e) { multer = null; }
+var pdfUpload = multer ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }) : null;
+
 // CORS対応
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -266,6 +274,33 @@ app.post('/addr-master', async (req, res) => {
       data: e.response && e.response.data ? e.response.data : null
     });
   }
+});
+
+// PDF一時アップロード（請求書送付用）
+app.post('/pdf-upload', function(req, res) {
+  // base64で受け取る方式
+  var filename = req.body.filename || 'document.pdf';
+  var base64 = req.body.data; // base64エンコードされたPDFデータ
+  if (!base64) {
+    return res.status(400).json({ status: 'error', message: 'data (base64) required' });
+  }
+  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  pdfStore[id] = { data: Buffer.from(base64, 'base64'), filename: filename, created: Date.now() };
+  // 24時間後に自動削除
+  setTimeout(function() { delete pdfStore[id]; }, 86400000);
+  var downloadUrl = (req.protocol === 'https' ? 'https' : 'http') + '://' + req.get('host') + '/pdf/' + id;
+  log('PDF uploaded:', filename, 'id:', id);
+  res.json({ status: 'ok', id: id, url: downloadUrl });
+});
+
+app.get('/pdf/:id', function(req, res) {
+  var entry = pdfStore[req.params.id];
+  if (!entry) {
+    return res.status(404).send('PDF not found or expired');
+  }
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(entry.filename) + '"');
+  res.send(entry.data);
 });
 
 // LINE proxy（フロントエンドからの送信）
