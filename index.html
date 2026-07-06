@@ -4977,8 +4977,8 @@
         var mileage = parseNum(row[14]);
         var deduction = parseNum(row[15]);
         var subtotal = parseNum(row[16]);
-        var tax = parseNum(row[17]);
-        var sysUsageFee = parseNum(row[18]);
+        var sysUsageFee = parseNum(row[17]);
+        var tax = parseNum(row[18]);
         var total = parseNum(row[19]);
 
         billingData.push({
@@ -5073,8 +5073,25 @@
       if (lineMapping[driverKey]) return lineMapping[driverKey];
       if (lineMapping[name]) return lineMapping[name];
       var cleanName = name.replace(/[\s　]/g, '');
+      // lineMapping のキーで空白除去マッチ
       for (var key in lineMapping) {
         if (key.replace(/[\s　]/g, '') === cleanName) return lineMapping[key];
+      }
+      // driverJapaneseNames（日本語名）から逆引き
+      for (var dKey in driverJapaneseNames) {
+        var jpName = (driverJapaneseNames[dKey] || '').replace(/[\s　]/g, '');
+        if (jpName === cleanName && lineMapping[dKey]) return lineMapping[dKey];
+      }
+      // transportIDs（配送ID）で照合
+      for (var tKey in transportIDs) {
+        if (transportIDs[tKey] === driverKey && lineMapping[tKey]) return lineMapping[tKey];
+      }
+      // 部分一致（姓のみ一致など）
+      for (var mKey in lineMapping) {
+        var cleanKey = mKey.replace(/[\s　]/g, '');
+        if (cleanName.length >= 2 && (cleanKey.indexOf(cleanName) >= 0 || cleanName.indexOf(cleanKey) >= 0)) {
+          return lineMapping[mKey];
+        }
       }
       return null;
     }
