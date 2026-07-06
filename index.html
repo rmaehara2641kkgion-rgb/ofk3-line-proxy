@@ -4257,8 +4257,7 @@
       }
 
       // 2. 管理者に全体一覧を送信（テキスト形式 — サイズ制限回避）
-      const adminIdRaw = lineSettings.adminLineId || '';
-      const adminIds = adminIdRaw.split(',').map(s => s.trim()).filter(Boolean);
+      var adminIds = adminIdList;
       let adminSent = 0;
       let adminFailed = 0;
       if (adminIds.length > 0) {
