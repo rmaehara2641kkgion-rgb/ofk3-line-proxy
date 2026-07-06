@@ -3744,10 +3744,23 @@
     function buildStaticMapUrl(coords) {
       if (!coords || coords.length === 0) return null;
       var baseUrl = 'https://ofk3-line-proxy-1.onrender.com/static-map?size=600x400';
-      var markerParts = [];
-      for (var i = 0; i < coords.length; i++) {
-        markerParts.push(coords[i].lat + ',' + coords[i].lng);
+      // Static Maps URLが長すぎるとLINE APIが400を返すため、最大30件に間引く
+      var sampled = coords;
+      if (coords.length > 30) {
+        sampled = [];
+        var step = coords.length / 30;
+        for (var s = 0; s < 30; s++) {
+          sampled.push(coords[Math.floor(s * step)]);
+        }
       }
+      var markerParts = [];
+      for (var i = 0; i < sampled.length; i++) {
+        if (typeof sampled[i].lat === 'number' && typeof sampled[i].lng === 'number'
+            && !isNaN(sampled[i].lat) && !isNaN(sampled[i].lng)) {
+          markerParts.push(sampled[i].lat + ',' + sampled[i].lng);
+        }
+      }
+      if (markerParts.length === 0) return null;
       // Static Maps APIのマーカーは1つのmarkersパラメータにpipe区切りで渡す
       var markersParam = 'color:red|size:small|' + markerParts.join('|');
       return baseUrl + '&markers=' + encodeURIComponent(markersParam);
@@ -4085,6 +4098,7 @@
             } catch (e) { console.error('route-data save error:', e); }
             if (rmUrl) {
               var previewUrl = buildStaticMapUrl(routeDD.map(function(d) { return { lat: d.lat, lng: d.lng }; }));
+              if (previewUrl) {
               lineMessages.push({
               type: 'flex',
               altText: '📍 配送マップ - タップで地図を開く',
