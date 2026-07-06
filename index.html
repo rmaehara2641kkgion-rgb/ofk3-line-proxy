@@ -664,9 +664,29 @@
           </div>
         </div>
 
-        <div id="billing-actions" class="hidden mb-4 flex gap-2">
-          <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
-          <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
+        <div id="billing-actions" class="hidden mb-4 space-y-3">
+          <div class="flex gap-2 flex-wrap">
+            <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
+            <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
+          </div>
+
+          <!-- PDF一括アップロード -->
+          <div class="card p-4">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-sm font-bold">📎 請求書PDF添付</h4>
+              <span id="pdf-match-count" class="text-xs text-ink-lighter"></span>
+            </div>
+            <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+              onclick="document.getElementById('pdf-files-input').click()"
+              ondragover="event.preventDefault(); this.classList.add('border-blue-400','bg-blue-50')"
+              ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
+              ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handlePdfUpload(event.dataTransfer.files)">
+              <p class="text-sm text-ink-lighter">請求書PDFをまとめてドラッグ＆ドロップ</p>
+              <p class="text-xs text-ink-lighter mt-1">ファイル名の【】内でドライバーを自動照合</p>
+              <input type="file" accept=".pdf" multiple onchange="handlePdfUpload(this.files)" class="hidden" id="pdf-files-input">
+            </div>
+            <div id="pdf-match-list" class="mt-3 space-y-1 max-h-48 overflow-y-auto"></div>
+          </div>
         </div>
 
         <div id="billing-send-log" class="hidden mb-4 card p-3">
@@ -5096,6 +5116,132 @@
       return null;
     }
 
+    // PDF請求書マッチング
+    var billingPdfMap = {}; // { driverName: { filename, base64, uploadedUrl } }
+
+    function handlePdfUpload(files) {
+      if (!files || files.length === 0) return;
+      var processed = 0;
+      var matched = 0;
+
+      for (var i = 0; i < files.length; i++) {
+        (function(file) {
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            processed++;
+            var base64 = e.target.result.split(',')[1]; // remove data:...;base64, prefix
+            var filename = file.name;
+
+            // ファイル名から名前を抽出: 【○○DA】 or 【○○】
+            var nameMatch = filename.match(/【(.+?)(?:DA|ＤＡ)?】/);
+            var extractedName = nameMatch ? nameMatch[1].replace(/[\s　]/g, '') : '';
+
+            if (extractedName) {
+              // billingDataから照合
+              var matchedDriver = findBillingDriverByName(extractedName);
+              if (matchedDriver) {
+                billingPdfMap[matchedDriver.name] = {
+                  filename: filename,
+                  base64: base64,
+                  uploadedUrl: null
+                };
+                matched++;
+              }
+            }
+
+            if (processed === files.length) {
+              renderPdfMatchList();
+            }
+          };
+          reader.readAsDataURL(file);
+        })(files[i]);
+      }
+    }
+
+    function findBillingDriverByName(name) {
+      if (!billingData) return null;
+      var clean = name.replace(/[\s　]/g, '');
+      for (var i = 0; i < billingData.length; i++) {
+        var d = billingData[i];
+        var dClean = d.name.replace(/[\s　]/g, '');
+        if (dClean === clean) return d;
+        if (clean.length >= 2 && (dClean.indexOf(clean) >= 0 || clean.indexOf(dClean) >= 0)) return d;
+      }
+      // driverJapaneseNamesからも探す
+      for (var key in driverJapaneseNames) {
+        var jpClean = (driverJapaneseNames[key] || '').replace(/[\s　]/g, '');
+        if (jpClean === clean) {
+          // このkeyに対応するbillingDataを探す
+          for (var j = 0; j < billingData.length; j++) {
+            if (billingData[j].name.replace(/[\s　]/g, '') === key.replace(/[\s　]/g, '')) return billingData[j];
+            if (billingData[j].driverKey === key) return billingData[j];
+          }
+        }
+      }
+      return null;
+    }
+
+    function renderPdfMatchList() {
+      var listEl = document.getElementById('pdf-match-list');
+      var countEl = document.getElementById('pdf-match-count');
+      if (!listEl) return;
+
+      var keys = Object.keys(billingPdfMap);
+      if (keys.length === 0) {
+        listEl.innerHTML = '';
+        if (countEl) countEl.textContent = '';
+        return;
+      }
+
+      var html = '';
+      keys.forEach(function(name) {
+        var pdf = billingPdfMap[name];
+        var hasLine = false;
+        for (var i = 0; i < billingData.length; i++) {
+          if (billingData[i].name === name) {
+            var uid = findLineUserId(billingData[i].driverKey, name);
+            hasLine = uid && uid.indexOf('U') === 0;
+            break;
+          }
+        }
+        var lineIcon = hasLine
+          ? '<span class="text-green-600 text-xs">✅</span>'
+          : '<span class="text-red-500 text-xs">⚠ LINE未登録</span>';
+        var uploadIcon = pdf.uploadedUrl
+          ? '<span class="text-green-600 text-xs">📤済</span>'
+          : '<span class="text-gray-400 text-xs">未送信</span>';
+        html += '<div class="flex items-center gap-2 text-xs py-1 border-b border-border">'
+          + '<span class="font-medium">' + name + '</span>'
+          + '<span class="text-ink-lighter truncate flex-1" title="' + pdf.filename + '">' + pdf.filename + '</span>'
+          + lineIcon + ' ' + uploadIcon
+          + '<button onclick="delete billingPdfMap[\'' + name.replace(/'/g, "\\'") + '\']; renderPdfMatchList();" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>'
+          + '</div>';
+      });
+      listEl.innerHTML = html;
+      if (countEl) countEl.textContent = keys.length + '件マッチ';
+    }
+
+    async function uploadPdfToServer(name) {
+      var pdf = billingPdfMap[name];
+      if (!pdf || pdf.uploadedUrl) return pdf ? pdf.uploadedUrl : null;
+
+      try {
+        var resp = await fetch('/pdf-upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: pdf.filename, data: pdf.base64 })
+        });
+        var result = await resp.json();
+        if (result.status === 'ok') {
+          pdf.uploadedUrl = result.url;
+          return result.url;
+        }
+      } catch (e) {
+        console.error('PDF upload error:', e);
+      }
+      return null;
+    }
+
     function buildBillingMessage(d) {
       var now = new Date();
       var monthStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月度';
@@ -5211,19 +5357,31 @@
         var userId = findLineUserId(d.driverKey, d.name);
         var msg = buildBillingMessage(d);
 
+        // PDF添付がある場合はアップロードしてURLを追加
+        var pdfUrl = null;
+        if (billingPdfMap[d.name]) {
+          pdfUrl = await uploadPdfToServer(d.name);
+          if (pdfUrl) {
+            msg += '\n\n📎 請求書PDF:\n' + pdfUrl;
+          }
+        }
+
+        var lineMessages = [{ type: 'text', text: msg }];
+
         try {
           await fetch(proxyUrl, {
             method: 'POST',
             mode: 'cors',
             credentials: 'omit',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ to: userId, messages: [{ type: 'text', text: msg }] })
+            body: JSON.stringify({ to: userId, messages: lineMessages })
           });
           billingSent[d.name] = true;
           successCount++;
+          var pdfNote = pdfUrl ? ' +PDF' : '';
           var entry = document.createElement('div');
           entry.className = 'text-xs py-1 text-green-600';
-          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + ' 送信完了';
+          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + pdfNote + ' 送信完了';
           logEl.insertBefore(entry, logEl.firstChild);
         } catch(e) {
           var entry2 = document.createElement('div');
