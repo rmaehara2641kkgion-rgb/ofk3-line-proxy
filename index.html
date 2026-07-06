@@ -1718,6 +1718,15 @@
     }
 
     // より精密な判定（❽=880 vs b2=900）
+    function normalizeShiftCode(code) {
+      if (!code) return '';
+      return String(code).trim()
+        .replace(/ｂ/g, 'b')
+        .replace(/Ｃ/g, 'C')
+        .replace(/０/g, '0').replace(/１/g, '1').replace(/２/g, '2').replace(/３/g, '3')
+        .replace(/[○◯〇Ｏ]/g, '〇');
+    }
+
     function guessShiftCodePrecise(minutes) {
       if (minutes >= 530 && minutes <= 550) return 'bike';
       if (minutes >= 640 && minutes <= 680) return '\u3007';
@@ -4562,11 +4571,12 @@
         var shiftCode = String(row[dateCol] || '').trim();
         if (!shiftCode || shiftCode === '休') continue;
 
-        // 全角→半角正規化
+        // 全角→半角正規化 + 丸記号の統一
         var normalizedCode = shiftCode
           .replace(/ｂ/g, 'b')
           .replace(/Ｃ/g, 'C')
-          .replace(/０/g, '0').replace(/１/g, '1').replace(/２/g, '2').replace(/３/g, '3');
+          .replace(/０/g, '0').replace(/１/g, '1').replace(/２/g, '2').replace(/３/g, '3')
+          .replace(/[○◯〇Ｏ]/g, '〇');
 
         // 所属会社も保存
         if (company && !driverDepartments[name]) {
@@ -4636,11 +4646,11 @@
           }
         }
 
-        // 差異判定
+        // 差異判定（正規化して比較）
         var tenkoShift = tenko ? (tenko.shiftCode || '') : '';
         var masterShift = master ? master.shiftCode : '';
         var hasMismatch = false;
-        if (shiftMasterData.length > 0 && tenkoShift && masterShift && tenkoShift !== masterShift) {
+        if (shiftMasterData.length > 0 && tenkoShift && masterShift && normalizeShiftCode(tenkoShift) !== normalizeShiftCode(masterShift)) {
           hasMismatch = true;
           mismatchCount++;
         }
