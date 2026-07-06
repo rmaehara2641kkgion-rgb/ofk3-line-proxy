@@ -855,6 +855,13 @@
         <h3 class="text-base font-bold mb-2">配送計画を確定して通知</h3>
         <p class="text-sm text-ink-light mb-4">以下の内容でドライバーにLINE通知を送信します。</p>
 
+        <!-- 着車時間帯フィルタ -->
+        <div class="mb-4">
+          <label class="text-xs font-bold text-ink mb-2 block">着車時間帯（複数選択可）</label>
+          <div id="departure-filter-buttons" class="flex flex-wrap gap-2"></div>
+          <p class="text-xs text-ink-lighter mt-1">選択した時間帯のドライバーのみ配信します。送信済みのドライバーは自動スキップされます。</p>
+        </div>
+
         <!-- Notification Mode (Messaging APIのみ) -->
         <div class="flex gap-2 mb-4" style="display:none">
           <button class="text-xs px-3 py-1.5 rounded border transition-all" id="mode-notify" onclick="setNotifyMode('notify')">グループ一括（Notify）</button>
@@ -875,6 +882,7 @@
         </div>
 
         <div class="flex gap-2 justify-end">
+          <button class="bg-orange-500 text-white text-sm px-4 py-2 rounded hover:bg-orange-600" onclick="resetAndResendAll()">🔄 全員に再送</button>
           <button class="bg-blue-500 text-white text-sm px-4 py-2 rounded hover:bg-blue-600" id="btn-test-line" onclick="sendTestLineMessage()">🧪 テスト送信（自分に）</button>
           <button class="btn-secondary text-sm px-4 py-2 rounded" onclick="closeModal()">キャンセル</button>
           <button class="btn-primary text-sm px-4 py-2 rounded" id="send-line-btn" onclick="sendLineNotification()">通知を送信</button>
@@ -3745,6 +3753,7 @@
 
       // Set default mode and preview
       setNotifyMode('messaging');
+      renderDepartureFilterButtons();
 
       document.getElementById('line-modal').classList.remove('hidden');
     }
@@ -3980,6 +3989,95 @@
       if (btn) { btn.disabled = false; btn.textContent = '🧪 テスト送信（自分に）'; }
     }
 
+    // 送信済みドライバー追跡（セッション内）
+    var lineSentDrivers = {};
+
+    function getUniqueDepartures() {
+      var deps = {};
+      assignmentData.forEach(function(r) {
+        if (r.driverName && r.departure) deps[r.departure] = true;
+      });
+      return Object.keys(deps).sort();
+    }
+
+    var selectedDepartures = {};
+
+    function renderDepartureFilterButtons() {
+      var container = document.getElementById('departure-filter-buttons');
+      if (!container) return;
+      var deps = getUniqueDepartures();
+      var html = '';
+      html += '<button type="button" class="text-xs px-3 py-1.5 rounded border transition-all '
+        + (Object.keys(selectedDepartures).length === 0 ? 'bg-accent text-white border-accent' : 'border-border text-ink-light')
+        + '" onclick="selectAllDepartures()">全て</button>';
+      deps.forEach(function(dep) {
+        var sentCount = 0;
+        var totalCount = 0;
+        assignmentData.forEach(function(r) {
+          if (r.driverName && r.departure === dep) {
+            totalCount++;
+            if (lineSentDrivers[r.driverName]) sentCount++;
+          }
+        });
+        var isSelected = !!selectedDepartures[dep];
+        var badge = sentCount > 0 ? ' (' + sentCount + '/' + totalCount + '済)' : ' (' + totalCount + '人)';
+        html += '<button type="button" class="text-xs px-3 py-1.5 rounded border transition-all '
+          + (isSelected ? 'bg-accent text-white border-accent' : 'border-border text-ink-light')
+          + '" onclick="toggleDeparture(\'' + dep + '\')">'
+          + dep + badge + '</button>';
+      });
+      container.innerHTML = html;
+      updateNotificationPreview();
+    }
+
+    function toggleDeparture(dep) {
+      if (selectedDepartures[dep]) {
+        delete selectedDepartures[dep];
+      } else {
+        selectedDepartures[dep] = true;
+      }
+      renderDepartureFilterButtons();
+    }
+
+    function selectAllDepartures() {
+      selectedDepartures = {};
+      renderDepartureFilterButtons();
+    }
+
+    function getFilteredRoutes() {
+      var depKeys = Object.keys(selectedDepartures);
+      return assignmentData.filter(function(r) {
+        if (!r.driverName) return false;
+        if (depKeys.length === 0) return true; // 全て
+        return !!selectedDepartures[r.departure];
+      });
+    }
+
+    function updateNotificationPreview() {
+      var previewEl = document.getElementById('notification-preview');
+      if (!previewEl) return;
+      var routes = getFilteredRoutes();
+      var html = '';
+      routes.forEach(function(r) {
+        var sent = lineSentDrivers[r.driverName];
+        var statusIcon = sent ? '<span style="color:#9CA3AF;" title="送信済み">✓</span> ' : '';
+        html += statusIcon + r.driverName + ' → ' + r.routeCode + ' / ' + r.totalDeliveries + '個 / 終了 ' + r.predictedEnd;
+        if (sent) html += ' <span style="color:#9CA3AF;font-size:10px;">(送信済み・スキップ)</span>';
+        html += '\n';
+      });
+      var unsent = routes.filter(function(r) { return !lineSentDrivers[r.driverName]; });
+      html += '\n--- ' + unsent.length + '人に送信 / ' + (routes.length - unsent.length) + '人スキップ（送信済み） ---';
+      previewEl.textContent = html;
+    }
+
+    function resetAndResendAll() {
+      if (!confirm('送信済み記録をリセットして全員に再送しますか？')) return;
+      lineSentDrivers = {};
+      selectedDepartures = {};
+      renderDepartureFilterButtons();
+      sendLineNotification();
+    }
+
     async function sendLineNotification() {
       if (notifyMode === 'notify') {
         await sendViaNotify();
@@ -4055,9 +4153,11 @@
         }
       }
 
-      // 1. ドライバーに個別送信（自分のコースと物量＋配送エリア情報を1通にまとめる）
-      for (const route of assignmentData) {
+      // 1. ドライバーに個別送信（選択した着車時間帯のみ、送信済みスキップ）
+      var filteredRoutes = getFilteredRoutes();
+      for (const route of filteredRoutes) {
         if (!route.driverName) continue;
+        if (lineSentDrivers[route.driverName]) { skipped++; continue; }
         const userId = lineMapping[route.driverName];
         if (!userId) { skipped++; continue; }
 
@@ -4145,7 +4245,7 @@
           }
           }
           const { ok, status, data } = await pushViaProxy(userId, lineMessages);
-          if (ok) { sent++; } else { failed++; console.error('Driver push failed:', status, data); }
+          if (ok) { sent++; lineSentDrivers[route.driverName] = true; } else { failed++; console.error('Driver push failed:', status, data); }
         } catch (e) {
           failed++;
           console.error('Driver push error:', e);
