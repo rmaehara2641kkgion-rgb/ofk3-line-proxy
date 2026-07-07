@@ -1400,11 +1400,17 @@
     function getDriverIconFallback(name, sizeClass) {
       var lid = lineMapping[name] || '';
       var initial = name ? name.charAt(0) : '?';
-      var bgColor = lid ? '#06C755' : '#CBD5E1';
-      var textColor = lid ? 'white' : '#64748B';
-      // sizeClassからピクセルを推定
-      var fontSize = sizeClass.indexOf('w-10') >= 0 ? '16px' : '12px';
-      return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:' + bgColor + ';color:' + textColor + ';font-size:' + fontSize + ';font-weight:bold;border:2px solid ' + (lid ? '#05A647' : '#94A3B8') + '">' + initial + '</div>';
+      if (lid) {
+        // LINE連携済み → LINEロゴ風アイコン（緑丸＋LINEマーク）
+        var sz = sizeClass.indexOf('w-10') >= 0 ? '40' : '32';
+        var fontSize = sizeClass.indexOf('w-10') >= 0 ? '11px' : '9px';
+        return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center relative" style="background:#06C755;border:2px solid #05A647">'
+          + '<svg viewBox="0 0 24 24" fill="white" style="width:60%;height:60%"><path d="M12 2C6.48 2 2 5.81 2 10.4c0 4.16 3.7 7.65 8.68 8.31.34.07.8.22.91.5.1.26.07.66.03.92l-.15.87c-.04.26-.2 1.01.89.55 1.08-.46 5.83-3.43 7.96-5.88C22.08 13.77 22 12.13 22 10.4 22 5.81 17.52 2 12 2z"/></svg>'
+          + '</div>';
+      }
+      // LINE未連携 → グレー丸にイニシャル
+      var fontSize2 = sizeClass.indexOf('w-10') >= 0 ? '16px' : '12px';
+      return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:#CBD5E1;color:#64748B;font-size:' + fontSize2 + ';font-weight:bold;border:2px solid #94A3B8">' + initial + '</div>';
     }
 
     // Initialize
