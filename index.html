@@ -5383,10 +5383,10 @@
 
       var routeCode = daNumberMap[da];
 
-      // 部分一致も試す（スキャナーがプレフィクス/サフィックス追加する場合）
+      // 部分一致：入力値がDA番号を完全に含む場合のみ（スキャナーがプレフィクス追加するケース）
       if (!routeCode) {
         for (var key in daNumberMap) {
-          if (key.indexOf(da) >= 0 || da.indexOf(key) >= 0) {
+          if (da.indexOf(key) >= 0 && key.length >= 6) {
             routeCode = daNumberMap[key];
             break;
           }
