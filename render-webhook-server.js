@@ -236,7 +236,12 @@ app.get('/addr-master', async (req, res) => {
     var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
     var url = ADDR_MASTER_GAS_URL + '?' + qs;
     console.log('addr-master GET:', url);
-    var response = await axios.get(url, { maxRedirects: 5 });
+    var response = await axios.get(url, { maxRedirects: 5, timeout: 30000 });
+    // GASがHTMLを返した場合のエラーハンドリング
+    if (typeof response.data === 'string' && response.data.indexOf('<!DOCTYPE') >= 0) {
+      console.error('addr-master GET: GAS returned HTML instead of JSON');
+      return res.status(502).json({ status: 'error', message: 'GAS returned HTML (possible error or auth issue)' });
+    }
     console.log('addr-master GET response:', JSON.stringify(response.data).substring(0, 200));
     res.json(response.data);
   } catch (e) {
