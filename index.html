@@ -620,9 +620,33 @@
             </table>
           </div>
         </div>
-      </div>
 
-      <!-- Billing Tab -->
+        <!-- 月次シフト集計 -->
+        <div class="card p-4 mt-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold">📊 月次シフト集計</h3>
+            <div class="flex gap-2 items-center">
+              <button onclick="changeAggMonth(-1)" class="text-xs px-2 py-1 rounded border border-border hover:bg-surface cursor-pointer">◀</button>
+              <span id="agg-month-label" class="text-sm font-medium min-w-24 text-center"></span>
+              <button onclick="changeAggMonth(1)" class="text-xs px-2 py-1 rounded border border-border hover:bg-surface cursor-pointer">▶</button>
+              <button onclick="exportShiftAggCsv()" class="btn-secondary text-xs px-3 py-1 rounded ml-2 cursor-pointer">CSV出力</button>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface" id="agg-header-row">
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">合計</th>
+                </tr>
+              </thead>
+              <tbody id="agg-table-body">
+                <tr><td colspan="20" class="text-center py-6 text-ink-lighter text-xs">点呼ログデータがありません</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div id="panel-billing" class="hidden">
         <div class="flex items-center justify-between mb-4">
           <div>
@@ -1180,7 +1204,7 @@
         renderMasterTable();
         refreshAllLineProfiles();
       }
-      if (tab === 'tenko-match') renderTenkoMatchTable();
+      if (tab === 'tenko-match') { renderTenkoMatchTable(); renderShiftAggregation(); }
       if (tab === 'billing') renderBillingTable();
     }
 
@@ -4913,6 +4937,146 @@
     }
 
     // 点呼ログエクスポート（CSV）
+    // ===== 月次シフト集計 =====
+    var aggMonth = new Date().getMonth(); // 0-11
+    var aggYear = new Date().getFullYear();
+
+    function changeAggMonth(delta) {
+      aggMonth += delta;
+      if (aggMonth > 11) { aggMonth = 0; aggYear++; }
+      if (aggMonth < 0) { aggMonth = 11; aggYear--; }
+      renderShiftAggregation();
+    }
+
+    function renderShiftAggregation() {
+      var label = document.getElementById('agg-month-label');
+      var headerRow = document.getElementById('agg-header-row');
+      var tbody = document.getElementById('agg-table-body');
+      if (!label || !tbody) return;
+
+      label.textContent = aggYear + '年' + (aggMonth + 1) + '月度';
+
+      // Filter tenkoLog for the selected month
+      var prefix = aggYear + '-' + String(aggMonth + 1).padStart(2, '0');
+      var monthLogs = tenkoLog.filter(function(log) {
+        return log.date && log.date.indexOf(prefix) === 0 && log.shiftCode;
+      });
+
+      if (monthLogs.length === 0) {
+        headerRow.innerHTML = '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>'
+          + '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">合計</th>';
+        tbody.innerHTML = '<tr><td colspan="20" class="text-center py-6 text-ink-lighter text-xs">この月の点呼ログデータがありません</td></tr>';
+        return;
+      }
+
+      // Collect all unique shift codes for this month
+      var shiftCodes = {};
+      monthLogs.forEach(function(log) {
+        var code = normalizeShiftCode(log.shiftCode);
+        if (code) shiftCodes[code] = true;
+      });
+      var codeList = Object.keys(shiftCodes).sort();
+
+      // Build header
+      var headerHtml = '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>';
+      codeList.forEach(function(code) {
+        headerHtml += '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">' + code + '</th>';
+      });
+      headerHtml += '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter font-bold">合計</th>';
+      headerRow.innerHTML = headerHtml;
+
+      // Aggregate by driver
+      var driverAgg = {};
+      monthLogs.forEach(function(log) {
+        var name = log.driverName;
+        var code = normalizeShiftCode(log.shiftCode);
+        if (!driverAgg[name]) {
+          driverAgg[name] = { total: 0 };
+          codeList.forEach(function(c) { driverAgg[name][c] = 0; });
+        }
+        driverAgg[name][code] = (driverAgg[name][code] || 0) + 1;
+        driverAgg[name].total++;
+      });
+
+      // Sort by total descending
+      var driverNames = Object.keys(driverAgg).sort(function(a, b) {
+        return driverAgg[b].total - driverAgg[a].total;
+      });
+
+      // Totals row
+      var colTotals = {};
+      codeList.forEach(function(c) { colTotals[c] = 0; });
+      var grandTotal = 0;
+
+      var rowsHtml = '';
+      driverNames.forEach(function(name) {
+        var agg = driverAgg[name];
+        rowsHtml += '<tr class="border-b border-border hover:bg-surface/50">';
+        rowsHtml += '<td class="px-3 py-2 font-medium text-sm">' + name + '</td>';
+        codeList.forEach(function(code) {
+          var count = agg[code] || 0;
+          colTotals[code] += count;
+          rowsHtml += '<td class="px-3 py-2 text-center text-sm">' + (count > 0 ? count : '<span class="text-ink-lighter">-</span>') + '</td>';
+        });
+        grandTotal += agg.total;
+        rowsHtml += '<td class="px-3 py-2 text-right font-bold text-sm">' + agg.total + '</td>';
+        rowsHtml += '</tr>';
+      });
+
+      // Footer totals row
+      rowsHtml += '<tr class="border-t-2 border-border bg-surface/80">';
+      rowsHtml += '<td class="px-3 py-2 font-bold text-xs text-ink-lighter">合計</td>';
+      codeList.forEach(function(code) {
+        rowsHtml += '<td class="px-3 py-2 text-center font-bold text-xs">' + colTotals[code] + '</td>';
+      });
+      rowsHtml += '<td class="px-3 py-2 text-right font-bold text-xs">' + grandTotal + '</td>';
+      rowsHtml += '</tr>';
+
+      tbody.innerHTML = rowsHtml;
+    }
+
+    function exportShiftAggCsv() {
+      var prefix = aggYear + '-' + String(aggMonth + 1).padStart(2, '0');
+      var monthLogs = tenkoLog.filter(function(log) {
+        return log.date && log.date.indexOf(prefix) === 0 && log.shiftCode;
+      });
+
+      if (monthLogs.length === 0) { alert('この月のデータがありません'); return; }
+
+      var shiftCodes = {};
+      monthLogs.forEach(function(log) {
+        var code = normalizeShiftCode(log.shiftCode);
+        if (code) shiftCodes[code] = true;
+      });
+      var codeList = Object.keys(shiftCodes).sort();
+
+      var driverAgg = {};
+      monthLogs.forEach(function(log) {
+        var name = log.driverName;
+        var code = normalizeShiftCode(log.shiftCode);
+        if (!driverAgg[name]) {
+          driverAgg[name] = { total: 0 };
+          codeList.forEach(function(c) { driverAgg[name][c] = 0; });
+        }
+        driverAgg[name][code] = (driverAgg[name][code] || 0) + 1;
+        driverAgg[name].total++;
+      });
+
+      var csv = '\uFEFF' + 'ドライバー,' + codeList.join(',') + ',合計\n';
+      Object.keys(driverAgg).sort(function(a, b) { return driverAgg[b].total - driverAgg[a].total; }).forEach(function(name) {
+        var agg = driverAgg[name];
+        csv += name;
+        codeList.forEach(function(code) { csv += ',' + (agg[code] || 0); });
+        csv += ',' + agg.total + '\n';
+      });
+
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = aggYear + '年' + (aggMonth + 1) + '月度_シフト集計.csv';
+      a.click();
+    }
+
     function exportTenkoLog() {
       if (tenkoLog.length === 0) { alert('点呼ログがありません'); return; }
       var header = '日付,ドライバー名,シフト,着車予定,点呼完了時間,免許証認証,メンター認証,臨時\n';
