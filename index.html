@@ -1134,6 +1134,7 @@
             <option value="gohai">誤配回収指示</option>
             <option value="seihaisou">正配送案内</option>
             <option value="gohai_seihaisou">誤配回収 + 正配送（2件セット）</option>
+            <option value="map_free">地図送信（住所自由入力）</option>
             <option value="custom">カスタム</option>
           </select>
         </div>
@@ -1156,7 +1157,7 @@
 
         <!-- 正配送住所 -->
         <div id="dm-seihaisou-section" class="hidden mb-3">
-          <label class="text-xs font-bold text-green-600 mb-1 block">✅ 正配送先住所</label>
+          <label id="dm-seihaisou-label" class="text-xs font-bold text-green-600 mb-1 block">✅ 正配送先住所</label>
           <input type="text" id="dm-seihaisou-addr" class="w-full border border-border rounded px-3 py-2 text-xs" placeholder="例: 福岡市早良区西新2-2-2" onchange="geocodeDmAddress('seihaisou')">
           <div id="dm-seihaisou-status" class="text-xs mt-1"></div>
           <div id="dm-seihaisou-preview" class="hidden mt-2">
@@ -5576,9 +5577,7 @@
         labelEl.className = 'text-sm text-red-500 mb-2';
       }
 
-      var avatarHtml = picUrl
-        ? '<img src="' + picUrl + '" class="w-10 h-10 rounded-full object-cover border-2 border-green-400" onerror="this.style.display=\'none\'">'
-        : '<div class="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-400 text-lg">👤</div>';
+      var avatarHtml = getDriverIcon(name, 'w-10 h-10');
 
       previewEl.innerHTML = '<div class="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">'
         + avatarHtml
@@ -5602,15 +5601,23 @@
       if (tmpl === 'gohai') {
         gohaiSec.classList.remove('hidden');
         msgEl.value = '【誤配回収のお願い】\n下記住所の荷物を回収してください。\n地図画像を添付します。';
+        document.getElementById('dm-seihaisou-label').textContent = '✅ 正配送先住所';
       } else if (tmpl === 'seihaisou') {
         seihaisouSec.classList.remove('hidden');
         msgEl.value = '【正しい配送先のご案内】\n下記住所に配達してください。\n地図画像を添付します。';
+        document.getElementById('dm-seihaisou-label').textContent = '✅ 正配送先住所';
       } else if (tmpl === 'gohai_seihaisou') {
         gohaiSec.classList.remove('hidden');
         seihaisouSec.classList.remove('hidden');
         msgEl.value = '【誤配対応】\n① まず下記住所で荷物を回収してください。\n② その後、正しい配送先へ届けてください。\n地図画像を添付します。';
+        document.getElementById('dm-seihaisou-label').textContent = '✅ 正配送先住所';
+      } else if (tmpl === 'map_free') {
+        seihaisouSec.classList.remove('hidden');
+        document.getElementById('dm-seihaisou-label').textContent = '📍 送信する住所';
+        msgEl.value = '📍 下記の場所を確認してください。';
       } else {
         msgEl.value = '';
+        document.getElementById('dm-seihaisou-label').textContent = '✅ 正配送先住所';
       }
     }
 
