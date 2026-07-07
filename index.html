@@ -5445,9 +5445,9 @@
 
       statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
 
-      // Render経由でGAS住所マスターから座標取得（CORS回避）
+      // Render経由でGoogle Maps Geocoding API直接（CORS回避・GAS不要）
       try {
-        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/addr-master?action=geocode&address=' + encodeURIComponent(address), { redirect: 'follow' });
+        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(address));
         var data = await res.json();
 
         if (data.status === 'ok' && data.lat && data.lng) {
