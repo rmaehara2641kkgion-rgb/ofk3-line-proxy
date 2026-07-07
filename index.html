@@ -1118,7 +1118,13 @@
       <div class="relative bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl fade-in max-h-[85vh] overflow-y-auto">
         <button onclick="closeDmModal()" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 text-xl">&times;</button>
         <h3 class="text-base font-bold mb-1">✉ 個別LINE送信</h3>
-        <p id="dm-driver-label" class="text-sm text-ink-lighter mb-4"></p>
+        <p id="dm-driver-label" class="text-sm text-ink-lighter mb-2"></p>
+
+        <!-- ドライバー選択（プルダウン式） -->
+        <div class="mb-3">
+          <label class="text-xs font-bold text-ink mb-1 block">送信先ドライバー</label>
+          <div id="dm-driver-select-container"></div>
+        </div>
 
         <!-- テンプレート選択 -->
         <div class="mb-3">
@@ -5476,11 +5482,15 @@
     var dmGeoCache = { gohai: null, seihaisou: null };
 
     function openDmModal(driverName) {
-      dmTargetDriver = driverName;
+      dmTargetDriver = driverName || '';
       dmGeoCache = { gohai: null, seihaisou: null };
-      var lineId = lineMapping[driverName] || '';
+
+      // ドライバー選択プルダウン構築（LINEアイコン付き）
+      buildDmDriverSelector(driverName);
+
+      var lineId = lineMapping[dmTargetDriver] || '';
       var statusText = lineId ? '（LINE連携済み）' : '（LINE未連携 - 送信不可）';
-      document.getElementById('dm-driver-label').textContent = driverName + ' ' + statusText;
+      document.getElementById('dm-driver-label').textContent = statusText;
       document.getElementById('dm-message').value = '';
       document.getElementById('dm-template-select').value = '';
       document.getElementById('dm-gohai-section').classList.add('hidden');
@@ -5498,6 +5508,86 @@
     function closeDmModal() {
       document.getElementById('dm-modal').classList.add('hidden');
       dmTargetDriver = '';
+    }
+
+    function buildDmDriverSelector(selectedName) {
+      var container = document.getElementById('dm-driver-select-container');
+      // LINE連携済みドライバーを優先、全ドライバー表示
+      var allNames = Object.keys(lineMapping).filter(function(n) { return lineMapping[n]; });
+      // lineMapping以外のドライバーも追加
+      for (var n in driverDB) {
+        if (allNames.indexOf(n) < 0) allNames.push(n);
+      }
+      allNames.sort(function(a, b) {
+        // LINE連携済みを上に
+        var aHas = lineMapping[a] ? 0 : 1;
+        var bHas = lineMapping[b] ? 0 : 1;
+        if (aHas !== bHas) return aHas - bHas;
+        return a.localeCompare(b);
+      });
+
+      var html = '<select id="dm-driver-select" class="w-full border border-border rounded px-3 py-2 text-sm" onchange="onDmDriverChange()">';
+      html += '<option value="">-- ドライバーを選択 --</option>';
+      for (var i = 0; i < allNames.length; i++) {
+        var name = allNames[i];
+        var lid = lineMapping[name] || '';
+        var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
+        var displayName = profile ? profile.displayName : '';
+        var statusMark = lid ? '🟢' : '⚪';
+        var label = statusMark + ' ' + name;
+        if (displayName && displayName !== name) label += ' (' + displayName + ')';
+        if (!lid) label += ' [未連携]';
+        var selected = (name === selectedName) ? ' selected' : '';
+        html += '<option value="' + name.replace(/"/g, '&quot;') + '"' + selected + '>' + label + '</option>';
+      }
+      html += '</select>';
+
+      // 選択中ドライバーのプレビュー
+      html += '<div id="dm-driver-preview" class="mt-2"></div>';
+      container.innerHTML = html;
+
+      // 初期プレビュー
+      if (selectedName) onDmDriverChange();
+    }
+
+    function onDmDriverChange() {
+      var sel = document.getElementById('dm-driver-select');
+      var name = sel.value;
+      dmTargetDriver = name;
+      var previewEl = document.getElementById('dm-driver-preview');
+      var labelEl = document.getElementById('dm-driver-label');
+
+      if (!name) {
+        previewEl.innerHTML = '';
+        labelEl.textContent = '';
+        return;
+      }
+
+      var lid = lineMapping[name] || '';
+      var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
+      var picUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
+      var displayName = profile ? profile.displayName : '';
+
+      if (lid) {
+        labelEl.textContent = '（LINE連携済み）';
+        labelEl.className = 'text-sm text-green-600 mb-2';
+      } else {
+        labelEl.textContent = '（LINE未連携 - 送信不可）';
+        labelEl.className = 'text-sm text-red-500 mb-2';
+      }
+
+      var avatarHtml = picUrl
+        ? '<img src="' + picUrl + '" class="w-10 h-10 rounded-full object-cover border-2 border-green-400" onerror="this.style.display=\'none\'">'
+        : '<div class="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-400 text-lg">👤</div>';
+
+      previewEl.innerHTML = '<div class="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">'
+        + avatarHtml
+        + '<div>'
+        + '<p class="text-sm font-bold">' + name + '</p>'
+        + (displayName && displayName !== name ? '<p class="text-xs text-ink-lighter">' + displayName + '</p>' : '')
+        + (lid ? '<p class="text-xs text-green-600 font-mono">' + lid.substring(0, 10) + '...</p>' : '<p class="text-xs text-red-400">LINE未連携</p>')
+        + '</div>'
+        + '</div>';
     }
 
     function applyDmTemplate() {
@@ -5991,26 +6081,8 @@
 
     function sendAddressToLine() {
       if (!addrSearchCurrentAddress) return;
-      // マスタ管理のドライバー一覧からLINE連携済みの人を選択するプロンプト
-      var linkedDrivers = [];
-      for (var name in lineMapping) {
-        if (lineMapping[name]) linkedDrivers.push(name);
-      }
-      if (linkedDrivers.length === 0) {
-        alert('LINE連携済みのドライバーがいません');
-        return;
-      }
-      var list = linkedDrivers.map(function(n, i) { return (i + 1) + '. ' + n; }).join('\n');
-      var choice = prompt('LINE送信先を番号で選択:\n' + list);
-      if (!choice) return;
-      var idx = parseInt(choice) - 1;
-      if (idx < 0 || idx >= linkedDrivers.length) {
-        alert('無効な番号です');
-        return;
-      }
-      var driverName = linkedDrivers[idx];
-      // DM モーダルを開いて住所をセット
-      openDmModal(driverName);
+      // DM モーダルを開く（ドライバー未選択状態 → プルダウンで選択）
+      openDmModal('');
       document.getElementById('dm-template-select').value = 'seihaisou';
       applyDmTemplate();
       document.getElementById('dm-seihaisou-addr').value = addrSearchCurrentAddress;
