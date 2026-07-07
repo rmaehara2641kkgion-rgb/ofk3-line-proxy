@@ -4118,13 +4118,14 @@
       var routes = getFilteredRoutes();
       var html = '';
       routes.forEach(function(r) {
-        var sent = lineSentDrivers[r.driverName];
+        var sentKey = r.driverName + '::' + r.routeCode;
+        var sent = lineSentDrivers[sentKey];
         var statusIcon = sent ? '<span style="color:#9CA3AF;" title="送信済み">✓</span> ' : '';
         html += statusIcon + r.driverName + ' → ' + r.routeCode + ' / ' + r.totalDeliveries + '個 / 終了 ' + r.predictedEnd;
         if (sent) html += ' <span style="color:#9CA3AF;font-size:10px;">(送信済み・スキップ)</span>';
         html += '\n';
       });
-      var unsent = routes.filter(function(r) { return !lineSentDrivers[r.driverName]; });
+      var unsent = routes.filter(function(r) { return !lineSentDrivers[r.driverName + '::' + r.routeCode]; });
       html += '\n--- ' + unsent.length + '人に送信 / ' + (routes.length - unsent.length) + '人スキップ（送信済み） ---';
       previewEl.textContent = html;
     }
@@ -4220,7 +4221,8 @@
         if (!route.driverName) continue;
         // 管理者は毎回送信（スキップしない）
         var isAdmin = adminIdList.indexOf(lineMapping[route.driverName]) >= 0;
-        if (!isAdmin && lineSentDrivers[route.driverName]) { skipped++; continue; }
+        var sentKey = route.driverName + '::' + route.routeCode;
+        if (!isAdmin && lineSentDrivers[sentKey]) { skipped++; continue; }
         const userId = lineMapping[route.driverName];
         if (!userId) { skipped++; continue; }
 
@@ -4308,7 +4310,7 @@
           }
           }
           const { ok, status, data } = await pushViaProxy(userId, lineMessages);
-          if (ok) { sent++; lineSentDrivers[route.driverName] = true; } else { failed++; console.error('Driver push failed:', status, data); }
+          if (ok) { sent++; lineSentDrivers[sentKey] = true; } else { failed++; console.error('Driver push failed:', status, data); }
         } catch (e) {
           failed++;
           console.error('Driver push error:', e);
