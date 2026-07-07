@@ -893,6 +893,21 @@
       </div>
     </div>
 
+    <!-- Tenko Edit Modal -->
+    <div id="tenko-edit-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/40" onclick="closeTenkoEditModal()"></div>
+      <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-base font-bold" id="tenko-edit-title">点呼ログ編集</h3>
+          <button onclick="closeTenkoEditModal()" class="text-ink-lighter hover:text-ink text-xl cursor-pointer">&times;</button>
+        </div>
+        <div id="tenko-edit-list" class="space-y-2"></div>
+        <div class="mt-4 flex gap-2">
+          <button onclick="addTenkoLogEntry()" class="bg-blue-500 text-white text-xs px-3 py-1.5 rounded hover:bg-blue-600 cursor-pointer">＋ 手動追加</button>
+        </div>
+      </div>
+    </div>
+
     <div id="line-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/30" onclick="closeModal()"></div>
       <div class="relative bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl fade-in">
@@ -4937,6 +4952,129 @@
     }
 
     // 点呼ログエクスポート（CSV）
+    // ===== 点呼ログ編集 =====
+    var tenkoEditDriver = '';
+
+    function openTenkoEditModal(driverName) {
+      tenkoEditDriver = driverName;
+      document.getElementById('tenko-edit-title').textContent = driverName + ' の点呼ログ（' + aggYear + '年' + (aggMonth + 1) + '月）';
+      renderTenkoEditList();
+      document.getElementById('tenko-edit-modal').classList.remove('hidden');
+    }
+
+    function closeTenkoEditModal() {
+      document.getElementById('tenko-edit-modal').classList.add('hidden');
+    }
+
+    function renderTenkoEditList() {
+      var listEl = document.getElementById('tenko-edit-list');
+      var prefix = aggYear + '-' + String(aggMonth + 1).padStart(2, '0');
+      var logs = [];
+      for (var i = 0; i < tenkoLog.length; i++) {
+        if (tenkoLog[i].driverName === tenkoEditDriver && tenkoLog[i].date && tenkoLog[i].date.indexOf(prefix) === 0) {
+          logs.push({ index: i, log: tenkoLog[i] });
+        }
+      }
+
+      if (logs.length === 0) {
+        listEl.innerHTML = '<p class="text-sm text-ink-lighter text-center py-4">この月のログがありません</p>';
+        return;
+      }
+
+      // Sort by date
+      logs.sort(function(a, b) { return a.log.date.localeCompare(b.log.date); });
+
+      var html = '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface/50">'
+        + '<th class="px-2 py-1.5 text-left text-xs text-ink-lighter">日付</th>'
+        + '<th class="px-2 py-1.5 text-left text-xs text-ink-lighter">シフト</th>'
+        + '<th class="px-2 py-1.5 text-left text-xs text-ink-lighter">着車予定</th>'
+        + '<th class="px-2 py-1.5 text-left text-xs text-ink-lighter">完了時間</th>'
+        + '<th class="px-2 py-1.5 text-center text-xs text-ink-lighter">操作</th>'
+        + '</tr></thead><tbody>';
+
+      logs.forEach(function(item) {
+        var l = item.log;
+        var idx = item.index;
+        html += '<tr class="border-b border-border" id="tenko-row-' + idx + '">'
+          + '<td class="px-2 py-1.5"><input type="date" value="' + (l.date || '') + '" class="text-xs border rounded px-1.5 py-1 w-28" id="te-date-' + idx + '"></td>'
+          + '<td class="px-2 py-1.5"><input type="text" value="' + (l.shiftCode || '') + '" class="text-xs border rounded px-1.5 py-1 w-16 text-center" id="te-shift-' + idx + '"></td>'
+          + '<td class="px-2 py-1.5"><input type="time" value="' + (l.scheduledArrival || '') + '" class="text-xs border rounded px-1.5 py-1 w-24" id="te-arrival-' + idx + '"></td>'
+          + '<td class="px-2 py-1.5"><input type="time" value="' + (l.completedAt || '') + '" class="text-xs border rounded px-1.5 py-1 w-24" id="te-completed-' + idx + '"></td>'
+          + '<td class="px-2 py-1.5 text-center">'
+          + '<button onclick="saveTenkoEdit(' + idx + ')" class="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer mr-1">保存</button>'
+          + '<button onclick="deleteTenkoLog(' + idx + ')" class="text-xs text-red-500 hover:text-red-700 font-medium cursor-pointer">削除</button>'
+          + '</td></tr>';
+      });
+
+      html += '</tbody></table>';
+      listEl.innerHTML = html;
+    }
+
+    function saveTenkoEdit(idx) {
+      var newDate = document.getElementById('te-date-' + idx).value;
+      var newShift = document.getElementById('te-shift-' + idx).value;
+      var newArrival = document.getElementById('te-arrival-' + idx).value;
+      var newCompleted = document.getElementById('te-completed-' + idx).value;
+
+      var old = tenkoLog[idx];
+      var changes = [];
+      if (old.date !== newDate) changes.push('日付: ' + old.date + ' → ' + newDate);
+      if (old.shiftCode !== newShift) changes.push('シフト: ' + old.shiftCode + ' → ' + newShift);
+      if (old.scheduledArrival !== newArrival) changes.push('着車予定: ' + (old.scheduledArrival || '未設定') + ' → ' + newArrival);
+      if (old.completedAt !== newCompleted) changes.push('完了時間: ' + (old.completedAt || '未設定') + ' → ' + newCompleted);
+
+      if (changes.length === 0) { alert('変更がありません'); return; }
+
+      if (!confirm('⚠ 点呼ログを変更します。よろしいですか？\n\n' + old.driverName + '（' + old.date + '）\n\n' + changes.join('\n'))) return;
+
+      tenkoLog[idx].date = newDate;
+      tenkoLog[idx].shiftCode = newShift;
+      tenkoLog[idx].scheduledArrival = newArrival;
+      tenkoLog[idx].completedAt = newCompleted;
+      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+
+      alert('✅ 変更を保存しました');
+      renderTenkoEditList();
+      renderShiftAggregation();
+    }
+
+    function deleteTenkoLog(idx) {
+      var log = tenkoLog[idx];
+      if (!confirm('⚠ 以下の点呼ログを削除します。よろしいですか？\n\n' + log.driverName + '\n日付: ' + log.date + '\nシフト: ' + log.shiftCode)) return;
+
+      tenkoLog.splice(idx, 1);
+      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+
+      alert('✅ 削除しました');
+      renderTenkoEditList();
+      renderShiftAggregation();
+    }
+
+    function addTenkoLogEntry() {
+      var date = prompt('日付を入力（例: 2025-07-01）');
+      if (!date) return;
+      var shift = prompt('シフトコードを入力（例: 〇、❽、C1）');
+      if (!shift) return;
+
+      if (!confirm('⚠ 以下の点呼ログを追加します。よろしいですか？\n\n' + tenkoEditDriver + '\n日付: ' + date + '\nシフト: ' + shift)) return;
+
+      tenkoLog.push({
+        date: date,
+        driverName: tenkoEditDriver,
+        shiftCode: shift,
+        scheduledArrival: '',
+        completedAt: '',
+        licenseVerified: false,
+        mentorVerified: false,
+        isTemporary: false
+      });
+      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+
+      alert('✅ 追加しました');
+      renderTenkoEditList();
+      renderShiftAggregation();
+    }
+
     // ===== 月次シフト集計 =====
     var aggMonth = new Date().getMonth(); // 0-11
     var aggYear = new Date().getFullYear();
@@ -5011,8 +5149,9 @@
       var rowsHtml = '';
       driverNames.forEach(function(name) {
         var agg = driverAgg[name];
-        rowsHtml += '<tr class="border-b border-border hover:bg-surface/50">';
-        rowsHtml += '<td class="px-3 py-2 font-medium text-sm">' + name + '</td>';
+        var escapedName = name.replace(/'/g, "\\'");
+        rowsHtml += '<tr class="border-b border-border hover:bg-surface/50 cursor-pointer" onclick="openTenkoEditModal(\'' + escapedName + '\')">';
+        rowsHtml += '<td class="px-3 py-2 font-medium text-sm"><span class="underline text-blue-600">' + name + '</span></td>';
         codeList.forEach(function(code) {
           var count = agg[code] || 0;
           colTotals[code] += count;
