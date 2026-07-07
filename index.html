@@ -244,6 +244,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko-match')" id="tab-tenko-match">点呼照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
 
@@ -716,6 +717,94 @@
                 <button onclick="clearScanHistory()" class="text-xs text-red-400 hover:text-red-600 cursor-pointer">クリア</button>
               </div>
               <div id="scan-history" class="space-y-1 max-h-48 overflow-y-auto"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 住所検索タブ -->
+      <div id="panel-addr-search" class="hidden">
+        <div class="card p-6 mb-4">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-base font-bold">🔍 住所検索</h3>
+            <div class="flex items-center gap-3">
+              <span id="addr-search-da-count" class="text-xs text-ink-lighter"></span>
+              <button id="addr-search-reload-btn" class="hidden text-xs text-blue-500 hover:text-blue-700 cursor-pointer" onclick="document.getElementById('addr-search-file-input').click()">📂 追加読込
+                <input type="file" id="addr-search-file-input" accept=".xlsx,.xls" multiple onchange="handleScanFileSelect(event)" class="hidden">
+              </button>
+            </div>
+          </div>
+
+          <!-- マニフェストドロップゾーン -->
+          <div id="addr-search-dropzone" class="text-center py-10 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+            onclick="document.getElementById('addr-search-file-input2').click()"
+            ondragover="event.preventDefault(); this.classList.add('border-blue-400','bg-blue-50')"
+            ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
+            ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handleScanFileDrop(event)">
+            <div class="text-4xl mb-3">📦</div>
+            <p class="text-sm font-semibold text-ink">マニフェストExcelをドロップ</p>
+            <p class="text-xs text-ink-lighter mt-1">またはクリックしてファイル選択（複数可）</p>
+            <p class="text-xs text-ink-lighter mt-1">※ダッシュボードのサイクルデータ読込でもOK</p>
+            <input type="file" id="addr-search-file-input2" accept=".xlsx,.xls" multiple onchange="handleScanFileSelect(event)" class="hidden">
+          </div>
+
+          <div id="addr-search-ready" class="hidden">
+            <!-- DA番号入力 -->
+            <div class="mb-4">
+              <label class="text-xs font-bold text-ink mb-2 block">DA番号で住所検索</label>
+              <input type="text" id="addr-search-input" placeholder="DA番号を入力またはスキャン..."
+                class="w-full text-lg px-4 py-3 border-2 border-blue-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none font-mono"
+                onkeydown="if(event.key==='Enter'){lookupAddress(); event.preventDefault();}"
+                onpaste="setTimeout(function(){ lookupAddress(); }, 50)"
+                autocomplete="off">
+              <p class="text-xs text-ink-lighter mt-1">Enter or 貼り付けで自動検索</p>
+            </div>
+
+            <!-- 結果表示 -->
+            <div id="addr-search-result" class="hidden mb-4">
+              <div id="addr-search-result-card" class="rounded-2xl p-6" style="background: #F0FDF4;">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-ink-lighter">コース</span>
+                  <span id="addr-search-route" class="text-sm font-bold text-blue-700"></span>
+                </div>
+                <div class="mb-3">
+                  <span class="text-xs text-ink-lighter">住所</span>
+                  <p id="addr-search-address" class="text-base font-bold text-ink mt-1"></p>
+                </div>
+                <div class="flex gap-2">
+                  <button onclick="copyAddress()" class="flex-1 px-3 py-2 bg-white border border-border rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors">📋 住所コピー</button>
+                  <button onclick="showAddressMap()" class="flex-1 px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 transition-colors">🗺️ 地図で見る</button>
+                  <button onclick="sendAddressToLine()" class="flex-1 px-3 py-2 bg-[#06C755] text-white rounded-lg text-xs font-medium hover:opacity-90 transition-opacity">✉ LINE送信</button>
+                </div>
+                <p id="addr-search-da-label" class="text-xs text-ink-lighter mt-2 font-mono text-center"></p>
+              </div>
+            </div>
+
+            <!-- 該当なし -->
+            <div id="addr-search-not-found" class="hidden mb-4">
+              <div class="rounded-2xl p-6 text-center" style="background: #FEF2F2;">
+                <p class="text-4xl mb-2">❌</p>
+                <p class="text-lg font-bold text-red-700">該当なし</p>
+                <p id="addr-search-not-found-da" class="text-sm text-ink-lighter font-mono mt-1"></p>
+              </div>
+            </div>
+
+            <!-- 地図表示エリア -->
+            <div id="addr-search-map-container" class="hidden mb-4">
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="text-xs font-bold text-ink-lighter">地図プレビュー</h4>
+                <button onclick="document.getElementById('addr-search-map-container').classList.add('hidden')" class="text-xs text-gray-400 hover:text-gray-600">✕ 閉じる</button>
+              </div>
+              <div id="addr-search-map" class="w-full rounded-lg border" style="height: 400px;"></div>
+            </div>
+
+            <!-- 検索履歴 -->
+            <div class="mt-4">
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="text-xs font-bold text-ink-lighter">検索履歴</h4>
+                <button onclick="clearAddrSearchHistory()" class="text-xs text-red-400 hover:text-red-600 cursor-pointer">クリア</button>
+              </div>
+              <div id="addr-search-history" class="space-y-1 max-h-48 overflow-y-auto"></div>
             </div>
           </div>
         </div>
@@ -1336,11 +1425,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-billing'];
+      var tabClasses = ['tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','billing':'tab-billing'};
+      var tabMap = {'dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
@@ -1350,6 +1439,7 @@
       }
       if (tab === 'tenko-match') { renderTenkoMatchTable(); renderShiftAggregation(); }
       if (tab === 'scan') { updateScanStatus(); document.getElementById('scan-input') && document.getElementById('scan-input').focus(); }
+      if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
     }
 
@@ -1624,6 +1714,7 @@
     let cycleData = {}; // routeCode -> array of addresses（メモリのみ、localStorageに保存しない）
     let routeAreas = JSON.parse(localStorage.getItem('routeAreas') || '{}');
     let daNumberMap = {}; // DA番号 → ルートコード 逆引き
+    let daAddressMap = {}; // DA番号 → 住所 逆引き
 
     function updateArea(index, value) {
       assignmentData[index].area = value;
@@ -1704,6 +1795,7 @@
         let routeCount = 0;
         let daCount = 0;
         daNumberMap = {}; // リセット
+        daAddressMap = {}; // リセット
         workbook.SheetNames.forEach(sheetName => {
           const sheet = workbook.Sheets[sheetName];
           const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
@@ -1727,6 +1819,10 @@
                 if (row && row[1] && String(row[1]).trim()) {
                   var da = String(row[1]).trim();
                   daNumberMap[da] = routeCode;
+                  // DA→住所マップ構築
+                  if (row[5] && String(row[5]).trim()) {
+                    daAddressMap[da] = String(row[5]).trim();
+                  }
                   daCount++;
                 }
               }
@@ -1747,8 +1843,7 @@
         document.getElementById('cycle-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
         alert(routeCount + 'ルート / DA番号 ' + daCount + '件を読み取りました');
         updateScanStatus();
-
-        // Re-render if dashboard is showing
+        updateAddrSearchStatus();
         if (assignmentData.length) {
           assignmentData.forEach(r => {
             if (routeAreas[r.routeCode]) {
@@ -5743,6 +5838,9 @@
                     if (row && row[1] && String(row[1]).trim()) {
                       var da = String(row[1]).trim();
                       daNumberMap[da] = routeCode;
+                      if (row[5] && String(row[5]).trim()) {
+                        daAddressMap[da] = String(row[5]).trim();
+                      }
                       totalDA++;
                     }
                   }
@@ -5753,13 +5851,201 @@
             processed++;
             if (processed === fileCount) {
               updateScanStatus();
-              document.getElementById('scan-input').focus();
+              updateAddrSearchStatus();
+              document.getElementById('scan-input') && document.getElementById('scan-input').focus();
               alert('マニフェスト読込完了\n' + fileCount + 'ファイル / DA ' + Object.keys(daNumberMap).length + '件');
             }
           };
           reader.readAsArrayBuffer(file);
         })(files[f]);
       }
+    }
+
+    // ===== 住所検索機能 =====
+    var addrSearchHistory = [];
+    var addrSearchMap = null;
+    var addrSearchCurrentAddress = '';
+    var addrSearchCurrentRoute = '';
+    var addrSearchCurrentDA = '';
+
+    function updateAddrSearchStatus() {
+      var daKeys = Object.keys(daAddressMap);
+      var countEl = document.getElementById('addr-search-da-count');
+      var dropzoneEl = document.getElementById('addr-search-dropzone');
+      var readyEl = document.getElementById('addr-search-ready');
+      var reloadBtn = document.getElementById('addr-search-reload-btn');
+      if (!countEl) return;
+
+      if (daKeys.length > 0) {
+        countEl.textContent = 'DA ' + daKeys.length + '件読込済み';
+        if (dropzoneEl) dropzoneEl.classList.add('hidden');
+        if (readyEl) readyEl.classList.remove('hidden');
+        if (reloadBtn) reloadBtn.classList.remove('hidden');
+      } else {
+        countEl.textContent = '';
+        if (dropzoneEl) dropzoneEl.classList.remove('hidden');
+        if (readyEl) readyEl.classList.add('hidden');
+        if (reloadBtn) reloadBtn.classList.add('hidden');
+      }
+    }
+
+    function lookupAddress() {
+      var input = document.getElementById('addr-search-input');
+      var da = input.value.trim();
+      if (!da) return;
+
+      var resultEl = document.getElementById('addr-search-result');
+      var notFoundEl = document.getElementById('addr-search-not-found');
+
+      var address = daAddressMap[da];
+      var routeCode = daNumberMap[da] || '';
+
+      // 部分一致（スキャナーのプレフィックス対応）
+      if (!address) {
+        for (var key in daAddressMap) {
+          if (da.indexOf(key) >= 0 && key.length >= 6) {
+            address = daAddressMap[key];
+            routeCode = daNumberMap[key] || '';
+            break;
+          }
+        }
+      }
+
+      if (address) {
+        addrSearchCurrentAddress = address;
+        addrSearchCurrentRoute = routeCode;
+        addrSearchCurrentDA = da;
+        var displayRoute = routeCode ? extractRouteNumber(routeCode) + ' (' + routeCode + ')' : '-';
+        document.getElementById('addr-search-route').textContent = displayRoute;
+        document.getElementById('addr-search-address').textContent = address;
+        document.getElementById('addr-search-da-label').textContent = 'DA: ' + da;
+        resultEl.classList.remove('hidden');
+        notFoundEl.classList.add('hidden');
+        document.getElementById('addr-search-map-container').classList.add('hidden');
+
+        addrSearchHistory.unshift({ da: da, address: address, routeCode: routeCode, time: new Date().toLocaleTimeString() });
+        if (addrSearchHistory.length > 50) addrSearchHistory.pop();
+      } else {
+        resultEl.classList.add('hidden');
+        notFoundEl.classList.remove('hidden');
+        document.getElementById('addr-search-not-found-da').textContent = da;
+
+        addrSearchHistory.unshift({ da: da, address: null, routeCode: '', time: new Date().toLocaleTimeString() });
+      }
+
+      renderAddrSearchHistory();
+      input.value = '';
+      input.focus();
+    }
+
+    function copyAddress() {
+      if (!addrSearchCurrentAddress) return;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(addrSearchCurrentAddress);
+      } else {
+        var tmp = document.createElement('textarea');
+        tmp.value = addrSearchCurrentAddress;
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tmp);
+      }
+      alert('住所をコピーしました:\n' + addrSearchCurrentAddress);
+    }
+
+    async function showAddressMap() {
+      if (!addrSearchCurrentAddress) return;
+      var container = document.getElementById('addr-search-map-container');
+      container.classList.remove('hidden');
+
+      // geocode
+      try {
+        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(addrSearchCurrentAddress));
+        var data = await res.json();
+
+        if (data.status === 'ok' && data.lat && data.lng) {
+          // Leaflet map
+          if (addrSearchMap) {
+            addrSearchMap.remove();
+          }
+          addrSearchMap = L.map('addr-search-map').setView([data.lat, data.lng], 17);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap',
+            maxZoom: 19
+          }).addTo(addrSearchMap);
+          L.marker([data.lat, data.lng]).addTo(addrSearchMap)
+            .bindPopup('<b>' + addrSearchCurrentAddress + '</b><br>DA: ' + addrSearchCurrentDA)
+            .openPopup();
+
+          // Leafletのサイズ修正（hiddenから表示した直後）
+          setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
+        } else {
+          alert('座標取得できませんでした: ' + (data.message || data.googleStatus || '不明'));
+          container.classList.add('hidden');
+        }
+      } catch (e) {
+        alert('通信エラー: ' + e.message);
+        container.classList.add('hidden');
+      }
+    }
+
+    function sendAddressToLine() {
+      if (!addrSearchCurrentAddress) return;
+      // マスタ管理のドライバー一覧からLINE連携済みの人を選択するプロンプト
+      var linkedDrivers = [];
+      for (var name in lineMapping) {
+        if (lineMapping[name]) linkedDrivers.push(name);
+      }
+      if (linkedDrivers.length === 0) {
+        alert('LINE連携済みのドライバーがいません');
+        return;
+      }
+      var list = linkedDrivers.map(function(n, i) { return (i + 1) + '. ' + n; }).join('\n');
+      var choice = prompt('LINE送信先を番号で選択:\n' + list);
+      if (!choice) return;
+      var idx = parseInt(choice) - 1;
+      if (idx < 0 || idx >= linkedDrivers.length) {
+        alert('無効な番号です');
+        return;
+      }
+      var driverName = linkedDrivers[idx];
+      // DM モーダルを開いて住所をセット
+      openDmModal(driverName);
+      document.getElementById('dm-template-select').value = 'seihaisou';
+      applyDmTemplate();
+      document.getElementById('dm-seihaisou-addr').value = addrSearchCurrentAddress;
+      geocodeDmAddress('seihaisou');
+    }
+
+    function renderAddrSearchHistory() {
+      var el = document.getElementById('addr-search-history');
+      if (!el) return;
+      if (addrSearchHistory.length === 0) {
+        el.innerHTML = '<p class="text-xs text-ink-lighter text-center py-2">まだ検索していません</p>';
+        return;
+      }
+      var html = '';
+      addrSearchHistory.forEach(function(item) {
+        var addrLabel = item.address
+          ? '<span class="text-ink truncate">' + item.address + '</span>'
+          : '<span class="text-red-500">該当なし</span>';
+        var routeLabel = item.routeCode ? '<span class="text-blue-700 font-bold">' + extractRouteNumber(item.routeCode) + '</span>' : '';
+        html += '<div class="flex items-center gap-3 text-xs py-1.5 border-b border-border">'
+          + '<span class="text-ink-lighter w-16 shrink-0">' + item.time + '</span>'
+          + '<span class="font-mono text-ink-lighter w-28 shrink-0 truncate">' + item.da + '</span>'
+          + '<span class="flex-1 truncate">' + addrLabel + '</span>'
+          + '<span class="shrink-0">' + routeLabel + '</span>'
+          + '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function clearAddrSearchHistory() {
+      addrSearchHistory = [];
+      renderAddrSearchHistory();
+      document.getElementById('addr-search-result').classList.add('hidden');
+      document.getElementById('addr-search-not-found').classList.add('hidden');
+      document.getElementById('addr-search-map-container').classList.add('hidden');
     }
 
     // ===== 請求照合機能 =====
