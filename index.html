@@ -5503,27 +5503,25 @@
         messages.push({ type: 'text', text: messageText });
       }
 
-      // 誤配先地図画像
+      // 誤配先 — ロケーションメッセージ（スワイプ可能なマップ）
       if (dmGeoCache.gohai) {
-        var gohaiMapUrl = 'https://ofk3-line-proxy-1.onrender.com/static-map?size=600x400&zoom=17'
-          + '&markers=' + encodeURIComponent('color:red|label:X|' + dmGeoCache.gohai.lat + ',' + dmGeoCache.gohai.lng);
-        messages.push({ type: 'text', text: '❌ 回収先: ' + dmGeoCache.gohai.address });
         messages.push({
-          type: 'image',
-          originalContentUrl: gohaiMapUrl,
-          previewImageUrl: gohaiMapUrl
+          type: 'location',
+          title: '❌ 回収先',
+          address: dmGeoCache.gohai.address,
+          latitude: dmGeoCache.gohai.lat,
+          longitude: dmGeoCache.gohai.lng
         });
       }
 
-      // 正配送先地図画像
+      // 正配送先 — ロケーションメッセージ（スワイプ可能なマップ）
       if (dmGeoCache.seihaisou) {
-        var seiMapUrl = 'https://ofk3-line-proxy-1.onrender.com/static-map?size=600x400&zoom=17'
-          + '&markers=' + encodeURIComponent('color:green|label:O|' + dmGeoCache.seihaisou.lat + ',' + dmGeoCache.seihaisou.lng);
-        messages.push({ type: 'text', text: '✅ 正配送先: ' + dmGeoCache.seihaisou.address });
         messages.push({
-          type: 'image',
-          originalContentUrl: seiMapUrl,
-          previewImageUrl: seiMapUrl
+          type: 'location',
+          title: '✅ 正配送先',
+          address: dmGeoCache.seihaisou.address,
+          latitude: dmGeoCache.seihaisou.lat,
+          longitude: dmGeoCache.seihaisou.lng
         });
       }
 
