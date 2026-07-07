@@ -5445,15 +5445,9 @@
 
       statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
 
-      // GAS住所マスターから座標取得
-      var gasUrl = (lineSettings.addrMasterGasUrl || '').trim();
-      if (!gasUrl) {
-        statusEl.innerHTML = '<span class="text-red-500">GAS WebApp URLが未設定です（設定画面で入力してください）</span>';
-        return;
-      }
-
+      // Render経由でGAS住所マスターから座標取得（CORS回避）
       try {
-        var res = await fetch(gasUrl + '?action=geocode&address=' + encodeURIComponent(address), { redirect: 'follow' });
+        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/addr-master?action=geocode&address=' + encodeURIComponent(address), { redirect: 'follow' });
         var data = await res.json();
 
         if (data.status === 'ok' && data.lat && data.lng) {
