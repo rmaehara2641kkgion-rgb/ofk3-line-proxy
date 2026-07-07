@@ -798,6 +798,25 @@
               <div id="addr-search-map" class="w-full rounded-lg border" style="height: 400px;"></div>
             </div>
 
+            <!-- 住所から直接地図検索 -->
+            <div class="mb-4 p-4 bg-gray-50 rounded-lg border border-border">
+              <h4 class="text-xs font-bold text-ink mb-2">📍 住所から直接地図を表示</h4>
+              <div class="flex gap-2">
+                <input type="text" id="addr-free-input" placeholder="住所を入力... 例: 福岡市西区姪浜駅南1-1-1"
+                  class="flex-1 border border-border rounded px-3 py-2 text-sm"
+                  onkeydown="if(event.key==='Enter'){showFreeAddressMap(); event.preventDefault();}">
+                <button onclick="showFreeAddressMap()" class="px-4 py-2 bg-blue-500 text-white rounded text-xs font-medium hover:bg-blue-600 transition-colors">🗺️ 地図</button>
+              </div>
+              <div id="addr-free-status" class="text-xs mt-1"></div>
+              <div id="addr-free-map-container" class="hidden mt-2">
+                <div id="addr-free-map" class="w-full rounded-lg border" style="height: 350px;"></div>
+                <div class="flex gap-2 mt-2">
+                  <button onclick="copyFreeAddress()" class="flex-1 px-3 py-1.5 bg-white border border-border rounded text-xs hover:bg-gray-50">📋 住所コピー</button>
+                  <button onclick="sendFreeAddressToLine()" class="flex-1 px-3 py-1.5 bg-[#06C755] text-white rounded text-xs hover:opacity-90">✉ LINE送信</button>
+                </div>
+              </div>
+            </div>
+
             <!-- 検索履歴 -->
             <div class="mt-4">
               <div class="flex items-center justify-between mb-2">
@@ -1151,7 +1170,7 @@
           <input type="text" id="dm-gohai-addr" class="w-full border border-border rounded px-3 py-2 text-xs" placeholder="例: 福岡市西区姪浜駅南1-1-1" onchange="geocodeDmAddress('gohai')">
           <div id="dm-gohai-status" class="text-xs mt-1"></div>
           <div id="dm-gohai-preview" class="hidden mt-2">
-            <img id="dm-gohai-map" class="w-full rounded-lg border" alt="誤配先地図">
+            <div id="dm-gohai-map" class="w-full rounded-lg border" style="height:200px;"></div>
           </div>
         </div>
 
@@ -1161,7 +1180,7 @@
           <input type="text" id="dm-seihaisou-addr" class="w-full border border-border rounded px-3 py-2 text-xs" placeholder="例: 福岡市早良区西新2-2-2" onchange="geocodeDmAddress('seihaisou')">
           <div id="dm-seihaisou-status" class="text-xs mt-1"></div>
           <div id="dm-seihaisou-preview" class="hidden mt-2">
-            <img id="dm-seihaisou-map" class="w-full rounded-lg border" alt="正配送先地図">
+            <div id="dm-seihaisou-map" class="w-full rounded-lg border" style="height:200px;"></div>
           </div>
         </div>
 
@@ -5551,7 +5570,7 @@
       if (selectedName) onDmDriverChange();
     }
 
-    function onDmDriverChange() {
+    async function onDmDriverChange() {
       var sel = document.getElementById('dm-driver-select');
       var name = sel.value;
       dmTargetDriver = name;
@@ -5565,8 +5584,13 @@
       }
 
       var lid = lineMapping[name] || '';
+
+      // プロフィール未取得なら自動取得
+      if (lid && !lineProfileCache[lid]) {
+        try { await fetchLineProfile(lid); } catch(e) {}
+      }
+
       var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
-      var picUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
       var displayName = profile ? profile.displayName : '';
 
       if (lid) {
@@ -5621,11 +5645,13 @@
       }
     }
 
+    var dmLeafletMaps = { gohai: null, seihaisou: null };
+
     async function geocodeDmAddress(type) {
       var addrInput = document.getElementById('dm-' + type + '-addr');
       var statusEl = document.getElementById('dm-' + type + '-status');
       var previewEl = document.getElementById('dm-' + type + '-preview');
-      var mapImg = document.getElementById('dm-' + type + '-map');
+      var mapDiv = document.getElementById('dm-' + type + '-map');
       var address = addrInput.value.trim();
 
       if (!address) {
@@ -5644,15 +5670,25 @@
 
         if (data.status === 'ok' && data.lat && data.lng) {
           dmGeoCache[type] = { lat: data.lat, lng: data.lng, address: address };
-          statusEl.innerHTML = '<span class="text-green-600">✓ 座標取得OK（' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '）</span>';
+          statusEl.innerHTML = '<span class="text-green-600">\u2713 座標取得OK（' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '）</span>';
 
-          // 地図プレビュー表示
-          var markerColor = type === 'gohai' ? 'red' : 'green';
-          var markerLabel = type === 'gohai' ? 'X' : 'O';
-          var mapUrl = 'https://ofk3-line-proxy-1.onrender.com/static-map?size=600x400&zoom=17'
-            + '&markers=' + encodeURIComponent('color:' + markerColor + '|label:' + markerLabel + '|' + data.lat + ',' + data.lng);
-          mapImg.src = mapUrl;
+          // Leaflet地図プレビュー（スワイプ・ズーム可能）
           previewEl.classList.remove('hidden');
+          if (dmLeafletMaps[type]) {
+            dmLeafletMaps[type].remove();
+          }
+          var map = L.map(mapDiv).setView([data.lat, data.lng], 17);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '\u00a9 OpenStreetMap',
+            maxZoom: 19
+          }).addTo(map);
+          var markerColor = type === 'gohai' ? 'red' : 'green';
+          var iconHtml = '<div style="background:' + markerColor + ';width:12px;height:12px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>';
+          var icon = L.divIcon({ html: iconHtml, className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+          L.marker([data.lat, data.lng], { icon: icon }).addTo(map)
+            .bindPopup('<b>' + address + '</b>').openPopup();
+          dmLeafletMaps[type] = map;
+          setTimeout(function() { map.invalidateSize(); }, 150);
         } else {
           statusEl.innerHTML = '<span class="text-red-500">座標取得失敗: ' + (data.message || '住所が見つかりません') + '</span>';
           previewEl.classList.add('hidden');
@@ -6125,6 +6161,73 @@
       document.getElementById('addr-search-result').classList.add('hidden');
       document.getElementById('addr-search-not-found').classList.add('hidden');
       document.getElementById('addr-search-map-container').classList.add('hidden');
+    }
+
+    // -- 住所から直接地図表示 --
+    var addrFreeMap = null;
+    var addrFreeCurrentAddress = '';
+    var addrFreeCurrentGeo = null;
+
+    async function showFreeAddressMap() {
+      var input = document.getElementById('addr-free-input');
+      var address = input.value.trim();
+      if (!address) return;
+
+      var statusEl = document.getElementById('addr-free-status');
+      var mapContainer = document.getElementById('addr-free-map-container');
+      statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
+
+      try {
+        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(address));
+        var data = await res.json();
+
+        if (data.status === 'ok' && data.lat && data.lng) {
+          addrFreeCurrentAddress = address;
+          addrFreeCurrentGeo = { lat: data.lat, lng: data.lng };
+          statusEl.innerHTML = '<span class="text-green-600">\u2713 ' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '</span>';
+
+          mapContainer.classList.remove('hidden');
+          if (addrFreeMap) addrFreeMap.remove();
+          addrFreeMap = L.map('addr-free-map').setView([data.lat, data.lng], 17);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '\u00a9 OpenStreetMap',
+            maxZoom: 19
+          }).addTo(addrFreeMap);
+          L.marker([data.lat, data.lng]).addTo(addrFreeMap)
+            .bindPopup('<b>' + address + '</b>').openPopup();
+          setTimeout(function() { addrFreeMap.invalidateSize(); }, 150);
+        } else {
+          statusEl.innerHTML = '<span class="text-red-500">座標取得失敗: ' + (data.message || data.googleStatus || '不明') + '</span>';
+          mapContainer.classList.add('hidden');
+        }
+      } catch (e) {
+        statusEl.innerHTML = '<span class="text-red-500">通信エラー: ' + e.message + '</span>';
+        mapContainer.classList.add('hidden');
+      }
+    }
+
+    function copyFreeAddress() {
+      if (!addrFreeCurrentAddress) return;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(addrFreeCurrentAddress);
+      } else {
+        var tmp = document.createElement('textarea');
+        tmp.value = addrFreeCurrentAddress;
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tmp);
+      }
+      alert('住所をコピーしました:\n' + addrFreeCurrentAddress);
+    }
+
+    function sendFreeAddressToLine() {
+      if (!addrFreeCurrentAddress) return;
+      openDmModal('');
+      document.getElementById('dm-template-select').value = 'map_free';
+      applyDmTemplate();
+      document.getElementById('dm-seihaisou-addr').value = addrFreeCurrentAddress;
+      geocodeDmAddress('seihaisou');
     }
 
     // ===== 請求照合機能 =====
