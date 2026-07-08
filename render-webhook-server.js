@@ -227,6 +227,48 @@ app.get('/static-map', async (req, res) => {
 });
 
 const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
+const VOLUME_MASTER_GAS_URL = process.env.VOLUME_MASTER_GAS_URL || '';
+
+// 物量マスターGASプロキシ
+app.get('/volume-master', async (req, res) => {
+  try {
+    if (!VOLUME_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'VOLUME_MASTER_GAS_URL not configured' });
+    }
+    var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
+    var url = VOLUME_MASTER_GAS_URL + '?' + qs;
+    console.log('volume-master GET:', url);
+    var response = await axios.get(url, { maxRedirects: 5, timeout: 120000 });
+    if (typeof response.data === 'string' && response.data.indexOf('<!DOCTYPE') >= 0) {
+      return res.status(502).json({ status: 'error', message: 'GAS returned HTML' });
+    }
+    res.json(response.data);
+  } catch (e) {
+    console.error('volume-master GET error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.post('/volume-master', async (req, res) => {
+  try {
+    if (!VOLUME_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'VOLUME_MASTER_GAS_URL not configured' });
+    }
+    var action = req.query.action || '';
+    var url = VOLUME_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
+    console.log('volume-master POST:', url);
+    var response = await axios.post(url, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5,
+      timeout: 120000,
+      validateStatus: function() { return true; }
+    });
+    res.status(response.status).json(response.data);
+  } catch (e) {
+    console.error('volume-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 app.get('/addr-master', async (req, res) => {
   try {
