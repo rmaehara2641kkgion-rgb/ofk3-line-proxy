@@ -950,9 +950,10 @@
           ondragleave="this.classList.remove('border-amber-400','bg-amber-50')"
           ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
           <div class="text-4xl mb-3">📦</div>
-          <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)をドラッグ＆ドロップ</p>
-          <p class="text-xs text-gray-400 mt-1">またはクリックしてファイルを選択</p>
-          <input type="file" id="volume-file-input" accept=".xlsx,.xls" onchange="handleVolumeFileSelect(event)" class="hidden">
+          <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)をまとめてドラッグ＆ドロップ</p>
+          <p class="text-xs text-gray-400 mt-1">複数日分OK・同じ日の複数サイクルもOK（自動統合）</p>
+          <p class="text-xs text-gray-400 mt-1">ファイル名から日付を自動取得</p>
+          <input type="file" id="volume-file-input" accept=".xlsx,.xls" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
         </div>
 
         <!-- 今日の集計サマリー -->
@@ -7956,176 +7957,347 @@
 
 
     // ===== 物量管理 =====
-    var volumeData = null; // 今日の集計結果
-    var volumeHistory = []; // 過去データ（GASから取得）
-    var VOLUME_GAS_URL = ''; // GAS保存先（後で設定）
+    var volumeData = null; // 今日の集計結果（表示用）
+    var volumeHistory = []; // 過去データ
+    var volumeBatchResults = []; // 一括処理結果
 
     function handleVolumeFileSelect(event) {
       var files = event.target.files;
-      if (files.length > 0) parseVolumeData(files[0]);
+      if (files.length > 0) parseVolumeFiles(files);
       event.target.value = '';
     }
 
     function handleVolumeFileDrop(event) {
       var files = event.dataTransfer.files;
-      if (files.length > 0) parseVolumeData(files[0]);
+      if (files.length > 0) parseVolumeFiles(files);
     }
 
-    function parseVolumeData(file) {
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          var data = new Uint8Array(e.target.result);
-          var workbook = XLSX.read(data, { type: 'array' });
-          var courses = {};
-
-          for (var si = 0; si < workbook.SheetNames.length; si++) {
-            try {
-              var sheetName = workbook.SheetNames[si];
-              var sheet = workbook.Sheets[sheetName];
-              var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-              // ルートコード取得
-              var routeCode = '';
-              var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
-              if (sheetRouteMatch) {
-                routeCode = sheetRouteMatch[1].trim();
-              }
-              if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
-                var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
-                if (routeMatch) routeCode = routeMatch[1].trim();
-              }
-              if (!routeCode) continue;
-
-              // 小口数とユニーク住所（件数）を計算
-              var packages = 0;
-              var addresses = {};
-              for (var i = 1; i < json.length; i++) {
-                var row = json[i];
-                if (!row || !row[1]) continue;
-                var da = String(row[1]).trim();
-                if (da === 'Tracking ID' || da === 'DA' || !da) continue;
-                packages++;
-                // 住所（Column F = index 5）でユニークカウント
-                if (row[5] && String(row[5]).trim()) {
-                  var addr = String(row[5]).trim();
-                  if (addr.indexOf('OFK') < 0) {
-                    addresses[addr] = true;
-                  }
-                }
-              }
-
-              if (packages > 0) {
-                // エリア判定
-                var addrList = Object.keys(addresses);
-                var area = extractAreaFromAddresses(addrList);
-
-                courses[routeCode] = {
-                  packages: packages,
-                  stops: Object.keys(addresses).length,
-                  area: area || '不明'
-                };
-              }
-            } catch(sheetErr) {
-              console.error('Volume sheet error:', sheetName, sheetErr.message);
-            }
-          }
-
-          // 集計
-          var courseKeys = Object.keys(courses);
-          if (courseKeys.length === 0) {
-            alert('コースデータが見つかりませんでした');
-            return;
-          }
-
-          // コース種別グルーピング（DCX, DMX, DSX, DCMR等）
-          var courseTypes = {};
-          var totalPkg = 0;
-          var totalStops = 0;
-          var areaData = {};
-
-          courseKeys.sort();
-          for (var c = 0; c < courseKeys.length; c++) {
-            var code = courseKeys[c];
-            var info = courses[code];
-            totalPkg += info.packages;
-            totalStops += info.stops;
-
-            // 種別抽出（DCX, DMX, DSX, DCMR等）
-            var typeMatch = code.match(/^([A-Z]+?)(\d)/);
-            var cType = typeMatch ? typeMatch[1] : code;
-            if (!courseTypes[cType]) {
-              courseTypes[cType] = { count: 0, packages: 0, stops: 0, maxNum: '', codes: [] };
-            }
-            courseTypes[cType].count++;
-            courseTypes[cType].packages += info.packages;
-            courseTypes[cType].stops += info.stops;
-            courseTypes[cType].codes.push(code);
-            // 最大番号
-            var numPart = code.replace(/^[A-Z]+/, '');
-            if (!courseTypes[cType].maxNum || numPart > courseTypes[cType].maxNum) {
-              courseTypes[cType].maxNum = numPart;
-            }
-
-            // エリア集計
-            var ar = info.area;
-            if (!areaData[ar]) { areaData[ar] = { packages: 0, stops: 0, courses: 0 }; }
-            areaData[ar].packages += info.packages;
-            areaData[ar].stops += info.stops;
-            areaData[ar].courses++;
-          }
-
-          var now = new Date();
-          var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-
-          volumeData = {
-            date: dateStr,
-            totalPackages: totalPkg,
-            totalStops: totalStops,
-            totalCourses: courseKeys.length,
-            courseTypes: courseTypes,
-            courses: courses,
-            areaData: areaData
-          };
-
-          renderVolumeSummary();
-        } catch(err) {
-          console.error('Volume parse error:', err);
-          alert('ファイル読込エラー: ' + err.message);
+    // ファイル名から日付を抽出
+    function extractDateFromFilename(filename) {
+      // パターン: 2026-07-08, 20260708, 2026_07_08, 07-08, 0708
+      var m = filename.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
+      if (m) return m[1] + '-' + m[2] + '-' + m[3];
+      // 短い日付（今年と仮定）
+      var m2 = filename.match(/(\d{1,2})[-_](\d{1,2})/);
+      if (m2) {
+        var mon = String(m2[1]).padStart(2, '0');
+        var day = String(m2[2]).padStart(2, '0');
+        if (Number(mon) >= 1 && Number(mon) <= 12 && Number(day) >= 1 && Number(day) <= 31) {
+          return new Date().getFullYear() + '-' + mon + '-' + day;
         }
+      }
+      return '';
+    }
+
+    // xlsx内のセルから日付を探す
+    function extractDateFromSheet(json) {
+      // Row0やRow1に日付が含まれてる可能性
+      for (var r = 0; r < Math.min(3, json.length); r++) {
+        if (!json[r]) continue;
+        for (var c = 0; c < Math.min(10, json[r].length); c++) {
+          var val = String(json[r][c] || '');
+          var dm = val.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+          if (dm) return dm[1] + '-' + String(dm[2]).padStart(2, '0') + '-' + String(dm[3]).padStart(2, '0');
+        }
+      }
+      return '';
+    }
+
+    // 複数ファイル一括処理
+    function parseVolumeFiles(files) {
+      var fileArray = [];
+      for (var i = 0; i < files.length; i++) fileArray.push(files[i]);
+
+      var results = {}; // date -> { courses, totalPkg, totalStops, courseTypes, areaData }
+      var processed = 0;
+      var total = fileArray.length;
+
+      for (var fi = 0; fi < fileArray.length; fi++) {
+        (function(file) {
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            try {
+              var data = new Uint8Array(e.target.result);
+              var workbook = XLSX.read(data, { type: 'array' });
+
+              // 日付取得: ファイル名 → シート内容 → 手動入力
+              var dateStr = extractDateFromFilename(file.name);
+              if (!dateStr && workbook.SheetNames.length > 0) {
+                var firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                var firstJson = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+                dateStr = extractDateFromSheet(firstJson);
+              }
+
+              // 日付ごとに集約
+              if (!dateStr) {
+                dateStr = prompt('日付が特定できません\nファイル: ' + file.name + '\n\n日付を入力してください (YYYY-MM-DD)', new Date().toISOString().substring(0, 10));
+                if (!dateStr) { processed++; return; }
+              }
+
+              if (!results[dateStr]) {
+                results[dateStr] = { courses: {} };
+              }
+
+              for (var si = 0; si < workbook.SheetNames.length; si++) {
+                try {
+                  var sheetName = workbook.SheetNames[si];
+                  var sheet = workbook.Sheets[sheetName];
+                  var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+                  var routeCode = '';
+                  var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
+                  if (sheetRouteMatch) routeCode = sheetRouteMatch[1].trim();
+                  if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
+                    var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
+                    if (routeMatch) routeCode = routeMatch[1].trim();
+                  }
+                  if (!routeCode) continue;
+
+                  var packages = 0;
+                  var addresses = {};
+                  for (var i = 1; i < json.length; i++) {
+                    var row = json[i];
+                    if (!row || !row[1]) continue;
+                    var da = String(row[1]).trim();
+                    if (da === 'Tracking ID' || da === 'DA' || !da) continue;
+                    packages++;
+                    if (row[5] && String(row[5]).trim()) {
+                      var addr = String(row[5]).trim();
+                      if (addr.indexOf('OFK') < 0) addresses[addr] = true;
+                    }
+                  }
+
+                  if (packages > 0) {
+                    var addrList = Object.keys(addresses);
+                    var area = extractAreaFromAddresses(addrList);
+                    results[dateStr].courses[routeCode] = {
+                      p: packages,
+                      s: Object.keys(addresses).length,
+                      a: area || '?'
+                    };
+                  }
+                } catch(se) { console.error('Vol sheet err:', sheetName, se.message); }
+              }
+            } catch(fe) { console.error('Vol file err:', file.name, fe.message); }
+
+            processed++;
+            if (processed === total) {
+              finishVolumeBatch(results);
+            }
+          };
+          reader.readAsArrayBuffer(file);
+        })(fileArray[fi]);
+      }
+    }
+
+    function finishVolumeBatch(results) {
+      var dates = Object.keys(results).sort();
+      if (dates.length === 0) { alert('データが見つかりませんでした'); return; }
+
+      // 各日付の集計を作成
+      volumeBatchResults = [];
+      for (var di = 0; di < dates.length; di++) {
+        var dateStr = dates[di];
+        var coursesObj = results[dateStr].courses;
+        var summary = buildVolumeSummary(dateStr, coursesObj);
+        volumeBatchResults.push(summary);
+      }
+
+      // 1件なら即表示、複数なら一括表示
+      if (volumeBatchResults.length === 1) {
+        volumeData = volumeBatchResults[0];
+        volumeData._full = results[dates[0]].courses; // 表示用に詳細保持
+        renderVolumeSummary();
+      } else {
+        renderVolumeBatchPreview();
+      }
+    }
+
+    function buildVolumeSummary(dateStr, coursesObj) {
+      var courseTypes = {};
+      var totalPkg = 0;
+      var totalStops = 0;
+      var areaData = {};
+      var courseKeys = Object.keys(coursesObj).sort();
+
+      for (var c = 0; c < courseKeys.length; c++) {
+        var code = courseKeys[c];
+        var info = coursesObj[code];
+        totalPkg += info.p;
+        totalStops += info.s;
+
+        var typeMatch = code.match(/^([A-Z]+?)(\d)/);
+        var cType = typeMatch ? typeMatch[1] : code;
+        if (!courseTypes[cType]) courseTypes[cType] = { n: 0, p: 0, s: 0, max: '' };
+        courseTypes[cType].n++;
+        courseTypes[cType].p += info.p;
+        courseTypes[cType].s += info.s;
+        var numPart = code.replace(/^[A-Z]+/, '');
+        if (!courseTypes[cType].max || numPart > courseTypes[cType].max) courseTypes[cType].max = numPart;
+
+        var ar = info.a;
+        if (!areaData[ar]) areaData[ar] = { p: 0, s: 0, n: 0 };
+        areaData[ar].p += info.p;
+        areaData[ar].s += info.s;
+        areaData[ar].n++;
+      }
+
+      return {
+        date: dateStr,
+        tp: totalPkg,
+        ts: totalStops,
+        tc: courseKeys.length,
+        ct: courseTypes,
+        ar: areaData
       };
-      reader.readAsArrayBuffer(file);
+    }
+
+    // 一括プレビュー表示
+    function renderVolumeBatchPreview() {
+      var html = '<div class="flex items-center justify-between mb-3">' +
+        '<h3 class="text-sm font-bold">' + volumeBatchResults.length + '日分のデータ</h3>' +
+        '<button onclick="saveVolumeBatch()" class="bg-amber-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-amber-600 cursor-pointer">💾 全て保存して蓄積</button>' +
+        '</div>';
+
+      html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead>' +
+        '<tr class="border-b border-border bg-surface">' +
+        '<th class="px-3 py-2 text-left text-xs">日付</th>' +
+        '<th class="px-3 py-2 text-right text-xs">小口数</th>' +
+        '<th class="px-3 py-2 text-right text-xs">件数</th>' +
+        '<th class="px-3 py-2 text-right text-xs">コース数</th>' +
+        '<th class="px-3 py-2 text-left text-xs">コース内訳</th>' +
+        '</tr></thead><tbody>';
+
+      for (var i = 0; i < volumeBatchResults.length; i++) {
+        var d = volumeBatchResults[i];
+        var typeParts = [];
+        var tKeys = Object.keys(d.ct).sort();
+        for (var t = 0; t < tKeys.length; t++) {
+          typeParts.push(tKeys[t] + ':' + d.ct[tKeys[t]].n + '(~' + tKeys[t] + d.ct[tKeys[t]].max + ')');
+        }
+        html += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2 text-xs font-mono font-bold">' + d.date + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + d.tp.toLocaleString() + '</td>' +
+          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + d.ts.toLocaleString() + '</td>' +
+          '<td class="px-3 py-2 text-right">' + d.tc + '</td>' +
+          '<td class="px-3 py-2 text-xs text-ink-lighter">' + typeParts.join(' / ') + '</td>' +
+          '</tr>';
+      }
+      html += '</tbody></table></div></div>';
+
+      document.getElementById('volume-summary').innerHTML = html;
+      document.getElementById('volume-summary').classList.remove('hidden');
+      document.getElementById('volume-dropzone').classList.add('hidden');
+    }
+
+    // 一括保存（GAS + localStorage）
+    async function saveVolumeBatch() {
+      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
+      var savedCount = 0;
+
+      for (var i = 0; i < volumeBatchResults.length; i++) {
+        var d = volumeBatchResults[i];
+        var found = false;
+        for (var j = 0; j < stored.length; j++) {
+          if (stored[j].date === d.date) {
+            stored[j] = d;
+            found = true;
+            break;
+          }
+        }
+        if (!found) stored.push(d);
+        savedCount++;
+      }
+
+      stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+      while (stored.length > 730) stored.shift();
+
+      try {
+        localStorage.setItem('volumeHistory', JSON.stringify(stored));
+      } catch(e) {
+        while (stored.length > 365) stored.shift();
+        try { localStorage.setItem('volumeHistory', JSON.stringify(stored)); } catch(e2) {}
+      }
+      volumeHistory = stored;
+
+      // GASにも保存
+      try {
+        var res = await fetch('/volume-master?action=save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(volumeBatchResults)
+        });
+        var data = await res.json();
+        if (data.status === 'ok') {
+          alert(savedCount + '日分のデータを保存しました（GAS + ローカル）');
+        } else {
+          alert(savedCount + '日分をローカル保存しました\nGAS保存エラー: ' + (data.message || ''));
+        }
+      } catch(e) {
+        alert(savedCount + '日分をローカル保存しました\nGAS接続エラー（後で同期されます）');
+      }
+
+      volumeBatchResults = [];
+      document.getElementById('volume-dropzone').classList.remove('hidden');
+      document.getElementById('volume-summary').classList.add('hidden');
+      restoreVolumeSummaryHTML();
+      renderVolumeHistory();
+    }
+
+    function restoreVolumeSummaryHTML() {
+      document.getElementById('volume-summary').innerHTML =
+        '<div class="flex items-center justify-between mb-3">' +
+        '<h3 class="text-sm font-bold">今日の集計</h3>' +
+        '<div class="flex items-center gap-2">' +
+        '<input type="date" id="volume-date-input" class="text-xs px-2 py-1 border border-gray-300 rounded" onchange="if(volumeData){volumeData.date=this.value;}">' +
+        '<span id="volume-date-label" class="text-xs text-ink-lighter"></span>' +
+        '<button onclick="saveVolumeData()" class="bg-amber-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-amber-600 cursor-pointer">💾 保存して蓄積</button>' +
+        '</div></div>' +
+        '<div class="grid grid-cols-4 gap-3 mb-4">' +
+        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-amber-600" id="vol-total-packages">0</div><div class="text-xs text-ink-lighter">総小口数</div></div>' +
+        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-blue-600" id="vol-total-stops">0</div><div class="text-xs text-ink-lighter">総件数</div></div>' +
+        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-green-600" id="vol-total-courses">0</div><div class="text-xs text-ink-lighter">総コース数</div></div>' +
+        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-purple-600" id="vol-avg-per-course">0</div><div class="text-xs text-ink-lighter">平均小口/コース</div></div>' +
+        '</div>' +
+        '<div class="card p-4 mb-4"><h4 class="text-xs font-bold text-ink-lighter mb-3">コース種別内訳</h4><div id="vol-course-breakdown" class="space-y-2"></div></div>' +
+        '<div class="card p-4 mb-4"><h4 class="text-xs font-bold text-ink-lighter mb-3">エリア別物量</h4><div id="vol-area-breakdown" class="space-y-2"></div></div>' +
+        '<div class="card overflow-hidden mb-4"><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+        '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース</th>' +
+        '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>' +
+        '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>' +
+        '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">エリア</th>' +
+        '</tr></thead><tbody id="vol-course-table-body"><tr><td colspan="4" class="text-center py-4 text-ink-lighter text-sm">データなし</td></tr></tbody></table></div></div>';
     }
 
     function renderVolumeSummary() {
       if (!volumeData) return;
       var d = volumeData;
 
+      restoreVolumeSummaryHTML();
       document.getElementById('volume-summary').classList.remove('hidden');
       document.getElementById('volume-dropzone').classList.add('hidden');
       document.getElementById('volume-date-label').textContent = d.date;
       document.getElementById('volume-date-input').value = d.date;
 
-      // サマリーカード
-      document.getElementById('vol-total-packages').textContent = d.totalPackages.toLocaleString();
-      document.getElementById('vol-total-stops').textContent = d.totalStops.toLocaleString();
-      document.getElementById('vol-total-courses').textContent = d.totalCourses;
-      document.getElementById('vol-avg-per-course').textContent = d.totalCourses > 0 ? Math.round(d.totalPackages / d.totalCourses) : 0;
+      document.getElementById('vol-total-packages').textContent = d.tp.toLocaleString();
+      document.getElementById('vol-total-stops').textContent = d.ts.toLocaleString();
+      document.getElementById('vol-total-courses').textContent = d.tc;
+      document.getElementById('vol-avg-per-course').textContent = d.tc > 0 ? Math.round(d.tp / d.tc) : 0;
 
       // コース種別内訳
       var breakdownHtml = '';
-      var types = Object.keys(d.courseTypes).sort();
+      var types = Object.keys(d.ct).sort();
       for (var t = 0; t < types.length; t++) {
-        var ct = d.courseTypes[types[t]];
-        var pct = d.totalPackages > 0 ? Math.round(ct.packages / d.totalPackages * 100) : 0;
+        var ct = d.ct[types[t]];
+        var pct = d.tp > 0 ? Math.round(ct.p / d.tp * 100) : 0;
         breakdownHtml += '<div class="flex items-center justify-between p-2 rounded-lg" style="background:rgba(0,0,0,0.03)">' +
           '<div class="flex items-center gap-2">' +
           '<span class="text-sm font-bold text-amber-700">' + types[t] + '</span>' +
-          '<span class="text-xs text-ink-lighter">' + ct.count + 'コース（〜' + types[t] + ct.maxNum + '）</span>' +
+          '<span class="text-xs text-ink-lighter">' + ct.n + 'コース（〜' + types[t] + ct.max + '）</span>' +
           '</div>' +
           '<div class="flex items-center gap-3">' +
-          '<span class="text-sm font-bold">' + ct.packages.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
-          '<span class="text-sm font-bold text-blue-600">' + ct.stops.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
+          '<span class="text-sm font-bold">' + ct.p.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
+          '<span class="text-sm font-bold text-blue-600">' + ct.s.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
           '<div class="w-16 h-2 bg-gray-200 rounded-full overflow-hidden"><div class="h-full bg-amber-400 rounded-full" style="width:' + pct + '%"></div></div>' +
           '<span class="text-xs text-ink-lighter w-8 text-right">' + pct + '%</span>' +
           '</div></div>';
@@ -8134,18 +8306,18 @@
 
       // エリア別物量
       var areaHtml = '';
-      var areas = Object.keys(d.areaData).sort(function(a, b) { return d.areaData[b].packages - d.areaData[a].packages; });
+      var areas = Object.keys(d.ar).sort(function(a, b) { return d.ar[b].p - d.ar[a].p; });
       for (var a = 0; a < areas.length; a++) {
-        var ad = d.areaData[areas[a]];
-        var aPct = d.totalPackages > 0 ? Math.round(ad.packages / d.totalPackages * 100) : 0;
+        var ad = d.ar[areas[a]];
+        var aPct = d.tp > 0 ? Math.round(ad.p / d.tp * 100) : 0;
         areaHtml += '<div class="flex items-center justify-between p-2 rounded-lg" style="background:rgba(0,0,0,0.03)">' +
           '<div class="flex items-center gap-2">' +
           '<span class="text-sm font-bold">' + areas[a] + '</span>' +
-          '<span class="text-xs text-ink-lighter">' + ad.courses + 'コース</span>' +
+          '<span class="text-xs text-ink-lighter">' + ad.n + 'コース</span>' +
           '</div>' +
           '<div class="flex items-center gap-3">' +
-          '<span class="text-sm font-bold">' + ad.packages.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
-          '<span class="text-sm font-bold text-blue-600">' + ad.stops.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
+          '<span class="text-sm font-bold">' + ad.p.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
+          '<span class="text-sm font-bold text-blue-600">' + ad.s.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
           '<div class="w-16 h-2 bg-gray-200 rounded-full overflow-hidden"><div class="h-full bg-green-400 rounded-full" style="width:' + aPct + '%"></div></div>' +
           '<span class="text-xs text-ink-lighter w-8 text-right">' + aPct + '%</span>' +
           '</div></div>';
@@ -8154,47 +8326,35 @@
 
       // コース一覧テーブル
       var tableHtml = '';
-      var sortedCourses = Object.keys(d.courses).sort();
+      var fullCourses = volumeData._full || {};
+      var sortedCourses = Object.keys(fullCourses).sort();
       for (var i = 0; i < sortedCourses.length; i++) {
         var cc = sortedCourses[i];
-        var ci = d.courses[cc];
+        var ci = fullCourses[cc];
         tableHtml += '<tr class="border-b border-border hover:bg-surface/50">' +
           '<td class="px-3 py-2 font-mono font-bold text-sm">' + cc + '</td>' +
-          '<td class="px-3 py-2 text-right font-bold">' + ci.packages + '</td>' +
-          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + ci.stops + '</td>' +
-          '<td class="px-3 py-2 text-xs text-ink-lighter">' + ci.area + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + ci.p + '</td>' +
+          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + ci.s + '</td>' +
+          '<td class="px-3 py-2 text-xs text-ink-lighter">' + ci.a + '</td>' +
           '</tr>';
       }
+      if (!tableHtml) tableHtml = '<tr><td colspan="4" class="text-center py-4 text-ink-lighter text-sm">コース詳細は保存時に圧縮されます</td></tr>';
       document.getElementById('vol-course-table-body').innerHTML = tableHtml;
     }
 
-    // GASへ保存（蓄積）
+    // 単日保存
     async function saveVolumeData() {
       if (!volumeData) { alert('集計データがありません'); return; }
-      // 保存用に軽量化（コース詳細は省く）
-      var slim = {
-        date: volumeData.date,
-        totalPackages: volumeData.totalPackages,
-        totalStops: volumeData.totalStops,
-        totalCourses: volumeData.totalCourses,
-        courseTypes: {},
-        areaData: volumeData.areaData
-      };
-      // courseTypesからcodesを除外（重い）
-      var ctKeys = Object.keys(volumeData.courseTypes);
-      for (var k = 0; k < ctKeys.length; k++) {
-        var ct = volumeData.courseTypes[ctKeys[k]];
-        slim.courseTypes[ctKeys[k]] = { count: ct.count, packages: ct.packages, stops: ct.stops, maxNum: ct.maxNum };
-      }
+      var dateInput = document.getElementById('volume-date-input');
+      if (dateInput && dateInput.value) volumeData.date = dateInput.value;
+
+      // 保存用に_full除去
+      var slim = { date: volumeData.date, tp: volumeData.tp, ts: volumeData.ts, tc: volumeData.tc, ct: volumeData.ct, ar: volumeData.ar };
 
       var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
       var found = false;
       for (var i = 0; i < stored.length; i++) {
-        if (stored[i].date === slim.date) {
-          stored[i] = slim;
-          found = true;
-          break;
-        }
+        if (stored[i].date === slim.date) { stored[i] = slim; found = true; break; }
       }
       if (!found) stored.push(slim);
       stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
@@ -8202,31 +8362,52 @@
       try {
         localStorage.setItem('volumeHistory', JSON.stringify(stored));
       } catch(e) {
-        // それでも超える場合、古いデータを削除
-        while (stored.length > 180) { stored.shift(); }
-        try {
-          localStorage.setItem('volumeHistory', JSON.stringify(stored));
-        } catch(e2) {
-          alert('保存容量を超えました。古いデータを削除してください。');
-          return;
-        }
+        while (stored.length > 365) stored.shift();
+        try { localStorage.setItem('volumeHistory', JSON.stringify(stored)); }
+        catch(e2) { alert('保存容量を超えました'); return; }
       }
       volumeHistory = stored;
 
-      alert('保存しました（' + slim.date + '）\n小口数: ' + slim.totalPackages + ' / 件数: ' + slim.totalStops + ' / コース数: ' + slim.totalCourses);
-      // 連続登録用にドロップゾーン再表示
+      alert('保存しました（' + slim.date + '）\n小口数: ' + slim.tp + ' / 件数: ' + slim.ts + ' / コース数: ' + slim.tc);
+
+      // GASにも保存
+      try {
+        fetch('/volume-master?action=save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([slim])
+        });
+      } catch(e) { console.error('GAS save error:', e); }
+
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       volumeData = null;
       renderVolumeHistory();
     }
 
-    // 過去データ読込
-    function loadVolumeHistory() {
+    // 過去データ読込（GAS → localStorage フォールバック）
+    async function loadVolumeHistory() {
+      // まずGASから取得を試みる
+      try {
+        var res = await fetch('/volume-master?action=list');
+        var data = await res.json();
+        if (data.status === 'ok' && data.data && data.data.length > 0) {
+          volumeHistory = data.data;
+          // localStorageにもキャッシュ
+          try { localStorage.setItem('volumeHistory', JSON.stringify(volumeHistory)); } catch(e) {}
+          document.getElementById('volume-history-section').classList.remove('hidden');
+          showVolumeRange('week');
+          return;
+        }
+      } catch(e) {
+        console.error('GAS load error:', e);
+      }
+
+      // GAS失敗時はlocalStorageから
       var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
       volumeHistory = stored;
       if (stored.length === 0) {
-        alert('蓄積データがまだありません。\nサイクルデータを読み込んで「💾 保存して蓄積」を押してください。');
+        alert('蓄積データがまだありません。\nサイクルデータを読み込んで保存してください。');
         return;
       }
       document.getElementById('volume-history-section').classList.remove('hidden');
@@ -8234,7 +8415,6 @@
     }
 
     function showVolumeRange(range) {
-      // ボタンハイライト
       ['week', 'month', 'compare'].forEach(function(r) {
         var btn = document.getElementById('vol-range-' + r);
         if (btn) btn.className = r === range ? 'bg-amber-500 text-white text-xs px-3 py-1.5 rounded cursor-pointer font-bold' : 'btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer';
@@ -8251,7 +8431,6 @@
         var monthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
         filtered = volumeHistory.filter(function(d) { return d.date.substring(0, 7) === monthStr; });
       } else if (range === 'compare') {
-        // 今月と前年同月
         var thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
         var lastYear = (now.getFullYear() - 1) + '-' + String(now.getMonth() + 1).padStart(2, '0');
         filtered = volumeHistory.filter(function(d) {
@@ -8273,22 +8452,20 @@
       var html = '';
       for (var i = data.length - 1; i >= 0; i--) {
         var d = data[i];
-        // コース内訳テキスト
         var typeSummary = '';
-        if (d.courseTypes) {
-          var tKeys = Object.keys(d.courseTypes).sort();
+        if (d.ct) {
+          var tKeys = Object.keys(d.ct).sort();
           var parts = [];
           for (var t = 0; t < tKeys.length; t++) {
-            parts.push(tKeys[t] + ':' + d.courseTypes[tKeys[t]].count);
+            parts.push(tKeys[t] + ':' + d.ct[tKeys[t]].n + '(~' + d.ct[tKeys[t]].max + ')');
           }
           typeSummary = parts.join(' / ');
         }
 
-        // 前日比計算
-        var prevPkg = (i > 0) ? data[i - 1].totalPackages : null;
+        var prevPkg = (i > 0) ? data[i - 1].tp : null;
         var diffHtml = '';
         if (prevPkg !== null) {
-          var diff = d.totalPackages - prevPkg;
+          var diff = d.tp - prevPkg;
           var diffColor = diff > 0 ? 'text-red-500' : (diff < 0 ? 'text-blue-500' : 'text-gray-400');
           var diffSign = diff > 0 ? '+' : '';
           diffHtml = ' <span class="text-xs ' + diffColor + '">' + diffSign + diff + '</span>';
@@ -8296,15 +8473,13 @@
 
         html += '<tr class="border-b border-border hover:bg-surface/50">' +
           '<td class="px-3 py-2 text-xs font-mono">' + d.date + '</td>' +
-          '<td class="px-3 py-2 text-right font-bold">' + d.totalPackages.toLocaleString() + diffHtml + '</td>' +
-          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + d.totalStops.toLocaleString() + '</td>' +
-          '<td class="px-3 py-2 text-right">' + d.totalCourses + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + d.tp.toLocaleString() + diffHtml + '</td>' +
+          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + d.ts.toLocaleString() + '</td>' +
+          '<td class="px-3 py-2 text-right">' + d.tc + '</td>' +
           '<td class="px-3 py-2 text-xs text-ink-lighter">' + typeSummary + '</td>' +
           '</tr>';
       }
       tbody.innerHTML = html;
-
-      // エリア別推移
       renderAreaHistory(data);
     }
 
@@ -8312,16 +8487,15 @@
       var container = document.getElementById('vol-area-history');
       if (data.length === 0) { container.innerHTML = ''; return; }
 
-      // 全エリア名を収集
       var allAreas = {};
       for (var i = 0; i < data.length; i++) {
-        if (data[i].areaData) {
-          var aKeys = Object.keys(data[i].areaData);
+        if (data[i].ar) {
+          var aKeys = Object.keys(data[i].ar);
           for (var a = 0; a < aKeys.length; a++) allAreas[aKeys[a]] = true;
         }
       }
       var areaNames = Object.keys(allAreas).sort();
-      if (areaNames.length === 0) { container.innerHTML = '<p class="text-xs text-ink-lighter">エリアデータなし</p>'; return; }
+      if (areaNames.length === 0) { container.innerHTML = ''; return; }
 
       var html = '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
         '<th class="px-2 py-1 text-left text-xs font-medium text-ink-lighter">日付</th>';
@@ -8333,7 +8507,7 @@
       for (var i = data.length - 1; i >= 0; i--) {
         html += '<tr class="border-b border-border"><td class="px-2 py-1 text-xs font-mono">' + data[i].date + '</td>';
         for (var a = 0; a < areaNames.length; a++) {
-          var val = (data[i].areaData && data[i].areaData[areaNames[a]]) ? data[i].areaData[areaNames[a]].packages : 0;
+          var val = (data[i].ar && data[i].ar[areaNames[a]]) ? data[i].ar[areaNames[a]].p : 0;
           html += '<td class="px-2 py-1 text-right text-xs font-bold">' + (val > 0 ? val.toLocaleString() : '-') + '</td>';
         }
         html += '</tr>';
