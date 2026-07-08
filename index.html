@@ -687,6 +687,7 @@
                 class="w-full text-lg px-4 py-3 border-2 border-blue-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none font-mono"
                 onkeydown="if(event.key==='Enter'){lookupDA(); event.preventDefault();}"
                 onpaste="setTimeout(function(){ lookupDA(); }, 50)"
+                oninput="clearTimeout(window._scanDebounce); window._scanDebounce=setTimeout(function(){ var v=document.getElementById('scan-input').value.trim(); if(v.length>=6) lookupDA(); },300)"
                 autocomplete="off" autofocus>
               <p class="text-xs text-ink-lighter mt-1">スキャン後自動検索。連続スキャンOK</p>
             </div>
