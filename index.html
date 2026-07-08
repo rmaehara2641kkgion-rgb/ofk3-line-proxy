@@ -48,6 +48,7 @@
     body.tab-tenko-match { background: linear-gradient(160deg, #f0f9ff 0%, #e0f2fe 45%, #bae6fd 75%, #f0f9ff 100%); }
     body.tab-map-master { background: linear-gradient(160deg, #fff1f2 0%, #ffe4e6 45%, #fecdd3 75%, #fff1f2 100%); }
     body.tab-billing { background: linear-gradient(160deg, #f0fdfa 0%, #ccfbf1 45%, #99f6e4 75%, #f0fdfa 100%); }
+    body.tab-volume { background: linear-gradient(160deg, #fef9c3 0%, #fde68a 45%, #fbbf24 75%, #fef9c3 100%); }
 
     /* === Body text color === */
     body { color: #1e293b; }
@@ -246,6 +247,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
       </nav>
 
       <!-- Dashboard Tab -->
@@ -929,6 +931,131 @@
         </div>
       </div>
 
+      <!-- 物量管理 Tab -->
+      <div id="panel-volume" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">📊 物量管理</h2>
+            <p class="text-sm text-ink-lighter">サイクルデータから物量を集計・蓄積・分析</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="loadVolumeHistory()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">📥 過去データ読込</button>
+          </div>
+        </div>
+
+        <!-- ドロップゾーン -->
+        <div id="volume-dropzone" class="text-center py-12 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/50 transition-colors"
+          onclick="document.getElementById('volume-file-input').click()"
+          ondragover="event.preventDefault(); this.classList.add('border-amber-400','bg-amber-50')"
+          ondragleave="this.classList.remove('border-amber-400','bg-amber-50')"
+          ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
+          <div class="text-4xl mb-3">📦</div>
+          <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)をドラッグ＆ドロップ</p>
+          <p class="text-xs text-gray-400 mt-1">またはクリックしてファイルを選択</p>
+          <input type="file" id="volume-file-input" accept=".xlsx,.xls" onchange="handleVolumeFileSelect(event)" class="hidden">
+        </div>
+
+        <!-- 今日の集計サマリー -->
+        <div id="volume-summary" class="hidden mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold">今日の集計</h3>
+            <div class="flex gap-2">
+              <span id="volume-date-label" class="text-xs text-ink-lighter"></span>
+              <button onclick="saveVolumeData()" class="bg-amber-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-amber-600 cursor-pointer">💾 保存して蓄積</button>
+            </div>
+          </div>
+
+          <!-- 全体サマリーカード -->
+          <div class="grid grid-cols-4 gap-3 mb-4">
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-amber-600" id="vol-total-packages">0</div>
+              <div class="text-xs text-ink-lighter">総小口数</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-blue-600" id="vol-total-stops">0</div>
+              <div class="text-xs text-ink-lighter">総件数</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-green-600" id="vol-total-courses">0</div>
+              <div class="text-xs text-ink-lighter">総コース数</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold text-purple-600" id="vol-avg-per-course">0</div>
+              <div class="text-xs text-ink-lighter">平均小口/コース</div>
+            </div>
+          </div>
+
+          <!-- コース種別内訳 -->
+          <div class="card p-4 mb-4">
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">コース種別内訳</h4>
+            <div id="vol-course-breakdown" class="space-y-2"></div>
+          </div>
+
+          <!-- エリア別物量 -->
+          <div class="card p-4 mb-4">
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">エリア別物量</h4>
+            <div id="vol-area-breakdown" class="space-y-2"></div>
+          </div>
+
+          <!-- コース一覧テーブル -->
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">エリア</th>
+                  </tr>
+                </thead>
+                <tbody id="vol-course-table-body">
+                  <tr><td colspan="4" class="text-center py-4 text-ink-lighter text-sm">データなし</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 過去データ比較 -->
+        <div id="volume-history-section" class="hidden">
+          <h3 class="text-sm font-bold mb-3">📈 物量推移・比較</h3>
+
+          <!-- 期間選択 -->
+          <div class="flex gap-2 mb-4 flex-wrap">
+            <button onclick="showVolumeRange('week')" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer" id="vol-range-week">直近7日</button>
+            <button onclick="showVolumeRange('month')" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer" id="vol-range-month">今月</button>
+            <button onclick="showVolumeRange('compare')" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer" id="vol-range-compare">前年同月比較</button>
+          </div>
+
+          <!-- 推移テーブル -->
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">日付</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
+                  </tr>
+                </thead>
+                <tbody id="vol-history-table-body">
+                  <tr><td colspan="5" class="text-center py-4 text-ink-lighter text-sm">過去データを読み込んでください</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- エリア別比較 -->
+          <div class="card p-4 mb-4">
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">エリア別推移</h4>
+            <div id="vol-area-history" class="overflow-x-auto"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- MAP管理 Tab -->
       <div id="panel-map-master" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -1471,11 +1598,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing'];
+      var tabClasses = ['tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-volume'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing'};
+      var tabMap = {'dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','volume':'tab-volume'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search'].forEach(t => {
+      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'volume'].forEach(t => {
         document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
         document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
       });
@@ -7826,6 +7953,367 @@
       a.click();
     }
 
+
+    // ===== 物量管理 =====
+    var volumeData = null; // 今日の集計結果
+    var volumeHistory = []; // 過去データ（GASから取得）
+    var VOLUME_GAS_URL = ''; // GAS保存先（後で設定）
+
+    function handleVolumeFileSelect(event) {
+      var files = event.target.files;
+      if (files.length > 0) parseVolumeData(files[0]);
+      event.target.value = '';
+    }
+
+    function handleVolumeFileDrop(event) {
+      var files = event.dataTransfer.files;
+      if (files.length > 0) parseVolumeData(files[0]);
+    }
+
+    function parseVolumeData(file) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var data = new Uint8Array(e.target.result);
+          var workbook = XLSX.read(data, { type: 'array' });
+          var courses = {};
+
+          for (var si = 0; si < workbook.SheetNames.length; si++) {
+            try {
+              var sheetName = workbook.SheetNames[si];
+              var sheet = workbook.Sheets[sheetName];
+              var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+              // ルートコード取得
+              var routeCode = '';
+              var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
+              if (sheetRouteMatch) {
+                routeCode = sheetRouteMatch[1].trim();
+              }
+              if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
+                var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
+                if (routeMatch) routeCode = routeMatch[1].trim();
+              }
+              if (!routeCode) continue;
+
+              // 小口数とユニーク住所（件数）を計算
+              var packages = 0;
+              var addresses = {};
+              for (var i = 1; i < json.length; i++) {
+                var row = json[i];
+                if (!row || !row[1]) continue;
+                var da = String(row[1]).trim();
+                if (da === 'Tracking ID' || da === 'DA' || !da) continue;
+                packages++;
+                // 住所（Column F = index 5）でユニークカウント
+                if (row[5] && String(row[5]).trim()) {
+                  var addr = String(row[5]).trim();
+                  if (addr.indexOf('OFK') < 0) {
+                    addresses[addr] = true;
+                  }
+                }
+              }
+
+              if (packages > 0) {
+                // エリア判定
+                var addrList = Object.keys(addresses);
+                var area = extractAreaFromAddresses(addrList);
+
+                courses[routeCode] = {
+                  packages: packages,
+                  stops: Object.keys(addresses).length,
+                  area: area || '不明'
+                };
+              }
+            } catch(sheetErr) {
+              console.error('Volume sheet error:', sheetName, sheetErr.message);
+            }
+          }
+
+          // 集計
+          var courseKeys = Object.keys(courses);
+          if (courseKeys.length === 0) {
+            alert('コースデータが見つかりませんでした');
+            return;
+          }
+
+          // コース種別グルーピング（DCX, DMX, DSX, DCMR等）
+          var courseTypes = {};
+          var totalPkg = 0;
+          var totalStops = 0;
+          var areaData = {};
+
+          courseKeys.sort();
+          for (var c = 0; c < courseKeys.length; c++) {
+            var code = courseKeys[c];
+            var info = courses[code];
+            totalPkg += info.packages;
+            totalStops += info.stops;
+
+            // 種別抽出（DCX, DMX, DSX, DCMR等）
+            var typeMatch = code.match(/^([A-Z]+?)(\d)/);
+            var cType = typeMatch ? typeMatch[1] : code;
+            if (!courseTypes[cType]) {
+              courseTypes[cType] = { count: 0, packages: 0, stops: 0, maxNum: '', codes: [] };
+            }
+            courseTypes[cType].count++;
+            courseTypes[cType].packages += info.packages;
+            courseTypes[cType].stops += info.stops;
+            courseTypes[cType].codes.push(code);
+            // 最大番号
+            var numPart = code.replace(/^[A-Z]+/, '');
+            if (!courseTypes[cType].maxNum || numPart > courseTypes[cType].maxNum) {
+              courseTypes[cType].maxNum = numPart;
+            }
+
+            // エリア集計
+            var ar = info.area;
+            if (!areaData[ar]) { areaData[ar] = { packages: 0, stops: 0, courses: 0 }; }
+            areaData[ar].packages += info.packages;
+            areaData[ar].stops += info.stops;
+            areaData[ar].courses++;
+          }
+
+          var now = new Date();
+          var dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+
+          volumeData = {
+            date: dateStr,
+            totalPackages: totalPkg,
+            totalStops: totalStops,
+            totalCourses: courseKeys.length,
+            courseTypes: courseTypes,
+            courses: courses,
+            areaData: areaData
+          };
+
+          renderVolumeSummary();
+        } catch(err) {
+          console.error('Volume parse error:', err);
+          alert('ファイル読込エラー: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function renderVolumeSummary() {
+      if (!volumeData) return;
+      var d = volumeData;
+
+      document.getElementById('volume-summary').classList.remove('hidden');
+      document.getElementById('volume-dropzone').classList.add('hidden');
+      document.getElementById('volume-date-label').textContent = d.date;
+
+      // サマリーカード
+      document.getElementById('vol-total-packages').textContent = d.totalPackages.toLocaleString();
+      document.getElementById('vol-total-stops').textContent = d.totalStops.toLocaleString();
+      document.getElementById('vol-total-courses').textContent = d.totalCourses;
+      document.getElementById('vol-avg-per-course').textContent = d.totalCourses > 0 ? Math.round(d.totalPackages / d.totalCourses) : 0;
+
+      // コース種別内訳
+      var breakdownHtml = '';
+      var types = Object.keys(d.courseTypes).sort();
+      for (var t = 0; t < types.length; t++) {
+        var ct = d.courseTypes[types[t]];
+        var pct = d.totalPackages > 0 ? Math.round(ct.packages / d.totalPackages * 100) : 0;
+        breakdownHtml += '<div class="flex items-center justify-between p-2 rounded-lg" style="background:rgba(0,0,0,0.03)">' +
+          '<div class="flex items-center gap-2">' +
+          '<span class="text-sm font-bold text-amber-700">' + types[t] + '</span>' +
+          '<span class="text-xs text-ink-lighter">' + ct.count + 'コース（〜' + types[t] + ct.maxNum + '）</span>' +
+          '</div>' +
+          '<div class="flex items-center gap-3">' +
+          '<span class="text-sm font-bold">' + ct.packages.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
+          '<span class="text-sm font-bold text-blue-600">' + ct.stops.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
+          '<div class="w-16 h-2 bg-gray-200 rounded-full overflow-hidden"><div class="h-full bg-amber-400 rounded-full" style="width:' + pct + '%"></div></div>' +
+          '<span class="text-xs text-ink-lighter w-8 text-right">' + pct + '%</span>' +
+          '</div></div>';
+      }
+      document.getElementById('vol-course-breakdown').innerHTML = breakdownHtml;
+
+      // エリア別物量
+      var areaHtml = '';
+      var areas = Object.keys(d.areaData).sort(function(a, b) { return d.areaData[b].packages - d.areaData[a].packages; });
+      for (var a = 0; a < areas.length; a++) {
+        var ad = d.areaData[areas[a]];
+        var aPct = d.totalPackages > 0 ? Math.round(ad.packages / d.totalPackages * 100) : 0;
+        areaHtml += '<div class="flex items-center justify-between p-2 rounded-lg" style="background:rgba(0,0,0,0.03)">' +
+          '<div class="flex items-center gap-2">' +
+          '<span class="text-sm font-bold">' + areas[a] + '</span>' +
+          '<span class="text-xs text-ink-lighter">' + ad.courses + 'コース</span>' +
+          '</div>' +
+          '<div class="flex items-center gap-3">' +
+          '<span class="text-sm font-bold">' + ad.packages.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">小口</span></span>' +
+          '<span class="text-sm font-bold text-blue-600">' + ad.stops.toLocaleString() + '<span class="text-xs font-normal text-ink-lighter">件</span></span>' +
+          '<div class="w-16 h-2 bg-gray-200 rounded-full overflow-hidden"><div class="h-full bg-green-400 rounded-full" style="width:' + aPct + '%"></div></div>' +
+          '<span class="text-xs text-ink-lighter w-8 text-right">' + aPct + '%</span>' +
+          '</div></div>';
+      }
+      document.getElementById('vol-area-breakdown').innerHTML = areaHtml;
+
+      // コース一覧テーブル
+      var tableHtml = '';
+      var sortedCourses = Object.keys(d.courses).sort();
+      for (var i = 0; i < sortedCourses.length; i++) {
+        var cc = sortedCourses[i];
+        var ci = d.courses[cc];
+        tableHtml += '<tr class="border-b border-border hover:bg-surface/50">' +
+          '<td class="px-3 py-2 font-mono font-bold text-sm">' + cc + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + ci.packages + '</td>' +
+          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + ci.stops + '</td>' +
+          '<td class="px-3 py-2 text-xs text-ink-lighter">' + ci.area + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('vol-course-table-body').innerHTML = tableHtml;
+    }
+
+    // GASへ保存（蓄積）
+    async function saveVolumeData() {
+      if (!volumeData) { alert('集計データがありません'); return; }
+      // まずlocalStorageにも保存
+      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
+      // 同日データがあれば上書き
+      var found = false;
+      for (var i = 0; i < stored.length; i++) {
+        if (stored[i].date === volumeData.date) {
+          stored[i] = volumeData;
+          found = true;
+          break;
+        }
+      }
+      if (!found) stored.push(volumeData);
+      stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+      localStorage.setItem('volumeHistory', JSON.stringify(stored));
+      volumeHistory = stored;
+
+      alert('保存しました（' + volumeData.date + '）\n小口数: ' + volumeData.totalPackages + ' / 件数: ' + volumeData.totalStops + ' / コース数: ' + volumeData.totalCourses);
+      renderVolumeHistory();
+    }
+
+    // 過去データ読込
+    function loadVolumeHistory() {
+      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
+      volumeHistory = stored;
+      if (stored.length === 0) {
+        alert('蓄積データがまだありません。\nサイクルデータを読み込んで「💾 保存して蓄積」を押してください。');
+        return;
+      }
+      document.getElementById('volume-history-section').classList.remove('hidden');
+      showVolumeRange('week');
+    }
+
+    function showVolumeRange(range) {
+      // ボタンハイライト
+      ['week', 'month', 'compare'].forEach(function(r) {
+        var btn = document.getElementById('vol-range-' + r);
+        if (btn) btn.className = r === range ? 'bg-amber-500 text-white text-xs px-3 py-1.5 rounded cursor-pointer font-bold' : 'btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer';
+      });
+
+      var now = new Date();
+      var filtered = [];
+
+      if (range === 'week') {
+        var weekAgo = new Date(now.getTime() - 7 * 86400000);
+        var weekStr = weekAgo.getFullYear() + '-' + String(weekAgo.getMonth() + 1).padStart(2, '0') + '-' + String(weekAgo.getDate()).padStart(2, '0');
+        filtered = volumeHistory.filter(function(d) { return d.date >= weekStr; });
+      } else if (range === 'month') {
+        var monthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+        filtered = volumeHistory.filter(function(d) { return d.date.substring(0, 7) === monthStr; });
+      } else if (range === 'compare') {
+        // 今月と前年同月
+        var thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+        var lastYear = (now.getFullYear() - 1) + '-' + String(now.getMonth() + 1).padStart(2, '0');
+        filtered = volumeHistory.filter(function(d) {
+          var m = d.date.substring(0, 7);
+          return m === thisMonth || m === lastYear;
+        });
+      }
+
+      renderVolumeHistoryTable(filtered, range);
+    }
+
+    function renderVolumeHistoryTable(data, range) {
+      var tbody = document.getElementById('vol-history-table-body');
+      if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-ink-lighter text-sm">該当期間のデータなし</td></tr>';
+        return;
+      }
+
+      var html = '';
+      for (var i = data.length - 1; i >= 0; i--) {
+        var d = data[i];
+        // コース内訳テキスト
+        var typeSummary = '';
+        if (d.courseTypes) {
+          var tKeys = Object.keys(d.courseTypes).sort();
+          var parts = [];
+          for (var t = 0; t < tKeys.length; t++) {
+            parts.push(tKeys[t] + ':' + d.courseTypes[tKeys[t]].count);
+          }
+          typeSummary = parts.join(' / ');
+        }
+
+        // 前日比計算
+        var prevPkg = (i > 0) ? data[i - 1].totalPackages : null;
+        var diffHtml = '';
+        if (prevPkg !== null) {
+          var diff = d.totalPackages - prevPkg;
+          var diffColor = diff > 0 ? 'text-red-500' : (diff < 0 ? 'text-blue-500' : 'text-gray-400');
+          var diffSign = diff > 0 ? '+' : '';
+          diffHtml = ' <span class="text-xs ' + diffColor + '">' + diffSign + diff + '</span>';
+        }
+
+        html += '<tr class="border-b border-border hover:bg-surface/50">' +
+          '<td class="px-3 py-2 text-xs font-mono">' + d.date + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + d.totalPackages.toLocaleString() + diffHtml + '</td>' +
+          '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + d.totalStops.toLocaleString() + '</td>' +
+          '<td class="px-3 py-2 text-right">' + d.totalCourses + '</td>' +
+          '<td class="px-3 py-2 text-xs text-ink-lighter">' + typeSummary + '</td>' +
+          '</tr>';
+      }
+      tbody.innerHTML = html;
+
+      // エリア別推移
+      renderAreaHistory(data);
+    }
+
+    function renderAreaHistory(data) {
+      var container = document.getElementById('vol-area-history');
+      if (data.length === 0) { container.innerHTML = ''; return; }
+
+      // 全エリア名を収集
+      var allAreas = {};
+      for (var i = 0; i < data.length; i++) {
+        if (data[i].areaData) {
+          var aKeys = Object.keys(data[i].areaData);
+          for (var a = 0; a < aKeys.length; a++) allAreas[aKeys[a]] = true;
+        }
+      }
+      var areaNames = Object.keys(allAreas).sort();
+      if (areaNames.length === 0) { container.innerHTML = '<p class="text-xs text-ink-lighter">エリアデータなし</p>'; return; }
+
+      var html = '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+        '<th class="px-2 py-1 text-left text-xs font-medium text-ink-lighter">日付</th>';
+      for (var a = 0; a < areaNames.length; a++) {
+        html += '<th class="px-2 py-1 text-right text-xs font-medium text-ink-lighter">' + areaNames[a] + '</th>';
+      }
+      html += '</tr></thead><tbody>';
+
+      for (var i = data.length - 1; i >= 0; i--) {
+        html += '<tr class="border-b border-border"><td class="px-2 py-1 text-xs font-mono">' + data[i].date + '</td>';
+        for (var a = 0; a < areaNames.length; a++) {
+          var val = (data[i].areaData && data[i].areaData[areaNames[a]]) ? data[i].areaData[areaNames[a]].packages : 0;
+          html += '<td class="px-2 py-1 text-right text-xs font-bold">' + (val > 0 ? val.toLocaleString() : '-') + '</td>';
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    function renderVolumeHistory() {
+      document.getElementById('volume-history-section').classList.remove('hidden');
+      showVolumeRange('week');
+    }
 
     // MAP管理タブ表示時にGASからリフレッシュ
     (function() {
