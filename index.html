@@ -8169,23 +8169,49 @@
     // GASへ保存（蓄積）
     async function saveVolumeData() {
       if (!volumeData) { alert('集計データがありません'); return; }
-      // まずlocalStorageにも保存
+      // 保存用に軽量化（コース詳細は省く）
+      var slim = {
+        date: volumeData.date,
+        totalPackages: volumeData.totalPackages,
+        totalStops: volumeData.totalStops,
+        totalCourses: volumeData.totalCourses,
+        courseTypes: {},
+        areaData: volumeData.areaData
+      };
+      // courseTypesからcodesを除外（重い）
+      var ctKeys = Object.keys(volumeData.courseTypes);
+      for (var k = 0; k < ctKeys.length; k++) {
+        var ct = volumeData.courseTypes[ctKeys[k]];
+        slim.courseTypes[ctKeys[k]] = { count: ct.count, packages: ct.packages, stops: ct.stops, maxNum: ct.maxNum };
+      }
+
       var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
-      // 同日データがあれば上書き
       var found = false;
       for (var i = 0; i < stored.length; i++) {
-        if (stored[i].date === volumeData.date) {
-          stored[i] = volumeData;
+        if (stored[i].date === slim.date) {
+          stored[i] = slim;
           found = true;
           break;
         }
       }
-      if (!found) stored.push(volumeData);
+      if (!found) stored.push(slim);
       stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
-      localStorage.setItem('volumeHistory', JSON.stringify(stored));
+
+      try {
+        localStorage.setItem('volumeHistory', JSON.stringify(stored));
+      } catch(e) {
+        // それでも超える場合、古いデータを削除
+        while (stored.length > 180) { stored.shift(); }
+        try {
+          localStorage.setItem('volumeHistory', JSON.stringify(stored));
+        } catch(e2) {
+          alert('保存容量を超えました。古いデータを削除してください。');
+          return;
+        }
+      }
       volumeHistory = stored;
 
-      alert('保存しました（' + volumeData.date + '）\n小口数: ' + volumeData.totalPackages + ' / 件数: ' + volumeData.totalStops + ' / コース数: ' + volumeData.totalCourses);
+      alert('保存しました（' + slim.date + '）\n小口数: ' + slim.totalPackages + ' / 件数: ' + slim.totalStops + ' / コース数: ' + slim.totalCourses);
       renderVolumeHistory();
     }
 
