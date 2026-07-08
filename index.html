@@ -1841,45 +1841,53 @@
         daNumberMap = {}; // リセット
         daAddressMap = {}; // リセット
         workbook.SheetNames.forEach(sheetName => {
+          try {
           const sheet = workbook.Sheets[sheetName];
           const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-          // First row contains "Route for XXXXX" - extract route code
-          if (json.length > 0 && json[0] && json[0][0]) {
+          // ルートコード取得：シート名 or Row0
+          var routeCode = '';
+          var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
+          if (sheetRouteMatch) {
+            routeCode = sheetRouteMatch[1].trim();
+          }
+          if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
             const routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
             if (routeMatch) {
-              const routeCode = routeMatch[1].trim();
+              routeCode = routeMatch[1].trim();
+            }
+          }
 
-              // Column F (index 5) = "Actual Customer Address"
-              // Column B (index 1) = DA番号
-              // Start from row 3 (index 2) — row 1 is route name, row 2 is headers
+          if (routeCode) {
               const addresses = [];
-              for (let i = 2; i < json.length; i++) {
+              for (let i = 1; i < json.length; i++) {
                 const row = json[i];
+                // ヘッダー行スキップ
+                if (row && row[1] && String(row[1]).trim() === 'Tracking ID') continue;
                 if (row && row[5] && String(row[5]).trim() && String(row[5]).indexOf('OFK') < 0) {
                   addresses.push(String(row[5]));
                 }
                 // DA番号マップ構築
                 if (row && row[1] && String(row[1]).trim()) {
                   var da = String(row[1]).trim();
-                  daNumberMap[da] = routeCode;
-                  // DA→住所マップ構築
-                  if (row[5] && String(row[5]).trim()) {
-                    daAddressMap[da] = String(row[5]).trim();
+                  if (da !== 'Tracking ID' && da !== 'DA') {
+                    daNumberMap[da] = routeCode;
+                    if (row[5] && String(row[5]).trim()) {
+                      daAddressMap[da] = String(row[5]).trim();
+                    }
+                    daCount++;
                   }
-                  daCount++;
                 }
               }
 
               if (addresses.length > 0) {
                 cycleData[routeCode] = addresses;
-                // Auto-extract area
                 const area = extractAreaFromAddresses(addresses);
                 if (area) routeAreas[routeCode] = area;
                 routeCount++;
               }
-            }
           }
+          } catch(sheetErr) { console.error('Sheet error:', sheetName, sheetErr.message); }
         });
 
         localStorage.setItem('routeAreas', JSON.stringify(routeAreas));
@@ -5973,37 +5981,60 @@
         (function(file) {
           var reader = new FileReader();
           reader.onload = function(e) {
-            var data = new Uint8Array(e.target.result);
-            var workbook = XLSX.read(data, { type: 'array' });
+            try {
+              var data = new Uint8Array(e.target.result);
+              var workbook = XLSX.read(data, { type: 'array' });
 
-            workbook.SheetNames.forEach(function(sheetName) {
-              var sheet = workbook.Sheets[sheetName];
-              var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+              for (var si = 0; si < workbook.SheetNames.length; si++) {
+                try {
+                  var sheetName = workbook.SheetNames[si];
+                  var sheet = workbook.Sheets[sheetName];
+                  var json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-              if (json.length > 0 && json[0] && json[0][0]) {
-                var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
-                if (routeMatch) {
-                  var routeCode = routeMatch[1].trim();
-                  for (var i = 2; i < json.length; i++) {
-                    var row = json[i];
-                    if (row && row[1] && String(row[1]).trim()) {
-                      var da = String(row[1]).trim();
-                      daNumberMap[da] = routeCode;
-                      if (row[5] && String(row[5]).trim()) {
-                        daAddressMap[da] = String(row[5]).trim();
-                      }
-                      totalDA++;
+                  // シート名からルートコード抽出を試みる（sequencedRoute_DMX45 → DMX45）
+                  var routeCode = '';
+                  var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
+                  if (sheetRouteMatch) {
+                    routeCode = sheetRouteMatch[1].trim();
+                  }
+
+                  // Row0からも取得（Route for XXX パターン）
+                  if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
+                    var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
+                    if (routeMatch) {
+                      routeCode = routeMatch[1].trim();
                     }
                   }
+
+                  if (routeCode) {
+                    for (var i = 1; i < json.length; i++) {
+                      var row = json[i];
+                      if (row && row[1] && String(row[1]).trim()) {
+                        var da = String(row[1]).trim();
+                        // ヘッダー行スキップ
+                        if (da === 'Tracking ID' || da === 'DA') continue;
+                        daNumberMap[da] = routeCode;
+                        if (row[5] && String(row[5]).trim()) {
+                          daAddressMap[da] = String(row[5]).trim();
+                        }
+                        totalDA++;
+                      }
+                    }
+                  }
+                } catch(sheetErr) {
+                  console.error('Sheet error:', workbook.SheetNames[si], sheetErr.message);
                 }
               }
-            });
+            } catch(fileErr) {
+              console.error('File error:', file.name, fileErr.message);
+            }
 
             processed++;
             if (processed === fileCount) {
               updateScanStatus();
               updateAddrSearchStatus();
-              document.getElementById('scan-input') && document.getElementById('scan-input').focus();
+              var scanInput = document.getElementById('scan-input');
+              if (scanInput) scanInput.focus();
               alert('マニフェスト読込完了\n' + fileCount + 'ファイル / DA ' + Object.keys(daNumberMap).length + '件');
             }
           };
