@@ -959,7 +959,8 @@
         <div id="volume-summary" class="hidden mb-4">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold">今日の集計</h3>
-            <div class="flex gap-2">
+            <div class="flex items-center gap-2">
+              <input type="date" id="volume-date-input" class="text-xs px-2 py-1 border border-gray-300 rounded" onchange="if(volumeData){volumeData.date=this.value; document.getElementById('volume-date-label').textContent=this.value;}">
               <span id="volume-date-label" class="text-xs text-ink-lighter"></span>
               <button onclick="saveVolumeData()" class="bg-amber-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-amber-600 cursor-pointer">💾 保存して蓄積</button>
             </div>
@@ -8103,6 +8104,7 @@
       document.getElementById('volume-summary').classList.remove('hidden');
       document.getElementById('volume-dropzone').classList.add('hidden');
       document.getElementById('volume-date-label').textContent = d.date;
+      document.getElementById('volume-date-input').value = d.date;
 
       // サマリーカード
       document.getElementById('vol-total-packages').textContent = d.totalPackages.toLocaleString();
@@ -8212,6 +8214,10 @@
       volumeHistory = stored;
 
       alert('保存しました（' + slim.date + '）\n小口数: ' + slim.totalPackages + ' / 件数: ' + slim.totalStops + ' / コース数: ' + slim.totalCourses);
+      // 連続登録用にドロップゾーン再表示
+      document.getElementById('volume-dropzone').classList.remove('hidden');
+      document.getElementById('volume-summary').classList.add('hidden');
+      volumeData = null;
       renderVolumeHistory();
     }
 
