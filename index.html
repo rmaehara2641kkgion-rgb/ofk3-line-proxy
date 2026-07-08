@@ -756,8 +756,9 @@
                 class="w-full text-lg px-4 py-3 border-2 border-blue-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none font-mono"
                 onkeydown="if(event.key==='Enter'){lookupAddress(); event.preventDefault();}"
                 onpaste="setTimeout(function(){ lookupAddress(); }, 50)"
+                oninput="clearTimeout(window._addrDebounce); window._addrDebounce=setTimeout(function(){ var v=document.getElementById('addr-search-input').value.trim(); if(v.length>=6) lookupAddress(); },300)"
                 autocomplete="off">
-              <p class="text-xs text-ink-lighter mt-1">Enter or 貼り付けで自動検索</p>
+              <p class="text-xs text-ink-lighter mt-1">6文字以上で自動検索 / Enter / 貼り付け</p>
             </div>
 
             <!-- 結果表示 -->
@@ -6075,6 +6076,7 @@
       var input = document.getElementById('addr-search-input');
       var da = input.value.trim();
       if (!da) return;
+      console.log('lookupAddress called: da=' + da + ', daAddressMap keys=' + Object.keys(daAddressMap).length);
 
       var resultEl = document.getElementById('addr-search-result');
       var notFoundEl = document.getElementById('addr-search-not-found');
