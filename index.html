@@ -299,13 +299,13 @@
               <input type="number" id="exec-sc-rate" value="17.1" step="0.1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
             </div>
             <div>
-              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料S/C 係数</label>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料S/C 週数</label>
               <input type="number" id="exec-sc-factor" value="5" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
             </div>
             <div>
               <label class="text-xs text-ink-lighter block mb-1">⛽ 売上S/C合計</label>
               <p class="text-sm font-bold text-emerald-700 mt-1" id="exec-sc-total">--</p>
-              <p class="text-[10px] text-gray-400">= km × 単価 × 係数（売上に加算）</p>
+              <p class="text-[10px] text-gray-400">= km × 単価 × 週数（売上に加算）</p>
             </div>
           </div>
           <div class="grid grid-cols-4 gap-4">
@@ -8547,7 +8547,7 @@
       renderExecDetailTable(typeBreakdown, fuelRate);
 
       // 日別損益テーブル
-      renderExecDailyTable(fuelRate, dailyBudget);
+      renderExecDailyTable(fuelRate, dailyBudget, scDaily);
     }
 
     // 円グラフ
@@ -8648,7 +8648,7 @@
     }
 
     // 日別損益テーブル
-    function renderExecDailyTable(fuelRate, dailyBudget) {
+    function renderExecDailyTable(fuelRate, dailyBudget, scDaily) {
       var thead = document.getElementById('exec-daily-thead');
       var tbody = document.getElementById('exec-daily-tbody');
       if (!execShiftData) return;
