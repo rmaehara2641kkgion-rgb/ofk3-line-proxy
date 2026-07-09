@@ -936,24 +936,38 @@
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">📊 物量管理</h2>
-            <p class="text-sm text-ink-lighter">サイクルデータから物量を集計・蓄積・分析</p>
+            <p class="text-sm text-ink-lighter">サイクルデータ＋Actual Reportで物量を集計・蓄積・分析</p>
           </div>
           <div class="flex gap-2">
             <button onclick="loadVolumeHistory()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">📥 過去データ読込</button>
           </div>
         </div>
 
-        <!-- ドロップゾーン -->
-        <div id="volume-dropzone" class="text-center py-12 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/50 transition-colors"
-          onclick="document.getElementById('volume-file-input').click()"
-          ondragover="event.preventDefault(); this.classList.add('border-amber-400','bg-amber-50')"
-          ondragleave="this.classList.remove('border-amber-400','bg-amber-50')"
-          ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
-          <div class="text-4xl mb-3">📦</div>
-          <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)をまとめてドラッグ＆ドロップ</p>
-          <p class="text-xs text-gray-400 mt-1">複数日分OK・同じ日の複数サイクルもOK（自動統合）</p>
-          <p class="text-xs text-gray-400 mt-1">ファイル名から日付を自動取得</p>
-          <input type="file" id="volume-file-input" accept=".xlsx,.xls" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
+        <!-- ドロップゾーン2つ横並び -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <!-- サイクルデータ -->
+          <div id="volume-dropzone" class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/50 transition-colors"
+            onclick="document.getElementById('volume-file-input').click()"
+            ondragover="event.preventDefault(); this.classList.add('border-amber-400','bg-amber-50')"
+            ondragleave="this.classList.remove('border-amber-400','bg-amber-50')"
+            ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
+            <div class="text-3xl mb-2">📦</div>
+            <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)</p>
+            <p class="text-xs text-gray-400 mt-1">複数日分OK・自動統合</p>
+            <input type="file" id="volume-file-input" accept=".xlsx,.xls" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
+          </div>
+
+          <!-- Actual Report -->
+          <div id="actual-dropzone" class="text-center py-8 border-2 border-dashed border-blue-300 rounded-lg cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-colors"
+            onclick="document.getElementById('actual-file-input').click()"
+            ondragover="event.preventDefault(); this.classList.add('border-blue-500','bg-blue-50')"
+            ondragleave="this.classList.remove('border-blue-500','bg-blue-50')"
+            ondrop="event.preventDefault(); this.classList.remove('border-blue-500','bg-blue-50'); handleActualFileDrop(event)">
+            <div class="text-3xl mb-2">📊</div>
+            <p class="text-sm font-medium text-ink-lighter">Actual Report(xlsx)</p>
+            <p class="text-xs text-gray-400 mt-1">GDS・Flex・シティーアクト自動取込</p>
+            <input type="file" id="actual-file-input" accept=".xlsx,.xls" onchange="handleActualFileSelect(event)" class="hidden">
+          </div>
         </div>
 
         <!-- 今日の集計サマリー -->
@@ -1043,6 +1057,10 @@
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-yellow-50">GDS</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-orange-50">Flex</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-blue-50">シティー</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">全体台数</th>
                   </tr>
                 </thead>
                 <tbody id="vol-history-table-body">
@@ -8439,8 +8457,25 @@
           '<td class="px-3 py-2 text-right font-bold">' + d.tp.toLocaleString() + diffHtml + '</td>' +
           '<td class="px-3 py-2 text-right text-blue-600 font-bold">' + d.ts.toLocaleString() + '</td>' +
           '<td class="px-3 py-2 text-right">' + d.tc + '</td>' +
-          '<td class="px-3 py-2 text-xs text-ink-lighter">' + typeSummary + '</td>' +
-          '</tr>';
+          '<td class="px-3 py-2 text-xs text-ink-lighter">' + typeSummary + '</td>';
+
+        // Actual列
+        if (d.actual) {
+          var a = d.actual;
+          var gds = a.gds || {};
+          var flex = a.flex || {};
+          var city = a.city || {};
+          html += '<td class="px-3 py-2 text-right bg-yellow-50 font-bold">' + ((gds.c1c3 || 0) + (gds.c2 || 0)) + '</td>' +
+            '<td class="px-3 py-2 text-right bg-orange-50 font-bold">' + (flex.total || 0) + '</td>' +
+            '<td class="px-3 py-2 text-right bg-blue-50 font-bold">' + (city.total || 0) + '</td>' +
+            '<td class="px-3 py-2 text-right font-bold text-lg">' + (a.total || 0) + '</td>';
+        } else {
+          html += '<td class="px-3 py-2 text-right bg-yellow-50 text-ink-lighter">-</td>' +
+            '<td class="px-3 py-2 text-right bg-orange-50 text-ink-lighter">-</td>' +
+            '<td class="px-3 py-2 text-right bg-blue-50 text-ink-lighter">-</td>' +
+            '<td class="px-3 py-2 text-right text-ink-lighter">-</td>';
+        }
+        html += '</tr>';
       }
       tbody.innerHTML = html;
       renderAreaHistory(data);
@@ -8477,6 +8512,204 @@
       }
       html += '</tbody></table>';
       container.innerHTML = html;
+    }
+
+    // ===== Actual Report パーサー =====
+    function handleActualFileSelect(event) {
+      var files = event.target.files;
+      if (files.length > 0) parseActualReport(files[0]);
+      event.target.value = '';
+    }
+    function handleActualFileDrop(event) {
+      var files = event.dataTransfer.files;
+      if (files.length > 0) parseActualReport(files[0]);
+    }
+
+    function excelDateToISO(serial) {
+      // Excelシリアル日付 → YYYY-MM-DD
+      if (!serial || serial < 40000) return '';
+      var d = new Date((serial - 25569) * 86400000);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function parseActualReport(file) {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var data = new Uint8Array(e.target.result);
+          var workbook = XLSX.read(data, { type: 'array' });
+          var allEntries = [];
+
+          for (var si = 0; si < workbook.SheetNames.length; si++) {
+            try {
+              var sheetName = workbook.SheetNames[si];
+              var sheet = workbook.Sheets[sheetName];
+              var json = XLSX.utils.sheet_to_json(sheet, { header: 'A', defval: '' });
+
+              // Row5以降がデータ（0-indexed: index 4以降）
+              for (var ri = 4; ri < json.length; ri++) {
+                var row = json[ri];
+                var year = Number(row.A);
+                if (!year || year < 2020) continue;
+
+                // 日付: Col C (Excelシリアル)
+                var dateSerial = Number(row.C);
+                var dateStr = excelDateToISO(dateSerial);
+                if (!dateStr) continue;
+
+                var entry = {
+                  date: dateStr,
+                  // GDS（自社）
+                  gds_c1c3: Number(row.D) || 0,
+                  gds_c2: Number(row.E) || 0,
+                  gds_dispatch: Number(row.F) || 0,
+                  gds_returned: Number(row.G) || 0,
+                  gds_undelivered: Number(row.H) || 0,
+                  gds_completed: Number(row.J) || 0,
+                  gds_rate: row.K,
+                  // Flex（Amlex）
+                  flex_c1: Number(row.O) || 0,
+                  flex_c2: Number(row.P) || 0,
+                  flex_c3: Number(row.Q) || 0,
+                  // シティーアクト
+                  city_c1_kvan: Number(row.V) || 0,
+                  city_c1_biker: Number(row.W) || 0,
+                  city_c1_1tvan: Number(row.X) || 0,
+                  city_c2_kvan: Number(row.Y) || 0,
+                  city_c2_biker: Number(row.Z) || 0,
+                  city_milkrun: Number(row.AA) || 0
+                };
+
+                // 合計算出
+                entry.gds_total = entry.gds_c1c3 + entry.gds_c2;
+                entry.flex_total = entry.flex_c1 + entry.flex_c2 + entry.flex_c3;
+                entry.city_total = entry.city_c1_kvan + entry.city_c1_biker + entry.city_c1_1tvan + entry.city_c2_kvan + entry.city_c2_biker + entry.city_milkrun;
+                entry.all_total = entry.gds_total + entry.flex_total + entry.city_total;
+
+                if (entry.all_total > 0) {
+                  allEntries.push(entry);
+                }
+              }
+            } catch(sheetErr) {
+              console.error('Actual sheet error:', sheetName, sheetErr.message);
+            }
+          }
+
+          if (allEntries.length === 0) {
+            alert('Actual Reportのデータが見つかりませんでした');
+            return;
+          }
+
+          // プレビュー表示
+          renderActualPreview(allEntries);
+        } catch(err) {
+          console.error('Actual parse error:', err);
+          alert('ファイル読込エラー: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function renderActualPreview(entries) {
+      var html = '<div class="flex items-center justify-between mb-3">' +
+        '<h3 class="text-sm font-bold">📊 Actual Report — ' + entries.length + '日分</h3>' +
+        '<button onclick="saveActualData()" class="bg-blue-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-blue-600 cursor-pointer">💾 GASに保存</button>' +
+        '</div>';
+
+      html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-xs"><thead>' +
+        '<tr class="border-b border-border bg-surface">' +
+        '<th class="px-2 py-1.5 text-left">日付</th>' +
+        '<th class="px-2 py-1.5 text-right bg-yellow-50" colspan="4">GDS（自社）</th>' +
+        '<th class="px-2 py-1.5 text-right bg-orange-50" colspan="2">Flex</th>' +
+        '<th class="px-2 py-1.5 text-right bg-blue-50" colspan="2">シティーアクト</th>' +
+        '<th class="px-2 py-1.5 text-right">全体</th>' +
+        '</tr>' +
+        '<tr class="border-b border-border bg-surface text-ink-lighter">' +
+        '<th class="px-2 py-1"></th>' +
+        '<th class="px-2 py-1 text-right bg-yellow-50">C1/3</th>' +
+        '<th class="px-2 py-1 text-right bg-yellow-50">C2</th>' +
+        '<th class="px-2 py-1 text-right bg-yellow-50">持出</th>' +
+        '<th class="px-2 py-1 text-right bg-yellow-50">配完</th>' +
+        '<th class="px-2 py-1 text-right bg-orange-50">台数</th>' +
+        '<th class="px-2 py-1 text-right bg-orange-50">C1+2+3</th>' +
+        '<th class="px-2 py-1 text-right bg-blue-50">台数</th>' +
+        '<th class="px-2 py-1 text-right bg-blue-50">内訳</th>' +
+        '<th class="px-2 py-1 text-right">合計台数</th>' +
+        '</tr></thead><tbody>';
+
+      for (var i = entries.length - 1; i >= 0; i--) {
+        var d = entries[i];
+        var rateStr = d.gds_rate ? (typeof d.gds_rate === 'number' ? Math.round(d.gds_rate * 100) + '%' : d.gds_rate) : '-';
+        var cityDetail = '';
+        if (d.city_c1_kvan) cityDetail += 'K' + d.city_c1_kvan;
+        if (d.city_c1_biker) cityDetail += ' B' + d.city_c1_biker;
+        if (d.city_c1_1tvan) cityDetail += ' 1t' + d.city_c1_1tvan;
+        if (d.city_c2_kvan) cityDetail += ' K2:' + d.city_c2_kvan;
+        if (d.city_c2_biker) cityDetail += ' B2:' + d.city_c2_biker;
+        if (d.city_milkrun) cityDetail += ' MR' + d.city_milkrun;
+
+        html += '<tr class="border-b border-border hover:bg-surface/50">' +
+          '<td class="px-2 py-1.5 font-mono">' + d.date + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-yellow-50 font-bold">' + d.gds_c1c3 + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_c2 + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_dispatch.toLocaleString() + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_completed.toLocaleString() + '<span class="text-ink-lighter ml-1">' + rateStr + '</span></td>' +
+          '<td class="px-2 py-1.5 text-right bg-orange-50 font-bold">' + d.flex_total + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-orange-50 text-ink-lighter">' + d.flex_c1 + '+' + d.flex_c2 + '+' + d.flex_c3 + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-blue-50 font-bold">' + d.city_total + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-blue-50 text-ink-lighter text-[10px]">' + (cityDetail || '-') + '</td>' +
+          '<td class="px-2 py-1.5 text-right font-bold text-lg">' + d.all_total + '</td>' +
+          '</tr>';
+      }
+      html += '</tbody></table></div></div>';
+
+      window._actualEntries = entries;
+      document.getElementById('volume-summary').innerHTML = html;
+      document.getElementById('volume-summary').classList.remove('hidden');
+    }
+
+    async function saveActualData() {
+      var entries = window._actualEntries;
+      if (!entries || !entries.length) { alert('データがありません'); return; }
+
+      // GASに保存するデータ形式に変換（既存のvolume形式にactual情報を追加）
+      var saveData = [];
+      for (var i = 0; i < entries.length; i++) {
+        var d = entries[i];
+        saveData.push({
+          date: d.date,
+          tp: d.gds_dispatch,
+          ts: d.gds_completed,
+          tc: d.all_total,
+          ct: {},
+          ar: {},
+          actual: {
+            gds: { c1c3: d.gds_c1c3, c2: d.gds_c2, dispatch: d.gds_dispatch, returned: d.gds_returned, undelivered: d.gds_undelivered, completed: d.gds_completed, rate: d.gds_rate },
+            flex: { c1: d.flex_c1, c2: d.flex_c2, c3: d.flex_c3, total: d.flex_total },
+            city: { c1_kvan: d.city_c1_kvan, c1_biker: d.city_c1_biker, c1_1tvan: d.city_c1_1tvan, c2_kvan: d.city_c2_kvan, c2_biker: d.city_c2_biker, milkrun: d.city_milkrun, total: d.city_total },
+            total: d.all_total
+          }
+        });
+      }
+
+      try {
+        var res = await fetch('/volume-master?action=save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(saveData)
+        });
+        var data = await res.json();
+        if (data.status === 'ok') {
+          alert(entries.length + '日分のActual ReportをGASに保存しました');
+          document.getElementById('volume-summary').classList.add('hidden');
+          window._actualEntries = null;
+          loadVolumeHistory();
+        } else {
+          alert('GAS保存エラー: ' + (data.message || ''));
+        }
+      } catch(e) {
+        alert('GAS接続エラー: ' + e.message);
+      }
     }
 
     function renderVolumeHistory() {
