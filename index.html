@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -8462,7 +8463,7 @@
 
       var profit = totalRevenue - totalCost;
       var profitRate = totalRevenue > 0 ? (profit / totalRevenue * 100).toFixed(1) : 0;
-      var budgetDiff = dailyBudget - charterCost;
+      var budgetDiff = dailyBudget - totalCost; // 日割予算 - 配送費
 
       // KPI表示
       document.getElementById('exec-kpi-area').classList.remove('hidden');
@@ -8481,7 +8482,7 @@
       var diffText = budgetDiff >= 0 ? '▼ ¥' + Math.round(Math.abs(budgetDiff)).toLocaleString() + ' 余裕' : '▲ ¥' + Math.round(Math.abs(budgetDiff)).toLocaleString() + ' 超過';
       document.getElementById('exec-charter-diff').textContent = diffText;
       document.getElementById('exec-charter-detail').textContent =
-        '日割予算: ¥' + Math.round(dailyBudget).toLocaleString() + ' / 実績: ¥' + Math.round(charterCost).toLocaleString();
+        '日割予算: ¥' + Math.round(dailyBudget).toLocaleString() + ' / 配送費: ¥' + Math.round(totalCost).toLocaleString();
       if (budgetDiff >= 0) {
         budgetCard.className = 'card p-4 border-2 bg-gradient-to-br from-green-50 to-green-100 border-green-300';
         document.getElementById('exec-charter-diff').className = 'text-2xl font-black text-green-700';
@@ -8511,7 +8512,7 @@
       }
       var monthProfit = monthRevenue - monthCost;
       var monthProfitRate = monthRevenue > 0 ? (monthProfit / monthRevenue * 100).toFixed(1) : 0;
-      var monthBudgetDiff = charterBudgetMonthly - monthCharter;
+      var monthBudgetDiff = charterBudgetMonthly - monthCost;
 
       document.getElementById('exec-month-revenue').textContent = '¥' + Math.round(monthRevenue).toLocaleString();
       document.getElementById('exec-month-cost').textContent = '¥' + Math.round(monthCost).toLocaleString();
@@ -8522,7 +8523,7 @@
       var mbText = monthBudgetDiff >= 0 ? '▼ ¥' + Math.round(Math.abs(monthBudgetDiff)).toLocaleString() + ' 余裕' : '▲ ¥' + Math.round(Math.abs(monthBudgetDiff)).toLocaleString() + ' 超過';
       document.getElementById('exec-month-budget-diff').textContent = mbText;
       document.getElementById('exec-month-budget-detail').textContent =
-        '予算: ¥' + Math.round(charterBudgetMonthly).toLocaleString() + ' / 実績: ¥' + Math.round(monthCharter).toLocaleString();
+        '予算: ¥' + Math.round(charterBudgetMonthly).toLocaleString() + ' / 配送費: ¥' + Math.round(monthCost).toLocaleString();
       if (monthBudgetDiff >= 0) {
         mbc.className = 'card p-4 border-2 bg-gradient-to-br from-green-50 to-green-100 border-green-300';
         document.getElementById('exec-month-budget-diff').className = 'text-xl font-black text-green-700';
@@ -8574,10 +8575,26 @@
             borderColor: '#fff'
           }]
         },
+        plugins: [ChartDataLabels],
         options: {
           responsive: true,
           plugins: {
             legend: { position: 'right', labels: { font: { size: 11 }, usePointStyle: true } },
+            datalabels: {
+              color: '#fff',
+              font: { weight: 'bold', size: 12 },
+              formatter: function(value, ctx) {
+                var total = 0;
+                for (var i = 0; i < ctx.dataset.data.length; i++) total += ctx.dataset.data[i];
+                var pct = (value / total * 100).toFixed(1);
+                return pct + '%';
+              },
+              display: function(ctx) {
+                var total = 0;
+                for (var i = 0; i < ctx.dataset.data.length; i++) total += ctx.dataset.data[i];
+                return (ctx.dataset.data[ctx.dataIndex] / total) >= 0.05;
+              }
+            },
             tooltip: {
               callbacks: {
                 label: function(ctx) {
@@ -8689,7 +8706,7 @@
         }
         var dProfit = dRev - dCost;
         var dRate = dRev > 0 ? (dProfit / dRev * 100).toFixed(1) : '0.0';
-        var dBudgetDiff = dailyBudget - dCharter;
+        var dBudgetDiff = dailyBudget - dCost; // 日割予算 - 配送費（全経費）
 
         cumRevenue += dRev;
         cumCost += dCost;
@@ -9364,7 +9381,7 @@
         options: {
           responsive: true,
           interaction: { mode: 'index', intersect: false },
-          plugins: { legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, color: '#9ca3af' } } },
+          plugins: { datalabels: { display: false }, legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, color: '#9ca3af' } } },
           scales: {
             x: { ticks: { color: '#9ca3af', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
             y: { type: 'linear', position: 'left', title: { display: true, text: '個口数 / 件数', font: { size: 11 }, color: '#9ca3af' }, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.06)' } },
