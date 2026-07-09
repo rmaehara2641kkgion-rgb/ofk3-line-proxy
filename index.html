@@ -8190,38 +8190,8 @@
       document.getElementById('volume-dropzone').classList.add('hidden');
     }
 
-    // 一括保存（GAS + localStorage）
+    // 一括保存（GASのみ）
     async function saveVolumeBatch() {
-      // localStorage用は超軽量（日付+数字のみ）
-      var slimList = [];
-      for (var i = 0; i < volumeBatchResults.length; i++) {
-        var d = volumeBatchResults[i];
-        var ctSlim = {};
-        var tKeys = Object.keys(d.ct || {});
-        for (var t = 0; t < tKeys.length; t++) {
-          ctSlim[tKeys[t]] = d.ct[tKeys[t]].n + '/' + d.ct[tKeys[t]].max;
-        }
-        slimList.push({ d: d.date, p: d.tp, s: d.ts, c: d.tc, t: ctSlim });
-      }
-
-      var stored = JSON.parse(localStorage.getItem('volH') || '[]');
-      for (var i = 0; i < slimList.length; i++) {
-        var found = false;
-        for (var j = 0; j < stored.length; j++) {
-          if (stored[j].d === slimList[i].d) { stored[j] = slimList[i]; found = true; break; }
-        }
-        if (!found) stored.push(slimList[i]);
-      }
-      stored.sort(function(a, b) { return a.d < b.d ? -1 : 1; });
-      while (stored.length > 730) stored.shift();
-      try { localStorage.setItem('volH', JSON.stringify(stored)); } catch(e) {
-        while (stored.length > 365) stored.shift();
-        try { localStorage.setItem('volH', JSON.stringify(stored)); } catch(e2) {}
-      }
-      // 古いキー削除
-      localStorage.removeItem('volumeHistory');
-
-      // GASに完全データ保存
       var savedCount = volumeBatchResults.length;
       try {
         var res = await fetch('/volume-master?action=save', {
@@ -8231,20 +8201,21 @@
         });
         var data = await res.json();
         if (data.status === 'ok') {
-          alert(savedCount + '日分のデータを保存しました（GAS + ローカル）');
+          alert(savedCount + '日分のデータをGASに保存しました');
         } else {
-          alert(savedCount + '日分をローカル保存しました\nGAS: ' + (data.message || 'エラー'));
+          alert('GAS保存エラー: ' + (data.message || ''));
+          return;
         }
       } catch(e) {
-        alert(savedCount + '日分をローカル保存しました\nGAS未接続（環境変数設定後に使えます）');
+        alert('GAS接続エラー: ' + e.message + '\n\nRenderの環境変数 VOLUME_MASTER_GAS_URL を確認してください');
+        return;
       }
 
       volumeBatchResults = [];
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       restoreVolumeSummaryHTML();
-      volumeHistory = convertStoredToHistory(stored);
-      renderVolumeHistory();
+      loadVolumeHistory();
     }
 
     function restoreVolumeSummaryHTML() {
@@ -8345,87 +8316,40 @@
       document.getElementById('vol-course-table-body').innerHTML = tableHtml;
     }
 
-    // 単日保存
+    // 単日保存（GASのみ）
     async function saveVolumeData() {
       if (!volumeData) { alert('集計データがありません'); return; }
       var dateInput = document.getElementById('volume-date-input');
       if (dateInput && dateInput.value) volumeData.date = dateInput.value;
 
-      // 保存用に_full除去
       var slim = { date: volumeData.date, tp: volumeData.tp, ts: volumeData.ts, tc: volumeData.tc, ct: volumeData.ct, ar: volumeData.ar };
 
-      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
-      var found = false;
-      for (var i = 0; i < stored.length; i++) {
-        if (stored[i].date === slim.date) { stored[i] = slim; found = true; break; }
-      }
-      if (!found) stored.push(slim);
-      stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
-
       try {
-        localStorage.setItem('volumeHistory', JSON.stringify(stored));
-      } catch(e) {
-        while (stored.length > 365) stored.shift();
-        try { localStorage.setItem('volumeHistory', JSON.stringify(stored)); }
-        catch(e2) { alert('保存容量を超えました'); return; }
-      }
-      volumeHistory = stored;
-
-      alert('保存しました（' + slim.date + '）\n小口数: ' + slim.tp + ' / 件数: ' + slim.ts + ' / コース数: ' + slim.tc);
-
-      // GASにも保存
-      try {
-        fetch('/volume-master?action=save', {
+        var res = await fetch('/volume-master?action=save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify([slim])
         });
-      } catch(e) { console.error('GAS save error:', e); }
-
-      // localStorage超軽量保存
-      var ctSlim = {};
-      var tKeys = Object.keys(slim.ct || {});
-      for (var t = 0; t < tKeys.length; t++) {
-        ctSlim[tKeys[t]] = slim.ct[tKeys[t]].n + '/' + slim.ct[tKeys[t]].max;
+        var data = await res.json();
+        if (data.status === 'ok') {
+          alert('GASに保存しました（' + slim.date + '）\n小口数: ' + slim.tp + ' / 件数: ' + slim.ts + ' / コース数: ' + slim.tc);
+        } else {
+          alert('GAS保存エラー: ' + (data.message || ''));
+          return;
+        }
+      } catch(e) {
+        alert('GAS接続エラー: ' + e.message);
+        return;
       }
-      var miniEntry = { d: slim.date, p: slim.tp, s: slim.ts, c: slim.tc, t: ctSlim };
-      var stored2 = JSON.parse(localStorage.getItem('volH') || '[]');
-      var f2 = false;
-      for (var i = 0; i < stored2.length; i++) {
-        if (stored2[i].d === miniEntry.d) { stored2[i] = miniEntry; f2 = true; break; }
-      }
-      if (!f2) stored2.push(miniEntry);
-      stored2.sort(function(a, b) { return a.d < b.d ? -1 : 1; });
-      try { localStorage.setItem('volH', JSON.stringify(stored2)); } catch(e) {}
-      localStorage.removeItem('volumeHistory');
 
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       volumeData = null;
-      renderVolumeHistory();
+      loadVolumeHistory();
     }
 
-    // stored(軽量形式)をhistory表示形式に変換
-    function convertStoredToHistory(stored) {
-      var result = [];
-      for (var i = 0; i < stored.length; i++) {
-        var s = stored[i];
-        var ct = {};
-        if (s.t) {
-          var tKeys = Object.keys(s.t);
-          for (var t = 0; t < tKeys.length; t++) {
-            var parts = String(s.t[tKeys[t]]).split('/');
-            ct[tKeys[t]] = { n: Number(parts[0]) || 0, max: parts[1] || '' };
-          }
-        }
-        result.push({ date: s.d, tp: s.p, ts: s.s, tc: s.c, ct: ct, ar: {} });
-      }
-      return result;
-    }
-
-    // 過去データ読込（GAS → localStorage フォールバック）
+    // 過去データ読込（GASのみ）
     async function loadVolumeHistory() {
-      // まずGASから取得
       try {
         var res = await fetch('/volume-master?action=list');
         var data = await res.json();
@@ -8435,19 +8359,14 @@
           showVolumeRange('week');
           return;
         }
+        if (data.status === 'ok' && (!data.data || data.data.length === 0)) {
+          alert('蓄積データがまだありません。\nサイクルデータを読み込んで保存してください。');
+          return;
+        }
+        alert('GAS読込エラー: ' + (data.message || ''));
       } catch(e) {
-        console.error('GAS load error:', e);
+        alert('GAS接続エラー: ' + e.message + '\n\nRenderの環境変数 VOLUME_MASTER_GAS_URL を確認してください');
       }
-
-      // GAS失敗時はlocalStorage(軽量形式)から
-      var stored = JSON.parse(localStorage.getItem('volH') || '[]');
-      if (stored.length === 0) {
-        alert('蓄積データがまだありません。\nサイクルデータを読み込んで保存してください。');
-        return;
-      }
-      volumeHistory = convertStoredToHistory(stored);
-      document.getElementById('volume-history-section').classList.remove('hidden');
-      showVolumeRange('week');
     }
 
     function showVolumeRange(range) {
