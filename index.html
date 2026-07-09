@@ -8192,35 +8192,37 @@
 
     // 一括保存（GAS + localStorage）
     async function saveVolumeBatch() {
-      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
-      var savedCount = 0;
-
+      // localStorage用は超軽量（日付+数字のみ）
+      var slimList = [];
       for (var i = 0; i < volumeBatchResults.length; i++) {
         var d = volumeBatchResults[i];
+        var ctSlim = {};
+        var tKeys = Object.keys(d.ct || {});
+        for (var t = 0; t < tKeys.length; t++) {
+          ctSlim[tKeys[t]] = d.ct[tKeys[t]].n + '/' + d.ct[tKeys[t]].max;
+        }
+        slimList.push({ d: d.date, p: d.tp, s: d.ts, c: d.tc, t: ctSlim });
+      }
+
+      var stored = JSON.parse(localStorage.getItem('volH') || '[]');
+      for (var i = 0; i < slimList.length; i++) {
         var found = false;
         for (var j = 0; j < stored.length; j++) {
-          if (stored[j].date === d.date) {
-            stored[j] = d;
-            found = true;
-            break;
-          }
+          if (stored[j].d === slimList[i].d) { stored[j] = slimList[i]; found = true; break; }
         }
-        if (!found) stored.push(d);
-        savedCount++;
+        if (!found) stored.push(slimList[i]);
       }
-
-      stored.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+      stored.sort(function(a, b) { return a.d < b.d ? -1 : 1; });
       while (stored.length > 730) stored.shift();
-
-      try {
-        localStorage.setItem('volumeHistory', JSON.stringify(stored));
-      } catch(e) {
+      try { localStorage.setItem('volH', JSON.stringify(stored)); } catch(e) {
         while (stored.length > 365) stored.shift();
-        try { localStorage.setItem('volumeHistory', JSON.stringify(stored)); } catch(e2) {}
+        try { localStorage.setItem('volH', JSON.stringify(stored)); } catch(e2) {}
       }
-      volumeHistory = stored;
+      // 古いキー削除
+      localStorage.removeItem('volumeHistory');
 
-      // GASにも保存
+      // GASに完全データ保存
+      var savedCount = volumeBatchResults.length;
       try {
         var res = await fetch('/volume-master?action=save', {
           method: 'POST',
@@ -8231,16 +8233,17 @@
         if (data.status === 'ok') {
           alert(savedCount + '日分のデータを保存しました（GAS + ローカル）');
         } else {
-          alert(savedCount + '日分をローカル保存しました\nGAS保存エラー: ' + (data.message || ''));
+          alert(savedCount + '日分をローカル保存しました\nGAS: ' + (data.message || 'エラー'));
         }
       } catch(e) {
-        alert(savedCount + '日分をローカル保存しました\nGAS接続エラー（後で同期されます）');
+        alert(savedCount + '日分をローカル保存しました\nGAS未接続（環境変数設定後に使えます）');
       }
 
       volumeBatchResults = [];
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       restoreVolumeSummaryHTML();
+      volumeHistory = convertStoredToHistory(stored);
       renderVolumeHistory();
     }
 
@@ -8379,22 +8382,55 @@
         });
       } catch(e) { console.error('GAS save error:', e); }
 
+      // localStorage超軽量保存
+      var ctSlim = {};
+      var tKeys = Object.keys(slim.ct || {});
+      for (var t = 0; t < tKeys.length; t++) {
+        ctSlim[tKeys[t]] = slim.ct[tKeys[t]].n + '/' + slim.ct[tKeys[t]].max;
+      }
+      var miniEntry = { d: slim.date, p: slim.tp, s: slim.ts, c: slim.tc, t: ctSlim };
+      var stored2 = JSON.parse(localStorage.getItem('volH') || '[]');
+      var f2 = false;
+      for (var i = 0; i < stored2.length; i++) {
+        if (stored2[i].d === miniEntry.d) { stored2[i] = miniEntry; f2 = true; break; }
+      }
+      if (!f2) stored2.push(miniEntry);
+      stored2.sort(function(a, b) { return a.d < b.d ? -1 : 1; });
+      try { localStorage.setItem('volH', JSON.stringify(stored2)); } catch(e) {}
+      localStorage.removeItem('volumeHistory');
+
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       volumeData = null;
       renderVolumeHistory();
     }
 
+    // stored(軽量形式)をhistory表示形式に変換
+    function convertStoredToHistory(stored) {
+      var result = [];
+      for (var i = 0; i < stored.length; i++) {
+        var s = stored[i];
+        var ct = {};
+        if (s.t) {
+          var tKeys = Object.keys(s.t);
+          for (var t = 0; t < tKeys.length; t++) {
+            var parts = String(s.t[tKeys[t]]).split('/');
+            ct[tKeys[t]] = { n: Number(parts[0]) || 0, max: parts[1] || '' };
+          }
+        }
+        result.push({ date: s.d, tp: s.p, ts: s.s, tc: s.c, ct: ct, ar: {} });
+      }
+      return result;
+    }
+
     // 過去データ読込（GAS → localStorage フォールバック）
     async function loadVolumeHistory() {
-      // まずGASから取得を試みる
+      // まずGASから取得
       try {
         var res = await fetch('/volume-master?action=list');
         var data = await res.json();
         if (data.status === 'ok' && data.data && data.data.length > 0) {
           volumeHistory = data.data;
-          // localStorageにもキャッシュ
-          try { localStorage.setItem('volumeHistory', JSON.stringify(volumeHistory)); } catch(e) {}
           document.getElementById('volume-history-section').classList.remove('hidden');
           showVolumeRange('week');
           return;
@@ -8403,13 +8439,13 @@
         console.error('GAS load error:', e);
       }
 
-      // GAS失敗時はlocalStorageから
-      var stored = JSON.parse(localStorage.getItem('volumeHistory') || '[]');
-      volumeHistory = stored;
+      // GAS失敗時はlocalStorage(軽量形式)から
+      var stored = JSON.parse(localStorage.getItem('volH') || '[]');
       if (stored.length === 0) {
         alert('蓄積データがまだありません。\nサイクルデータを読み込んで保存してください。');
         return;
       }
+      volumeHistory = convertStoredToHistory(stored);
       document.getElementById('volume-history-section').classList.remove('hidden');
       showVolumeRange('week');
     }
