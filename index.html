@@ -7,6 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -987,7 +988,7 @@
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="card p-3 text-center">
               <div class="text-2xl font-bold text-amber-600" id="vol-total-packages">0</div>
-              <div class="text-xs text-ink-lighter">総小口数</div>
+              <div class="text-xs text-ink-lighter">総個口数</div>
             </div>
             <div class="card p-3 text-center">
               <div class="text-2xl font-bold text-blue-600" id="vol-total-stops">0</div>
@@ -1022,7 +1023,7 @@
                 <thead>
                   <tr class="border-b border-border bg-surface">
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">個口数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">エリア</th>
                   </tr>
@@ -1055,7 +1056,7 @@
                 <thead>
                   <tr class="border-b border-border bg-surface">
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">日付</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">個口数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
@@ -1072,10 +1073,10 @@
             </div>
           </div>
 
-          <!-- エリア別比較 -->
+          <!-- 物量グラフ -->
           <div class="card p-4 mb-4">
-            <h4 class="text-xs font-bold text-ink-lighter mb-3">エリア別推移</h4>
-            <div id="vol-area-history" class="overflow-x-auto"></div>
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">物量推移グラフ</h4>
+            <canvas id="vol-chart" height="250"></canvas>
           </div>
         </div>
       </div>
@@ -8281,7 +8282,7 @@
       html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead>' +
         '<tr class="border-b border-border bg-surface">' +
         '<th class="px-3 py-2 text-left text-xs">日付</th>' +
-        '<th class="px-3 py-2 text-right text-xs">小口数</th>' +
+        '<th class="px-3 py-2 text-right text-xs">個口数</th>' +
         '<th class="px-3 py-2 text-right text-xs">件数</th>' +
         '<th class="px-3 py-2 text-right text-xs">コース数</th>' +
         '<th class="px-3 py-2 text-left text-xs">コース内訳</th>' +
@@ -8349,7 +8350,7 @@
         '<button onclick="saveVolumeData()" class="bg-amber-500 text-white px-4 py-1.5 rounded text-xs font-bold hover:bg-amber-600 cursor-pointer">💾 保存して蓄積</button>' +
         '</div></div>' +
         '<div class="grid grid-cols-4 gap-3 mb-4">' +
-        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-amber-600" id="vol-total-packages">0</div><div class="text-xs text-ink-lighter">総小口数</div></div>' +
+        '<div class="card p-3 text-center"><div class="text-2xl font-bold text-amber-600" id="vol-total-packages">0</div><div class="text-xs text-ink-lighter">総個口数</div></div>' +
         '<div class="card p-3 text-center"><div class="text-2xl font-bold text-blue-600" id="vol-total-stops">0</div><div class="text-xs text-ink-lighter">総件数</div></div>' +
         '<div class="card p-3 text-center"><div class="text-2xl font-bold text-green-600" id="vol-total-courses">0</div><div class="text-xs text-ink-lighter">総コース数</div></div>' +
         '<div class="card p-3 text-center"><div class="text-2xl font-bold text-purple-600" id="vol-avg-per-course">0</div><div class="text-xs text-ink-lighter">平均小口/コース</div></div>' +
@@ -8358,7 +8359,7 @@
         '<div class="card p-4 mb-4"><h4 class="text-xs font-bold text-ink-lighter mb-3">エリア別物量</h4><div id="vol-area-breakdown" class="space-y-2"></div></div>' +
         '<div class="card overflow-hidden mb-4"><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
         '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース</th>' +
-        '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">小口数</th>' +
+        '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">個口数</th>' +
         '<th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>' +
         '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">エリア</th>' +
         '</tr></thead><tbody id="vol-course-table-body"><tr><td colspan="4" class="text-center py-4 text-ink-lighter text-sm">データなし</td></tr></tbody></table></div></div>';
@@ -8453,7 +8454,7 @@
         });
         var data = await res.json();
         if (data.status === 'ok') {
-          alert('GASに保存しました（' + slim.date + '）\n小口数: ' + slim.tp + ' / 件数: ' + slim.ts + ' / コース数: ' + slim.tc);
+          alert('GASに保存しました（' + slim.date + '）\n個口数: ' + slim.tp + ' / 件数: ' + slim.ts + ' / コース数: ' + slim.tc);
         } else {
           alert('GAS保存エラー: ' + (data.message || ''));
           return;
@@ -8533,6 +8534,9 @@
         return;
       }
 
+      // 日付昇順ソート
+      data.sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+
       var html = '';
       for (var i = data.length - 1; i >= 0; i--) {
         var d = data[i];
@@ -8581,40 +8585,63 @@
         html += '</tr>';
       }
       tbody.innerHTML = html;
-      renderAreaHistory(data);
+      renderVolumeChart(data);
     }
 
-    function renderAreaHistory(data) {
-      var container = document.getElementById('vol-area-history');
-      if (data.length === 0) { container.innerHTML = ''; return; }
+    var volChartInstance = null;
+    function renderVolumeChart(data) {
+      var canvas = document.getElementById('vol-chart');
+      if (!canvas) return;
+      if (data.length === 0) { if (volChartInstance) { volChartInstance.destroy(); volChartInstance = null; } return; }
 
-      var allAreas = {};
-      for (var i = 0; i < data.length; i++) {
-        if (data[i].ar) {
-          var aKeys = Object.keys(data[i].ar);
-          for (var a = 0; a < aKeys.length; a++) allAreas[aKeys[a]] = true;
+      // 日付昇順
+      var sorted = data.slice().sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+      var labels = [];
+      var pkgData = [];
+      var stopData = [];
+      var courseData = [];
+      var totalData = [];
+
+      for (var i = 0; i < sorted.length; i++) {
+        var d = sorted[i];
+        labels.push(d.date.substring(5)); // MM-DD
+        pkgData.push(d.tp || 0);
+        stopData.push(d.ts || 0);
+        courseData.push(d.tc || 0);
+        var allTotal = 0;
+        if (d.actual && d.actual.total) {
+          allTotal = d.actual.total;
+        } else if (d.actual) {
+          var gds = d.actual.gds || {};
+          var flex = d.actual.flex || {};
+          var city = d.actual.city || {};
+          allTotal = (gds.c1c3 || 0) + (gds.c2 || 0) + (flex.total || 0) + (city.total || 0);
         }
+        totalData.push(allTotal);
       }
-      var areaNames = Object.keys(allAreas).sort();
-      if (areaNames.length === 0) { container.innerHTML = ''; return; }
 
-      var html = '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
-        '<th class="px-2 py-1 text-left text-xs font-medium text-ink-lighter">日付</th>';
-      for (var a = 0; a < areaNames.length; a++) {
-        html += '<th class="px-2 py-1 text-right text-xs font-medium text-ink-lighter">' + areaNames[a] + '</th>';
-      }
-      html += '</tr></thead><tbody>';
-
-      for (var i = data.length - 1; i >= 0; i--) {
-        html += '<tr class="border-b border-border"><td class="px-2 py-1 text-xs font-mono">' + data[i].date + '</td>';
-        for (var a = 0; a < areaNames.length; a++) {
-          var val = (data[i].ar && data[i].ar[areaNames[a]]) ? data[i].ar[areaNames[a]].p : 0;
-          html += '<td class="px-2 py-1 text-right text-xs font-bold">' + (val > 0 ? val.toLocaleString() : '-') + '</td>';
+      if (volChartInstance) volChartInstance.destroy();
+      volChartInstance = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: '個口数', data: pkgData, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', tension: 0.3, yAxisID: 'y', borderWidth: 2, pointRadius: 3 },
+            { label: '件数', data: stopData, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', tension: 0.3, yAxisID: 'y', borderWidth: 2, pointRadius: 3 },
+            { label: 'コース数', data: courseData, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)', tension: 0.3, yAxisID: 'y2', borderWidth: 2, pointRadius: 3 },
+            { label: '全台数', data: totalData, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', tension: 0.3, yAxisID: 'y2', borderWidth: 2, pointRadius: 3, borderDash: [5, 3] }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 } } } },
+          scales: {
+            y: { type: 'linear', position: 'left', title: { display: true, text: '個口数 / 件数', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.06)' } },
+            y2: { type: 'linear', position: 'right', title: { display: true, text: 'コース数 / 全台数', font: { size: 11 } }, grid: { drawOnChartArea: false } }
+          }
         }
-        html += '</tr>';
-      }
-      html += '</tbody></table>';
-      container.innerHTML = html;
+      });
     }
 
     // ===== Actual Report パーサー =====
