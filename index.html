@@ -1057,10 +1057,10 @@
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-yellow-50">GDS</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-orange-50">Flex</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter bg-blue-50">シティー</th>
-                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">全体台数</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-yellow-800 bg-yellow-100 border-l-2 border-yellow-400">🟡 GDS</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-orange-800 bg-orange-100 border-l-2 border-orange-400">🟠 Flex</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-blue-800 bg-blue-100 border-l-2 border-blue-400">🔵 シティー</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter border-l-2 border-gray-300">全体台数</th>
                   </tr>
                 </thead>
                 <tbody id="vol-history-table-body">
@@ -8465,15 +8465,15 @@
           var gds = a.gds || {};
           var flex = a.flex || {};
           var city = a.city || {};
-          html += '<td class="px-3 py-2 text-right bg-yellow-50 font-bold">' + ((gds.c1c3 || 0) + (gds.c2 || 0)) + '</td>' +
-            '<td class="px-3 py-2 text-right bg-orange-50 font-bold">' + (flex.total || 0) + '</td>' +
-            '<td class="px-3 py-2 text-right bg-blue-50 font-bold">' + (city.total || 0) + '</td>' +
-            '<td class="px-3 py-2 text-right font-bold text-lg">' + (a.total || 0) + '</td>';
+          html += '<td class="px-3 py-2 text-right bg-yellow-50 font-bold border-l-2 border-yellow-400">' + ((gds.c1c3 || 0) + (gds.c2 || 0)) + '</td>' +
+            '<td class="px-3 py-2 text-right bg-orange-50 font-bold border-l-2 border-orange-400">' + (flex.total || 0) + '</td>' +
+            '<td class="px-3 py-2 text-right bg-blue-50 font-bold border-l-2 border-blue-400">' + (city.total || 0) + '</td>' +
+            '<td class="px-3 py-2 text-right font-bold text-lg border-l-2 border-gray-300">' + (a.total || 0) + '</td>';
         } else {
-          html += '<td class="px-3 py-2 text-right bg-yellow-50 text-ink-lighter">-</td>' +
-            '<td class="px-3 py-2 text-right bg-orange-50 text-ink-lighter">-</td>' +
-            '<td class="px-3 py-2 text-right bg-blue-50 text-ink-lighter">-</td>' +
-            '<td class="px-3 py-2 text-right text-ink-lighter">-</td>';
+          html += '<td class="px-3 py-2 text-right bg-yellow-50 text-ink-lighter border-l-2 border-yellow-400">-</td>' +
+            '<td class="px-3 py-2 text-right bg-orange-50 text-ink-lighter border-l-2 border-orange-400">-</td>' +
+            '<td class="px-3 py-2 text-right bg-blue-50 text-ink-lighter border-l-2 border-blue-400">-</td>' +
+            '<td class="px-3 py-2 text-right text-ink-lighter border-l-2 border-gray-300">-</td>';
         }
         html += '</tr>';
       }
@@ -8617,24 +8617,22 @@
         '</div>';
 
       html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-xs"><thead>' +
-        '<tr class="border-b border-border bg-surface">' +
-        '<th class="px-2 py-1.5 text-left">日付</th>' +
-        '<th class="px-2 py-1.5 text-right bg-yellow-50" colspan="4">GDS（自社）</th>' +
-        '<th class="px-2 py-1.5 text-right bg-orange-50" colspan="2">Flex</th>' +
-        '<th class="px-2 py-1.5 text-right bg-blue-50" colspan="2">シティーアクト</th>' +
-        '<th class="px-2 py-1.5 text-right">全体</th>' +
+        '<tr class="border-b-2 border-gray-300 bg-surface">' +
+        '<th class="px-2 py-1.5 text-left" rowspan="2">日付</th>' +
+        '<th class="px-2 py-1.5 text-center bg-yellow-100 text-yellow-800 font-bold border-l-2 border-yellow-400" colspan="4">🟡 GDS（自社）</th>' +
+        '<th class="px-2 py-1.5 text-center bg-orange-100 text-orange-800 font-bold border-l-2 border-orange-400" colspan="2">🟠 Flex</th>' +
+        '<th class="px-2 py-1.5 text-center bg-blue-100 text-blue-800 font-bold border-l-2 border-blue-400" colspan="2">🔵 シティーアクト</th>' +
+        '<th class="px-2 py-1.5 text-right border-l-2 border-gray-300" rowspan="2">全体</th>' +
         '</tr>' +
-        '<tr class="border-b border-border bg-surface text-ink-lighter">' +
-        '<th class="px-2 py-1"></th>' +
-        '<th class="px-2 py-1 text-right bg-yellow-50">C1/3</th>' +
+        '<tr class="border-b-2 border-gray-300 bg-surface text-ink-lighter">' +
+        '<th class="px-2 py-1 text-right bg-yellow-50 border-l-2 border-yellow-400">C1/3</th>' +
         '<th class="px-2 py-1 text-right bg-yellow-50">C2</th>' +
         '<th class="px-2 py-1 text-right bg-yellow-50">持出</th>' +
         '<th class="px-2 py-1 text-right bg-yellow-50">配完</th>' +
-        '<th class="px-2 py-1 text-right bg-orange-50">台数</th>' +
+        '<th class="px-2 py-1 text-right bg-orange-50 border-l-2 border-orange-400">台数</th>' +
         '<th class="px-2 py-1 text-right bg-orange-50">C1+2+3</th>' +
-        '<th class="px-2 py-1 text-right bg-blue-50">台数</th>' +
+        '<th class="px-2 py-1 text-right bg-blue-50 border-l-2 border-blue-400">台数</th>' +
         '<th class="px-2 py-1 text-right bg-blue-50">内訳</th>' +
-        '<th class="px-2 py-1 text-right">合計台数</th>' +
         '</tr></thead><tbody>';
 
       for (var i = entries.length - 1; i >= 0; i--) {
@@ -8650,15 +8648,15 @@
 
         html += '<tr class="border-b border-border hover:bg-surface/50">' +
           '<td class="px-2 py-1.5 font-mono">' + d.date + '</td>' +
-          '<td class="px-2 py-1.5 text-right bg-yellow-50 font-bold">' + d.gds_c1c3 + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-yellow-50 font-bold border-l-2 border-yellow-400">' + d.gds_c1c3 + '</td>' +
           '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_c2 + '</td>' +
           '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_dispatch.toLocaleString() + '</td>' +
           '<td class="px-2 py-1.5 text-right bg-yellow-50">' + d.gds_completed.toLocaleString() + '<span class="text-ink-lighter ml-1">' + rateStr + '</span></td>' +
-          '<td class="px-2 py-1.5 text-right bg-orange-50 font-bold">' + d.flex_total + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-orange-50 font-bold border-l-2 border-orange-400">' + d.flex_total + '</td>' +
           '<td class="px-2 py-1.5 text-right bg-orange-50 text-ink-lighter">' + d.flex_c1 + '+' + d.flex_c2 + '+' + d.flex_c3 + '</td>' +
-          '<td class="px-2 py-1.5 text-right bg-blue-50 font-bold">' + d.city_total + '</td>' +
+          '<td class="px-2 py-1.5 text-right bg-blue-50 font-bold border-l-2 border-blue-400">' + d.city_total + '</td>' +
           '<td class="px-2 py-1.5 text-right bg-blue-50 text-ink-lighter text-[10px]">' + (cityDetail || '-') + '</td>' +
-          '<td class="px-2 py-1.5 text-right font-bold text-lg">' + d.all_total + '</td>' +
+          '<td class="px-2 py-1.5 text-right font-bold text-lg border-l-2 border-gray-300">' + d.all_total + '</td>' +
           '</tr>';
       }
       html += '</tbody></table></div></div>';
