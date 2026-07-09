@@ -218,7 +218,7 @@
     .print-preview-table tr:nth-child(even) { background: rgba(255,255,255,0.03); }
   </style>
 </head>
-<body class="min-h-screen text-ink tab-dashboard">
+<body class="min-h-screen text-ink tab-exec">
   <div id="app">
     <!-- Header -->
     <header id="app-header" class="px-6 py-3 flex items-center justify-between sticky top-0 z-50">
@@ -238,8 +238,9 @@
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto px-6 py-6">
       <!-- Tabs -->
-      <nav class="flex gap-6 mb-6 border-b border-border">
-        <button class="tab-active pb-3 text-sm" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
+      <nav class="flex gap-6 mb-6 border-b border-border overflow-x-auto">
+        <button class="tab-active pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
+        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
@@ -252,8 +253,101 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
       </nav>
 
+      <!-- Executive Dashboard Tab -->
+      <div id="panel-exec">
+        <!-- シフト表アップロード -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold">📅 DAシフト表</h3>
+            <div class="flex items-center gap-3">
+              <label class="text-xs text-ink-lighter">対象日:</label>
+              <input type="date" id="exec-target-date" class="text-xs border border-border rounded px-2 py-1" onchange="recalcExecDashboard()">
+            </div>
+          </div>
+          <div class="upload-zone rounded-lg p-6 text-center cursor-pointer" id="exec-shift-dropzone"
+               onclick="document.getElementById('exec-shift-input').click()"
+               ondrop="event.preventDefault();this.classList.remove('border-accent');parseShiftForExec(event.dataTransfer.files)"
+               ondragover="event.preventDefault();this.classList.add('border-accent')"
+               ondragleave="this.classList.remove('border-accent')">
+            <p class="text-sm font-medium text-ink-lighter">DAシフト表をドロップ（xlsx）</p>
+            <p class="text-xs text-gray-400 mt-1">メインシートから自動読取</p>
+            <input type="file" id="exec-shift-input" accept=".xlsx,.xls" onchange="parseShiftForExec(this.files)" class="hidden">
+          </div>
+          <div id="exec-shift-status" class="mt-2 text-xs"></div>
+        </div>
+
+        <!-- 設定パネル（燃料サーチャージ・傭車予算） -->
+        <div class="card p-4 mb-4">
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料サーチャージ（円/h）</label>
+              <input type="number" id="exec-fuel-rate" value="79" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">🚛 傭車費 月間予算（万円）</label>
+              <input type="number" id="exec-charter-budget" value="1300" step="10" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">📅 当月稼働日数</label>
+              <input type="number" id="exec-work-days" value="31" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+          </div>
+        </div>
+
+        <!-- KPIカード群 -->
+        <div id="exec-kpi-area" class="hidden">
+          <div class="grid grid-cols-4 gap-4 mb-4">
+            <div class="card p-4 bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200">
+              <p class="text-xs text-emerald-600 font-medium mb-1">💰 本日の売上</p>
+              <p class="text-2xl font-black text-emerald-800" id="exec-revenue">--</p>
+              <p class="text-xs text-emerald-500 mt-1" id="exec-revenue-detail"></p>
+            </div>
+            <div class="card p-4 bg-gradient-to-br from-red-50 to-red-100 border-red-200">
+              <p class="text-xs text-red-600 font-medium mb-1">📦 本日の配送費</p>
+              <p class="text-2xl font-black text-red-800" id="exec-cost">--</p>
+              <p class="text-xs text-red-500 mt-1" id="exec-cost-detail"></p>
+            </div>
+            <div class="card p-4 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
+              <p class="text-xs text-blue-600 font-medium mb-1">📈 本日の利益予測</p>
+              <p class="text-2xl font-black text-blue-800" id="exec-profit">--</p>
+              <p class="text-xs text-blue-500 mt-1" id="exec-profit-rate"></p>
+            </div>
+            <div class="card p-4 border-2" id="exec-budget-card">
+              <p class="text-xs font-medium mb-1">🚛 傭車費 予算比</p>
+              <p class="text-2xl font-black" id="exec-charter-diff">--</p>
+              <p class="text-xs mt-1" id="exec-charter-detail"></p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 mb-4">
+            <!-- 稼働人数 -->
+            <div class="card p-4">
+              <h4 class="text-xs font-bold text-ink-lighter mb-3">👷 稼働人数</h4>
+              <p class="text-3xl font-black text-ink mb-1" id="exec-headcount">--</p>
+              <div id="exec-headcount-breakdown" class="text-xs text-ink-lighter"></div>
+            </div>
+            <!-- 所属別構成比 円グラフ -->
+            <div class="card p-4">
+              <h4 class="text-xs font-bold text-ink-lighter mb-3">🏢 所属別配送構成比</h4>
+              <canvas id="exec-pie-chart" height="200"></canvas>
+            </div>
+          </div>
+
+          <!-- 日別明細テーブル -->
+          <div class="card p-4">
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">📋 コース種別 × 所属 明細</h4>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead id="exec-detail-thead"></thead>
+                <tbody id="exec-detail-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Dashboard Tab -->
-      <div id="panel-dashboard">
+      <div id="panel-dashboard" class="hidden">
         <!-- Upload Section -->
         <div id="upload-section">
           <div class="grid grid-cols-2 gap-4">
@@ -1623,14 +1717,18 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-volume'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-volume'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','volume':'tab-volume'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','volume':'tab-volume'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      ['dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'volume'].forEach(t => {
-        document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
-        document.getElementById(`tab-${t}`).className = t === tab ? 'tab-active pb-3 text-sm' : 'tab-inactive pb-3 text-sm';
-      });
+      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'volume'];
+      for (var i = 0; i < allTabs.length; i++) {
+        var t = allTabs[i];
+        var panel = document.getElementById('panel-' + t);
+        if (panel) panel.classList.toggle('hidden', t !== tab);
+        var tabBtn = document.getElementById('tab-' + t);
+        if (tabBtn) tabBtn.className = t === tab ? 'tab-active pb-3 text-sm whitespace-nowrap' : 'tab-inactive pb-3 text-sm whitespace-nowrap';
+      }
       if (tab === 'master') {
         renderMasterTable();
         refreshAllLineProfiles();
@@ -8027,6 +8125,388 @@
     }
 
     // 蓄積用（複数回ドロップ対応）
+    // ============================================================
+    // 経営ダッシュボード
+    // ============================================================
+
+    // 料金マスタ（コース種別 → {hours, revenue, costDirect, costOther}）
+    var EXEC_RATE_TABLE = {
+      'maru':  { hours: 11,  revenue: 19092, costDirect: 15015, costOther: 17270 },
+      'c1':    { hours: 6.5, revenue: 11284, costDirect: 8873,  costOther: 10205 },
+      'c3':    { hours: 4.5, revenue: 7808,  costDirect: 6143,  costOther: 7065 },
+      'hachi': { hours: 8,   revenue: 13887, costDirect: 10920, costOther: 12560 },
+      'bike':  { hours: 10,  revenue: 15800, costDirect: 12160, costOther: 14040 },
+      'b1':    { hours: 5,   revenue: 7900,  costDirect: 6080,  costOther: 7020 },
+      'b2':    { hours: 5,   revenue: 7900,  costDirect: 6080,  costOther: 7020 }
+    };
+
+    // 所属カテゴリ判定
+    // GDSダイレクト → 'direct'（経費あり安い方）
+    // GDS管理/GDSパート → 'staff'（経費ゼロ）
+    // それ以外 → 'other'（経費あり高い方）
+    function getExecDeptCategory(deptName) {
+      if (!deptName) return 'other';
+      var d = deptName.trim();
+      if (d === 'GDSダイレクト') return 'direct';
+      if (d === 'GDS管理' || d === 'GDSパート') return 'staff';
+      return 'other';
+    }
+
+    // コース種別正規化（半角全角・表記ゆれ吸収）
+    function normalizeExecCourseType(raw) {
+      if (!raw) return null;
+      var s = raw.toString().trim();
+      // 全角→半角
+      s = s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(c) {
+        return String.fromCharCode(c.charCodeAt(0) - 0xFEE0);
+      });
+      s = s.toLowerCase();
+      // ○/〇/◯ → maru
+      if (s === '○' || s === '〇' || s === '◯' || s === 'o' || s === '０') return 'maru';
+      // ❽/⑧/8 → hachi
+      if (s === '❽' || s === '⑧' || s === '8') return 'hachi';
+      // C1/c1/Ｃ１
+      if (s === 'c1') return 'c1';
+      // C3/c3
+      if (s === 'c3') return 'c3';
+      // bike/Bike/BIKE/ﾊﾞｲｸ
+      if (s === 'bike' || s === 'biker' || s === 'バイク' || s === 'ﾊﾞｲｸ') return 'bike';
+      // b1/B1/ｂ１
+      if (s === 'b1') return 'b1';
+      // b2/B2/ｂ２
+      if (s === 'b2') return 'b2';
+      return null; // 計算対象外（休/唐津/嘉麻/研修/空白等）
+    }
+
+    // コース種別の表示名
+    var EXEC_TYPE_LABELS = {
+      'maru': '○（11h）',
+      'c1': 'C1（6.5h）',
+      'c3': 'C3（4.5h）',
+      'hachi': '❽（8h）',
+      'bike': 'Bike（10h）',
+      'b1': 'b1（5h）',
+      'b2': 'b2（5h）'
+    };
+
+    // 設定の保存/復元
+    var execSettings = JSON.parse(localStorage.getItem('execSettings') || '{}');
+    function loadExecSettings() {
+      if (execSettings.fuelRate !== undefined) document.getElementById('exec-fuel-rate').value = execSettings.fuelRate;
+      if (execSettings.charterBudget !== undefined) document.getElementById('exec-charter-budget').value = execSettings.charterBudget;
+      if (execSettings.workDays !== undefined) document.getElementById('exec-work-days').value = execSettings.workDays;
+    }
+    function saveExecSettings() {
+      execSettings.fuelRate = Number(document.getElementById('exec-fuel-rate').value) || 79;
+      execSettings.charterBudget = Number(document.getElementById('exec-charter-budget').value) || 1300;
+      execSettings.workDays = Number(document.getElementById('exec-work-days').value) || 31;
+      localStorage.setItem('execSettings', JSON.stringify(execSettings));
+    }
+
+    // シフト表パース済みデータ（全日分）
+    var execShiftData = null; // { month:7, year:2026, days:{1:[{name,dept,type},...], 2:[...],...} }
+
+    // シフト表パース
+    function parseShiftForExec(files) {
+      if (!files || files.length === 0) return;
+      var file = files[0];
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var wb = XLSX.read(e.target.result, { type: 'array' });
+          // メインシートを探す
+          var sheetName = null;
+          for (var i = 0; i < wb.SheetNames.length; i++) {
+            if (wb.SheetNames[i] === 'メイン') { sheetName = 'メイン'; break; }
+          }
+          if (!sheetName) sheetName = wb.SheetNames[0];
+          var ws = wb.Sheets[sheetName];
+          var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+          // ヘッダー解析: 行4(index3)に日付(1〜31)が入っている
+          // 行1-3: ヘッダー情報
+          // 行4: 日付行（列D〜AH = index3〜33）
+          // 行5以降: データ（A=所属, B=名前, C=回数, D以降=日別コース）
+          var headerRow = null;
+          for (var r = 0; r < Math.min(10, rows.length); r++) {
+            var has1 = false;
+            for (var c = 3; c < 35; c++) {
+              var v = Number(rows[r][c]);
+              if (v === 1) has1 = true;
+              if (has1 && v === 2) { headerRow = r; break; }
+            }
+            if (headerRow !== null) break;
+          }
+          if (headerRow === null) { alert('日付ヘッダーが見つかりません'); return; }
+
+          // 日付列マッピング（day番号 → 列index）
+          var dayToCol = {};
+          for (var c = 3; c < Math.min(50, rows[headerRow].length); c++) {
+            var dayNum = Number(rows[headerRow][c]);
+            if (dayNum >= 1 && dayNum <= 31) {
+              dayToCol[dayNum] = c;
+            }
+          }
+
+          // データ行パース
+          var days = {};
+          for (var d = 1; d <= 31; d++) days[d] = [];
+
+          var currentDept = '';
+          for (var r = headerRow + 1; r < rows.length; r++) {
+            var row = rows[r];
+            var dept = row[0] ? row[0].toString().trim() : '';
+            if (dept) currentDept = dept;
+            var name = row[1] ? row[1].toString().trim() : '';
+            if (!name) continue;
+
+            // マスタ管理の所属で上書き（より正確）
+            var masterDept = driverDepartments[name] || '';
+            var effectiveDept = masterDept || currentDept;
+
+            for (var d = 1; d <= 31; d++) {
+              if (!dayToCol[d]) continue;
+              var cellVal = row[dayToCol[d]];
+              var courseType = normalizeExecCourseType(cellVal);
+              if (courseType) {
+                days[d].push({
+                  name: name,
+                  dept: effectiveDept,
+                  deptCategory: getExecDeptCategory(effectiveDept),
+                  type: courseType
+                });
+              }
+            }
+          }
+
+          execShiftData = { days: days, fileName: file.name };
+          document.getElementById('exec-shift-status').innerHTML =
+            '<span class="text-emerald-600 font-bold">✅ ' + file.name + ' 読込完了</span>';
+
+          // 今日の日付をセット
+          var today = new Date();
+          var dateStr = today.getFullYear() + '-' +
+            ('0' + (today.getMonth() + 1)).slice(-2) + '-' +
+            ('0' + today.getDate()).slice(-2);
+          document.getElementById('exec-target-date').value = dateStr;
+
+          recalcExecDashboard();
+        } catch (err) {
+          alert('シフト表読込エラー: ' + err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // ダッシュボード計算 & 表示
+    function recalcExecDashboard() {
+      if (!execShiftData) return;
+      var dateInput = document.getElementById('exec-target-date').value;
+      if (!dateInput) return;
+
+      var targetDay = Number(dateInput.split('-')[2]);
+      var entries = execShiftData.days[targetDay] || [];
+
+      var fuelRate = Number(document.getElementById('exec-fuel-rate').value) || 79;
+      var charterBudgetMonthly = (Number(document.getElementById('exec-charter-budget').value) || 1300) * 10000;
+      var workDays = Number(document.getElementById('exec-work-days').value) || 31;
+      var dailyBudget = charterBudgetMonthly / workDays;
+
+      // 集計
+      var totalRevenue = 0;
+      var totalCost = 0;
+      var charterCost = 0; // 自社以外の経費のみ
+      var headcount = entries.length;
+      var deptCounts = {}; // 所属別人数
+      var typeBreakdown = {}; // コース種別 → {direct:n, staff:n, other:n}
+
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var rate = EXEC_RATE_TABLE[e.type];
+        if (!rate) continue;
+
+        var fuel = fuelRate * rate.hours;
+        var rev = rate.revenue + fuel;
+        totalRevenue += rev;
+
+        var cost = 0;
+        if (e.deptCategory === 'direct') {
+          cost = rate.costDirect;
+        } else if (e.deptCategory === 'staff') {
+          cost = 0; // 経費ゼロ
+        } else {
+          cost = rate.costOther;
+          charterCost += cost;
+        }
+        totalCost += cost;
+
+        // 所属別カウント
+        var deptLabel = e.dept || '不明';
+        deptCounts[deptLabel] = (deptCounts[deptLabel] || 0) + 1;
+
+        // コース種別明細
+        if (!typeBreakdown[e.type]) typeBreakdown[e.type] = { direct: 0, staff: 0, other: 0, total: 0 };
+        typeBreakdown[e.type][e.deptCategory]++;
+        typeBreakdown[e.type].total++;
+      }
+
+      var profit = totalRevenue - totalCost;
+      var profitRate = totalRevenue > 0 ? (profit / totalRevenue * 100).toFixed(1) : 0;
+      var budgetDiff = dailyBudget - charterCost;
+
+      // KPI表示
+      document.getElementById('exec-kpi-area').classList.remove('hidden');
+
+      document.getElementById('exec-revenue').textContent = '¥' + totalRevenue.toLocaleString();
+      document.getElementById('exec-revenue-detail').textContent = headcount + '名 × 各コース + 燃料S/C ' + fuelRate + '円/h';
+
+      document.getElementById('exec-cost').textContent = '¥' + totalCost.toLocaleString();
+      document.getElementById('exec-cost-detail').textContent = '傭車費: ¥' + charterCost.toLocaleString();
+
+      document.getElementById('exec-profit').textContent = '¥' + profit.toLocaleString();
+      document.getElementById('exec-profit-rate').textContent = '利益率 ' + profitRate + '%';
+
+      var budgetCard = document.getElementById('exec-budget-card');
+      var diffText = budgetDiff >= 0 ? '▼ ¥' + Math.abs(budgetDiff).toLocaleString() + ' 余裕' : '▲ ¥' + Math.abs(budgetDiff).toLocaleString() + ' 超過';
+      document.getElementById('exec-charter-diff').textContent = diffText;
+      document.getElementById('exec-charter-detail').textContent =
+        '日割予算: ¥' + Math.round(dailyBudget).toLocaleString() + ' / 実績: ¥' + charterCost.toLocaleString();
+      if (budgetDiff >= 0) {
+        budgetCard.className = 'card p-4 border-2 bg-gradient-to-br from-green-50 to-green-100 border-green-300';
+        document.getElementById('exec-charter-diff').className = 'text-2xl font-black text-green-700';
+      } else {
+        budgetCard.className = 'card p-4 border-2 bg-gradient-to-br from-red-50 to-red-100 border-red-300';
+        document.getElementById('exec-charter-diff').className = 'text-2xl font-black text-red-700';
+      }
+
+      // 稼働人数
+      document.getElementById('exec-headcount').textContent = headcount + '名';
+      var breakdownHtml = '';
+      var deptKeys = Object.keys(deptCounts).sort();
+      for (var i = 0; i < deptKeys.length; i++) {
+        breakdownHtml += '<span class="inline-block mr-3">' + deptKeys[i] + ': <strong>' + deptCounts[deptKeys[i]] + '</strong></span>';
+      }
+      document.getElementById('exec-headcount-breakdown').innerHTML = breakdownHtml;
+
+      // 円グラフ
+      renderExecPieChart(deptCounts);
+
+      // 明細テーブル
+      renderExecDetailTable(typeBreakdown, fuelRate);
+    }
+
+    // 円グラフ
+    var execPieChartInstance = null;
+    function renderExecPieChart(deptCounts) {
+      var canvas = document.getElementById('exec-pie-chart');
+      if (!canvas) return;
+
+      var labels = Object.keys(deptCounts);
+      var data = [];
+      for (var i = 0; i < labels.length; i++) data.push(deptCounts[labels[i]]);
+
+      var colors = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+      if (execPieChartInstance) execPieChartInstance.destroy();
+      execPieChartInstance = new Chart(canvas, {
+        type: 'doughnut',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: data,
+            backgroundColor: colors.slice(0, labels.length),
+            borderWidth: 2,
+            borderColor: '#fff'
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'right', labels: { font: { size: 11 }, usePointStyle: true } },
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  var total = 0;
+                  for (var i = 0; i < ctx.dataset.data.length; i++) total += ctx.dataset.data[i];
+                  var pct = (ctx.parsed / total * 100).toFixed(1);
+                  return ctx.label + ': ' + ctx.parsed + '名 (' + pct + '%)';
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // 明細テーブル
+    function renderExecDetailTable(typeBreakdown, fuelRate) {
+      var thead = document.getElementById('exec-detail-thead');
+      var tbody = document.getElementById('exec-detail-tbody');
+
+      thead.innerHTML = '<tr class="border-b-2 border-gray-300 bg-surface">' +
+        '<th class="px-3 py-2 text-left text-xs">コース種別</th>' +
+        '<th class="px-3 py-2 text-right text-xs">GDSダイレクト</th>' +
+        '<th class="px-3 py-2 text-right text-xs">GDS管理/パート</th>' +
+        '<th class="px-3 py-2 text-right text-xs">自社以外</th>' +
+        '<th class="px-3 py-2 text-right text-xs">合計</th>' +
+        '<th class="px-3 py-2 text-right text-xs">売上小計</th>' +
+        '<th class="px-3 py-2 text-right text-xs">経費小計</th>' +
+        '</tr>';
+
+      var html = '';
+      var typeKeys = ['maru', 'hachi', 'bike', 'b1', 'b2', 'c1', 'c3'];
+      var grandRevenue = 0;
+      var grandCost = 0;
+
+      for (var t = 0; t < typeKeys.length; t++) {
+        var key = typeKeys[t];
+        var bd = typeBreakdown[key];
+        if (!bd) continue;
+
+        var rate = EXEC_RATE_TABLE[key];
+        var fuel = fuelRate * rate.hours;
+        var revPerUnit = rate.revenue + fuel;
+        var subRevenue = revPerUnit * bd.total;
+        var subCost = rate.costDirect * bd.direct + rate.costOther * bd.other;
+        grandRevenue += subRevenue;
+        grandCost += subCost;
+
+        html += '<tr class="border-b border-border hover:bg-surface/50">' +
+          '<td class="px-3 py-2 font-bold">' + EXEC_TYPE_LABELS[key] + '</td>' +
+          '<td class="px-3 py-2 text-right">' + (bd.direct || '-') + '</td>' +
+          '<td class="px-3 py-2 text-right">' + (bd.staff || '-') + '</td>' +
+          '<td class="px-3 py-2 text-right">' + (bd.other || '-') + '</td>' +
+          '<td class="px-3 py-2 text-right font-bold">' + bd.total + '</td>' +
+          '<td class="px-3 py-2 text-right text-emerald-600">¥' + subRevenue.toLocaleString() + '</td>' +
+          '<td class="px-3 py-2 text-right text-red-600">¥' + subCost.toLocaleString() + '</td>' +
+          '</tr>';
+      }
+
+      html += '<tr class="border-t-2 border-gray-400 bg-surface font-bold">' +
+        '<td class="px-3 py-2">合計</td><td class="px-3 py-2" colspan="3"></td>' +
+        '<td class="px-3 py-2 text-right">' + Object.keys(typeBreakdown).reduce(function(s, k) { return s + typeBreakdown[k].total; }, 0) + '</td>' +
+        '<td class="px-3 py-2 text-right text-emerald-700">¥' + grandRevenue.toLocaleString() + '</td>' +
+        '<td class="px-3 py-2 text-right text-red-700">¥' + grandCost.toLocaleString() + '</td>' +
+        '</tr>';
+
+      tbody.innerHTML = html;
+    }
+
+    // 初期化時に設定復元
+    (function() {
+      var today = new Date();
+      var dateStr = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
+      document.getElementById('exec-target-date').value = dateStr;
+      // 当月日数デフォルト
+      var lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+      document.getElementById('exec-work-days').value = lastDay;
+      loadExecSettings();
+    })();
+
+    // ============================================================
+    // 物量管理
+    // ============================================================
+
     var volumePendingResults = {};
 
     function resetVolumePending() {
