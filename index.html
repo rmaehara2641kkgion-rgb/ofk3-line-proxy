@@ -953,7 +953,8 @@
             ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
             <div class="text-3xl mb-2">📦</div>
             <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)</p>
-            <p class="text-xs text-gray-400 mt-1">複数日分OK・自動統合</p>
+            <p class="text-xs text-gray-400 mt-1">複数日分OK・自動統合・追加ドロップ可</p>
+            <div id="volume-pending-info" class="mt-2"></div>
             <input type="file" id="volume-file-input" accept=".xlsx,.xls" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
           </div>
 
@@ -8023,12 +8024,22 @@
       return '';
     }
 
-    // 複数ファイル一括処理
+    // 蓄積用（複数回ドロップ対応）
+    var volumePendingResults = {};
+
+    function resetVolumePending() {
+      volumePendingResults = {};
+      document.getElementById('volume-summary').innerHTML = '';
+      document.getElementById('volume-summary').classList.add('hidden');
+      document.getElementById('volume-pending-info').innerHTML = '';
+    }
+
+    // 複数ファイル一括処理（追加蓄積モード）
     function parseVolumeFiles(files) {
       var fileArray = [];
       for (var i = 0; i < files.length; i++) fileArray.push(files[i]);
 
-      var results = {}; // date -> { courses, totalPkg, totalStops, courseTypes, areaData }
+      var results = volumePendingResults; // 前回の結果を引き継ぐ
       var processed = 0;
       var total = fileArray.length;
 
@@ -8111,8 +8122,20 @@
     }
 
     function finishVolumeBatch(results) {
+      volumePendingResults = results; // 蓄積を保持
       var dates = Object.keys(results).sort();
       if (dates.length === 0) { alert('データが見つかりませんでした'); return; }
+
+      // 蓄積状況を表示
+      var totalCourses = 0;
+      for (var di = 0; di < dates.length; di++) {
+        totalCourses += Object.keys(results[dates[di]].courses).length;
+      }
+      var infoEl = document.getElementById('volume-pending-info');
+      if (infoEl) {
+        infoEl.innerHTML = '<span class="text-xs text-emerald-600 font-bold">✅ ' + dates.length + '日分 / ' + totalCourses + 'コース蓄積中</span>' +
+          ' <button onclick="resetVolumePending()" class="text-xs text-red-500 underline ml-2 cursor-pointer">🔄 リセット</button>';
+      }
 
       // 各日付の集計を作成
       volumeBatchResults = [];
@@ -8232,6 +8255,8 @@
       }
 
       volumeBatchResults = [];
+      volumePendingResults = {};
+      document.getElementById('volume-pending-info').innerHTML = '';
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       restoreVolumeSummaryHTML();
@@ -8365,6 +8390,8 @@
       document.getElementById('volume-dropzone').classList.remove('hidden');
       document.getElementById('volume-summary').classList.add('hidden');
       volumeData = null;
+      volumePendingResults = {};
+      document.getElementById('volume-pending-info').innerHTML = '';
       loadVolumeHistory();
     }
 
