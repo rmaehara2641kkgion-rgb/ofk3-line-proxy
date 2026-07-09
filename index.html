@@ -6,6 +6,7 @@
   <title>配送管理 - OFK3</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -952,10 +953,10 @@
             ondragleave="this.classList.remove('border-amber-400','bg-amber-50')"
             ondrop="event.preventDefault(); this.classList.remove('border-amber-400','bg-amber-50'); handleVolumeFileDrop(event)">
             <div class="text-3xl mb-2">📦</div>
-            <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx)</p>
+            <p class="text-sm font-medium text-ink-lighter">サイクルデータ(xlsx/zip)</p>
             <p class="text-xs text-gray-400 mt-1">複数日分OK・自動統合・追加ドロップ可</p>
             <div id="volume-pending-info" class="mt-2"></div>
-            <input type="file" id="volume-file-input" accept=".xlsx,.xls" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
+            <input type="file" id="volume-file-input" accept=".xlsx,.xls,.zip" multiple onchange="handleVolumeFileSelect(event)" class="hidden">
           </div>
 
           <!-- Actual Report -->
@@ -1058,7 +1059,7 @@
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium bg-yellow-100 border-l-2 border-yellow-400"><img src="logo-gds.png" alt="GDS" class="inline-block h-5"></th>
+                    <th class="px-3 py-2 text-center text-xs font-medium bg-yellow-100 border-l-2 border-yellow-400"><img src="logo-gds.png" alt="GDS" class="inline-block h-7"></th>
                     <th class="px-3 py-2 text-center text-xs font-medium bg-orange-100 border-l-2 border-orange-400"><img src="logo-flex.png" alt="Flex" class="inline-block h-5"></th>
                     <th class="px-3 py-2 text-center text-xs font-medium bg-blue-100 border-l-2 border-blue-400"><img src="logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter border-l-2 border-gray-300">全体台数</th>
@@ -8034,10 +8035,85 @@
       document.getElementById('volume-pending-info').innerHTML = '';
     }
 
-    // 複数ファイル一括処理（追加蓄積モード）
+    // 複数ファイル一括処理（追加蓄積モード・ZIP対応）
     function parseVolumeFiles(files) {
       var fileArray = [];
       for (var i = 0; i < files.length; i++) fileArray.push(files[i]);
+
+      // ZIP展開してxlsxを抽出
+      var xlsxFiles = [];
+      var zipCount = 0;
+      var nonZipCount = 0;
+
+      for (var i = 0; i < fileArray.length; i++) {
+        if (fileArray[i].name.match(/\.zip$/i)) {
+          zipCount++;
+        } else {
+          nonZipCount++;
+        }
+      }
+
+      if (zipCount === 0) {
+        // ZIPなし → そのまま処理
+        parseVolumeXlsxFiles(fileArray);
+        return;
+      }
+
+      // ZIP展開
+      var pending = fileArray.length;
+      var extractedFiles = [];
+
+      for (var i = 0; i < fileArray.length; i++) {
+        (function(file) {
+          if (!file.name.match(/\.zip$/i)) {
+            extractedFiles.push(file);
+            pending--;
+            if (pending === 0) parseVolumeXlsxFiles(extractedFiles);
+            return;
+          }
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            JSZip.loadAsync(e.target.result).then(function(zip) {
+              var zipFiles = [];
+              zip.forEach(function(path, entry) {
+                if (!entry.dir && path.match(/\.xlsx?$/i) && path.indexOf('~$') < 0) {
+                  zipFiles.push(entry);
+                }
+              });
+              if (zipFiles.length === 0) {
+                pending--;
+                if (pending === 0) parseVolumeXlsxFiles(extractedFiles);
+                return;
+              }
+              var zipPending = zipFiles.length;
+              for (var z = 0; z < zipFiles.length; z++) {
+                (function(entry) {
+                  entry.async('arraybuffer').then(function(buf) {
+                    var fname = entry.name.split('/').pop();
+                    var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    blob.name = fname;
+                    extractedFiles.push(blob);
+                    zipPending--;
+                    if (zipPending === 0) {
+                      pending--;
+                      if (pending === 0) parseVolumeXlsxFiles(extractedFiles);
+                    }
+                  });
+                })(zipFiles[z]);
+              }
+            }).catch(function(err) {
+              alert('ZIP展開エラー: ' + file.name + '\n' + err.message);
+              pending--;
+              if (pending === 0) parseVolumeXlsxFiles(extractedFiles);
+            });
+          };
+          reader.readAsArrayBuffer(file);
+        })(fileArray[i]);
+      }
+    }
+
+    function parseVolumeXlsxFiles(fileArray) {
+      if (fileArray.length === 0) { alert('xlsxファイルが見つかりませんでした'); return; }
 
       var results = volumePendingResults; // 前回の結果を引き継ぐ
       var processed = 0;
@@ -8646,7 +8722,7 @@
       html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-xs"><thead>' +
         '<tr class="border-b-2 border-gray-300 bg-surface">' +
         '<th class="px-2 py-1.5 text-left" rowspan="2">日付</th>' +
-        '<th class="px-2 py-1.5 text-center bg-yellow-100 font-bold border-l-2 border-yellow-400" colspan="4"><img src="logo-gds.png" alt="GDS" class="inline-block h-5"></th>' +
+        '<th class="px-2 py-1.5 text-center bg-yellow-100 font-bold border-l-2 border-yellow-400" colspan="4"><img src="logo-gds.png" alt="GDS" class="inline-block h-7"></th>' +
         '<th class="px-2 py-1.5 text-center bg-orange-100 font-bold border-l-2 border-orange-400" colspan="2"><img src="logo-flex.png" alt="Flex" class="inline-block h-5"></th>' +
         '<th class="px-2 py-1.5 text-center bg-blue-100 font-bold border-l-2 border-blue-400" colspan="2"><img src="logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>' +
         '<th class="px-2 py-1.5 text-right border-l-2 border-gray-300" rowspan="2">全体</th>' +
