@@ -284,8 +284,8 @@
               <input type="number" id="exec-fuel-rate" value="79" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
             </div>
             <div>
-              <label class="text-xs text-ink-lighter block mb-1">🚛 傭車費 月間予算（万円）</label>
-              <input type="number" id="exec-charter-budget" value="1300" step="10" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+              <label class="text-xs text-ink-lighter block mb-1">🚛 傭車費 月間予算（円）</label>
+              <input type="number" id="exec-charter-budget" value="13000000" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
             </div>
             <div>
               <label class="text-xs text-ink-lighter block mb-1">📅 当月稼働日数</label>
@@ -8198,7 +8198,7 @@
     }
     function saveExecSettings() {
       execSettings.fuelRate = Number(document.getElementById('exec-fuel-rate').value) || 79;
-      execSettings.charterBudget = Number(document.getElementById('exec-charter-budget').value) || 1300;
+      execSettings.charterBudget = Number(document.getElementById('exec-charter-budget').value) || 13000000;
       execSettings.workDays = Number(document.getElementById('exec-work-days').value) || 31;
       localStorage.setItem('execSettings', JSON.stringify(execSettings));
     }
@@ -8223,29 +8223,62 @@
           var ws = wb.Sheets[sheetName];
           var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-          // ヘッダー解析: 行4(index3)に日付(1〜31)が入っている
-          // 行1-3: ヘッダー情報
-          // 行4: 日付行（列D〜AH = index3〜33）
-          // 行5以降: データ（A=所属, B=名前, C=回数, D以降=日別コース）
+          // ヘッダー解析: 日付番号(1〜31)が入った行を探す
+          // R3に「1,2,3,...31」、R4に曜日名の構成
+          // XLSXで読むと日付シリアル値の場合もあるので柔軟に対応
           var headerRow = null;
-          for (var r = 0; r < Math.min(10, rows.length); r++) {
-            var has1 = false;
-            for (var c = 3; c < 35; c++) {
-              var v = Number(rows[r][c]);
-              if (v === 1) has1 = true;
-              if (has1 && v === 2) { headerRow = r; break; }
-            }
-            if (headerRow !== null) break;
-          }
-          if (headerRow === null) { alert('日付ヘッダーが見つかりません'); return; }
-
-          // 日付列マッピング（day番号 → 列index）
           var dayToCol = {};
-          for (var c = 3; c < Math.min(50, rows[headerRow].length); c++) {
-            var dayNum = Number(rows[headerRow][c]);
-            if (dayNum >= 1 && dayNum <= 31) {
-              dayToCol[dayNum] = c;
+
+          for (var r = 0; r < Math.min(15, rows.length); r++) {
+            var foundDays = {};
+            for (var c = 3; c < Math.min(50, (rows[r] || []).length); c++) {
+              var v = rows[r][c];
+              if (v === undefined || v === null || v === '') continue;
+              var num = Number(v);
+              // 日付シリアル値の場合（40000以上）→ 日に変換
+              if (num > 40000 && num < 60000) {
+                var dt = new Date((num - 25569) * 86400000);
+                num = dt.getDate();
+              }
+              if (num >= 1 && num <= 31 && Math.floor(num) === num) {
+                foundDays[num] = c;
+              }
             }
+            // 少なくとも28日以上見つかれば日付行と判定
+            var dayCount = Object.keys(foundDays).length;
+            if (dayCount >= 28) {
+              headerRow = r;
+              dayToCol = foundDays;
+              break;
+            }
+          }
+
+          // フォールバック: 「社名」「名前」ラベルの次の行
+          if (headerRow === null) {
+            for (var r = 0; r < Math.min(10, rows.length); r++) {
+              var cell0 = (rows[r][0] || '').toString();
+              var cell1 = (rows[r][1] || '').toString();
+              if (cell0.indexOf('社') >= 0 && cell1.indexOf('名') >= 0) {
+                headerRow = r;
+                // この行自体に日付があるかチェック
+                for (var c = 3; c < Math.min(50, rows[r].length); c++) {
+                  var num = Number(rows[r][c]);
+                  if (num > 40000 && num < 60000) {
+                    var dt = new Date((num - 25569) * 86400000);
+                    num = dt.getDate();
+                  }
+                  if (num >= 1 && num <= 31 && Math.floor(num) === num) {
+                    dayToCol[num] = c;
+                  }
+                }
+                break;
+              }
+            }
+          }
+
+          if (headerRow === null || Object.keys(dayToCol).length === 0) {
+            alert('日付ヘッダーが見つかりません（行0〜14を検索済み）');
+            return;
           }
 
           // データ行パース
@@ -8308,7 +8341,7 @@
       var entries = execShiftData.days[targetDay] || [];
 
       var fuelRate = Number(document.getElementById('exec-fuel-rate').value) || 79;
-      var charterBudgetMonthly = (Number(document.getElementById('exec-charter-budget').value) || 1300) * 10000;
+      var charterBudgetMonthly = Number(document.getElementById('exec-charter-budget').value) || 13000000;
       var workDays = Number(document.getElementById('exec-work-days').value) || 31;
       var dailyBudget = charterBudgetMonthly / workDays;
 
