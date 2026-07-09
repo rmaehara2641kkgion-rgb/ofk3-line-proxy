@@ -278,15 +278,37 @@
 
         <!-- 設定パネル（燃料サーチャージ・傭車予算） -->
         <div class="card p-4 mb-4">
-          <div class="grid grid-cols-3 gap-4">
+          <div class="grid grid-cols-2 gap-4 mb-3">
             <div>
-              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料サーチャージ（円/h）</label>
+              <label class="text-xs text-ink-lighter block mb-1">🚗 走行距離連動費（円/h）</label>
               <input type="number" id="exec-fuel-rate" value="79" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+              <p class="text-[10px] text-gray-400 mt-1">※経費として計上（ドライバー運賃チャージ）</p>
             </div>
             <div>
               <label class="text-xs text-ink-lighter block mb-1">🚛 傭車費 月間予算（円）</label>
               <input type="number" id="exec-charter-budget" value="13000000" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
             </div>
+          </div>
+          <div class="grid grid-cols-4 gap-4 mb-3">
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料S/C 走行距離（km）</label>
+              <input type="number" id="exec-sc-km" value="8500" step="100" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料S/C 単価（円/km）</label>
+              <input type="number" id="exec-sc-rate" value="17.1" step="0.1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 燃料S/C 係数</label>
+              <input type="number" id="exec-sc-factor" value="5" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter block mb-1">⛽ 売上S/C合計</label>
+              <p class="text-sm font-bold text-emerald-700 mt-1" id="exec-sc-total">--</p>
+              <p class="text-[10px] text-gray-400">= km × 単価 × 係数（売上に加算）</p>
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-4">
             <div>
               <label class="text-xs text-ink-lighter block mb-1">📅 当月稼働日数</label>
               <input type="number" id="exec-work-days" value="31" step="1" class="w-full border border-border rounded px-2 py-1.5 text-sm" onchange="saveExecSettings();recalcExecDashboard()">
@@ -8183,8 +8205,9 @@
     function getExecDeptCategory(deptName) {
       if (!deptName) return 'other';
       var d = deptName.trim();
-      if (d === 'GDSダイレクト') return 'direct';
       if (d === 'GDS管理' || d === 'GDSパート') return 'staff';
+      // GDS/GDSダイレクト/GDS系は全てダイレクト扱い
+      if (d.indexOf('GDS') >= 0 || d === 'GDS') return 'direct';
       return 'other';
     }
 
@@ -8231,11 +8254,17 @@
       if (execSettings.fuelRate !== undefined) document.getElementById('exec-fuel-rate').value = execSettings.fuelRate;
       if (execSettings.charterBudget !== undefined) document.getElementById('exec-charter-budget').value = execSettings.charterBudget;
       if (execSettings.workDays !== undefined) document.getElementById('exec-work-days').value = execSettings.workDays;
+      if (execSettings.scKm !== undefined) document.getElementById('exec-sc-km').value = execSettings.scKm;
+      if (execSettings.scRate !== undefined) document.getElementById('exec-sc-rate').value = execSettings.scRate;
+      if (execSettings.scFactor !== undefined) document.getElementById('exec-sc-factor').value = execSettings.scFactor;
     }
     function saveExecSettings() {
       execSettings.fuelRate = Number(document.getElementById('exec-fuel-rate').value) || 79;
       execSettings.charterBudget = Number(document.getElementById('exec-charter-budget').value) || 13000000;
       execSettings.workDays = Number(document.getElementById('exec-work-days').value) || 31;
+      execSettings.scKm = Number(document.getElementById('exec-sc-km').value) || 8500;
+      execSettings.scRate = Number(document.getElementById('exec-sc-rate').value) || 17.1;
+      execSettings.scFactor = Number(document.getElementById('exec-sc-factor').value) || 5;
       localStorage.setItem('execSettings', JSON.stringify(execSettings));
     }
 
@@ -8349,6 +8378,10 @@
           }
 
           execShiftData = { days: days, fileName: file.name };
+
+          // データ永続化（ページ更新しても残る）
+          try { localStorage.setItem('execShiftData', JSON.stringify(execShiftData)); } catch(e) {}
+
           document.getElementById('exec-shift-status').innerHTML =
             '<span class="text-emerald-600 font-bold">✅ ' + file.name + ' 読込完了</span>';
 
@@ -8381,31 +8414,39 @@
       var workDays = Number(document.getElementById('exec-work-days').value) || 31;
       var dailyBudget = charterBudgetMonthly / workDays;
 
+      // 燃料サーチャージ（売上加算・月間固定）
+      var scKm = Number(document.getElementById('exec-sc-km').value) || 8500;
+      var scRate = Number(document.getElementById('exec-sc-rate').value) || 17.1;
+      var scFactor = Number(document.getElementById('exec-sc-factor').value) || 5;
+      var scMonthly = scKm * scRate * scFactor;
+      var scDaily = scMonthly / workDays;
+      document.getElementById('exec-sc-total').textContent = '¥' + Math.round(scMonthly).toLocaleString() + '（日割 ¥' + Math.round(scDaily).toLocaleString() + '）';
+
       // 集計
-      var totalRevenue = 0;
+      var totalRevenue = scDaily; // 日割サーチャージを売上に加算
       var totalCost = 0;
-      var charterCost = 0; // 自社以外の経費のみ
+      var charterCost = 0;
       var headcount = entries.length;
-      var deptCounts = {}; // 所属別人数
-      var typeBreakdown = {}; // コース種別 → {direct:n, staff:n, other:n}
+      var deptCounts = {};
+      var typeBreakdown = {};
 
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
         var rate = EXEC_RATE_TABLE[e.type];
         if (!rate) continue;
 
-        var fuel = fuelRate * rate.hours;
-        var rev = rate.revenue + fuel;
+        var fuel = fuelRate * rate.hours; // 走行距離連動費 = 経費
+        var rev = rate.revenue; // サーチャージは月間固定で別計上
         totalRevenue += rev;
 
-        var cost = 0;
+        var cost = fuel; // 全員に走行距離連動費がかかる
         if (e.deptCategory === 'direct') {
-          cost = rate.costDirect;
+          cost += rate.costDirect;
         } else if (e.deptCategory === 'staff') {
-          cost = 0; // 経費ゼロ
+          // 走行距離連動費のみ（車建て経費ゼロ）
         } else {
-          cost = rate.costOther;
-          charterCost += cost;
+          cost += rate.costOther;
+          charterCost += rate.costOther;
         }
         totalCost += cost;
 
@@ -8450,14 +8491,16 @@
       }
 
       // === 月間見通し ===
-      var monthRevenue = 0, monthCost = 0, monthCharter = 0;
+      var monthRevenue = scMonthly, monthCost = 0, monthCharter = 0;
       for (var d = 1; d <= 31; d++) {
         var dayEntries = execShiftData.days[d] || [];
         for (var i = 0; i < dayEntries.length; i++) {
           var de = dayEntries[i];
           var dr = EXEC_RATE_TABLE[de.type];
           if (!dr) continue;
-          monthRevenue += dr.revenue + fuelRate * dr.hours;
+          monthRevenue += dr.revenue;
+          var deFuel = fuelRate * dr.hours;
+          monthCost += deFuel;
           if (de.deptCategory === 'direct') {
             monthCost += dr.costDirect;
           } else if (de.deptCategory === 'other') {
@@ -8577,9 +8620,9 @@
 
         var rate = EXEC_RATE_TABLE[key];
         var fuel = fuelRate * rate.hours;
-        var revPerUnit = rate.revenue + fuel;
+        var revPerUnit = rate.revenue;
         var subRevenue = revPerUnit * bd.total;
-        var subCost = rate.costDirect * bd.direct + rate.costOther * bd.other;
+        var subCost = fuel * bd.total + rate.costDirect * bd.direct + rate.costOther * bd.other;
         grandRevenue += subRevenue;
         grandCost += subCost;
 
@@ -8630,12 +8673,13 @@
         var entries = execShiftData.days[d] || [];
         if (entries.length === 0) continue;
 
-        var dRev = 0, dCost = 0, dCharter = 0;
+        var dRev = scDaily, dCost = 0, dCharter = 0;
         for (var i = 0; i < entries.length; i++) {
           var e = entries[i];
           var rate = EXEC_RATE_TABLE[e.type];
           if (!rate) continue;
-          dRev += rate.revenue + fuelRate * rate.hours;
+          dRev += rate.revenue;
+          dCost += fuelRate * rate.hours;
           if (e.deptCategory === 'direct') {
             dCost += rate.costDirect;
           } else if (e.deptCategory === 'other') {
@@ -8691,10 +8735,21 @@
       var today = new Date();
       var dateStr = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
       document.getElementById('exec-target-date').value = dateStr;
-      // 当月日数デフォルト
       var lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
       document.getElementById('exec-work-days').value = lastDay;
       loadExecSettings();
+
+      // シフトデータ復元
+      try {
+        var saved = localStorage.getItem('execShiftData');
+        if (saved) {
+          execShiftData = JSON.parse(saved);
+          document.getElementById('exec-shift-status').innerHTML =
+            '<span class="text-emerald-600 font-bold">✅ ' + (execShiftData.fileName || 'シフト表') + '（保存済み）</span>' +
+            ' <button onclick="localStorage.removeItem(\'execShiftData\');execShiftData=null;document.getElementById(\'exec-shift-status\').innerHTML=\'\';document.getElementById(\'exec-kpi-area\').classList.add(\'hidden\')" class="text-xs text-red-500 underline ml-2 cursor-pointer">クリア</button>';
+          recalcExecDashboard();
+        }
+      } catch(e) {}
     })();
 
     // ============================================================
