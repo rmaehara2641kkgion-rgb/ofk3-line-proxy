@@ -296,19 +296,21 @@
 
         <!-- KPIカード群 -->
         <div id="exec-kpi-area" class="hidden">
+          <!-- 本日 -->
+          <h4 class="text-xs font-bold text-ink-lighter mb-2">📊 本日（<span id="exec-date-label"></span>）</h4>
           <div class="grid grid-cols-4 gap-4 mb-4">
             <div class="card p-4 bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200">
-              <p class="text-xs text-emerald-600 font-medium mb-1">💰 本日の売上</p>
+              <p class="text-xs text-emerald-600 font-medium mb-1">💰 売上</p>
               <p class="text-2xl font-black text-emerald-800" id="exec-revenue">--</p>
               <p class="text-xs text-emerald-500 mt-1" id="exec-revenue-detail"></p>
             </div>
             <div class="card p-4 bg-gradient-to-br from-red-50 to-red-100 border-red-200">
-              <p class="text-xs text-red-600 font-medium mb-1">📦 本日の配送費</p>
+              <p class="text-xs text-red-600 font-medium mb-1">📦 配送費</p>
               <p class="text-2xl font-black text-red-800" id="exec-cost">--</p>
               <p class="text-xs text-red-500 mt-1" id="exec-cost-detail"></p>
             </div>
             <div class="card p-4 bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
-              <p class="text-xs text-blue-600 font-medium mb-1">📈 本日の利益予測</p>
+              <p class="text-xs text-blue-600 font-medium mb-1">📈 利益</p>
               <p class="text-2xl font-black text-blue-800" id="exec-profit">--</p>
               <p class="text-xs text-blue-500 mt-1" id="exec-profit-rate"></p>
             </div>
@@ -316,6 +318,29 @@
               <p class="text-xs font-medium mb-1">🚛 傭車費 予算比</p>
               <p class="text-2xl font-black" id="exec-charter-diff">--</p>
               <p class="text-xs mt-1" id="exec-charter-detail"></p>
+            </div>
+          </div>
+
+          <!-- 月間見通し -->
+          <h4 class="text-xs font-bold text-ink-lighter mb-2">📅 月間見通し</h4>
+          <div class="grid grid-cols-4 gap-4 mb-4">
+            <div class="card p-4 bg-gradient-to-br from-emerald-50 to-emerald-50 border-emerald-100">
+              <p class="text-xs text-emerald-600 font-medium mb-1">💰 月間売上</p>
+              <p class="text-xl font-black text-emerald-800" id="exec-month-revenue">--</p>
+            </div>
+            <div class="card p-4 bg-gradient-to-br from-red-50 to-red-50 border-red-100">
+              <p class="text-xs text-red-600 font-medium mb-1">📦 月間配送費</p>
+              <p class="text-xl font-black text-red-800" id="exec-month-cost">--</p>
+            </div>
+            <div class="card p-4 bg-gradient-to-br from-blue-50 to-blue-50 border-blue-100">
+              <p class="text-xs text-blue-600 font-medium mb-1">📈 月間利益</p>
+              <p class="text-xl font-black text-blue-800" id="exec-month-profit">--</p>
+              <p class="text-xs text-blue-500 mt-1" id="exec-month-profit-rate"></p>
+            </div>
+            <div class="card p-4 border-2" id="exec-month-budget-card">
+              <p class="text-xs font-medium mb-1">🚛 傭車費 月間予算</p>
+              <p class="text-xl font-black" id="exec-month-budget-diff">--</p>
+              <p class="text-xs mt-1" id="exec-month-budget-detail"></p>
             </div>
           </div>
 
@@ -333,13 +358,24 @@
             </div>
           </div>
 
-          <!-- 日別明細テーブル -->
-          <div class="card p-4">
+          <!-- コース種別明細 -->
+          <div class="card p-4 mb-4">
             <h4 class="text-xs font-bold text-ink-lighter mb-3">📋 コース種別 × 所属 明細</h4>
             <div class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead id="exec-detail-thead"></thead>
                 <tbody id="exec-detail-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 日別損益テーブル -->
+          <div class="card p-4">
+            <h4 class="text-xs font-bold text-ink-lighter mb-3">📆 日別損益一覧</h4>
+            <div class="overflow-x-auto max-h-96 overflow-y-auto">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0" id="exec-daily-thead"></thead>
+                <tbody id="exec-daily-tbody"></tbody>
               </table>
             </div>
           </div>
@@ -8389,27 +8425,67 @@
 
       // KPI表示
       document.getElementById('exec-kpi-area').classList.remove('hidden');
+      document.getElementById('exec-date-label').textContent = dateInput;
 
-      document.getElementById('exec-revenue').textContent = '¥' + totalRevenue.toLocaleString();
+      document.getElementById('exec-revenue').textContent = '¥' + Math.round(totalRevenue).toLocaleString();
       document.getElementById('exec-revenue-detail').textContent = headcount + '名 × 各コース + 燃料S/C ' + fuelRate + '円/h';
 
-      document.getElementById('exec-cost').textContent = '¥' + totalCost.toLocaleString();
-      document.getElementById('exec-cost-detail').textContent = '傭車費: ¥' + charterCost.toLocaleString();
+      document.getElementById('exec-cost').textContent = '¥' + Math.round(totalCost).toLocaleString();
+      document.getElementById('exec-cost-detail').textContent = '傭車費: ¥' + Math.round(charterCost).toLocaleString();
 
-      document.getElementById('exec-profit').textContent = '¥' + profit.toLocaleString();
+      document.getElementById('exec-profit').textContent = '¥' + Math.round(profit).toLocaleString();
       document.getElementById('exec-profit-rate').textContent = '利益率 ' + profitRate + '%';
 
       var budgetCard = document.getElementById('exec-budget-card');
-      var diffText = budgetDiff >= 0 ? '▼ ¥' + Math.abs(budgetDiff).toLocaleString() + ' 余裕' : '▲ ¥' + Math.abs(budgetDiff).toLocaleString() + ' 超過';
+      var diffText = budgetDiff >= 0 ? '▼ ¥' + Math.round(Math.abs(budgetDiff)).toLocaleString() + ' 余裕' : '▲ ¥' + Math.round(Math.abs(budgetDiff)).toLocaleString() + ' 超過';
       document.getElementById('exec-charter-diff').textContent = diffText;
       document.getElementById('exec-charter-detail').textContent =
-        '日割予算: ¥' + Math.round(dailyBudget).toLocaleString() + ' / 実績: ¥' + charterCost.toLocaleString();
+        '日割予算: ¥' + Math.round(dailyBudget).toLocaleString() + ' / 実績: ¥' + Math.round(charterCost).toLocaleString();
       if (budgetDiff >= 0) {
         budgetCard.className = 'card p-4 border-2 bg-gradient-to-br from-green-50 to-green-100 border-green-300';
         document.getElementById('exec-charter-diff').className = 'text-2xl font-black text-green-700';
       } else {
         budgetCard.className = 'card p-4 border-2 bg-gradient-to-br from-red-50 to-red-100 border-red-300';
         document.getElementById('exec-charter-diff').className = 'text-2xl font-black text-red-700';
+      }
+
+      // === 月間見通し ===
+      var monthRevenue = 0, monthCost = 0, monthCharter = 0;
+      for (var d = 1; d <= 31; d++) {
+        var dayEntries = execShiftData.days[d] || [];
+        for (var i = 0; i < dayEntries.length; i++) {
+          var de = dayEntries[i];
+          var dr = EXEC_RATE_TABLE[de.type];
+          if (!dr) continue;
+          monthRevenue += dr.revenue + fuelRate * dr.hours;
+          if (de.deptCategory === 'direct') {
+            monthCost += dr.costDirect;
+          } else if (de.deptCategory === 'other') {
+            monthCost += dr.costOther;
+            monthCharter += dr.costOther;
+          }
+        }
+      }
+      var monthProfit = monthRevenue - monthCost;
+      var monthProfitRate = monthRevenue > 0 ? (monthProfit / monthRevenue * 100).toFixed(1) : 0;
+      var monthBudgetDiff = charterBudgetMonthly - monthCharter;
+
+      document.getElementById('exec-month-revenue').textContent = '¥' + Math.round(monthRevenue).toLocaleString();
+      document.getElementById('exec-month-cost').textContent = '¥' + Math.round(monthCost).toLocaleString();
+      document.getElementById('exec-month-profit').textContent = '¥' + Math.round(monthProfit).toLocaleString();
+      document.getElementById('exec-month-profit-rate').textContent = '利益率 ' + monthProfitRate + '%';
+
+      var mbc = document.getElementById('exec-month-budget-card');
+      var mbText = monthBudgetDiff >= 0 ? '▼ ¥' + Math.round(Math.abs(monthBudgetDiff)).toLocaleString() + ' 余裕' : '▲ ¥' + Math.round(Math.abs(monthBudgetDiff)).toLocaleString() + ' 超過';
+      document.getElementById('exec-month-budget-diff').textContent = mbText;
+      document.getElementById('exec-month-budget-detail').textContent =
+        '予算: ¥' + Math.round(charterBudgetMonthly).toLocaleString() + ' / 実績: ¥' + Math.round(monthCharter).toLocaleString();
+      if (monthBudgetDiff >= 0) {
+        mbc.className = 'card p-4 border-2 bg-gradient-to-br from-green-50 to-green-100 border-green-300';
+        document.getElementById('exec-month-budget-diff').className = 'text-xl font-black text-green-700';
+      } else {
+        mbc.className = 'card p-4 border-2 bg-gradient-to-br from-red-50 to-red-100 border-red-300';
+        document.getElementById('exec-month-budget-diff').className = 'text-xl font-black text-red-700';
       }
 
       // 稼働人数
@@ -8426,6 +8502,9 @@
 
       // 明細テーブル
       renderExecDetailTable(typeBreakdown, fuelRate);
+
+      // 日別損益テーブル
+      renderExecDailyTable(fuelRate, dailyBudget);
     }
 
     // 円グラフ
@@ -8520,6 +8599,88 @@
         '<td class="px-3 py-2 text-right">' + Object.keys(typeBreakdown).reduce(function(s, k) { return s + typeBreakdown[k].total; }, 0) + '</td>' +
         '<td class="px-3 py-2 text-right text-emerald-700">¥' + grandRevenue.toLocaleString() + '</td>' +
         '<td class="px-3 py-2 text-right text-red-700">¥' + grandCost.toLocaleString() + '</td>' +
+        '</tr>';
+
+      tbody.innerHTML = html;
+    }
+
+    // 日別損益テーブル
+    function renderExecDailyTable(fuelRate, dailyBudget) {
+      var thead = document.getElementById('exec-daily-thead');
+      var tbody = document.getElementById('exec-daily-tbody');
+      if (!execShiftData) return;
+
+      thead.innerHTML = '<tr class="border-b-2 border-gray-300 bg-gray-900 text-gray-200">' +
+        '<th class="px-3 py-2 text-left text-xs">日</th>' +
+        '<th class="px-3 py-2 text-right text-xs">人数</th>' +
+        '<th class="px-3 py-2 text-right text-xs text-emerald-400">売上</th>' +
+        '<th class="px-3 py-2 text-right text-xs text-red-400">配送費</th>' +
+        '<th class="px-3 py-2 text-right text-xs text-red-300">うち傭車費</th>' +
+        '<th class="px-3 py-2 text-right text-xs text-blue-400">利益</th>' +
+        '<th class="px-3 py-2 text-right text-xs">利益率</th>' +
+        '<th class="px-3 py-2 text-right text-xs">日割予算</th>' +
+        '<th class="px-3 py-2 text-right text-xs">予算差</th>' +
+        '</tr>';
+
+      var html = '';
+      var cumRevenue = 0, cumCost = 0, cumCharter = 0;
+      var targetDay = Number(document.getElementById('exec-target-date').value.split('-')[2]);
+
+      for (var d = 1; d <= 31; d++) {
+        var entries = execShiftData.days[d] || [];
+        if (entries.length === 0) continue;
+
+        var dRev = 0, dCost = 0, dCharter = 0;
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i];
+          var rate = EXEC_RATE_TABLE[e.type];
+          if (!rate) continue;
+          dRev += rate.revenue + fuelRate * rate.hours;
+          if (e.deptCategory === 'direct') {
+            dCost += rate.costDirect;
+          } else if (e.deptCategory === 'other') {
+            dCost += rate.costOther;
+            dCharter += rate.costOther;
+          }
+        }
+        var dProfit = dRev - dCost;
+        var dRate = dRev > 0 ? (dProfit / dRev * 100).toFixed(1) : '0.0';
+        var dBudgetDiff = dailyBudget - dCharter;
+
+        cumRevenue += dRev;
+        cumCost += dCost;
+        cumCharter += dCharter;
+
+        var isToday = (d === targetDay);
+        var rowClass = isToday ? 'border-b border-border bg-yellow-50 font-bold' : 'border-b border-border hover:bg-surface/50';
+        var budgetClass = dBudgetDiff >= 0 ? 'text-green-600' : 'text-red-600 font-bold';
+        var budgetLabel = dBudgetDiff >= 0 ? '▼¥' + Math.round(Math.abs(dBudgetDiff)).toLocaleString() : '▲¥' + Math.round(Math.abs(dBudgetDiff)).toLocaleString();
+
+        html += '<tr class="' + rowClass + '">' +
+          '<td class="px-3 py-1.5 text-xs">' + d + '日' + (isToday ? ' ⬅' : '') + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs">' + entries.length + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs text-emerald-700">¥' + Math.round(dRev).toLocaleString() + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs text-red-700">¥' + Math.round(dCost).toLocaleString() + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs text-red-500">¥' + Math.round(dCharter).toLocaleString() + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs text-blue-700">¥' + Math.round(dProfit).toLocaleString() + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs">' + dRate + '%</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs text-ink-lighter">¥' + Math.round(dailyBudget).toLocaleString() + '</td>' +
+          '<td class="px-3 py-1.5 text-right text-xs ' + budgetClass + '">' + budgetLabel + '</td>' +
+          '</tr>';
+      }
+
+      // 累計行
+      var cumProfit = cumRevenue - cumCost;
+      var cumRate = cumRevenue > 0 ? (cumProfit / cumRevenue * 100).toFixed(1) : '0.0';
+      html += '<tr class="border-t-2 border-gray-400 bg-gray-100 font-bold">' +
+        '<td class="px-3 py-2 text-xs">累計</td>' +
+        '<td class="px-3 py-2 text-right text-xs"></td>' +
+        '<td class="px-3 py-2 text-right text-xs text-emerald-800">¥' + Math.round(cumRevenue).toLocaleString() + '</td>' +
+        '<td class="px-3 py-2 text-right text-xs text-red-800">¥' + Math.round(cumCost).toLocaleString() + '</td>' +
+        '<td class="px-3 py-2 text-right text-xs text-red-600">¥' + Math.round(cumCharter).toLocaleString() + '</td>' +
+        '<td class="px-3 py-2 text-right text-xs text-blue-800">¥' + Math.round(cumProfit).toLocaleString() + '</td>' +
+        '<td class="px-3 py-2 text-right text-xs">' + cumRate + '%</td>' +
+        '<td class="px-3 py-2 text-right text-xs" colspan="2"></td>' +
         '</tr>';
 
       tbody.innerHTML = html;
