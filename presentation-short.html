@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OFK3 配送管理システム - 社内稟議資料</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700;900&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Noto Sans JP', sans-serif; background: #0f172a; color: #e2e8f0; }
+
+    .slide {
+      width: 100%;
+      min-height: 100vh;
+      padding: 60px 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      position: relative;
+      page-break-after: always;
+    }
+
+    /* Cover */
+    .slide-cover {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #0f172a 100%);
+      text-align: center;
+      justify-content: center;
+      align-items: center;
+    }
+    .slide-cover .subtitle {
+      font-size: 16px;
+      color: #60a5fa;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      margin-bottom: 30px;
+      font-weight: 500;
+    }
+    .slide-cover h1 {
+      font-size: 52px;
+      font-weight: 900;
+      background: linear-gradient(135deg, #60a5fa, #34d399);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      line-height: 1.3;
+      margin-bottom: 20px;
+    }
+    .slide-cover .tagline {
+      font-size: 20px;
+      color: #94a3b8;
+      margin-bottom: 40px;
+    }
+    .slide-cover .meta {
+      font-size: 14px;
+      color: #64748b;
+    }
+
+    /* Section headers */
+    .slide-section {
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+    }
+    .section-number {
+      font-size: 120px;
+      font-weight: 900;
+      color: rgba(96, 165, 250, 0.1);
+      position: absolute;
+      top: 40px;
+      right: 80px;
+      line-height: 1;
+    }
+    .section-label {
+      font-size: 14px;
+      color: #60a5fa;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      font-weight: 500;
+    }
+    .slide h2 {
+      font-size: 36px;
+      font-weight: 900;
+      line-height: 1.4;
+      margin-bottom: 24px;
+    }
+    .slide h2 .accent { color: #60a5fa; }
+    .slide h2 .accent-green { color: #34d399; }
+    .slide h2 .accent-yellow { color: #fbbf24; }
+    .slide h2 .accent-red { color: #f87171; }
+
+    .slide p, .slide li {
+      font-size: 18px;
+      line-height: 1.8;
+      color: #cbd5e1;
+    }
+
+    /* Problem cards */
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-top: 30px;
+    }
+    .problem-card {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+    }
+    .problem-card .icon { font-size: 36px; margin-bottom: 12px; }
+    .problem-card .label { font-size: 15px; font-weight: 700; color: #f87171; }
+    .problem-card .desc { font-size: 13px; color: #94a3b8; margin-top: 8px; }
+
+    /* Solution cards */
+    .solution-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin-top: 30px;
+    }
+    .solution-card {
+      background: rgba(52, 211, 153, 0.06);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .solution-card .icon { font-size: 28px; margin-bottom: 8px; }
+    .solution-card .label { font-size: 16px; font-weight: 700; color: #34d399; margin-bottom: 6px; }
+    .solution-card .desc { font-size: 14px; color: #94a3b8; line-height: 1.6; }
+
+    /* Feature list */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-top: 30px;
+    }
+    .feature-item {
+      background: rgba(96, 165, 250, 0.06);
+      border: 1px solid rgba(96, 165, 250, 0.15);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+    }
+    .feature-item .icon { font-size: 28px; margin-bottom: 8px; }
+    .feature-item .label { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+
+    /* Comparison */
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 60px 1fr;
+      gap: 0;
+      margin-top: 30px;
+      align-items: center;
+    }
+    .compare-before, .compare-after {
+      border-radius: 12px;
+      padding: 30px;
+    }
+    .compare-before {
+      background: rgba(239, 68, 68, 0.06);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .compare-after {
+      background: rgba(52, 211, 153, 0.06);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+    }
+    .compare-arrow {
+      text-align: center;
+      font-size: 36px;
+    }
+    .compare-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      margin-bottom: 16px;
+    }
+    .compare-before .compare-title { color: #f87171; }
+    .compare-after .compare-title { color: #34d399; }
+    .compare-list { list-style: none; }
+    .compare-list li {
+      font-size: 15px;
+      padding: 6px 0;
+      color: #94a3b8;
+    }
+    .compare-list li::before { margin-right: 8px; }
+    .compare-before .compare-list li::before { content: '\2715'; color: #f87171; }
+    .compare-after .compare-list li::before { content: '\2713'; color: #34d399; }
+
+    /* Quote */
+    .quote {
+      font-size: 24px;
+      font-weight: 300;
+      font-style: italic;
+      color: #94a3b8;
+      border-left: 3px solid #60a5fa;
+      padding-left: 24px;
+      margin: 20px 0;
+      line-height: 1.6;
+    }
+
+    /* Footer */
+    .slide-footer {
+      position: absolute;
+      bottom: 30px;
+      left: 80px;
+      right: 80px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #475569;
+    }
+
+    /* Print */
+    @media print {
+      .slide { min-height: 100vh; }
+      body { background: #0f172a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+
+    /* Nav */
+    .nav-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(15, 23, 42, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 10px 30px;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      z-index: 100;
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .nav-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #334155;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .nav-dot.active { background: #60a5fa; transform: scale(1.3); }
+
+    @media print { .nav-bar { display: none; } }
+  </style>
+</head>
+<body>
+
+<!-- ============ SLIDE 0: COVER ============ -->
+<div class="slide slide-cover" id="slide-0">
+  <div class="subtitle">社内稟議資料</div>
+  <h1>現場の課題から生まれた<br>配送管理システム</h1>
+  <div class="tagline">OFK3 Delivery Management System</div>
+  <div class="meta">
+    LINE Messaging API 月額 ¥5,500 利用申請<br>
+    2026年7月
+  </div>
+</div>
+
+<!-- ============ SLIDE 1: ORIGIN ============ -->
+<div class="slide slide-section" id="slide-1">
+  <span class="section-number">01</span>
+  <div class="section-label">THE ORIGIN</div>
+  <h2>最初の目的は、<br>とても<span class="accent">シンプル</span>でした。</h2>
+  <div class="quote">
+    Amazon配送の現場で「メンターの起動漏れ」と「Amazonアプリのフライングログイン」が発生していました。
+  </div>
+  <p style="margin-top: 20px;">
+    これを防ぐため、事務所内で<strong>コーテックスを閲覧してから出発する運用</strong>を行っていましたが…
+  </p>
+  <div class="problem-grid">
+    <div class="problem-card">
+      <div class="icon">😰</div>
+      <div class="label">管理者の確認負担</div>
+      <div class="desc">毎朝一人ずつ目視確認<br>出発が遅延</div>
+    </div>
+    <div class="problem-card">
+      <div class="icon">⏳</div>
+      <div class="label">ドライバーの待機時間</div>
+      <div class="desc">確認待ちの行列<br>出発時間にバラつき</div>
+    </div>
+    <div class="problem-card">
+      <div class="icon">🔒</div>
+      <div class="label">個人情報の閲覧リスク</div>
+      <div class="desc">配送先情報が<br>第三者の目に触れる</div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>1 / 6</span></div>
+</div>
+
+<!-- ============ SLIDE 2: FIRST SOLUTION ============ -->
+<div class="slide slide-section" id="slide-2">
+  <span class="section-number">02</span>
+  <div class="section-label">FIRST STEP</div>
+  <h2><span class="accent-green">QRコード認証システム</span>を<br>開発しました。</h2>
+  <div class="solution-grid">
+    <div class="solution-card">
+      <div class="icon">📱</div>
+      <div class="label">QRコード認証</div>
+      <div class="desc">ドライバーがスマホでQRを読み取るだけ。事務所内の目視確認が不要に。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">🆔</div>
+      <div class="label">トランスポートID認証</div>
+      <div class="desc">Amazon Transport IDと紐付け。なりすまし防止と本人確認を同時に実現。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">✅</div>
+      <div class="label">メンター起動確認</div>
+      <div class="desc">メンター未起動のまま出発するケースをシステムでブロック。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">📊</div>
+      <div class="label">リアルタイム状況確認</div>
+      <div class="desc">管理者は誰が実施・未実施かをダッシュボードで一目で確認。</div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>2 / 6</span></div>
+</div>
+
+<!-- ============ SLIDE 3: NEXT CHALLENGE ============ -->
+<div class="slide slide-section" id="slide-3">
+  <span class="section-number">03</span>
+  <div class="section-label">NEXT CHALLENGE</div>
+  <h2>運用を始めると、<br>「<span class="accent-yellow">ドライバーへの連絡</span>」が<br>大きな課題に。</h2>
+  <div style="margin-top: 30px;">
+    <div class="problem-grid" style="grid-template-columns: repeat(5, 1fr);">
+      <div class="problem-card">
+        <div class="icon">🔄</div>
+        <div class="label">コース変更</div>
+      </div>
+      <div class="problem-card">
+        <div class="icon">🆘</div>
+        <div class="label">応援依頼</div>
+      </div>
+      <div class="problem-card">
+        <div class="icon">📦</div>
+        <div class="label">誤配対応</div>
+      </div>
+      <div class="problem-card">
+        <div class="icon">📍</div>
+        <div class="label">ピンずれ</div>
+      </div>
+      <div class="problem-card">
+        <div class="icon">📞</div>
+        <div class="label">CS案件</div>
+      </div>
+    </div>
+    <div class="compare-grid" style="margin-top: 40px;">
+      <div class="compare-before">
+        <div class="compare-title">BEFORE</div>
+        <ul class="compare-list">
+          <li>電話で1件ずつ連絡</li>
+          <li>個別LINEでバラバラ対応</li>
+          <li>伝達ミス・連絡漏れ</li>
+          <li>対応履歴が残らない</li>
+        </ul>
+      </div>
+      <div class="compare-arrow">→</div>
+      <div class="compare-after">
+        <div class="compare-title">AFTER（LINE連携）</div>
+        <ul class="compare-list">
+          <li>ワンクリックで一斉送信</li>
+          <li>コース概要・地図を即送信</li>
+          <li>対応履歴をシステムに記録</li>
+          <li>管理者の電話対応を大幅削減</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>3 / 6</span></div>
+</div>
+
+<!-- ============ SLIDE 4: LINE INTEGRATION ============ -->
+<div class="slide slide-section" id="slide-4">
+  <span class="section-number">04</span>
+  <div class="section-label">LINE INTEGRATION</div>
+  <h2>配送管理システムと<br><span class="accent-green">LINE</span>を連携しました。</h2>
+  <div class="solution-grid">
+    <div class="solution-card">
+      <div class="icon">📋</div>
+      <div class="label">コース概要送信</div>
+      <div class="desc">当日のコース情報（荷物数・件数・エリア）をLINEで自動送信。出発前に確認可能。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">🗺️</div>
+      <div class="label">地図・ピン位置送信</div>
+      <div class="desc">Google Maps APIで生成した地図画像をLINEへ。ピンずれも正しい位置を即共有。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">💬</div>
+      <div class="label">個別連絡</div>
+      <div class="desc">誤配・CS案件の対応指示をワンクリックで。電話不要、履歴も残る。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">📍</div>
+      <div class="label">住所検索・座標補正</div>
+      <div class="desc">住所マスタで正しい座標を取得。ピンずれを管理者がその場で修正・送信。</div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>4 / 6</span></div>
+</div>
+
+<!-- ============ SLIDE 5: FULL FEATURES ============ -->
+<div class="slide slide-section" id="slide-5">
+  <span class="section-number">05</span>
+  <div class="section-label">CURRENT SYSTEM</div>
+  <h2>「配送管理」から<br>「<span class="accent">一元管理プラットフォーム</span>」へ。</h2>
+  <div class="feature-grid">
+    <div class="feature-item">
+      <div class="icon">📊</div>
+      <div class="label">経営ダッシュボード</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">💰</div>
+      <div class="label">売上・利益管理</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">🚛</div>
+      <div class="label">傭車費予算管理</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">📈</div>
+      <div class="label">自社配送率</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">📱</div>
+      <div class="label">QR認証・点呼</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">✅</div>
+      <div class="label">メンター確認</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">👷</div>
+      <div class="label">ドライバー管理</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">💬</div>
+      <div class="label">LINE送信</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">🗺️</div>
+      <div class="label">MAP送信</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">📍</div>
+      <div class="label">ピン修正</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">📦</div>
+      <div class="label">物量分析</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">🔍</div>
+      <div class="label">住所検索</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">📋</div>
+      <div class="label">マニフェスト分析</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">🏷️</div>
+      <div class="label">仕分けスキャン</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">⚡</div>
+      <div class="label">配送速度管理</div>
+    </div>
+    <div class="feature-item">
+      <div class="icon">🚨</div>
+      <div class="label">クレーム管理</div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>5 / 6</span></div>
+</div>
+
+<!-- ============ SLIDE 6: EXEC DASHBOARD ============ -->
+<div class="slide slide-section" id="slide-6">
+  <span class="section-number">06</span>
+  <div class="section-label">EXECUTIVE DASHBOARD</div>
+  <h2><span class="accent-green">経営ダッシュボード</span>で<br>数字が見える。</h2>
+  <div class="solution-grid">
+    <div class="solution-card">
+      <div class="icon">💰</div>
+      <div class="label">リアルタイム売上・利益</div>
+      <div class="desc">シフト表をアップするだけで、本日の売上・配送費・利益が自動計算。日別・月間の損益推移も一覧表示。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">🚛</div>
+      <div class="label">傭車費予算管理</div>
+      <div class="desc">月間予算に対して日割で予算クリア/超過を判定。予算オーバーは赤、クリアは緑でひと目で把握。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">🏢</div>
+      <div class="label">所属別構成比</div>
+      <div class="desc">GDSダイレクト・管理/パート・自社以外の配送比率を円グラフで可視化。自社配送率の推移を管理。</div>
+    </div>
+    <div class="solution-card">
+      <div class="icon">📊</div>
+      <div class="label">物量推移分析</div>
+      <div class="desc">個口数・件数・コース数の推移をグラフ化。時期別分析で配送計画の精度を向上。</div>
+    </div>
+  </div>
+  <div class="slide-footer"><span>OFK3 配送管理システム</span><span>6 / 6</span></div>
+</div>
+
+<!-- Navigation -->
+<div class="nav-bar" id="nav-bar"></div>
+
+<script>
+  var slides = document.querySelectorAll('.slide');
+  var nav = document.getElementById('nav-bar');
+  for (var i = 0; i < slides.length; i++) {
+    var dot = document.createElement('div');
+    dot.className = 'nav-dot' + (i === 0 ? ' active' : '');
+    dot.setAttribute('data-idx', i);
+    dot.onclick = function() {
+      var idx = Number(this.getAttribute('data-idx'));
+      slides[idx].scrollIntoView({ behavior: 'smooth' });
+    };
+    nav.appendChild(dot);
+  }
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        var idx = Array.prototype.indexOf.call(slides, entry.target);
+        var dots = document.querySelectorAll('.nav-dot');
+        for (var d = 0; d < dots.length; d++) {
+          dots[d].className = d === idx ? 'nav-dot active' : 'nav-dot';
+        }
+      }
+    });
+  }, { threshold: 0.5 });
+  for (var i = 0; i < slides.length; i++) observer.observe(slides[i]);
+</script>
+
+</body>
+</html>
