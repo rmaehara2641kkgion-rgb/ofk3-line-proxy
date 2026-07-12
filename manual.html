@@ -392,14 +392,17 @@
 </div>
 
 <h3 id="dash-line">LINE送信</h3>
+<p>アサイン完了後、<strong>ドライバー全員と内勤管理者全員に、コース内容（配達数・エリア・終了目安）と配送MAPを一斉にLINE送信</strong>できます。個別送信も可能です。</p>
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
-    <li>ルート一覧の「LINE送信」ボタンをクリック</li>
-    <li>送信先ドライバーを選択（LINE連携済みのドライバーが対象）</li>
-    <li>テンプレートを選択（正配送案内等）</li>
-    <li>メッセージ内容と地図プレビューを確認して「LINE送信」</li>
+    <li>ルート一覧上部の「LINE送信」ボタンをクリック → <strong>全ドライバー＋内勤管理者へ一斉送信</strong></li>
+    <li>各ドライバーに自分のコース情報（コース番号・エリア・配達数・出発予定・終了目安）と配送MAPが届く</li>
+    <li>個別送信も可能：各ルート行から特定ドライバーにのみ送信</li>
   </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 一斉送信のメリット</strong>：朝のアサイン確定後、ワンクリックで全員に配送情報を共有。電話やグループLINEでの個別連絡が不要になります。
 </div>
 <div class="warn-box">
   <strong>⚠ 前提条件</strong>：ドライバーがLINE連携済み（マスタ管理でLINE IDが登録されている）であること。
@@ -437,26 +440,61 @@
 
 <!-- ==================== ドライバー管理 ==================== -->
 <h2 id="drivers"><span class="icon">👷</span>ドライバー管理</h2>
-<p>ドライバーの登録・編集・LINE連携状況を管理します。</p>
+<p>ドライバーの能力データベースです。週次で更新される配送実績を基に、予測エンジンの基礎データとして使用されます。</p>
+<table class="key-table">
+  <tr><th>項目</th><th>内容</th></tr>
+  <tr><td>個/時間</td><td>1時間あたりの配達個数（能力値）。配送完了予測の計算に使用</td></tr>
+  <tr><td>配完率%</td><td>配達完了率。高いほど安定したドライバー</td></tr>
+  <tr><td>誤配率%</td><td>誤配送の発生率</td></tr>
+  <tr><td>稼働日数</td><td>累計の稼働日数</td></tr>
+  <tr><td>総配送数</td><td>累計の配達個数</td></tr>
+  <tr><td>正配依頼</td><td>正しい配送先への案内を依頼した回数</td></tr>
+</table>
 <div class="step-box">
   <div class="step-title">主な操作</div>
   <ol>
-    <li><strong>ドライバー追加</strong>：名前・所属・Transport IDを入力して登録</li>
-    <li><strong>LINE連携</strong>：ドライバーがLINE Botを友だち追加し、Transport IDを送信すると自動連携</li>
-    <li><strong>編集・削除</strong>：一覧から該当ドライバーを選択して操作</li>
+    <li><strong>実績データ更新</strong>：「実績データ更新」ボタンで最新の配送実績を反映</li>
+    <li><strong>QR一括印刷</strong>：全ドライバーのQRコードを一括印刷</li>
   </ol>
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/drivers.png" alt="ドライバー管理画面">
+  <div class="screenshot-caption">▲ ドライバー能力データベース — 個/時間・配完率・誤配率・総配送数で能力を可視化</div>
 </div>
 
 <hr>
 
 <!-- ==================== マスタ管理 ==================== -->
 <h2 id="master"><span class="icon">🔧</span>マスタ管理</h2>
-<p>ドライバーのマスタデータ（所属・Transport ID・LINE ID・表示名など）を一括管理します。</p>
-<ul>
-  <li>所属の変更（GDS / JHS / AE物流 / ファンタジスタ / LINGs 等）</li>
-  <li>Transport IDの紐付け修正</li>
-  <li>LINE連携状態の確認（プロフィール画像・表示名が取得されていれば連携済み）</li>
-</ul>
+<p>ドライバーのマスタデータ（所属・Transport ID・LINE ID・電話番号など）を一括管理します。</p>
+<table class="key-table">
+  <tr><th>項目</th><th>内容</th></tr>
+  <tr><td>名前（日本語）</td><td>ドライバーの日本語表記名</td></tr>
+  <tr><td>ドライバー名</td><td>LINEプロフィール名（連携後に自動取得）</td></tr>
+  <tr><td>LINE ID</td><td>LINE User ID（Bot友だち追加で自動取得）</td></tr>
+  <tr><td>電話番号</td><td>連絡先電話番号</td></tr>
+  <tr><td>TRANSPORT ID</td><td>Amazon Transport ID（点呼QRコードと紐付け）</td></tr>
+  <tr><td>所属</td><td>GDS管理 / GDSダイレクト / JHS / AE物流 / OFK6 等</td></tr>
+</table>
+<div class="step-box">
+  <div class="step-title">主な操作</div>
+  <ol>
+    <li><strong>ドライバー追加</strong>：名前・所属・Transport IDを入力して登録</li>
+    <li><strong>LINE連携</strong>：ドライバーがLINE Botを友だち追加し、Transport IDを送信すると自動連携</li>
+    <li><strong>QR表示</strong>：各ドライバーのQRコードを個別表示</li>
+    <li><strong>個別LINE送信</strong>：マスタ画面から直接ドライバーにLINEメッセージ送信</li>
+    <li><strong>編集</strong>：所属変更・Transport ID修正等をインライン編集</li>
+  </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 状態インジケータ</strong>：緑●＝LINE連携済み、灰色●＝未連携。LINEアイコン付きのドライバーは連携済みで送信可能です。
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/master.png" alt="マスタ管理画面">
+  <div class="screenshot-caption">▲ マスタ管理 — ドライバー情報の一括管理（LINE ID・Transport ID・所属・QR表示・個別LINE送信）</div>
+</div>
 
 <hr>
 
@@ -495,9 +533,15 @@
   <strong>💡 メンター起動率向上</strong>：2段階認証により、メンター未起動のまま出発するケースをシステムで防止。起動率が向上します。
 </div>
 
-<div class="screenshot" style="max-width:200px; margin: 20px auto;">
-  <img src="manual-img/qr-sample.png" alt="QRコードサンプル">
-  <div class="screenshot-caption">▲ Transport IDと紐づいたQRコード（サンプル）</div>
+<div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin: 20px 0;">
+  <div class="screenshot" style="max-width:200px; margin: 0;">
+    <img src="manual-img/qr-sample.png" alt="QRコードサンプル">
+    <div class="screenshot-caption">▲ 第1段階：Transport ID紐づきQRコード</div>
+  </div>
+  <div class="screenshot screenshot-mobile" style="max-width:280px; margin: 0;">
+    <img src="manual-img/mentor.png" alt="メンター起動画面">
+    <div class="screenshot-caption">▲ 第2段階：メンター起動画面をカメラで認証</div>
+  </div>
 </div>
 
 <h3>LINEアラート機能</h3>
@@ -548,7 +592,7 @@
 
 <!-- ==================== MAP管理 ==================== -->
 <h2 id="map-master"><span class="icon">🗺️</span>MAP管理</h2>
-<p>住所キャッシュの管理・CYCLEデータ一括取り込み・ジオコーディングを行います。</p>
+<p>配送データを取り込むことで住所マスタを自動構築。<strong>過去に配送したエリアの住所は、経度・緯度を1秒足らずで検索可能</strong>になります。</p>
 <ul>
   <li><strong>CYCLEファイル取り込み</strong>：配送データから住所を自動抽出し住所マスタに登録</li>
   <li><strong>住所マスターJSON読込</strong>：既存の住所マスタJSONを読み込み</li>
@@ -556,6 +600,9 @@
   <li><strong>未取得を一括ジオコーディング</strong>：座標未取得の住所をGoogle Geocoding APIで一括変換</li>
   <li><strong>重複住所を統合</strong>：同一住所の重複エントリを統合</li>
 </ul>
+<div class="tip-box">
+  <strong>💡 住所マスタの成長</strong>：配送データを取り込むたびに住所マスタが自動で蓄積・成長します。一度ジオコーディングした住所は以降API不要で瞬時に座標取得でき、ピンずれ対応やMAP送信がスムーズになります。
+</div>
 
 <div class="screenshot">
   <img src="manual-img/map-master.png" alt="MAP管理画面">
@@ -566,7 +613,30 @@
 
 <!-- ==================== 仕分けスキャン ==================== -->
 <h2 id="scan"><span class="icon">🏷️</span>仕分けスキャン</h2>
-<p>バーコードスキャンで荷物の仕分け状況を管理します。</p>
+<p>バーコードスキャンで荷物の仕分けコースを瞬時に判定します。</p>
+
+<div class="compare-grid" style="margin-bottom: 24px;">
+  <div class="compare-before">
+    <div class="compare-title">BEFORE（従来の差し込み作業）</div>
+    <ul class="compare-list">
+      <li>マニフェストデータのExcelを開く</li>
+      <li>Ctrl+F で検索ウィンドウを開く</li>
+      <li>DA番号をスキャンして検索</li>
+      <li>結果からコース番号を目視確認</li>
+    </ul>
+  </div>
+  <div class="compare-arrow">→</div>
+  <div class="compare-after">
+    <div class="compare-title">AFTER（OFK3 仕分けスキャン）</div>
+    <ul class="compare-list">
+      <li>スキャン1回で即コース表示</li>
+      <li>音声読み上げで手元を見ずに判定</li>
+      <li>Excel不要・検索操作ゼロ</li>
+      <li>圧倒的な時間短縮</li>
+    </ul>
+  </div>
+</div>
+
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
@@ -577,7 +647,7 @@
   </ol>
 </div>
 <div class="tip-box">
-  <strong>💡 音声案内</strong>：「🔊 音声案内」チェックをONにすると、スキャン時にコース番号を音声で読み上げます。
+  <strong>💡 音声案内</strong>：「🔊 音声案内」チェックをONにすると、スキャン時にコース番号を音声で読み上げます。荷物から目を離さずに仕分けが可能です。
 </div>
 <div class="tip-box">
   <strong>💡 追加読込</strong>：「📂 追加読込」で配送データを事前に読み込んでおくと、DA番号からコースを自動判定します。
