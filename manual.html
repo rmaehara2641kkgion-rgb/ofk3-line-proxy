@@ -495,6 +495,11 @@
   <strong>💡 メンター起動率向上</strong>：2段階認証により、メンター未起動のまま出発するケースをシステムで防止。起動率が向上します。
 </div>
 
+<div class="screenshot" style="max-width:200px; margin: 20px auto;">
+  <img src="manual-img/qr-sample.png" alt="QRコードサンプル">
+  <div class="screenshot-caption">▲ Transport IDと紐づいたQRコード（サンプル）</div>
+</div>
+
 <h3>LINEアラート機能</h3>
 <table class="key-table">
   <tr><th>タイミング</th><th>アラート内容</th><th>送信先</th></tr>
@@ -503,6 +508,11 @@
 </table>
 <div class="warn-box">
   <strong>⚠ アラート機能</strong>：この2段階アラートにより、点呼漏れ・メンター起動漏れを防止します。管理者が個別に電話確認する必要はありません。
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/tenko-alert.png" alt="点呼未完了LINE通知">
+  <div class="screenshot-caption">▲ 管理者LINEに届く点呼未完了通知 — 着車時間超過のドライバー名・認証状態（QR✅❌ / メンター✅❌）を自動送信</div>
 </div>
 
 <hr>
@@ -670,9 +680,19 @@
   <tr><td>個口数</td><td><span class="badge badge-yellow">黄色</span></td><td>荷物の個口数推移</td></tr>
   <tr><td>件数</td><td><span class="badge badge-blue">シアン</span></td><td>配送件数の推移</td></tr>
   <tr><td>コース数</td><td><span class="badge badge-green">緑</span></td><td>コース数の推移</td></tr>
-  <tr><td>その他</td><td><span style="color:#f472b6;">ピンク</span></td><td>補助指標</td></tr>
+  <tr><td>全台数</td><td><span style="color:#f472b6;">ピンク</span></td><td>全体の配送台数推移</td></tr>
 </table>
-<p>推移テーブルは日付昇順でソートされます。</p>
+<p>推移テーブルは日付昇順でソートされ、各日の個口数・件数・コース数・コース内訳・ティーアウト数・全体台数が確認できます。</p>
+
+<div class="screenshot">
+  <img src="manual-img/volume-table.png" alt="物量管理テーブル画面">
+  <div class="screenshot-caption">▲ 物量管理 — サイクルデータ＋Actual Reportの取込エリアと物量推移テーブル（期間フィルター付き）</div>
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/volume-graph.png" alt="物量推移グラフ">
+  <div class="screenshot-caption">▲ 物量推移グラフ — 個口数(黄)・件数(シアン)・コース数(緑)・全台数(ピンク)の推移を可視化</div>
+</div>
 
 <div class="tip-box">
   <strong>💡 GAS連携</strong>：物量データはGoogle Apps Script（GAS）経由でスプレッドシートとも連携しています。ブラウザからの取り込みとGASの双方向でデータがマージされます。
