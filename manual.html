@@ -165,6 +165,29 @@
 
     hr { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 40px 0; }
 
+    .screenshot {
+      margin: 20px 0;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    .screenshot img {
+      width: 100%;
+      display: block;
+    }
+    .screenshot-caption {
+      background: rgba(96,165,250,0.08);
+      padding: 8px 16px;
+      font-size: 12px;
+      color: #64748b;
+      text-align: center;
+    }
+    .screenshot-mobile {
+      max-width: 300px;
+      margin: 20px auto;
+    }
+
     code {
       background: rgba(96,165,250,0.1);
       padding: 2px 6px;
@@ -324,29 +347,58 @@
 <p><strong>■ 日別損益テーブル</strong></p>
 <p>月内の各日の売上・経費・利益・予算差を一覧表示。予算超過日は赤、クリア日は緑で色分けされます。</p>
 
+<div class="screenshot">
+  <img src="manual-img/exec-dashboard.png" alt="経営ダッシュボード画面">
+  <div class="screenshot-caption">▲ 経営ダッシュボード — KPIカード・所属別円グラフ・コース種別明細</div>
+</div>
+
 <hr>
 
 <!-- ==================== 本日のダッシュボード ==================== -->
 <h2 id="dashboard"><span class="icon">📋</span>本日のダッシュボード</h2>
-<p>Amazon配送データ（Actual Report等）を読み込んで、当日の配送状況を管理します。</p>
+<p>Amazon配送データを読み込んで、当日の全ルート・ドライバーの配送状況を一覧管理します。</p>
 
 <h3 id="dash-upload">配送データの読み込み</h3>
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
     <li>「本日のダッシュボード」タブを選択</li>
-    <li>ドロップエリアにAmazon配送データ（.xlsx）をドラッグ＆ドロップ</li>
-    <li>データが読み込まれ、ダッシュボードに反映される</li>
+    <li>「住所データ（コース詳細）」エリアにCYCLEファイル（.xlsx）をドロップ → ルート・DA情報を読込</li>
+    <li>「アサインデータ」エリアにルートファイル（.xlsx）をドロップ → ドライバー割当を読込</li>
+    <li>総ルート数・稼働ドライバー数・総配達数・予測最終完了時間が表示される</li>
   </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 ルート別配送予測</strong>：各ドライバーのルート・エリア・配達数・能力（個/H）・出発時間・予測終了時間が一覧で確認でき、遅延リスクのあるルートを事前に把握できます。
+</div>
+
+<h3>配送完了予測の計算ロジック</h3>
+<p>各ルートの「予測終了」時間は以下の4要素で自動計算されます。</p>
+<table class="key-table">
+  <tr><th>要素</th><th>内容</th></tr>
+  <tr><td>① 積み込み時間</td><td>OFK3固定値：15分</td></tr>
+  <tr><td>② 移動時間（往路）</td><td>ステーションから最短のピン（最初の配送先）への移動時間</td></tr>
+  <tr><td>③ 配達時間</td><td>荷物の件数 ÷ 能力値（個/H）</td></tr>
+  <tr><td>④ 帰庫時間（復路）</td><td>最長距離のピン（最後の配送先）からステーションへの移動時間</td></tr>
+</table>
+<div class="step-box">
+  <div class="step-title">計算式</div>
+  <p><strong>予測終了時間 = 出発時間 + 積み込み15分 + 往路移動 + 配達時間 + 復路移動</strong></p>
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/dashboard.png" alt="本日のダッシュボード画面">
+  <div class="screenshot-caption">▲ 本日のダッシュボード — 64ルート・38名稼働・5,047配達のルート別配送予測</div>
 </div>
 
 <h3 id="dash-line">LINE送信</h3>
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
-    <li>ダッシュボード上でドライバーの行を確認</li>
-    <li>「LINE送信」ボタンをクリック</li>
-    <li>コース概要（荷物数・件数・エリア）がドライバーのLINEに送信される</li>
+    <li>ルート一覧の「LINE送信」ボタンをクリック</li>
+    <li>送信先ドライバーを選択（LINE連携済みのドライバーが対象）</li>
+    <li>テンプレートを選択（正配送案内等）</li>
+    <li>メッセージ内容と地図プレビューを確認して「LINE送信」</li>
   </ol>
 </div>
 <div class="warn-box">
@@ -357,10 +409,28 @@
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
-    <li>ドライバー行の「MAP」ボタンをクリック</li>
-    <li>Google Maps APIで生成した配送エリアの地図画像がLINEで送信される</li>
-    <li>ピンずれがある場合は、正しい位置に修正してから送信可能</li>
+    <li>ルート一覧右端の「MAP」アイコンをクリック</li>
+    <li>配送MAPモーダルが開き、エリア別の配達件数と全ピンが地図上に表示される</li>
+    <li>内容を確認し「LINE送信」で配送情報＋地図をドライバーに送信</li>
   </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 スワイプ対応</strong>：ドライバーに届く配送MAPはスマホでスワイプ操作（拡大・移動）が可能な仕様です。ピンタップで詳細も確認できます。
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/map-modal.png" alt="配送MAPモーダル">
+  <div class="screenshot-caption">▲ 管理者画面 — エリア別件数（千隈19件・不明1件・賀茂1件）とピン位置を確認してLINE送信</div>
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/line-message.png" alt="LINEに届く配送情報と地図">
+  <div class="screenshot-caption">▲ ドライバーのLINEに届く配送情報（コース・エリア・配達数・終了目安）＋スワイプ可能な配送MAP</div>
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/map.png" alt="配送マップ画面（スマホ）">
+  <div class="screenshot-caption">▲ 配送MAPを開いた状態 — 全ピンをスワイプで確認可能（未配達:赤 / 完了:緑 / 現在地:青）</div>
 </div>
 
 <hr>
@@ -395,56 +465,92 @@
 <p>コースの割り当て効率を分析・最適化するための支援ツールです。</p>
 <ul>
   <li>配送データからコース別の荷物数・件数・エリアを分析</li>
-  <li>ドライバーの適性やコース特性に基づいた割当提案</li>
+  <li>ドライバーの能力（個/h）に基づいた入替提案を自動生成</li>
+  <li>「最適化を実行」ボタンで提案一覧を表示</li>
+  <li>各提案には入替による終了予測時間の短縮効果が表示される</li>
 </ul>
+
+<div class="screenshot">
+  <img src="manual-img/optimization.png" alt="コース最適化画面">
+  <div class="screenshot-caption">▲ コース割最適化提案 — ドライバー間の入替で終了時間を短縮する提案を自動生成</div>
+</div>
 
 <hr>
 
 <!-- ==================== 点呼管理 ==================== -->
 <h2 id="tenko"><span class="icon">📱</span>点呼管理</h2>
-<p>QRコードによる出発前点呼（メンター起動確認・本人認証）を管理します。</p>
+<p>2段階QR認証による出発前点呼を自動化し、メンター起動率を向上させます。</p>
 
+<h3>2段階認証の流れ</h3>
 <div class="step-box">
-  <div class="step-title">運用の流れ</div>
+  <div class="step-title">ドライバー側の操作（自動開始）</div>
   <ol>
-    <li>管理者が「点呼管理」タブでQRコードを表示</li>
-    <li>ドライバーがスマホでQRコードを読み取り</li>
-    <li>Transport ID認証 → メンター起動確認 → 点呼完了</li>
-    <li>管理者は画面上で実施済み・未実施を一覧で確認</li>
+    <li>決まった時間になるとドライバーのスマホで点呼が自動的に開始</li>
+    <li><strong>第1段階</strong>：Transport IDと紐づいたQRコードをカメラで認証（本人確認）</li>
+    <li><strong>第2段階</strong>：メンター起動画面をカメラで認証（メンター起動確認）</li>
+    <li>2段階クリアで点呼完了</li>
   </ol>
 </div>
 <div class="tip-box">
-  <strong>💡 メリット</strong>：管理者の目視確認が不要になり、ドライバーの待機時間も解消。個人情報の閲覧リスクも低減。
+  <strong>💡 メンター起動率向上</strong>：2段階認証により、メンター未起動のまま出発するケースをシステムで防止。起動率が向上します。
+</div>
+
+<h3>LINEアラート機能</h3>
+<table class="key-table">
+  <tr><th>タイミング</th><th>アラート内容</th><th>送信先</th></tr>
+  <tr><td>着車<strong>5分前</strong>で点呼未完了</td><td>点呼を促すリマインド通知</td><td>ドライバー本人（LINE自動送信）</td></tr>
+  <tr><td><strong>着車時間</strong>で点呼未完了</td><td>未完了ドライバーの報告通知</td><td>管理者（LINE自動送信）</td></tr>
+</table>
+<div class="warn-box">
+  <strong>⚠ アラート機能</strong>：この2段階アラートにより、点呼漏れ・メンター起動漏れを防止します。管理者が個別に電話確認する必要はありません。
 </div>
 
 <hr>
 
 <!-- ==================== 点呼照合 ==================== -->
 <h2 id="tenko-match"><span class="icon">✅</span>点呼照合</h2>
-<p>DAシフト表と点呼実績を突き合わせて、未実施者を検出します。</p>
+<p>AmazonスケジュールUIとDAシフト表を照合し、請求漏れや過請求を防ぎます。</p>
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
     <li>DAシフト表（当日の出勤者リスト）を読み込み</li>
-    <li>システムが点呼実績と自動照合</li>
-    <li>未実施者が赤でハイライト表示される</li>
-    <li>シフト集計（所属別・コース種別別の人数）も自動表示</li>
+    <li>システムがスケジュールUIと点呼実績を自動照合</li>
+    <li>各ドライバーの状態が表示される：
+      <ul>
+        <li><span style="color:#34d399;">✅ 点呼済</span>：正常完了</li>
+        <li><span style="color:#f87171;">❌ 未点呼</span>：点呼が完了していない</li>
+        <li><span style="color:#fbbf24;">⚠ シフト表なし</span>：スケジュールUIに存在するがシフト表に未登録</li>
+      </ul>
+    </li>
+    <li>不一致を検出し、請求漏れ・過請求を防止</li>
   </ol>
 </div>
 <div class="tip-box">
   <strong>💡 DAシフト表が正</strong>：点呼照合ではDAシフト表をマスター（正）として扱います。Amazon配送データの着車時間はルート割り当て＋時間予測の補助として使用。
 </div>
 
+<div class="screenshot">
+  <img src="manual-img/tenko.png" alt="点呼照合画面">
+  <div class="screenshot-caption">▲ 点呼照合 — 各ドライバーの点呼状態（✅点呼済 / ❌未点呼 / ⚠シフト表なし）を一覧表示</div>
+</div>
+
 <hr>
 
 <!-- ==================== MAP管理 ==================== -->
 <h2 id="map-master"><span class="icon">🗺️</span>MAP管理</h2>
-<p>配送先のピン位置（座標）を管理・修正します。</p>
+<p>住所キャッシュの管理・CYCLEデータ一括取り込み・ジオコーディングを行います。</p>
 <ul>
-  <li><strong>ピンずれ検索</strong>：住所から正しい座標を検索し、マスタを更新</li>
-  <li><strong>座標補正</strong>：Google Maps上で正しい位置をクリックして修正</li>
-  <li><strong>修正後送信</strong>：修正した正しい位置情報をドライバーにLINE送信</li>
+  <li><strong>CYCLEファイル取り込み</strong>：配送データから住所を自動抽出し住所マスタに登録</li>
+  <li><strong>住所マスターJSON読込</strong>：既存の住所マスタJSONを読み込み</li>
+  <li><strong>住所マスターDL</strong>：現在のマスタデータをJSONでダウンロード</li>
+  <li><strong>未取得を一括ジオコーディング</strong>：座標未取得の住所をGoogle Geocoding APIで一括変換</li>
+  <li><strong>重複住所を統合</strong>：同一住所の重複エントリを統合</li>
 </ul>
+
+<div class="screenshot">
+  <img src="manual-img/map-master.png" alt="MAP管理画面">
+  <div class="screenshot-caption">▲ MAP管理 — 住所マスター（38,006件登録 / 30,438件座標取得済 / 7,568件未取得）</div>
+</div>
 
 <hr>
 
@@ -455,36 +561,84 @@
   <div class="step-title">操作手順</div>
   <ol>
     <li>「仕分けスキャン」タブを開く（入力欄に自動フォーカス）</li>
-    <li>バーコードリーダーで荷物のバーコードをスキャン</li>
-    <li>スキャン結果がリアルタイムで画面に反映</li>
-    <li>該当コースへの仕分け状況を確認</li>
+    <li>バーコードリーダーまたは手入力でDA番号をスキャン</li>
+    <li>該当するコース番号（例: X6 = DSX6）が大きく表示される</li>
+    <li>スキャン履歴が下部にリアルタイムで蓄積される</li>
   </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 音声案内</strong>：「🔊 音声案内」チェックをONにすると、スキャン時にコース番号を音声で読み上げます。
+</div>
+<div class="tip-box">
+  <strong>💡 追加読込</strong>：「📂 追加読込」で配送データを事前に読み込んでおくと、DA番号からコースを自動判定します。
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/scan.png" alt="仕分けスキャン画面">
+  <div class="screenshot-caption">▲ 仕分けスキャン — DA番号をスキャンするとコース番号が大きく表示される</div>
 </div>
 
 <hr>
 
 <!-- ==================== 住所検索 ==================== -->
 <h2 id="addr-search"><span class="icon">🔍</span>住所検索</h2>
-<p>住所マスタから配送先の住所・座標を検索します。</p>
+<p>DA番号または住所から配送先を検索し、地図プレビュー・LINE送信ができます。</p>
 <div class="step-box">
   <div class="step-title">操作手順</div>
   <ol>
     <li>「住所検索」タブを開く（入力欄に自動フォーカス）</li>
-    <li>住所の一部（町名、番地など）を入力</li>
-    <li>候補がリアルタイムで絞り込み表示される</li>
-    <li>結果から座標を取得し、ピンずれ修正やMAP送信に利用可能</li>
+    <li><strong>DA番号で検索</strong>：DA番号を入力またはスキャン → コース・住所・地図が表示される</li>
+    <li>「住所コピー」「地図で見る」「LINE送信」の3つのアクションが選べる</li>
+    <li><strong>住所から直接検索</strong>：下部の「住所から直接地図を表示」欄に住所を入力 → 地図ボタンで表示</li>
   </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 追加読込</strong>：事前に「📂 追加読込」で配送データを読み込んでおくと、DA番号からコース・住所を自動判定できます。
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/addr-search.png" alt="住所検索画面">
+  <div class="screenshot-caption">▲ 住所検索 — DA番号からコース(X6)・住所・地図プレビューを表示し、LINE送信も可能</div>
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/line-send.png" alt="個別LINE送信モーダル">
+  <div class="screenshot-caption">▲ 住所検索からの個別LINE送信 — ドライバー選択・テンプレート・住所・地図付きで送信</div>
 </div>
 
 <hr>
 
 <!-- ==================== 請求照合 ==================== -->
 <h2 id="billing"><span class="icon">💳</span>請求照合</h2>
-<p>請求データの照合を行います。</p>
-<ul>
-  <li>請求データを読み込み、配送実績と突き合わせ</li>
-  <li>差異がある項目をハイライト表示</li>
-</ul>
+<p>個人事業主ドライバーへの請求金額を算出し、LINE一斉送信で通知します。</p>
+<div class="step-box">
+  <div class="step-title">操作手順</div>
+  <ol>
+    <li>「請求照合」タブを選択</li>
+    <li>「📂 請求Excel読込」で請求データ（.xlsx）を読み込み</li>
+    <li>対象者数・合計金額・LINE送信可能数が表示される</li>
+    <li>各ドライバーの稼働日数・チャーター料金・走行距離連動・控除・税別・消費税・システム使用料・合計が一覧表示</li>
+    <li>「メッセージプレビュー」で送信内容を事前確認</li>
+    <li>請求書PDFをドロップエリアにまとめてドラッグ＆ドロップ（ファイル名の【】内でドライバー自動照合）</li>
+    <li>「LINE一斉送信」で全対象者に請求金額通知＋PDF添付をLINE送信</li>
+  </ol>
+</div>
+<div class="tip-box">
+  <strong>💡 PDF自動照合</strong>：請求書PDFのファイル名に【ドライバー名DA】を含めると、自動的に該当ドライバーに紐付けられます。
+</div>
+<div class="warn-box">
+  <strong>⚠ LINE未登録</strong>：LINE未登録のドライバーには「⚠ LINE未登録」と表示され、送信対象外となります。
+</div>
+
+<div class="screenshot">
+  <img src="manual-img/billing.png" alt="請求照合画面">
+  <div class="screenshot-caption">▲ 請求金額照合 — 18名対象・合計¥4,179,848・LINE送信可能12名</div>
+</div>
+
+<div class="screenshot screenshot-mobile">
+  <img src="manual-img/billing-preview.png" alt="請求メッセージプレビュー">
+  <div class="screenshot-caption">▲ メッセージプレビュー — 稼働実績・請求金額・添付PDFの確認画面</div>
+</div>
 
 <hr>
 
