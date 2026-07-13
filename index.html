@@ -1706,18 +1706,16 @@
 
     function getDriverIconFallback(name, sizeClass) {
       var lid = lineMapping[name] || '';
-      var initial = name ? name.charAt(0) : '?';
       if (lid) {
-        // LINE連携済み → LINEロゴ風アイコン（緑丸＋LINEマーク）
-        var sz = sizeClass.indexOf('w-10') >= 0 ? '40' : '32';
-        var fontSize = sizeClass.indexOf('w-10') >= 0 ? '11px' : '9px';
-        return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center relative" style="background:#06C755;border:2px solid #05A647">'
-          + '<svg viewBox="0 0 24 24" fill="white" style="width:60%;height:60%"><path d="M12 2C6.48 2 2 5.81 2 10.4c0 4.16 3.7 7.65 8.68 8.31.34.07.8.22.91.5.1.26.07.66.03.92l-.15.87c-.04.26-.2 1.01.89.55 1.08-.46 5.83-3.43 7.96-5.88C22.08 13.77 22 12.13 22 10.4 22 5.81 17.52 2 12 2z"/></svg>'
+        // LINE連携済みだがアイコン画像なし → シルエット人型アイコン（グレー背景に緑ボーダー）
+        return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:#E2E8F0;border:2px solid #06C755">'
+          + '<svg viewBox="0 0 24 24" fill="#94A3B8" style="width:65%;height:65%"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>'
           + '</div>';
       }
-      // LINE未連携 → グレー丸にイニシャル
-      var fontSize2 = sizeClass.indexOf('w-10') >= 0 ? '16px' : '12px';
-      return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:#CBD5E1;color:#64748B;font-size:' + fontSize2 + ';font-weight:bold;border:2px solid #94A3B8">' + initial + '</div>';
+      // LINE未連携 → グレー丸にシルエット人型
+      return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:#CBD5E1;border:2px solid #94A3B8">'
+        + '<svg viewBox="0 0 24 24" fill="#64748B" style="width:65%;height:65%"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>'
+        + '</div>';
     }
 
     // Initialize
@@ -2130,8 +2128,21 @@
       reader.onload = (e) => {
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(sheet);
+        // 「配達アソシエート」列を含むシートを自動検出（READMEシート等をスキップ）
+        var targetSheet = null;
+        for (var si = 0; si < workbook.SheetNames.length; si++) {
+          var s = workbook.Sheets[workbook.SheetNames[si]];
+          var j = XLSX.utils.sheet_to_json(s, { range: 0 });
+          if (j.length > 0 && Object.keys(j[0]).some(function(k) { return k.indexOf('配達アソシエート') >= 0; })) {
+            targetSheet = s;
+            break;
+          }
+        }
+        if (!targetSheet) {
+          alert('「配達アソシエート」列が見つかりません。正しいファイルか確認してください。');
+          return;
+        }
+        var json = XLSX.utils.sheet_to_json(targetSheet);
         processDriverData(json);
       };
       reader.readAsArrayBuffer(file);
@@ -3697,7 +3708,7 @@
             <span class="${dotClass} text-lg" title="${statusLabel}">●</span>
           </td>
           <td class="px-3 py-2.5">
-            <input type="text" value="${jname.replace(/"/g, '&quot;')}" placeholder="山田 太郎"
+            <input type="text" value="${jname.replace(/"/g, '&quot;')}" placeholder="氏名を入力してください"
               class="border border-border rounded px-2 py-1 text-xs w-full min-w-[100px] focus:outline-none focus:border-accent"
               onchange="updateJapaneseName('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
