@@ -4190,7 +4190,7 @@
         ...Object.keys(phoneMapping),
         ...assignmentData.map(r => r.driverName).filter(Boolean)
       ]);
-      const rows = [['ドライバー名', '名前（日本語）', '所属', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
+      const rows = [['ドライバー名', '名前（日本語）', '所属', 'TransportID', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
 
       [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja')).forEach(name => {
         const db = driverDB[name] || {};
@@ -4198,6 +4198,7 @@
           name,
           driverJapaneseNames[name] || '',
           driverDepartments[name] || '',
+          transportIDs[name] || '',
           lineMapping[name] || '',
           phoneMapping[name] || '',
           db.packagesPerHour || '',
