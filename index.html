@@ -6165,15 +6165,12 @@
     }
 
     function extractRouteNumber(routeCode) {
-      // DCX16→16, DMX45→45, DSX8B→8B, DCMRA2→A2, DCMRB1→B1
+      // 先頭の D のみ除去して残りを表示
+      // DCX12→CX12, DMX45→MX45, DSX8B→SX8B, DCMRA2→CMRA2, DCMRB1→CMRB1
       var code = routeCode;
-      // DCMRプレフィックス
-      if (code.indexOf('DCMR') === 0) {
-        return code.substring(4);
+      if (code.charAt(0) === 'D' && code.length > 1) {
+        return code.substring(1);
       }
-      // DCX / DMX / DSX / DC等のプレフィックス除去 → 末尾の番号部分のみ
-      var match = code.match(/^[A-Z]+?(\d+[A-Za-z]*|[A-Z]\d+.*)$/);
-      if (match) return match[1];
       return code;
     }
 
