@@ -1283,15 +1283,13 @@
         <!-- 正常台数マスタ -->
         <div class="card p-4 mb-4">
           <h3 class="text-sm font-medium mb-2">📋 OFK3 正常台数マスタ</h3>
-          <p class="text-xs text-ink-lighter mb-3">自社が把握している正常台数。編集するとlocalStorageに保存されます。</p>
+          <p class="text-xs text-ink-lighter mb-3">時間数ごとの正常台数。編集するとlocalStorageに保存されます。</p>
           <div class="overflow-x-auto">
             <table class="w-full text-sm" id="fleet-master-table">
               <thead>
                 <tr class="border-b border-border bg-surface">
-                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">サービスタイプ</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">サイクル</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">計画時間</th>
                   <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Block</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">時間(h)</th>
                   <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">正常台数</th>
                   <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">操作</th>
                 </tr>
@@ -10283,29 +10281,21 @@
     }
 
     // ===== 台数照合 =====
-    var FLEET_MASTER_KEY = 'fleetMasterData';
+    var FLEET_MASTER_KEY = 'fleetMasterV2';
     var fleetCompareResults = [];
 
-    // Default master data - service, cycle, duration(hours), block, count
+    // Default: block -> hours -> count (hours only matching)
     var defaultFleetMaster = [
-      {service: 'Standard Parcel', cycle: 'CYCLE_2', hours: 8, block: '8B', count: 12},
-      {service: 'Standard Parcel', cycle: 'CYCLE_1', hours: 6.5, block: '6B30S', count: 16},
-      {service: 'Standard Parcel', cycle: 'CYCLE_3', hours: 4.5, block: '4B30S', count: 16},
-      {service: 'Biker (Rear Cargo - Large)', cycle: 'CYCLE_1', hours: 3, block: '3B', count: 4},
-      {service: 'Biker (Rear Cargo - Large)', cycle: 'CYCLE_1', hours: 2, block: '2B', count: 4},
-      {service: 'Biker (Rear Cargo - Large)', cycle: 'CYCLE_2', hours: 2, block: '2B', count: 4}
+      {block: '8B', hours: 8, count: 12},
+      {block: '6B30S', hours: 6.5, count: 16},
+      {block: '4B30S', hours: 4.5, count: 16},
+      {block: '3B', hours: 3, count: 4},
+      {block: '2B', hours: 2, count: 8}
     ];
 
     function getFleetMaster() {
       var saved = localStorage.getItem(FLEET_MASTER_KEY);
-      if (saved) {
-        try {
-          var d = JSON.parse(saved);
-          // migrate old format without cycle/hours
-          if (d.length > 0 && d[0].hours === undefined) return defaultFleetMaster.slice();
-          return d;
-        } catch(e) {}
-      }
+      if (saved) { try { return JSON.parse(saved); } catch(e) {} }
       return defaultFleetMaster.slice();
     }
 
@@ -10314,13 +10304,11 @@
       var rows = tbody.querySelectorAll('tr');
       var data = [];
       for (var i = 0; i < rows.length; i++) {
-        var inputs = rows[i].querySelectorAll('input, select');
+        var inputs = rows[i].querySelectorAll('input');
         data.push({
-          service: inputs[0].value,
-          cycle: inputs[1].value,
-          hours: parseFloat(inputs[2].value) || 0,
-          block: inputs[3].value,
-          count: parseInt(inputs[4].value) || 0
+          block: inputs[0].value,
+          hours: parseFloat(inputs[1].value) || 0,
+          count: parseInt(inputs[2].value) || 0
         });
       }
       localStorage.setItem(FLEET_MASTER_KEY, JSON.stringify(data));
@@ -10329,19 +10317,12 @@
     function renderFleetMaster() {
       var master = getFleetMaster();
       var tbody = document.getElementById('fleet-master-tbody');
-      var svcOpts = ['Standard Parcel','Biker (Rear Cargo - Large)','Nursery Route Level 1','Nursery Route Level 2','Nursery Route Level 3','Secure Parcel'];
       var html = '';
       for (var i = 0; i < master.length; i++) {
         var m = master[i];
-        var selHtml = '';
-        for (var s = 0; s < svcOpts.length; s++) {
-          selHtml += '<option' + (m.service === svcOpts[s] ? ' selected' : '') + '>' + svcOpts[s] + '</option>';
-        }
         html += '<tr class="border-b border-border">' +
-          '<td class="px-2 py-1"><select class="w-full border border-border rounded px-2 py-1 text-xs" onchange="saveFleetMaster()">' + selHtml + '</select></td>' +
-          '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="' + (m.cycle || '') + '" onchange="saveFleetMaster()"></td>' +
-          '<td class="px-2 py-1"><input type="number" step="0.5" class="w-20 border border-border rounded px-2 py-1 text-xs" value="' + m.hours + '" onchange="saveFleetMaster()"></td>' +
-          '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="' + m.block + '" onchange="saveFleetMaster()"></td>' +
+          '<td class="px-2 py-1"><input type="text" class="w-24 border border-border rounded px-2 py-1 text-xs" value="' + m.block + '" onchange="saveFleetMaster()"></td>' +
+          '<td class="px-2 py-1 text-center"><input type="number" step="0.5" class="w-20 border border-border rounded px-2 py-1 text-xs text-center" value="' + m.hours + '" onchange="saveFleetMaster()"></td>' +
           '<td class="px-2 py-1 text-center"><input type="number" class="w-16 border border-border rounded px-2 py-1 text-xs text-center" value="' + m.count + '" min="0" onchange="saveFleetMaster()"></td>' +
           '<td class="px-2 py-1 text-center"><button class="text-red-500 text-xs" onclick="this.closest(\'tr\').remove();saveFleetMaster()">削除</button></td>' +
           '</tr>';
@@ -10353,43 +10334,45 @@
       var tbody = document.getElementById('fleet-master-tbody');
       var tr = document.createElement('tr');
       tr.className = 'border-b border-border';
-      tr.innerHTML = '<td class="px-2 py-1"><select class="w-full border border-border rounded px-2 py-1 text-xs" onchange="saveFleetMaster()">' +
-        '<option>Standard Parcel</option><option>Biker (Rear Cargo - Large)</option><option>Nursery Route Level 1</option><option>Nursery Route Level 2</option><option>Nursery Route Level 3</option><option>Secure Parcel</option></select></td>' +
-        '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="" onchange="saveFleetMaster()"></td>' +
-        '<td class="px-2 py-1"><input type="number" step="0.5" class="w-20 border border-border rounded px-2 py-1 text-xs" value="0" onchange="saveFleetMaster()"></td>' +
-        '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="" onchange="saveFleetMaster()"></td>' +
+      tr.innerHTML = '<td class="px-2 py-1"><input type="text" class="w-24 border border-border rounded px-2 py-1 text-xs" value="" onchange="saveFleetMaster()"></td>' +
+        '<td class="px-2 py-1 text-center"><input type="number" step="0.5" class="w-20 border border-border rounded px-2 py-1 text-xs text-center" value="0" onchange="saveFleetMaster()"></td>' +
         '<td class="px-2 py-1 text-center"><input type="number" class="w-16 border border-border rounded px-2 py-1 text-xs text-center" value="0" min="0" onchange="saveFleetMaster()"></td>' +
         '<td class="px-2 py-1 text-center"><button class="text-red-500 text-xs" onclick="this.closest(\'tr\').remove();saveFleetMaster()">削除</button></td>';
       tbody.appendChild(tr);
       saveFleetMaster();
     }
 
-    // Initialize master table on load
     (function() {
       if (document.getElementById('fleet-master-tbody')) renderFleetMaster();
       else document.addEventListener('DOMContentLoaded', renderFleetMaster);
     })();
 
-    // --- Build master lookup keyed by service|hours ---
+    // Build master lookup: hours -> {count, block}
     function buildMasterLookup() {
       var master = getFleetMaster();
-      var lookup = {}; // 'service|hours' -> {count, cycle, block}
+      var lookup = {};
       for (var m = 0; m < master.length; m++) {
-        var key = master[m].service + '|' + master[m].hours;
-        if (!lookup[key]) lookup[key] = {count: 0, cycle: master[m].cycle, block: master[m].block};
-        lookup[key].count += master[m].count;
+        var h = master[m].hours;
+        if (!lookup[h]) lookup[h] = {count: 0, block: master[m].block};
+        lookup[h].count += master[m].count;
       }
       return lookup;
     }
 
-    // --- Normalize duration text to hours number ---
+    // Block name -> hours: 8B->8, 6B30S->6.5, 5B30S->5.5, 4B30S->4.5, 3B->3, 2B->2
+    function blockToHours(block) {
+      block = String(block).trim().toUpperCase();
+      var m = block.match(/^(\d+)B(\d+)?/);
+      if (m) return parseInt(m[1]) + (m[2] ? parseInt(m[2]) / 60 : 0);
+      return 0;
+    }
+
+    // "8時間" -> 8, "6時間30分" -> 6.5
     function parseDurationToHours(txt) {
       if (typeof txt === 'number') return txt;
       txt = String(txt).trim();
-      // "8時間" -> 8, "6時間30分" -> 6.5, "4時間30分" -> 4.5, "2時間" -> 2
       var m = txt.match(/(\d+)\s*時間\s*(\d+)?\s*分?/);
       if (m) return parseInt(m[1]) + (m[2] ? parseInt(m[2]) / 60 : 0);
-      // "8.00" or "6.50"
       var n = parseFloat(txt);
       if (!isNaN(n)) return n;
       return 0;
@@ -10416,7 +10399,7 @@
     }
 
     function processInputFile(wb, fileName) {
-      // Find OFK3 sheet or first sheet
+      // Try all sheets, find one with OFK3 data or use first
       var ws = null;
       var sheetName = '';
       for (var i = 0; i < wb.SheetNames.length; i++) {
@@ -10427,96 +10410,56 @@
       var data = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
       if (data.length < 2) { alert('データが空です（シート: ' + sheetName + '）'); return; }
 
-      // Find header row - look for "Service Type" or "サービスタイプ" or similar
-      var headerRow = -1;
-      var colService = -1, colCycle = -1, colDuration = -1, colCount = -1;
-      for (var r = 0; r < Math.min(data.length, 20); r++) {
+      // Scan all cells for block patterns (8B, 6B30S, etc.)
+      // InputFile structure: each row filtered by OFK3 has a block value like "8B", "6B30S"
+      var blockCounts = {}; // hours -> count
+      var blockPattern = /^(\d+B\d*S?)$/i;
+      var foundBlocks = [];
+
+      for (var r = 0; r < data.length; r++) {
         var row = data[r];
+        if (!row) continue;
         for (var c = 0; c < row.length; c++) {
-          var v = String(row[c]).trim().toLowerCase();
-          if (v === 'service type' || v === 'servicetype' || v === 'service_type' || v.indexOf('サービスタイプ') >= 0) {
-            headerRow = r; colService = c;
-          }
-          if (v === 'cycle' || v === 'cycle_name' || v.indexOf('サイクル') >= 0) colCycle = c;
-          if (v === 'planned duration' || v === 'duration' || v === 'planned_duration' || v.indexOf('計画された時間') >= 0 || v.indexOf('planned time') >= 0 || v.indexOf('時間') >= 0) colDuration = c;
-          if (v === 'count' || v === 'routes' || v === 'route_count' || v === 'number of routes' || v.indexOf('台数') >= 0 || v.indexOf('ルート数') >= 0) colCount = c;
-        }
-        if (headerRow >= 0) break;
-      }
-
-      // If no clear header found, try to detect structure from the data
-      // The inputfile likely has: each row = one route entry, so we count rows
-      var dateMap = {}; // date -> { 'service|hours': count }
-      var today = new Date().toISOString().split('T')[0];
-
-      if (headerRow >= 0 && colService >= 0) {
-        // Header found - scan data rows
-        // Try to find duration column by value pattern (e.g., 8.00, 6.50)
-        if (colDuration < 0) {
-          for (var c = 0; c < data[headerRow].length; c++) {
-            var hv = String(data[headerRow][c]).trim().toLowerCase();
-            if (hv === 'hours' || hv === 'planned hours' || hv === 'block hours') { colDuration = c; break; }
-          }
-        }
-
-        for (var r = headerRow + 1; r < data.length; r++) {
-          var row = data[r];
-          if (!row || !row[colService]) continue;
-          var svc = String(row[colService]).trim();
-          if (!svc) continue;
-          // Filter OFK3 if station column exists
-          var isOFK3 = true;
-          for (var c = 0; c < row.length; c++) {
-            var cv = String(row[c]);
-            if (cv.indexOf('Station') >= 0 || cv.indexOf('ステーション') >= 0) {
-              // Check if this row has OFK3
-              break;
+          var v = String(row[c]).trim();
+          if (blockPattern.test(v)) {
+            var h = blockToHours(v);
+            if (h > 0) {
+              blockCounts[h] = (blockCounts[h] || 0) + 1;
+              foundBlocks.push({row: r, col: c, block: v, hours: h});
             }
           }
+        }
+      }
 
-          var hours = 0;
-          if (colDuration >= 0) {
-            hours = parseDurationToHours(row[colDuration]);
-          }
-          // If count column exists, use it; otherwise count 1 per row
-          var cnt = 1;
-          if (colCount >= 0) {
-            cnt = parseInt(row[colCount]) || 1;
-          }
-          var key = svc + '|' + hours;
-          if (!dateMap[today]) dateMap[today] = {};
-          dateMap[today][key] = (dateMap[today][key] || 0) + cnt;
-        }
-      } else {
-        // No header detected - show debug info
+      if (foundBlocks.length === 0) {
+        // Debug: show first rows
         var debugRows = [];
-        for (var r = 0; r < Math.min(data.length, 5); r++) {
-          debugRows.push('Row' + r + ': ' + data[r].slice(0, 10).join(' | '));
+        for (var r = 0; r < Math.min(data.length, 8); r++) {
+          debugRows.push('Row' + r + ': ' + (data[r] ? data[r].slice(0, 12).join(' | ') : '(empty)'));
         }
-        alert('InputFileのヘッダーを検出できません\nシート: ' + sheetName + '\nシート一覧: ' + wb.SheetNames.join(', ') + '\n\n' + debugRows.join('\n'));
+        alert('ブロック値（8B, 6B30S等）が見つかりません\nシート: ' + sheetName + '\nシート一覧: ' + wb.SheetNames.join(', ') + '\n\n' + debugRows.join('\n'));
         return;
       }
 
-      // Show input file detected structure first
+      // Build dateMap with today's date (InputFile = single day snapshot)
+      var today = fileName.match(/(\d{4})(\d{2})(\d{2})/);
+      var dateKey = today ? today[1] + '-' + today[2] + '-' + today[3] : new Date().toISOString().split('T')[0];
+      var dateMap = {};
+      dateMap[dateKey] = blockCounts;
+
+      // Show summary
       var resultDiv = document.getElementById('fleet-input-result');
       resultDiv.classList.remove('hidden');
       var infoHtml = '<div class="card p-3 border border-orange-300">';
-      infoHtml += '<div class="text-xs font-medium mb-2" style="color:#ea580c">📄 ' + fileName + ' （シート: ' + sheetName + '）</div>';
-      var dKeys = Object.keys(dateMap);
-      if (dKeys.length > 0) {
-        var counts = dateMap[dKeys[0]];
-        infoHtml += '<table class="w-full text-xs"><thead><tr class="border-b"><th class="text-left px-2 py-1">サービスタイプ</th><th class="text-center px-2 py-1">時間</th><th class="text-center px-2 py-1">検出台数</th></tr></thead><tbody>';
-        var cKeys = Object.keys(counts).sort();
-        for (var k = 0; k < cKeys.length; k++) {
-          var parts = cKeys[k].split('|');
-          infoHtml += '<tr class="border-b"><td class="px-2 py-1">' + parts[0] + '</td><td class="text-center px-2 py-1">' + parts[1] + 'h</td><td class="text-center px-2 py-1 font-bold">' + counts[cKeys[k]] + '</td></tr>';
-        }
-        infoHtml += '</tbody></table>';
+      infoHtml += '<div class="text-xs font-medium mb-2" style="color:#ea580c">📄 ' + fileName + ' （' + foundBlocks.length + '件検出）</div>';
+      infoHtml += '<table class="w-full text-xs"><thead><tr class="border-b"><th class="text-center px-2 py-1">時間(h)</th><th class="text-center px-2 py-1">検出台数</th></tr></thead><tbody>';
+      var hKeys = Object.keys(blockCounts).sort(function(a,b){return parseFloat(b)-parseFloat(a);});
+      for (var k = 0; k < hKeys.length; k++) {
+        infoHtml += '<tr class="border-b"><td class="text-center px-2 py-1">' + hKeys[k] + 'h</td><td class="text-center px-2 py-1 font-bold">' + blockCounts[hKeys[k]] + '</td></tr>';
       }
-      infoHtml += '</div>';
+      infoHtml += '</tbody></table></div>';
       resultDiv.innerHTML = infoHtml;
 
-      // Compare and render
       renderFleetComparison(dateMap, 'InputFile');
     }
 
@@ -10582,86 +10525,82 @@
     }
 
     function processSdrCsv(csvText, fileName) {
-      // Remove BOM
       if (csvText.charCodeAt(0) === 0xFEFF || csvText.charCodeAt(0) === 0xFFFE) csvText = csvText.substring(1);
       if (csvText.charCodeAt(0) === 0xEF && csvText.charCodeAt(1) === 0xBB && csvText.charCodeAt(2) === 0xBF) csvText = csvText.substring(3);
       var lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
       if (lines.length < 2) { alert('データが空です'); return; }
 
       var header = parseCSVLine(lines[0]);
-      var colDate = -1, colStation = -1, colService = -1, colDuration = -1;
+      var colDate = -1, colStation = -1, colDuration = -1, colExcluded = -1;
       for (var h = 0; h < header.length; h++) {
         var hv = header[h].trim();
         if (hv === '日付') colDate = h;
         else if (hv.indexOf('ステーション') >= 0) colStation = h;
-        else if (hv.indexOf('サービスタイプ') >= 0) colService = h;
         else if (hv.indexOf('計画された時間') >= 0) colDuration = h;
+        else if (hv.indexOf('除外') >= 0) colExcluded = h;
       }
 
-      if (colDate < 0 || colService < 0 || colDuration < 0) {
-        var debugInfo = 'ヘッダー検出結果: 日付=' + colDate + ' サービスタイプ=' + colService + ' 計画された時間=' + colDuration + '\n';
-        debugInfo += 'ヘッダー行: ' + header.join(' | ');
-        alert('GDS Service Details Reportの形式ではありません\n\n' + debugInfo);
+      if (colDate < 0 || colDuration < 0) {
+        alert('GDS Service Details Reportの形式ではありません\nヘッダー: ' + header.join(' | '));
         return;
       }
 
-      // Count routes per date per service+duration (each row = 1 route)
+      // Count routes per date per hours (each row = 1 route)
       var dateMap = {};
       for (var i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
         var cols = parseCSVLine(lines[i]);
-        // Filter OFK3 only
         if (colStation >= 0 && String(cols[colStation]).indexOf('OFK3') < 0) continue;
         var date = cols[colDate];
-        var service = String(cols[colService]).trim();
-        var duration = parseDurationToHours(cols[colDuration]);
-        var key = service + '|' + duration;
+        var hours = parseDurationToHours(cols[colDuration]);
+        if (hours <= 0) continue;
         if (!dateMap[date]) dateMap[date] = {};
-        dateMap[date][key] = (dateMap[date][key] || 0) + 1;
+        dateMap[date][hours] = (dateMap[date][hours] || 0) + 1;
       }
 
-      // Show SDR result summary
       var resultDiv = document.getElementById('fleet-sdr-result');
       resultDiv.classList.remove('hidden');
       var dates = Object.keys(dateMap).sort();
-      var infoHtml = '<div class="card p-3 border border-blue-300">';
-      infoHtml += '<div class="text-xs font-medium mb-2" style="color:#2563eb">📊 ' + fileName + ' （' + dates.length + '日分検出）</div>';
-      infoHtml += '</div>';
-      resultDiv.innerHTML = infoHtml;
+      resultDiv.innerHTML = '<div class="card p-3 border border-blue-300"><div class="text-xs font-medium" style="color:#2563eb">📊 ' + fileName + ' （' + dates.length + '日分 / ' + (lines.length - 1) + '行）</div></div>';
 
-      // Compare and render
       renderFleetComparison(dateMap, 'Service Details');
     }
 
-    // ===== Shared comparison logic =====
+    // ===== Shared comparison =====
     function renderFleetComparison(dateMap, sourceName) {
-      var masterLookup = buildMasterLookup();
+      var masterLookup = buildMasterLookup(); // hours -> {count, block}
       var dates = Object.keys(dateMap).sort();
       var okCount = 0, ngCount = 0;
       var results = [];
 
+      // Get all hours from master for block name display
+      var master = getFleetMaster();
+      var hoursToBlock = {};
+      for (var m = 0; m < master.length; m++) {
+        hoursToBlock[master[m].hours] = master[m].block;
+      }
+
       for (var d = 0; d < dates.length; d++) {
         var dt = dates[d];
         var actual = dateMap[dt];
-        var allKeys = {};
+        var allHours = {};
         var mKeys = Object.keys(masterLookup);
-        for (var k = 0; k < mKeys.length; k++) allKeys[mKeys[k]] = true;
+        for (var k = 0; k < mKeys.length; k++) allHours[mKeys[k]] = true;
         var aKeys = Object.keys(actual);
-        for (var k = 0; k < aKeys.length; k++) allKeys[aKeys[k]] = true;
+        for (var k = 0; k < aKeys.length; k++) allHours[aKeys[k]] = true;
 
         var dayRows = [];
         var dayHasAlert = false;
-        var sortedKeys = Object.keys(allKeys).sort();
-        for (var ki = 0; ki < sortedKeys.length; ki++) {
-          var key = sortedKeys[ki];
-          var parts = key.split('|');
-          var expected = masterLookup[key] ? masterLookup[key].count : 0;
-          var got = actual[key] || 0;
+        var sortedHours = Object.keys(allHours).sort(function(a,b){return parseFloat(b)-parseFloat(a);});
+        for (var ki = 0; ki < sortedHours.length; ki++) {
+          var h = sortedHours[ki];
+          var expected = masterLookup[h] ? masterLookup[h].count : 0;
+          var got = actual[h] || 0;
           var diff = got - expected;
           if (diff !== 0) dayHasAlert = true;
           dayRows.push({
-            service: parts[0],
-            hours: parts[1],
+            hours: h,
+            block: hoursToBlock[h] || '-',
             expected: expected,
             actual: got,
             diff: diff
@@ -10670,20 +10609,17 @@
 
         if (dayHasAlert) ngCount++;
         else okCount++;
-
         results.push({date: dt, rows: dayRows, hasAlert: dayHasAlert});
       }
 
       fleetCompareResults = results;
 
-      // Update summary
       document.getElementById('fleet-alert').classList.remove('hidden');
       document.getElementById('fleet-source').textContent = sourceName;
       document.getElementById('fleet-days').textContent = dates.length;
       document.getElementById('fleet-ok').textContent = okCount;
       document.getElementById('fleet-ng').textContent = ngCount;
 
-      // Render detail per date
       document.getElementById('fleet-detail').classList.remove('hidden');
       var container = document.getElementById('fleet-detail-container');
       var html = '';
@@ -10697,7 +10633,7 @@
         else html += ' <span class="text-emerald-600">— 一致</span>';
         html += '</div>';
         html += '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
-          '<th class="px-3 py-1.5 text-left text-xs">サービスタイプ</th>' +
+          '<th class="px-3 py-1.5 text-left text-xs">Block</th>' +
           '<th class="px-3 py-1.5 text-center text-xs">時間(h)</th>' +
           '<th class="px-3 py-1.5 text-center text-xs">正常台数</th>' +
           '<th class="px-3 py-1.5 text-center text-xs">Amazon台数</th>' +
@@ -10712,7 +10648,7 @@
           else { diffText = '0'; }
           var rowBg = row.diff !== 0 ? ' bg-yellow-50' : '';
           html += '<tr class="border-b border-border' + rowBg + '">' +
-            '<td class="px-3 py-1.5 text-xs">' + row.service + '</td>' +
+            '<td class="px-3 py-1.5 text-xs font-medium">' + row.block + '</td>' +
             '<td class="px-3 py-1.5 text-center text-xs">' + row.hours + 'h</td>' +
             '<td class="px-3 py-1.5 text-center text-xs">' + row.expected + '</td>' +
             '<td class="px-3 py-1.5 text-center text-xs font-bold">' + row.actual + '</td>' +
@@ -10727,12 +10663,12 @@
 
     function exportFleetResult() {
       if (!fleetCompareResults.length) return;
-      var csvRows = [['日付', 'サービスタイプ', '時間(h)', '正常台数', 'Amazon台数', '差異']];
+      var csvRows = [['日付', 'Block', '時間(h)', '正常台数', 'Amazon台数', '差異']];
       for (var d = 0; d < fleetCompareResults.length; d++) {
         var res = fleetCompareResults[d];
         for (var r = 0; r < res.rows.length; r++) {
           var row = res.rows[r];
-          csvRows.push([res.date, row.service, row.hours, row.expected, row.actual, row.diff]);
+          csvRows.push([res.date, row.block, row.hours, row.expected, row.actual, row.diff]);
         }
       }
       var csv = csvRows.map(function(row) {
