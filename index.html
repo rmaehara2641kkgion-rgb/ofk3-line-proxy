@@ -10463,18 +10463,12 @@
         var row = data[r];
         if (!row) continue;
 
-        // OFK3 filter: check station column, or fallback check all columns for OFK3
-        if (colStation >= 0) {
-          var stationVal = String(row[colStation]).trim();
-          if (stationVal.indexOf('OFK3') < 0) {
-            // Also check neighboring columns (Node, NodeP, DS Name may vary)
-            var rowHasOFK3 = false;
-            for (var cc = 0; cc < Math.min(row.length, 10); cc++) {
-              if (String(row[cc]).indexOf('OFK3') >= 0) { rowHasOFK3 = true; break; }
-            }
-            if (!rowHasOFK3) continue;
-          }
+        // OFK3 filter: check first 10 columns for OFK3 text
+        var rowHasOFK3 = false;
+        for (var cc = 0; cc < Math.min(row.length, 10); cc++) {
+          if (String(row[cc]).toUpperCase().indexOf('OFK3') >= 0) { rowHasOFK3 = true; break; }
         }
+        if (!rowHasOFK3) continue;
 
         // If block column identified, only check that column
         var searchCols = colBlock >= 0 ? [colBlock] : [];
@@ -10496,9 +10490,29 @@
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: show header and first data rows
-        var debugRows = ['ヘッダー行: ' + (headerRow >= 0 ? headerRow : '未検出') + ' / Station列: ' + (colStation >= 0 ? colStation : '未検出')];
-        for (var r = 0; r < Math.min(data.length, 8); r++) {
+        // Debug: collect unique station names and sample block values
+        var stations = {};
+        var sampleBlocks = {};
+        for (var r = startRow; r < Math.min(data.length, 200); r++) {
+          var row = data[r];
+          if (!row) continue;
+          // Collect station/node names from first 5 cols
+          for (var cc = 0; cc < Math.min(row.length, 5); cc++) {
+            var sv = String(row[cc]).trim();
+            if (sv && sv.length > 1 && sv.length < 30) stations[sv] = (stations[sv] || 0) + 1;
+          }
+          // Collect block values from col 8-9
+          for (var cc = 7; cc < Math.min(row.length, 10); cc++) {
+            var bv = String(row[cc]).trim();
+            if (bv && bv.length > 0 && bv.length < 15) sampleBlocks[bv] = (sampleBlocks[bv] || 0) + 1;
+          }
+        }
+        var stList = Object.keys(stations).slice(0, 20).join(', ');
+        var blList = Object.keys(sampleBlocks).slice(0, 20).join(', ');
+        var debugRows = ['ヘッダー行: ' + headerRow + ' / Station列: ' + colStation + ' / Block列: ' + colBlock];
+        debugRows.push('ステーション候補: ' + stList);
+        debugRows.push('Block候補: ' + blList);
+        for (var r = headerRow >= 0 ? headerRow : 0; r < Math.min(data.length, headerRow + 5); r++) {
           debugRows.push('Row' + r + ': ' + (data[r] ? data[r].slice(0, 15).join(' | ') : '(empty)'));
         }
         alert('OFK3のブロック値が見つかりません\nシート: ' + sheetName + '\n\n' + debugRows.join('\n'));
