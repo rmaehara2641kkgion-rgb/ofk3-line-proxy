@@ -10432,81 +10432,97 @@
         return;
       }
 
-      // Find Block column and B/S column dynamically from header row (Row3)
-      var colBlock = -1;
-      var colBS = -1;
+      // Structure: C列(col2)=Node(OFK3), H列(col7)=Block(数値), I列(col8)=B/S(テキスト8B等)
+      // Row3=ヘッダー, Row1-2=メタ, Row4以降=データ
+      // UW列以降に日別台数（Row3に日付 45658=7/13 等のシリアル値）
+
+      // Find columns dynamically from Row3 header
       var row3 = data[3] || [];
+      var colNode = -1, colBlockNum = -1, colBlockText = -1;
+      var dateCols = []; // {col, date} - 日付列
+
       for (var c = 0; c < row3.length; c++) {
         var hv = String(row3[c]).trim().toLowerCase();
-        if (hv === 'block') colBlock = c;
-        if (hv === 'b/s') colBS = c;
+        if (hv === 'node') colNode = c;
+        else if (hv === 'block') colBlockNum = c;
+        else if (hv === 'b/s') colBlockText = c;
+        else {
+          // 日付列の検出（Excelシリアル日付: 45000-46000くらい = 2023-2026年）
+          var nv = parseFloat(row3[c]);
+          if (!isNaN(nv) && nv >= 45000 && nv <= 47000) {
+            // Convert Excel serial to date
+            var d = new Date((nv - 25569) * 86400000);
+            var ds = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+            dateCols.push({col: c, date: ds, serial: nv});
+          }
+        }
       }
 
-      // B/S列の数値を時間として読む（Block列のテキスト "8B" ではなく数値 8 が入ってる）
-      var blockCounts = {}; // hours -> count
+      // Extract data: filter C列=OFK3, read B/S column, read date columns for counts
+      var blockCounts = {}; // hours -> count (for today or latest date)
+      var dateMap = {}; // date -> {hours -> count}
       var foundBlocks = [];
-      var blockPattern = /^(\d+B\d*S?)$/i;
-      var hoursCol = colBS >= 0 ? colBS : colBlock;
+
+      // Determine target date from filename or use latest date column
+      var fileDate = fileName.match(/(\d{4})(\d{2})(\d{2})/);
+      var targetDate = fileDate ? fileDate[1] + '-' + fileDate[2] + '-' + fileDate[3] : '';
 
       for (var r = 4; r < data.length; r++) {
         var row = data[r];
         if (!row) continue;
+
+        // Filter: Node column must contain OFK3
+        if (colNode >= 0) {
+          var nodeVal = String(row[colNode] || '').trim().toUpperCase();
+          if (nodeVal.indexOf('OFK3') < 0) continue;
+        }
+
+        // Get hours from Block column (numeric) or B/S column
         var hours = 0;
-        var blockName = '';
+        if (colBlockNum >= 0) {
+          var bv = parseFloat(row[colBlockNum]);
+          if (!isNaN(bv) && bv > 0) hours = bv;
+        }
+        if (hours === 0 && colBlockText >= 0) {
+          hours = blockToHours(String(row[colBlockText] || ''));
+        }
+        if (hours <= 0) continue;
 
-        // Try B/S or Block column as numeric hours
-        if (hoursCol >= 0 && row[hoursCol] !== undefined && row[hoursCol] !== '') {
-          var val = row[hoursCol];
-          if (typeof val === 'number' && val > 0 && val <= 24) {
-            hours = val;
-          } else {
-            var pv = parseFloat(String(val));
-            if (!isNaN(pv) && pv > 0 && pv <= 24) hours = pv;
+        // If date columns found, read counts from each date column
+        if (dateCols.length > 0) {
+          for (var di = 0; di < dateCols.length; di++) {
+            var dc = dateCols[di];
+            var cnt = parseInt(row[dc.col]);
+            if (!isNaN(cnt) && cnt > 0) {
+              if (!dateMap[dc.date]) dateMap[dc.date] = {};
+              dateMap[dc.date][hours] = (dateMap[dc.date][hours] || 0) + cnt;
+            }
           }
+        } else {
+          // No date columns - just count rows
+          var today = targetDate || new Date().toISOString().split('T')[0];
+          if (!dateMap[today]) dateMap[today] = {};
+          dateMap[today][hours] = (dateMap[today][hours] || 0) + 1;
         }
-
-        // Also check Block column for text pattern like "8B"
-        if (colBlock >= 0 && colBlock !== hoursCol && row[colBlock] !== undefined) {
-          var bv = String(row[colBlock]).trim();
-          if (blockPattern.test(bv)) {
-            blockName = bv;
-            if (hours === 0) hours = blockToHours(bv);
-          }
-        }
-
-        if (hours > 0) {
-          blockCounts[hours] = (blockCounts[hours] || 0) + 1;
-          foundBlocks.push({row: r, hours: hours, block: blockName || hours + 'h'});
-        }
+        foundBlocks.push({row: r, hours: hours});
       }
 
       if (foundBlocks.length === 0) {
-        var debugParts = [];
-        var sampleRow = data[4] || [];
-        for (var c = 0; c < Math.min(row3.length, 20); c++) {
-          debugParts.push('col' + c + '(' + String(row3[c] || '') + ')=' + String(sampleRow[c] !== undefined ? sampleRow[c] : ''));
+        var nodeVals = {};
+        for (var r = 4; r < Math.min(data.length, 100); r++) {
+          if (data[r] && colNode >= 0) nodeVals[String(data[r][colNode] || '')] = true;
         }
-        alert('データが見つかりません (Block列=' + colBlock + ' / B/S列=' + colBS + ')\n行数: ' + data.length + '\n\n' + debugParts.join('\n'));
+        alert('OFK3データが見つかりません\nNode列(col' + colNode + ')の値: ' + Object.keys(nodeVals).slice(0, 15).join(', ') + '\nBlock列=' + colBlockNum + ' / B/S列=' + colBlockText + '\n日付列数=' + dateCols.length);
         return;
       }
-
-      // Build dateMap with today's date (InputFile = single day snapshot)
-      var today = fileName.match(/(\d{4})(\d{2})(\d{2})/);
-      var dateKey = today ? today[1] + '-' + today[2] + '-' + today[3] : new Date().toISOString().split('T')[0];
-      var dateMap = {};
-      dateMap[dateKey] = blockCounts;
 
       // Show summary
       var resultDiv = document.getElementById('fleet-input-result');
       resultDiv.classList.remove('hidden');
+      var dates = Object.keys(dateMap).sort();
       var infoHtml = '<div class="card p-3 border border-orange-300">';
-      infoHtml += '<div class="text-xs font-medium mb-2" style="color:#ea580c">📄 ' + fileName + ' （' + foundBlocks.length + '件検出）</div>';
-      infoHtml += '<table class="w-full text-xs"><thead><tr class="border-b"><th class="text-center px-2 py-1">時間(h)</th><th class="text-center px-2 py-1">検出台数</th></tr></thead><tbody>';
-      var hKeys = Object.keys(blockCounts).sort(function(a,b){return parseFloat(b)-parseFloat(a);});
-      for (var k = 0; k < hKeys.length; k++) {
-        infoHtml += '<tr class="border-b"><td class="text-center px-2 py-1">' + hKeys[k] + 'h</td><td class="text-center px-2 py-1 font-bold">' + blockCounts[hKeys[k]] + '</td></tr>';
-      }
-      infoHtml += '</tbody></table></div>';
+      infoHtml += '<div class="text-xs font-medium mb-2" style="color:#ea580c">📄 ' + fileName + ' （OFK3: ' + foundBlocks.length + '行 / ' + dates.length + '日分）</div>';
+      infoHtml += '</div>';
       resultDiv.innerHTML = infoHtml;
 
       renderFleetComparison(dateMap, 'InputFile');
