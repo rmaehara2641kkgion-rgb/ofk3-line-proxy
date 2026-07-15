@@ -10432,90 +10432,50 @@
         return;
       }
 
-      // Find header row and station/block columns
-      var headerRow = -1;
-      var colStation = -1;
-      var colBlock = -1;
-      for (var r = 0; r < Math.min(data.length, 20); r++) {
-        var row = data[r];
-        if (!row) continue;
-        for (var c = 0; c < row.length; c++) {
-          var v = String(row[c]).trim().toLowerCase();
-          if (v === 'ds name' || v === 'ds_name' || v === 'delivery_station' || v.indexOf('station') >= 0 || v.indexOf('ステーション') >= 0) {
-            colStation = c;
-            if (headerRow < 0) headerRow = r;
-          }
-          if (v === 'block' || v === 'block_code' || v.indexOf('ブロック') >= 0) {
-            colBlock = c;
-            if (headerRow < 0) headerRow = r;
-          }
-        }
-        if (colStation >= 0 && colBlock >= 0) break;
-      }
-
-      // Scan for block patterns, filtering by OFK3 if station column found
+      // Simple: C列(col2)=Node にOFK3が含まれる行の Block列(col8) を取得
       var blockCounts = {}; // hours -> count
       var blockPattern = /^(\d+B\d*S?)$/i;
       var foundBlocks = [];
-      var startRow = headerRow >= 0 ? headerRow + 1 : 0;
 
-      for (var r = startRow; r < data.length; r++) {
+      for (var r = 4; r < data.length; r++) {
         var row = data[r];
-        if (!row) continue;
-
-        // OFK3 filter: check first 10 columns for OFK3 text
-        var rowHasOFK3 = false;
-        for (var cc = 0; cc < Math.min(row.length, 10); cc++) {
-          if (String(row[cc]).toUpperCase().indexOf('OFK3') >= 0) { rowHasOFK3 = true; break; }
-        }
-        if (!rowHasOFK3) continue;
-
-        // If block column identified, only check that column
-        var searchCols = colBlock >= 0 ? [colBlock] : [];
-        if (searchCols.length === 0) {
-          for (var c = 0; c < row.length; c++) searchCols.push(c);
-        }
-
-        for (var ci = 0; ci < searchCols.length; ci++) {
-          var c = searchCols[ci];
-          var v = String(row[c]).trim();
-          if (blockPattern.test(v)) {
-            var h = blockToHours(v);
-            if (h > 0) {
-              blockCounts[h] = (blockCounts[h] || 0) + 1;
-              foundBlocks.push({row: r, col: c, block: v, hours: h});
-            }
+        if (!row || row.length < 9) continue;
+        var node = String(row[2]).trim().toUpperCase();
+        if (node.indexOf('OFK3') < 0) continue;
+        var block = String(row[8]).trim();
+        if (blockPattern.test(block)) {
+          var h = blockToHours(block);
+          if (h > 0) {
+            blockCounts[h] = (blockCounts[h] || 0) + 1;
+            foundBlocks.push({row: r, block: block, hours: h});
           }
         }
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: collect unique station names and sample block values
-        var stations = {};
-        var sampleBlocks = {};
-        for (var r = startRow; r < Math.min(data.length, 200); r++) {
+        // Debug: show sample of C列 and col8
+        var debugLines = [];
+        var ofk3Count = 0;
+        for (var r = 4; r < Math.min(data.length, 50); r++) {
           var row = data[r];
           if (!row) continue;
-          // Collect station/node names from first 5 cols
-          for (var cc = 0; cc < Math.min(row.length, 5); cc++) {
-            var sv = String(row[cc]).trim();
-            if (sv && sv.length > 1 && sv.length < 30) stations[sv] = (stations[sv] || 0) + 1;
-          }
-          // Collect block values from col 8-9
-          for (var cc = 7; cc < Math.min(row.length, 10); cc++) {
-            var bv = String(row[cc]).trim();
-            if (bv && bv.length > 0 && bv.length < 15) sampleBlocks[bv] = (sampleBlocks[bv] || 0) + 1;
+          var node = String(row[2] || '').trim();
+          var blk = String(row[8] || '').trim();
+          if (node.toUpperCase().indexOf('OFK3') >= 0) {
+            ofk3Count++;
+            if (debugLines.length < 5) debugLines.push('Row' + r + ': C=' + node + ' / Block=' + blk);
           }
         }
-        var stList = Object.keys(stations).slice(0, 20).join(', ');
-        var blList = Object.keys(sampleBlocks).slice(0, 20).join(', ');
-        var debugRows = ['ヘッダー行: ' + headerRow + ' / Station列: ' + colStation + ' / Block列: ' + colBlock];
-        debugRows.push('ステーション候補: ' + stList);
-        debugRows.push('Block候補: ' + blList);
-        for (var r = headerRow >= 0 ? headerRow : 0; r < Math.min(data.length, headerRow + 5); r++) {
-          debugRows.push('Row' + r + ': ' + (data[r] ? data[r].slice(0, 15).join(' | ') : '(empty)'));
+        if (ofk3Count === 0) {
+          // Show unique C column values
+          var cVals = {};
+          for (var r = 4; r < Math.min(data.length, 100); r++) {
+            if (data[r]) cVals[String(data[r][2] || '').trim()] = true;
+          }
+          alert('C列にOFK3が見つかりません\nC列の値: ' + Object.keys(cVals).slice(0, 20).join(', '));
+        } else {
+          alert('OFK3行 ' + ofk3Count + '件あるがBlock値が不正\n\n' + debugLines.join('\n'));
         }
-        alert('OFK3のブロック値が見つかりません\nシート: ' + sheetName + '\n\n' + debugRows.join('\n'));
         return;
       }
 
