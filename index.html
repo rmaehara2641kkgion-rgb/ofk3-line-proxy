@@ -10432,75 +10432,61 @@
         return;
       }
 
-      // Find Block column dynamically from header row (Row3)
+      // Find Block column and B/S column dynamically from header row (Row3)
       var colBlock = -1;
+      var colBS = -1;
       var row3 = data[3] || [];
       for (var c = 0; c < row3.length; c++) {
         var hv = String(row3[c]).trim().toLowerCase();
-        if (hv === 'block' || hv === 'b/s') {
-          if (colBlock < 0 || hv === 'block') colBlock = c;
-        }
+        if (hv === 'block') colBlock = c;
+        if (hv === 'b/s') colBS = c;
       }
 
-      // If Block column not found in row3, try scanning all header-like rows
-      if (colBlock < 0) {
-        for (var r = 0; r < Math.min(data.length, 10); r++) {
-          var row = data[r];
-          if (!row) continue;
-          for (var c = 0; c < row.length; c++) {
-            if (String(row[c]).trim().toLowerCase() === 'block') { colBlock = c; break; }
-          }
-          if (colBlock >= 0) break;
-        }
-      }
-
+      // B/S列の数値を時間として読む（Block列のテキスト "8B" ではなく数値 8 が入ってる）
       var blockCounts = {}; // hours -> count
-      var blockPattern = /^(\d+B\d*S?)$/i;
       var foundBlocks = [];
-      var dataStartRow = colBlock >= 0 ? 4 : 0;
+      var blockPattern = /^(\d+B\d*S?)$/i;
+      var hoursCol = colBS >= 0 ? colBS : colBlock;
 
-      if (colBlock >= 0) {
-        // Use identified Block column
-        for (var r = dataStartRow; r < data.length; r++) {
-          var row = data[r];
-          if (!row || row.length <= colBlock) continue;
-          var block = String(row[colBlock]).trim();
-          if (blockPattern.test(block)) {
-            var h = blockToHours(block);
-            if (h > 0) {
-              blockCounts[h] = (blockCounts[h] || 0) + 1;
-              foundBlocks.push({row: r, block: block, hours: h});
-            }
+      for (var r = 4; r < data.length; r++) {
+        var row = data[r];
+        if (!row) continue;
+        var hours = 0;
+        var blockName = '';
+
+        // Try B/S or Block column as numeric hours
+        if (hoursCol >= 0 && row[hoursCol] !== undefined && row[hoursCol] !== '') {
+          var val = row[hoursCol];
+          if (typeof val === 'number' && val > 0 && val <= 24) {
+            hours = val;
+          } else {
+            var pv = parseFloat(String(val));
+            if (!isNaN(pv) && pv > 0 && pv <= 24) hours = pv;
           }
+        }
+
+        // Also check Block column for text pattern like "8B"
+        if (colBlock >= 0 && colBlock !== hoursCol && row[colBlock] !== undefined) {
+          var bv = String(row[colBlock]).trim();
+          if (blockPattern.test(bv)) {
+            blockName = bv;
+            if (hours === 0) hours = blockToHours(bv);
+          }
+        }
+
+        if (hours > 0) {
+          blockCounts[hours] = (blockCounts[hours] || 0) + 1;
+          foundBlocks.push({row: r, hours: hours, block: blockName || hours + 'h'});
         }
       }
 
-      // Fallback: scan ALL cells for block patterns
       if (foundBlocks.length === 0) {
-        for (var r = 0; r < data.length; r++) {
-          var row = data[r];
-          if (!row) continue;
-          for (var c = 0; c < row.length; c++) {
-            var v = String(row[c]).trim();
-            if (blockPattern.test(v)) {
-              var h = blockToHours(v);
-              if (h > 0) {
-                blockCounts[h] = (blockCounts[h] || 0) + 1;
-                foundBlocks.push({row: r, col: c, block: v, hours: h});
-              }
-            }
-          }
-        }
-      }
-
-      if (foundBlocks.length === 0) {
-        // Show row3 header + row4 data for debugging
         var debugParts = [];
-        var sampleRow = data[4] || data[5] || [];
+        var sampleRow = data[4] || [];
         for (var c = 0; c < Math.min(row3.length, 20); c++) {
-          debugParts.push('col' + c + '(' + String(row3[c] || '') + ')=' + String((sampleRow[c] !== undefined ? sampleRow[c] : '') + ''));
+          debugParts.push('col' + c + '(' + String(row3[c] || '') + ')=' + String(sampleRow[c] !== undefined ? sampleRow[c] : ''));
         }
-        alert('Block値が見つかりません (Block列=' + colBlock + ')\n行数: ' + data.length + '\n\n' + debugParts.join('\n'));
+        alert('データが見つかりません (Block列=' + colBlock + ' / B/S列=' + colBS + ')\n行数: ' + data.length + '\n\n' + debugParts.join('\n'));
         return;
       }
 
