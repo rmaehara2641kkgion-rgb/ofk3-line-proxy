@@ -10351,24 +10351,32 @@
       if (!file) return;
       var name = file.name.toLowerCase();
       if (name.indexOf('.zip') >= 0) {
-        // Extract ZIP and find CSV
         var reader = new FileReader();
         reader.onload = function(e) {
           JSZip.loadAsync(e.target.result).then(function(zip) {
             var csvFiles = [];
             zip.forEach(function(path, entry) {
-              if (path.toLowerCase().indexOf('weekly report') >= 0 && path.toLowerCase().indexOf('.csv') >= 0) {
+              var lp = path.toLowerCase();
+              if (lp.indexOf('weekly report') >= 0 && lp.indexOf('.csv') >= 0 && lp.indexOf('/') < 0) {
                 csvFiles.push(entry);
               }
             });
             if (csvFiles.length === 0) {
-              // Try any CSV
+              zip.forEach(function(path, entry) {
+                var lp = path.toLowerCase();
+                if (lp.indexOf('weekly report') >= 0 && lp.indexOf('.csv') >= 0) {
+                  csvFiles.push(entry);
+                }
+              });
+            }
+            if (csvFiles.length === 0) {
               zip.forEach(function(path, entry) {
                 if (path.toLowerCase().indexOf('.csv') >= 0) csvFiles.push(entry);
               });
             }
             if (csvFiles.length === 0) { alert('ZIP内にCSVが見つかりません'); return; }
-            csvFiles[0].async('string').then(function(csvText) {
+            csvFiles[0].async('uint8array').then(function(arr) {
+              var csvText = new TextDecoder('utf-8').decode(arr);
               processFleetCsv(csvText);
             });
           });
@@ -10405,11 +10413,11 @@
     }
 
     function processFleetCsv(csvText) {
+      // Remove BOM (UTF-8 BOM or UTF-16 BOM)
+      if (csvText.charCodeAt(0) === 0xFEFF || csvText.charCodeAt(0) === 0xFFFE) csvText = csvText.substring(1);
+      if (csvText.charCodeAt(0) === 0xEF && csvText.charCodeAt(1) === 0xBB && csvText.charCodeAt(2) === 0xBF) csvText = csvText.substring(3);
       var lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
       if (lines.length < 2) { alert('データが空です'); return; }
-
-      // Remove BOM
-      if (lines[0].charCodeAt(0) === 0xFEFF) lines[0] = lines[0].substring(1);
 
       var header = parseCSVLine(lines[0]);
       var colDate = -1, colStation = -1, colService = -1, colDuration = -1, colRoutes = -1;
