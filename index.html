@@ -51,6 +51,7 @@
     body.tab-tenko-match { background: linear-gradient(160deg, #f0f9ff 0%, #e0f2fe 45%, #bae6fd 75%, #f0f9ff 100%); }
     body.tab-map-master { background: linear-gradient(160deg, #fff1f2 0%, #ffe4e6 45%, #fecdd3 75%, #fff1f2 100%); }
     body.tab-billing { background: linear-gradient(160deg, #f0fdfa 0%, #ccfbf1 45%, #99f6e4 75%, #f0fdfa 100%); }
+    body.tab-ftds { background: linear-gradient(160deg, #fef2f2 0%, #fecaca 45%, #fca5a5 75%, #fef2f2 100%); }
     body.tab-volume { background: linear-gradient(160deg, #fef9c3 0%, #fde68a 45%, #fbbf24 75%, #fef9c3 100%); }
 
     /* === Body text color === */
@@ -251,6 +252,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS分析</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
       </nav>
 
@@ -1086,6 +1088,96 @@
         </div>
       </div>
 
+      <!-- FTDS分析 Tab -->
+      <div id="panel-ftds" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">📋 FTDS分析（未配分析）</h2>
+            <p class="text-xs text-ink-lighter mt-1">FTDSデータのTransportIDをマスタと突合してドライバー名を特定</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>エクスポート</button>
+          </div>
+        </div>
+
+        <!-- Drop zone -->
+        <div id="ftds-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-accent hover:bg-blue-50 transition mb-4"
+             ondragover="event.preventDefault();this.classList.add('border-accent','bg-blue-50')"
+             ondragleave="this.classList.remove('border-accent','bg-blue-50')"
+             ondrop="event.preventDefault();this.classList.remove('border-accent','bg-blue-50');handleFtdsDrop(event)"
+             onclick="document.getElementById('ftds-file-input').click()">
+          <p class="text-ink-lighter text-sm">FTDSファイル（xlsx）をドラッグ＆ドロップ</p>
+          <p class="text-xs text-ink-lighter mt-1">またはクリックしてファイルを選択</p>
+          <input type="file" id="ftds-file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleFtdsFile(this.files[0])">
+        </div>
+
+        <!-- Summary -->
+        <div id="ftds-summary" class="hidden mb-4">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">総レコード</div>
+              <div class="text-lg font-bold" id="ftds-total">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">特定済み</div>
+              <div class="text-lg font-bold text-emerald-600" id="ftds-matched">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">未特定</div>
+              <div class="text-lg font-bold text-red-600" id="ftds-unmatched">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">特定率</div>
+              <div class="text-lg font-bold" id="ftds-rate">-</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Driver summary -->
+        <div id="ftds-driver-summary" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">ドライバー別集計</h3>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー名</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">件数</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">失敗理由内訳</th>
+                  </tr>
+                </thead>
+                <tbody id="ftds-driver-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail table -->
+        <div id="ftds-detail" class="hidden">
+          <h3 class="text-sm font-medium mb-2">詳細データ</h3>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">日付</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー名</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">サイクル</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ルートコード</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">TrackingID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">郵便番号</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">失敗理由</th>
+                  </tr>
+                </thead>
+                <tbody id="ftds-detail-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 物量管理 Tab -->
       <div id="panel-volume" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -1774,11 +1866,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-volume'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-volume'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','volume':'tab-volume'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','volume':'tab-volume'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'volume'];
+      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'volume'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -9611,6 +9703,201 @@
         }
       };
     })();
+
+    // ===== FTDS分析 =====
+    var ftdsResultData = [];
+
+    function handleFtdsDrop(e) {
+      var files = e.dataTransfer.files;
+      if (files.length > 0) handleFtdsFile(files[0]);
+    }
+
+    function handleFtdsFile(file) {
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, {type: 'array'});
+        // Find sheet with transporter_id column
+        var sheetData = null;
+        for (var si = 0; si < wb.SheetNames.length; si++) {
+          var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], {header: 1, defval: ''});
+          if (rows.length > 0) {
+            var hdr = rows[0];
+            var hasTransporter = false;
+            for (var hi = 0; hi < hdr.length; hi++) {
+              if (String(hdr[hi]).toLowerCase().indexOf('transporter_id') >= 0) { hasTransporter = true; break; }
+            }
+            if (hasTransporter) { sheetData = rows; break; }
+          }
+        }
+        if (!sheetData || sheetData.length < 2) {
+          alert('transporter_id列が見つかりません');
+          return;
+        }
+        processFtdsData(sheetData);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function processFtdsData(rows) {
+      var header = rows[0];
+      // Find column indices
+      var colMap = {};
+      for (var i = 0; i < header.length; i++) {
+        var h = String(header[i]).toLowerCase().trim();
+        if (h === 'transporter_id') colMap.transporterId = i;
+        else if (h === 'event_date') colMap.date = i;
+        else if (h === 'cycle_name') colMap.cycle = i;
+        else if (h === 'route_code') colMap.route = i;
+        else if (h === 'tracking_id') colMap.tracking = i;
+        else if (h === 'shipping_address_postal_code' || h === 'zip') colMap.zip = i;
+        else if (h === 'failure_reason') colMap.reason = i;
+        else if (h === 'week') colMap.week = i;
+      }
+      if (colMap.transporterId === undefined) {
+        alert('transporter_id列が見つかりません');
+        return;
+      }
+
+      // Build reverse lookup: transportID -> driverName
+      var tidToName = {};
+      var keys = Object.keys(transportIDs);
+      for (var k = 0; k < keys.length; k++) {
+        var name = keys[k];
+        var tid = String(transportIDs[name] || '').trim();
+        if (tid) tidToName[tid] = name;
+      }
+
+      // Process rows
+      var results = [];
+      var matched = 0;
+      var unmatched = 0;
+      var driverStats = {};
+
+      for (var r = 1; r < rows.length; r++) {
+        var row = rows[r];
+        var tid = String(row[colMap.transporterId] || '').trim();
+        if (!tid) continue;
+        var driverName = tidToName[tid] || '';
+        var dateVal = colMap.date !== undefined ? String(row[colMap.date] || '') : '';
+        // Format date
+        if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
+        var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : '';
+        var cycle = colMap.cycle !== undefined ? String(row[colMap.cycle] || '') : '';
+        var route = colMap.route !== undefined ? String(row[colMap.route] || '') : '';
+        var tracking = colMap.tracking !== undefined ? String(row[colMap.tracking] || '') : '';
+        var zip = '';
+        if (colMap.zip !== undefined) zip = String(row[colMap.zip] || '');
+
+        var rec = {
+          date: dateVal,
+          driverName: driverName,
+          transporterId: tid,
+          cycle: cycle,
+          route: route,
+          tracking: tracking,
+          zip: zip,
+          reason: reason
+        };
+        results.push(rec);
+
+        if (driverName) {
+          matched++;
+          if (!driverStats[driverName]) driverStats[driverName] = {tid: tid, count: 0, reasons: {}};
+          driverStats[driverName].count++;
+          if (reason) {
+            driverStats[driverName].reasons[reason] = (driverStats[driverName].reasons[reason] || 0) + 1;
+          }
+        } else {
+          unmatched++;
+          var unkKey = '(不明) ' + tid;
+          if (!driverStats[unkKey]) driverStats[unkKey] = {tid: tid, count: 0, reasons: {}};
+          driverStats[unkKey].count++;
+          if (reason) {
+            driverStats[unkKey].reasons[reason] = (driverStats[unkKey].reasons[reason] || 0) + 1;
+          }
+        }
+      }
+
+      ftdsResultData = results;
+
+      // Update summary
+      document.getElementById('ftds-summary').classList.remove('hidden');
+      document.getElementById('ftds-total').textContent = results.length;
+      document.getElementById('ftds-matched').textContent = matched;
+      document.getElementById('ftds-unmatched').textContent = unmatched;
+      var rate = results.length > 0 ? Math.round(matched / results.length * 100) : 0;
+      document.getElementById('ftds-rate').textContent = rate + '%';
+
+      // Driver summary table
+      document.getElementById('ftds-driver-summary').classList.remove('hidden');
+      var driverTbody = document.getElementById('ftds-driver-tbody');
+      var driverKeys = Object.keys(driverStats).sort(function(a, b) {
+        return driverStats[b].count - driverStats[a].count;
+      });
+      var driverHtml = '';
+      for (var d = 0; d < driverKeys.length; d++) {
+        var dk = driverKeys[d];
+        var ds = driverStats[dk];
+        var reasonParts = [];
+        var rKeys = Object.keys(ds.reasons);
+        for (var ri = 0; ri < rKeys.length; ri++) {
+          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+        }
+        var isUnknown = dk.indexOf('(不明)') === 0;
+        driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
+          '<td class="px-3 py-2' + (isUnknown ? ' text-red-600 font-medium' : '') + '">' + dk + '</td>' +
+          '<td class="px-3 py-2 text-xs font-mono">' + ds.tid + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ds.count + '</td>' +
+          '<td class="px-3 py-2 text-xs">' + reasonParts.join(', ') + '</td>' +
+          '</tr>';
+      }
+      driverTbody.innerHTML = driverHtml;
+
+      // Detail table
+      document.getElementById('ftds-detail').classList.remove('hidden');
+      var detailTbody = document.getElementById('ftds-detail-tbody');
+      var detailHtml = '';
+      for (var i = 0; i < results.length; i++) {
+        var rec = results[i];
+        var isUnk = !rec.driverName;
+        detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
+          '<td class="px-2 py-1.5 text-xs">' + rec.date + '</td>' +
+          '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec.cycle + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec.route + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec.zip + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec.reason + '</td>' +
+          '</tr>';
+      }
+      detailTbody.innerHTML = detailHtml;
+
+      // Enable export
+      document.getElementById('ftds-export-btn').disabled = false;
+    }
+
+    function exportFtdsResult() {
+      if (!ftdsResultData.length) return;
+      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'サイクル', 'ルートコード', 'TrackingID', '郵便番号', '失敗理由']];
+      for (var i = 0; i < ftdsResultData.length; i++) {
+        var r = ftdsResultData[i];
+        csvRows.push([r.date, r.driverName || '(未特定)', r.transporterId, r.cycle, r.route, r.tracking, r.zip, r.reason]);
+      }
+      var csv = csvRows.map(function(row) {
+        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+      }).join('\n');
+      var bom = '\uFEFF';
+      var blob = new Blob([bom + csv], {type: 'text/csv;charset=utf-8;'});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'FTDS分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
 
   </script>
 </body>
