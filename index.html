@@ -10452,15 +10452,14 @@
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: show col8 values
-        var col8Vals = {};
-        for (var r = 4; r < Math.min(data.length, 100); r++) {
-          if (data[r] && data[r].length > 8) {
-            var v = String(data[r][8] || '').trim();
-            if (v) col8Vals[v] = (col8Vals[v] || 0) + 1;
-          }
+        // Debug: show ALL columns of first data row to find block column
+        var sampleRow = data[4] || data[5] || [];
+        var headerRow3 = data[3] || [];
+        var debugParts = [];
+        for (var c = 0; c < Math.min(sampleRow.length, 20); c++) {
+          debugParts.push('col' + c + '(' + String(headerRow3[c] || '') + ')=' + String(sampleRow[c] || ''));
         }
-        alert('Block値が見つかりません\ncol8の値: ' + Object.keys(col8Vals).slice(0, 20).join(', ') + '\n行数: ' + data.length);
+        alert('Block値が見つかりません\n行数: ' + data.length + '\n\nヘッダー+データ:\n' + debugParts.join('\n'));
         return;
       }
 
