@@ -208,6 +208,7 @@
       body { background: #fff; color: #1e293b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/gh/gitbrent/PptxGenJS@3.12.0/dist/pptxgen.bundle.js"></script>
 </head>
 <body>
 
@@ -244,6 +245,9 @@
   <a href="#volume-graph" class="sub-link">グラフの見方</a>
 
   <a href="#tips" class="section-link">💡 よくある質問</a>
+  <div style="padding: 20px 24px; margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.06);">
+    <button onclick="exportToPptx()" style="width:100%;padding:10px;background:linear-gradient(135deg,#60a5fa,#34d399);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">📥 PowerPoint出力</button>
+  </div>
 </nav>
 
 <!-- ======== MAIN CONTENT ======== -->
@@ -807,5 +811,217 @@
 </p>
 
 </div>
+
+<script>
+function exportToPptx() {
+  var pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  pptx.defineLayout({name:'WIDE16x9', width:13.33, height:7.5});
+  pptx.layout = 'WIDE16x9';
+
+  var BG = '0F172A';
+  var TITLE_COLOR = '60A5FA';
+  var TEXT_COLOR = 'CBD5E1';
+  var ACCENT = '34D399';
+
+  // --- Title Slide ---
+  var s0 = pptx.addSlide();
+  s0.background = {color: BG};
+  s0.addText('OFK3 配送管理システム', {x: 0.8, y: 2.0, w: 11.7, h: 1.2, fontSize: 40, fontFace: 'Meiryo', bold: true, color: TITLE_COLOR, align: 'center'});
+  s0.addText('管理者向け操作マニュアル', {x: 0.8, y: 3.3, w: 11.7, h: 0.8, fontSize: 24, fontFace: 'Meiryo', color: TEXT_COLOR, align: 'center'});
+  s0.addText('2026年7月版', {x: 0.8, y: 4.3, w: 11.7, h: 0.5, fontSize: 14, fontFace: 'Meiryo', color: '64748B', align: 'center'});
+
+  // --- Slide definitions ---
+  var slides = [
+    {
+      title: '📖 はじめに',
+      bullets: [
+        'アクセスURL: https://ofk3-line-proxy-1.onrender.com/index.html',
+        'PC・タブレット・スマホ対応',
+        '初回アクセス時は30秒〜1分の読み込み（Render無料枠）',
+        '',
+        '【タブ一覧】',
+        '経営ダッシュボード / 本日のダッシュボード / ドライバー管理',
+        'マスタ管理 / コース最適化 / 点呼管理 / 点呼照合',
+        'MAP管理 / 仕分けスキャン / 住所検索 / 請求照合 / 物量管理'
+      ]
+    },
+    {
+      title: '💰 経営ダッシュボード',
+      bullets: [
+        'シフト表（Excel）をドラッグ＆ドロップするだけで自動計算',
+        '',
+        '■ 本日KPIカード：売上・配送費・利益・予算差',
+        '■ 月間見通し：累計売上・配送費・利益・予算消化率',
+        '■ 所属別構成比：GDSダイレクト / 管理パート / 自社以外',
+        '■ コース種別明細：○(11h) / ❽(8h) / bike(10h) / c1(6.5h) / c3(4.5h) / b1,b2(5h)',
+        '■ 日別損益テーブル：予算超過日は赤、クリア日は緑',
+        '',
+        'データはlocalStorageに保存 → ページ更新しても消えない'
+      ]
+    },
+    {
+      title: '📋 本日のダッシュボード',
+      bullets: [
+        '配送データ（CYCLE xlsx）をドロップ → ルート・DA情報を読込',
+        'アサインデータをドロップ → ドライバー割当を読込',
+        '',
+        '■ 配送完了予測の計算式:',
+        '  出発時間 + 積み込み15分 + 往路移動 + 件数÷能力値 + 復路移動',
+        '',
+        '■ LINE一斉送信:',
+        '  アサイン完了後、ドライバー全員＋内勤管理者全員にコース内容＋MAPを一斉送信',
+        '',
+        '■ MAP送信:',
+        '  配送MAPはスマホでスワイプ操作可能（未配達:赤 / 完了:緑 / 現在地:青）'
+      ]
+    },
+    {
+      title: '👷 ドライバー管理 / 🔧 マスタ管理',
+      bullets: [
+        '【ドライバー管理】能力データベース',
+        '  個/時間・配完率・誤配率・稼働日数・総配送数を管理',
+        '  実績データ更新・QR一括印刷',
+        '',
+        '【マスタ管理】基本情報の一括管理',
+        '  名前（日本語）/ ドライバー名 / LINE ID / 電話番号',
+        '  Transport ID / 所属（GDS管理/ダイレクト/JHS/AE物流等）',
+        '',
+        '  LINE Botを友だち追加→Transport ID送信で自動連携',
+        '  緑●＝LINE連携済み、灰色●＝未連携'
+      ]
+    },
+    {
+      title: '🚛 コース最適化',
+      bullets: [
+        '配送データからコース別の荷物数・件数・エリアを分析',
+        'ドライバーの能力（個/h）に基づいた入替提案を自動生成',
+        '各提案には終了予測時間の短縮効果が表示される',
+        '',
+        '「最適化を実行」ボタンで提案一覧を表示'
+      ]
+    },
+    {
+      title: '📱 点呼管理 / ✅ 点呼照合',
+      bullets: [
+        '【2段階QR認証】',
+        '  第1段階：Transport ID紐づきQRコードをカメラで認証',
+        '  第2段階：メンター起動画面をカメラで認証',
+        '  → メンター起動率を向上',
+        '',
+        '【LINEアラート】',
+        '  着車5分前で未完了 → ドライバー本人にLINE自動送信',
+        '  着車時間で未完了 → 管理者にLINE自動送信',
+        '',
+        '【点呼照合】',
+        '  DAシフト表とスケジュールUIを照合 → 請求漏れ・過請求を防止'
+      ]
+    },
+    {
+      title: '🗺️ MAP管理 / 🏷️ 仕分けスキャン',
+      bullets: [
+        '【MAP管理】住所マスタを自動構築',
+        '  配送データ取り込み → 住所を自動抽出・マスタ登録',
+        '  過去に配送したエリアは経度・緯度を1秒足らずで検索可能',
+        '  未取得住所を一括ジオコーディング',
+        '',
+        '【仕分けスキャン】スキャン1回で即コース表示',
+        '  従来：Excel→Ctrl+F→スキャン→目視確認（4工程）',
+        '  OFK3：スキャンのみ（1工程）→ 圧倒的な時間短縮',
+        '  音声読み上げで手元を見ずに判定可能'
+      ]
+    },
+    {
+      title: '🔍 住所検索 / 💳 請求照合',
+      bullets: [
+        '【住所検索】',
+        '  DA番号または住所から配送先を検索',
+        '  地図プレビュー・住所コピー・LINE送信の3アクション',
+        '',
+        '【請求照合】',
+        '  請求Excel読込 → 対象者数・合計金額・LINE送信可能数を表示',
+        '  稼働日数・チャーター料金・走行距離連動・控除・税別・消費税・合計を一覧',
+        '  請求書PDFをドラッグ＆ドロップで自動照合（ファイル名【ドライバー名DA】）',
+        '  LINE一斉送信で請求金額通知＋PDF添付'
+      ]
+    },
+    {
+      title: '📊 物量管理',
+      bullets: [
+        'サイクルデータ（xlsx / ZIP）をドラッグ＆ドロップで読込',
+        '',
+        '■ 蓄積モード：複数回ドロップでデータ追加、同日は自動上書き',
+        '■ ZIP対応：ZIP内のxlsxを自動展開（一時ファイル自動除外）',
+        '',
+        '■ 折れ線グラフ：',
+        '  個口数(黄) / 件数(シアン) / コース数(緑) / 全台数(ピンク)',
+        '',
+        '■ GAS連携：',
+        '  Google Apps Script経由でスプレッドシートと双方向マージ'
+      ]
+    },
+    {
+      title: '💡 よくある質問',
+      bullets: [
+        'Q. ページ更新でデータは消える？',
+        '  → 経営DBのシフトデータはlocalStorageで保持。配送データは都度読込',
+        '',
+        'Q. 初回アクセスが遅い',
+        '  → Render無料枠のスリープ。初回30秒〜1分、以降は通常速度',
+        '',
+        'Q. ドライバーにLINEが届かない',
+        '  → Bot友だち追加・マスタのLINE ID・API月間上限を確認',
+        '',
+        'Q. シフト表が読み込めない',
+        '  → .xlsx形式・シート名「メイン」・日付行（1〜31）を確認',
+        '',
+        'Q. 別のPC/スマホからアクセスできる？',
+        '  → URL共有でどの端末からでもOK。localStorageは端末ごと独立'
+      ]
+    }
+  ];
+
+  for (var i = 0; i < slides.length; i++) {
+    var sd = slides[i];
+    var sl = pptx.addSlide();
+    sl.background = {color: BG};
+
+    // Title
+    sl.addText(sd.title, {x: 0.6, y: 0.3, w: 12, h: 0.7, fontSize: 28, fontFace: 'Meiryo', bold: true, color: TITLE_COLOR});
+
+    // Title underline
+    sl.addShape(pptx.ShapeType.rect, {x: 0.6, y: 1.05, w: 5, h: 0.04, fill: {color: TITLE_COLOR}});
+
+    // Bullets
+    var bulletObjs = [];
+    for (var b = 0; b < sd.bullets.length; b++) {
+      var line = sd.bullets[b];
+      var isHeader = line.indexOf('■') === 0 || line.indexOf('【') === 0;
+      var isIndent = line.indexOf('  ') === 0;
+      var isEmpty = line === '';
+      bulletObjs.push({
+        text: line,
+        options: {
+          fontSize: isEmpty ? 8 : (isHeader ? 15 : 13),
+          fontFace: 'Meiryo',
+          color: isHeader ? ACCENT : TEXT_COLOR,
+          bold: isHeader,
+          indentLevel: isIndent ? 1 : 0,
+          bullet: (!isEmpty && !isIndent && !isHeader) ? {type: 'bullet', color: TITLE_COLOR} : false,
+          breakType: isEmpty ? 'none' : undefined,
+          paraSpaceAfter: isEmpty ? 4 : 3
+        }
+      });
+    }
+    sl.addText(bulletObjs, {x: 0.8, y: 1.3, w: 11.5, h: 5.8, valign: 'top'});
+
+    // Page number
+    sl.addText((i + 2) + ' / ' + (slides.length + 1), {x: 11, y: 7.0, w: 2, h: 0.4, fontSize: 10, fontFace: 'Meiryo', color: '64748B', align: 'right'});
+  }
+
+  pptx.writeFile({fileName: 'OFK3_操作マニュアル.pptx'});
+}
+</script>
+
 </body>
 </html>
