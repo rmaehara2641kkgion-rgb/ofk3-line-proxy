@@ -10389,7 +10389,7 @@
       var reader = new FileReader();
       reader.onload = function(e) {
         try {
-          var wb = XLSX.read(new Uint8Array(e.target.result), {type: 'array'});
+          var wb = XLSX.read(new Uint8Array(e.target.result), {type: 'array', bookVBA: true, cellStyles: false, cellFormula: false});
           processInputFile(wb, file.name);
         } catch(err) {
           alert('ファイル読み込みエラー: ' + err.message);
@@ -10399,16 +10399,38 @@
     }
 
     function processInputFile(wb, fileName) {
-      // Try all sheets, find one with OFK3 data or use first
+      // Try all sheets - find one with data (skip empty sheets)
       var ws = null;
       var sheetName = '';
-      for (var i = 0; i < wb.SheetNames.length; i++) {
-        if (wb.SheetNames[i].indexOf('OFK3') >= 0) { ws = wb.Sheets[wb.SheetNames[i]]; sheetName = wb.SheetNames[i]; break; }
-      }
-      if (!ws) { ws = wb.Sheets[wb.SheetNames[0]]; sheetName = wb.SheetNames[0]; }
+      var data = [];
 
-      var data = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
-      if (data.length < 2) { alert('データが空です（シート: ' + sheetName + '）'); return; }
+      // Priority 1: sheet with OFK3 in name
+      for (var i = 0; i < wb.SheetNames.length; i++) {
+        if (wb.SheetNames[i].indexOf('OFK3') >= 0) {
+          var tmpWs = wb.Sheets[wb.SheetNames[i]];
+          var tmpData = XLSX.utils.sheet_to_json(tmpWs, {header: 1, defval: ''});
+          if (tmpData.length >= 2) { ws = tmpWs; sheetName = wb.SheetNames[i]; data = tmpData; break; }
+        }
+      }
+      // Priority 2: first sheet with data
+      if (!ws) {
+        for (var i = 0; i < wb.SheetNames.length; i++) {
+          var tmpWs = wb.Sheets[wb.SheetNames[i]];
+          var tmpData = XLSX.utils.sheet_to_json(tmpWs, {header: 1, defval: ''});
+          if (tmpData.length >= 2) { ws = tmpWs; sheetName = wb.SheetNames[i]; data = tmpData; break; }
+        }
+      }
+
+      if (!ws || data.length < 2) {
+        var sheetInfo = '';
+        for (var s = 0; s < wb.SheetNames.length; s++) {
+          var tmpWs = wb.Sheets[wb.SheetNames[s]];
+          var tmpRef = tmpWs ? (tmpWs['!ref'] || 'ref無し') : 'null';
+          sheetInfo += wb.SheetNames[s] + ': range=' + tmpRef + '\n';
+        }
+        alert('全シートが空です\n\n' + sheetInfo);
+        return;
+      }
 
       // Scan all cells for block patterns (8B, 6B30S, etc.)
       // InputFile structure: each row filtered by OFK3 has a block value like "8B", "6B30S"
