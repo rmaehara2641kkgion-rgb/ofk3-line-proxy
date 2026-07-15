@@ -10432,16 +10432,49 @@
         return;
       }
 
-      // Scan all cells for block patterns (8B, 6B30S, etc.)
-      // InputFile structure: each row filtered by OFK3 has a block value like "8B", "6B30S"
-      var blockCounts = {}; // hours -> count
-      var blockPattern = /^(\d+B\d*S?)$/i;
-      var foundBlocks = [];
-
-      for (var r = 0; r < data.length; r++) {
+      // Find header row and station column for OFK3 filtering
+      var headerRow = -1;
+      var colStation = -1;
+      var colBlock = -1;
+      for (var r = 0; r < Math.min(data.length, 20); r++) {
         var row = data[r];
         if (!row) continue;
         for (var c = 0; c < row.length; c++) {
+          var v = String(row[c]).trim().toLowerCase();
+          if (v.indexOf('station') >= 0 || v.indexOf('ステーション') >= 0 || v === 'ds_name' || v === 'delivery_station') {
+            headerRow = r; colStation = c;
+          }
+          if (v === 'block' || v === 'block_code' || v === 'block_id' || v === 'route_block' || v.indexOf('ブロック') >= 0) {
+            colBlock = c;
+          }
+        }
+        if (headerRow >= 0) break;
+      }
+
+      // Scan for block patterns, filtering by OFK3 if station column found
+      var blockCounts = {}; // hours -> count
+      var blockPattern = /^(\d+B\d*S?)$/i;
+      var foundBlocks = [];
+      var startRow = headerRow >= 0 ? headerRow + 1 : 0;
+
+      for (var r = startRow; r < data.length; r++) {
+        var row = data[r];
+        if (!row) continue;
+
+        // OFK3 filter: if station column found, check if row contains OFK3
+        if (colStation >= 0) {
+          var stationVal = String(row[colStation]).trim();
+          if (stationVal.indexOf('OFK3') < 0) continue;
+        }
+
+        // If block column identified, only check that column
+        var searchCols = colBlock >= 0 ? [colBlock] : [];
+        if (searchCols.length === 0) {
+          for (var c = 0; c < row.length; c++) searchCols.push(c);
+        }
+
+        for (var ci = 0; ci < searchCols.length; ci++) {
+          var c = searchCols[ci];
           var v = String(row[c]).trim();
           if (blockPattern.test(v)) {
             var h = blockToHours(v);
@@ -10454,12 +10487,12 @@
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: show first rows
-        var debugRows = [];
+        // Debug: show header and first data rows
+        var debugRows = ['ヘッダー行: ' + (headerRow >= 0 ? headerRow : '未検出') + ' / Station列: ' + (colStation >= 0 ? colStation : '未検出')];
         for (var r = 0; r < Math.min(data.length, 8); r++) {
-          debugRows.push('Row' + r + ': ' + (data[r] ? data[r].slice(0, 12).join(' | ') : '(empty)'));
+          debugRows.push('Row' + r + ': ' + (data[r] ? data[r].slice(0, 15).join(' | ') : '(empty)'));
         }
-        alert('ブロック値（8B, 6B30S等）が見つかりません\nシート: ' + sheetName + '\nシート一覧: ' + wb.SheetNames.join(', ') + '\n\n' + debugRows.join('\n'));
+        alert('OFK3のブロック値が見つかりません\nシート: ' + sheetName + '\n\n' + debugRows.join('\n'));
         return;
       }
 
