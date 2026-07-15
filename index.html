@@ -10432,7 +10432,8 @@
         return;
       }
 
-      // Simple: C列(col2)=Node にOFK3が含まれる行の Block列(col8) を取得
+      // InputFileはファイル全体がOFK3対象（ファイル名にOFK3含む）
+      // Row3=ヘッダー、Row4以降=データ、col8=Block
       var blockCounts = {}; // hours -> count
       var blockPattern = /^(\d+B\d*S?)$/i;
       var foundBlocks = [];
@@ -10440,8 +10441,6 @@
       for (var r = 4; r < data.length; r++) {
         var row = data[r];
         if (!row || row.length < 9) continue;
-        var node = String(row[2]).trim().toUpperCase();
-        if (node.indexOf('OFK3') < 0) continue;
         var block = String(row[8]).trim();
         if (blockPattern.test(block)) {
           var h = blockToHours(block);
@@ -10453,29 +10452,15 @@
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: show sample of C列 and col8
-        var debugLines = [];
-        var ofk3Count = 0;
-        for (var r = 4; r < Math.min(data.length, 50); r++) {
-          var row = data[r];
-          if (!row) continue;
-          var node = String(row[2] || '').trim();
-          var blk = String(row[8] || '').trim();
-          if (node.toUpperCase().indexOf('OFK3') >= 0) {
-            ofk3Count++;
-            if (debugLines.length < 5) debugLines.push('Row' + r + ': C=' + node + ' / Block=' + blk);
+        // Debug: show col8 values
+        var col8Vals = {};
+        for (var r = 4; r < Math.min(data.length, 100); r++) {
+          if (data[r] && data[r].length > 8) {
+            var v = String(data[r][8] || '').trim();
+            if (v) col8Vals[v] = (col8Vals[v] || 0) + 1;
           }
         }
-        if (ofk3Count === 0) {
-          // Show unique C column values
-          var cVals = {};
-          for (var r = 4; r < Math.min(data.length, 100); r++) {
-            if (data[r]) cVals[String(data[r][2] || '').trim()] = true;
-          }
-          alert('C列にOFK3が見つかりません\nC列の値: ' + Object.keys(cVals).slice(0, 20).join(', '));
-        } else {
-          alert('OFK3行 ' + ofk3Count + '件あるがBlock値が不正\n\n' + debugLines.join('\n'));
-        }
+        alert('Block値が見つかりません\ncol8の値: ' + Object.keys(col8Vals).slice(0, 20).join(', ') + '\n行数: ' + data.length);
         return;
       }
 
