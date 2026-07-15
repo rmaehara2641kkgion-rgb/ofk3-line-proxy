@@ -52,6 +52,7 @@
     body.tab-map-master { background: linear-gradient(160deg, #fff1f2 0%, #ffe4e6 45%, #fecdd3 75%, #fff1f2 100%); }
     body.tab-billing { background: linear-gradient(160deg, #f0fdfa 0%, #ccfbf1 45%, #99f6e4 75%, #f0fdfa 100%); }
     body.tab-ftds { background: linear-gradient(160deg, #fef2f2 0%, #fecaca 45%, #fca5a5 75%, #fef2f2 100%); }
+    body.tab-fleet { background: linear-gradient(160deg, #fff7ed 0%, #fed7aa 45%, #fdba74 75%, #fff7ed 100%); }
     body.tab-volume { background: linear-gradient(160deg, #fef9c3 0%, #fde68a 45%, #fbbf24 75%, #fef9c3 100%); }
 
     /* === Body text color === */
@@ -253,6 +254,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC分析</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
       </nav>
 
@@ -1266,6 +1268,74 @@
         </div>
       </div>
 
+      <!-- 台数照合 Tab -->
+      <div id="panel-fleet" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">🔔 台数照合（自社 vs Amazon）</h2>
+            <p class="text-xs text-ink-lighter mt-1">OFK3正常台数とGDS Weekly Reportの完了ルート数を照合。差異があればアラート表示。</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFleetResult()" id="fleet-export-btn" disabled>エクスポート</button>
+          </div>
+        </div>
+
+        <!-- 正常台数マスタ -->
+        <div class="card p-4 mb-4">
+          <h3 class="text-sm font-medium mb-2">📋 OFK3 正常台数マスタ</h3>
+          <p class="text-xs text-ink-lighter mb-3">自社が把握している正常台数。編集するとlocalStorageに保存されます。</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm" id="fleet-master-table">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">サービスタイプ</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">計画時間</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Block</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">正常台数</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">操作</th>
+                </tr>
+              </thead>
+              <tbody id="fleet-master-tbody"></tbody>
+            </table>
+          </div>
+          <button class="mt-3 text-xs px-3 py-1.5 bg-accent text-white rounded" onclick="addFleetMasterRow()">＋ 行追加</button>
+        </div>
+
+        <!-- Drop zone -->
+        <div id="fleet-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-accent hover:bg-blue-50 transition mb-4"
+             ondragover="event.preventDefault();this.classList.add('border-accent','bg-blue-50')"
+             ondragleave="this.classList.remove('border-accent','bg-blue-50')"
+             ondrop="event.preventDefault();this.classList.remove('border-accent','bg-blue-50');handleFleetDrop(event)"
+             onclick="document.getElementById('fleet-file-input').click()">
+          <p class="text-ink-lighter text-sm font-medium">GDS Weekly Report（ZIP / CSV）をドラッグ＆ドロップ</p>
+          <p class="text-xs text-ink-lighter mt-1">ZIPの場合は中のCSVを自動展開</p>
+          <input type="file" id="fleet-file-input" accept=".zip,.csv" class="hidden" onchange="handleFleetFile(this.files[0])" multiple>
+        </div>
+
+        <!-- Alert results -->
+        <div id="fleet-alert" class="hidden mb-4">
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">照合日数</div>
+              <div class="text-lg font-bold" id="fleet-days">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">一致</div>
+              <div class="text-lg font-bold text-emerald-600" id="fleet-ok">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">差異あり 🚨</div>
+              <div class="text-lg font-bold text-red-600" id="fleet-ng">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail per date -->
+        <div id="fleet-detail" class="hidden">
+          <div id="fleet-detail-container"></div>
+        </div>
+      </div>
+
       <!-- 物量管理 Tab -->
       <div id="panel-volume" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -1954,11 +2024,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-volume'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','volume':'tab-volume'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'volume'];
+      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -10184,6 +10254,314 @@
       var a = document.createElement('a');
       a.href = url;
       a.download = 'ContactCompliance分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ===== 台数照合 =====
+    var FLEET_MASTER_KEY = 'fleetMasterData';
+    var fleetCompareResults = [];
+
+    // Default master data based on user input
+    var defaultFleetMaster = [
+      {service: 'Standard Parcel', duration: '8時間', block: '8B', count: 12},
+      {service: 'Standard Parcel', duration: '6時間30分', block: '6B30S', count: 16},
+      {service: 'Standard Parcel', duration: '4時間30分', block: '4B30S', count: 16},
+      {service: 'Biker (Rear Cargo - Large)', duration: '3時間', block: '3B', count: 4},
+      {service: 'Biker (Rear Cargo - Large)', duration: '2時間', block: '2B', count: 4},
+      {service: 'Biker (Rear Cargo - Large)', duration: '2時間', block: '2B(C2)', count: 4}
+    ];
+
+    function getFleetMaster() {
+      var saved = localStorage.getItem(FLEET_MASTER_KEY);
+      if (saved) {
+        try { return JSON.parse(saved); } catch(e) {}
+      }
+      return defaultFleetMaster.slice();
+    }
+
+    function saveFleetMaster() {
+      var tbody = document.getElementById('fleet-master-tbody');
+      var rows = tbody.querySelectorAll('tr');
+      var data = [];
+      for (var i = 0; i < rows.length; i++) {
+        var inputs = rows[i].querySelectorAll('input, select');
+        data.push({
+          service: inputs[0].value,
+          duration: inputs[1].value,
+          block: inputs[2].value,
+          count: parseInt(inputs[3].value) || 0
+        });
+      }
+      localStorage.setItem(FLEET_MASTER_KEY, JSON.stringify(data));
+    }
+
+    function renderFleetMaster() {
+      var master = getFleetMaster();
+      var tbody = document.getElementById('fleet-master-tbody');
+      var html = '';
+      for (var i = 0; i < master.length; i++) {
+        var m = master[i];
+        html += '<tr class="border-b border-border">' +
+          '<td class="px-2 py-1"><select class="w-full border border-border rounded px-2 py-1 text-xs" onchange="saveFleetMaster()">' +
+            '<option' + (m.service === 'Standard Parcel' ? ' selected' : '') + '>Standard Parcel</option>' +
+            '<option' + (m.service === 'Biker (Rear Cargo - Large)' ? ' selected' : '') + '>Biker (Rear Cargo - Large)</option>' +
+            '<option' + (m.service === 'Nursery Route Level 1' ? ' selected' : '') + '>Nursery Route Level 1</option>' +
+            '<option' + (m.service === 'Nursery Route Level 2' ? ' selected' : '') + '>Nursery Route Level 2</option>' +
+            '<option' + (m.service === 'Nursery Route Level 3' ? ' selected' : '') + '>Nursery Route Level 3</option>' +
+            '<option' + (m.service === 'Secure Parcel' ? ' selected' : '') + '>Secure Parcel</option>' +
+          '</select></td>' +
+          '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="' + m.duration + '" onchange="saveFleetMaster()"></td>' +
+          '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="' + m.block + '" onchange="saveFleetMaster()"></td>' +
+          '<td class="px-2 py-1 text-center"><input type="number" class="w-16 border border-border rounded px-2 py-1 text-xs text-center" value="' + m.count + '" min="0" onchange="saveFleetMaster()"></td>' +
+          '<td class="px-2 py-1 text-center"><button class="text-red-500 text-xs" onclick="this.closest(\'tr\').remove();saveFleetMaster()">削除</button></td>' +
+          '</tr>';
+      }
+      tbody.innerHTML = html;
+    }
+
+    function addFleetMasterRow() {
+      var tbody = document.getElementById('fleet-master-tbody');
+      var tr = document.createElement('tr');
+      tr.className = 'border-b border-border';
+      tr.innerHTML = '<td class="px-2 py-1"><select class="w-full border border-border rounded px-2 py-1 text-xs" onchange="saveFleetMaster()">' +
+        '<option>Standard Parcel</option><option>Biker (Rear Cargo - Large)</option><option>Nursery Route Level 1</option><option>Nursery Route Level 2</option><option>Nursery Route Level 3</option><option>Secure Parcel</option></select></td>' +
+        '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="" onchange="saveFleetMaster()"></td>' +
+        '<td class="px-2 py-1"><input type="text" class="w-full border border-border rounded px-2 py-1 text-xs" value="" onchange="saveFleetMaster()"></td>' +
+        '<td class="px-2 py-1 text-center"><input type="number" class="w-16 border border-border rounded px-2 py-1 text-xs text-center" value="0" min="0" onchange="saveFleetMaster()"></td>' +
+        '<td class="px-2 py-1 text-center"><button class="text-red-500 text-xs" onclick="this.closest(\'tr\').remove();saveFleetMaster()">削除</button></td>';
+      tbody.appendChild(tr);
+      saveFleetMaster();
+    }
+
+    // Initialize master table on load
+    (function() {
+      if (document.getElementById('fleet-master-tbody')) renderFleetMaster();
+      else document.addEventListener('DOMContentLoaded', renderFleetMaster);
+    })();
+
+    function handleFleetDrop(e) {
+      var files = e.dataTransfer.files;
+      for (var i = 0; i < files.length; i++) {
+        handleFleetFile(files[i]);
+      }
+    }
+
+    function handleFleetFile(file) {
+      if (!file) return;
+      var name = file.name.toLowerCase();
+      if (name.indexOf('.zip') >= 0) {
+        // Extract ZIP and find CSV
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          JSZip.loadAsync(e.target.result).then(function(zip) {
+            var csvFiles = [];
+            zip.forEach(function(path, entry) {
+              if (path.toLowerCase().indexOf('weekly report') >= 0 && path.toLowerCase().indexOf('.csv') >= 0) {
+                csvFiles.push(entry);
+              }
+            });
+            if (csvFiles.length === 0) {
+              // Try any CSV
+              zip.forEach(function(path, entry) {
+                if (path.toLowerCase().indexOf('.csv') >= 0) csvFiles.push(entry);
+              });
+            }
+            if (csvFiles.length === 0) { alert('ZIP内にCSVが見つかりません'); return; }
+            csvFiles[0].async('string').then(function(csvText) {
+              processFleetCsv(csvText);
+            });
+          });
+        };
+        reader.readAsArrayBuffer(file);
+      } else if (name.indexOf('.csv') >= 0) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          processFleetCsv(e.target.result);
+        };
+        reader.readAsText(file, 'UTF-8');
+      }
+    }
+
+    function parseCSVLine(line) {
+      var result = [];
+      var current = '';
+      var inQuotes = false;
+      for (var i = 0; i < line.length; i++) {
+        var ch = line.charAt(i);
+        if (inQuotes) {
+          if (ch === '"') {
+            if (i + 1 < line.length && line.charAt(i + 1) === '"') { current += '"'; i++; }
+            else { inQuotes = false; }
+          } else { current += ch; }
+        } else {
+          if (ch === '"') { inQuotes = true; }
+          else if (ch === ',') { result.push(current); current = ''; }
+          else { current += ch; }
+        }
+      }
+      result.push(current);
+      return result;
+    }
+
+    function processFleetCsv(csvText) {
+      var lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      if (lines.length < 2) { alert('データが空です'); return; }
+
+      // Remove BOM
+      if (lines[0].charCodeAt(0) === 0xFEFF) lines[0] = lines[0].substring(1);
+
+      var header = parseCSVLine(lines[0]);
+      var colDate = -1, colStation = -1, colService = -1, colDuration = -1, colRoutes = -1;
+      for (var h = 0; h < header.length; h++) {
+        var hv = header[h].trim();
+        if (hv === '日付') colDate = h;
+        else if (hv.indexOf('ステーション') >= 0) colStation = h;
+        else if (hv.indexOf('サービスタイプ') >= 0) colService = h;
+        else if (hv.indexOf('計画された時間') >= 0) colDuration = h;
+        else if (hv.indexOf('完了したルート') >= 0) colRoutes = h;
+      }
+
+      if (colDate < 0 || colService < 0 || colDuration < 0 || colRoutes < 0) {
+        alert('GDS Weekly Reportの形式ではありません（日付・サービスタイプ・計画された時間・完了したルート列が必要）');
+        return;
+      }
+
+      // Parse data grouped by date
+      var dateMap = {}; // date -> { 'service|duration': routeCount }
+      for (var i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        var cols = parseCSVLine(lines[i]);
+        var station = colStation >= 0 ? cols[colStation] : '';
+        // Filter OFK3 only
+        if (station.indexOf('OFK3') < 0) continue;
+        var date = cols[colDate];
+        var service = cols[colService];
+        var duration = cols[colDuration];
+        var routes = parseInt(cols[colRoutes]) || 0;
+        var key = service + '|' + duration;
+        if (!dateMap[date]) dateMap[date] = {};
+        dateMap[date][key] = (dateMap[date][key] || 0) + routes;
+      }
+
+      // Compare with master
+      var master = getFleetMaster();
+      var masterLookup = {};
+      var totalMasterCount = 0;
+      for (var m = 0; m < master.length; m++) {
+        var mk = master[m].service + '|' + master[m].duration;
+        masterLookup[mk] = (masterLookup[mk] || 0) + master[m].count;
+        totalMasterCount += master[m].count;
+      }
+
+      var dates = Object.keys(dateMap).sort();
+      var okCount = 0;
+      var ngCount = 0;
+      var results = [];
+
+      for (var d = 0; d < dates.length; d++) {
+        var dt = dates[d];
+        var actual = dateMap[dt];
+        var allKeys = {};
+        var mKeys = Object.keys(masterLookup);
+        for (var k = 0; k < mKeys.length; k++) allKeys[mKeys[k]] = true;
+        var aKeys = Object.keys(actual);
+        for (var k = 0; k < aKeys.length; k++) allKeys[aKeys[k]] = true;
+
+        var dayRows = [];
+        var dayHasAlert = false;
+        var sortedKeys = Object.keys(allKeys).sort();
+        for (var ki = 0; ki < sortedKeys.length; ki++) {
+          var key = sortedKeys[ki];
+          var parts = key.split('|');
+          var expected = masterLookup[key] || 0;
+          var got = actual[key] || 0;
+          var diff = got - expected;
+          if (diff !== 0) dayHasAlert = true;
+          dayRows.push({
+            service: parts[0],
+            duration: parts[1],
+            expected: expected,
+            actual: got,
+            diff: diff
+          });
+        }
+
+        if (dayHasAlert) ngCount++;
+        else okCount++;
+
+        results.push({date: dt, rows: dayRows, hasAlert: dayHasAlert});
+      }
+
+      fleetCompareResults = results;
+
+      // Update summary
+      document.getElementById('fleet-alert').classList.remove('hidden');
+      document.getElementById('fleet-days').textContent = dates.length;
+      document.getElementById('fleet-ok').textContent = okCount;
+      document.getElementById('fleet-ng').textContent = ngCount;
+
+      // Render detail per date
+      document.getElementById('fleet-detail').classList.remove('hidden');
+      var container = document.getElementById('fleet-detail-container');
+      var html = '';
+      for (var d = 0; d < results.length; d++) {
+        var res = results[d];
+        var alertClass = res.hasAlert ? 'border-red-400 bg-red-50' : 'border-emerald-400 bg-emerald-50';
+        var alertIcon = res.hasAlert ? '🚨' : '✅';
+        html += '<div class="card mb-4 border-2 ' + alertClass + '">';
+        html += '<div class="px-4 py-2 font-bold text-sm">' + alertIcon + ' ' + res.date;
+        if (res.hasAlert) html += ' <span class="text-red-600 font-bold">— 差異あり</span>';
+        else html += ' <span class="text-emerald-600">— 一致</span>';
+        html += '</div>';
+        html += '<table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+          '<th class="px-3 py-1.5 text-left text-xs">サービスタイプ</th>' +
+          '<th class="px-3 py-1.5 text-left text-xs">計画時間</th>' +
+          '<th class="px-3 py-1.5 text-center text-xs">正常台数</th>' +
+          '<th class="px-3 py-1.5 text-center text-xs">Amazon台数</th>' +
+          '<th class="px-3 py-1.5 text-center text-xs">差異</th>' +
+          '</tr></thead><tbody>';
+        for (var r = 0; r < res.rows.length; r++) {
+          var row = res.rows[r];
+          var diffClass = '';
+          var diffText = '';
+          if (row.diff > 0) { diffClass = 'text-blue-600 font-bold'; diffText = '+' + row.diff; }
+          else if (row.diff < 0) { diffClass = 'text-red-600 font-bold'; diffText = String(row.diff); }
+          else { diffText = '0'; }
+          var rowBg = row.diff !== 0 ? ' bg-yellow-50' : '';
+          html += '<tr class="border-b border-border' + rowBg + '">' +
+            '<td class="px-3 py-1.5 text-xs">' + row.service + '</td>' +
+            '<td class="px-3 py-1.5 text-xs">' + row.duration + '</td>' +
+            '<td class="px-3 py-1.5 text-center text-xs">' + row.expected + '</td>' +
+            '<td class="px-3 py-1.5 text-center text-xs font-bold">' + row.actual + '</td>' +
+            '<td class="px-3 py-1.5 text-center text-xs ' + diffClass + '">' + diffText + '</td>' +
+            '</tr>';
+        }
+        html += '</tbody></table></div>';
+      }
+      container.innerHTML = html;
+      document.getElementById('fleet-export-btn').disabled = false;
+    }
+
+    function exportFleetResult() {
+      if (!fleetCompareResults.length) return;
+      var csvRows = [['日付', 'サービスタイプ', '計画時間', '正常台数', 'Amazon台数', '差異']];
+      for (var d = 0; d < fleetCompareResults.length; d++) {
+        var res = fleetCompareResults[d];
+        for (var r = 0; r < res.rows.length; r++) {
+          var row = res.rows[r];
+          csvRows.push([res.date, row.service, row.duration, row.expected, row.actual, row.diff]);
+        }
+      }
+      var csv = csvRows.map(function(row) {
+        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+      }).join('\n');
+      var bom = '\uFEFF';
+      var blob = new Blob([bom + csv], {type: 'text/csv;charset=utf-8;'});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = '台数照合_' + new Date().toISOString().split('T')[0] + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
