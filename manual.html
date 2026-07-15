@@ -813,210 +813,463 @@
 </div>
 
 <script>
+function loadImageAsBase64(src) {
+  return new Promise(function(resolve) {
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function() {
+      var c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      resolve(c.toDataURL('image/png'));
+    };
+    img.onerror = function() { resolve(null); };
+    img.src = src;
+  });
+}
+
 function exportToPptx() {
+  var btn = document.querySelector('[onclick="exportToPptx()"]');
+  btn.textContent = '⏳ 画像読み込み中...';
+  btn.disabled = true;
+
+  // All images needed
+  var imgSources = {
+    'exec': 'manual-img/exec-dashboard.png',
+    'dashboard': 'manual-img/dashboard.png',
+    'map-modal': 'manual-img/map-modal.png',
+    'map': 'manual-img/map.png',
+    'line-message': 'manual-img/line-message.png',
+    'drivers': 'manual-img/drivers.png',
+    'master': 'manual-img/master.png',
+    'optimization': 'manual-img/optimization.png',
+    'qr-sample': 'manual-img/qr-sample.png',
+    'mentor': 'manual-img/mentor.png',
+    'tenko-alert': 'manual-img/tenko-alert.png',
+    'tenko': 'manual-img/tenko.png',
+    'map-master': 'manual-img/map-master.png',
+    'scan': 'manual-img/scan.png',
+    'addr-search': 'manual-img/addr-search.png',
+    'line-send': 'manual-img/line-send.png',
+    'billing': 'manual-img/billing.png',
+    'billing-preview': 'manual-img/billing-preview.png',
+    'volume-table': 'manual-img/volume-table.png',
+    'volume-graph': 'manual-img/volume-graph.png'
+  };
+
+  var keys = Object.keys(imgSources);
+  var promises = [];
+  for (var i = 0; i < keys.length; i++) {
+    promises.push(loadImageAsBase64(imgSources[keys[i]]));
+  }
+
+  Promise.all(promises).then(function(results) {
+    var imgs = {};
+    for (var i = 0; i < keys.length; i++) {
+      imgs[keys[i]] = results[i];
+    }
+    buildPptx(imgs);
+    btn.textContent = '📥 PowerPoint出力';
+    btn.disabled = false;
+  });
+}
+
+function addBullets(sl, items, x, y, w, h) {
+  var BG = '0F172A'; var TITLE_COLOR = '60A5FA'; var TEXT_COLOR = 'CBD5E1'; var ACCENT = '34D399';
+  var bulletObjs = [];
+  for (var b = 0; b < items.length; b++) {
+    var line = items[b];
+    var isHeader = line.indexOf('■') === 0 || line.indexOf('【') === 0;
+    var isIndent = line.indexOf('  ') === 0;
+    var isEmpty = line === '';
+    bulletObjs.push({
+      text: line,
+      options: {
+        fontSize: isEmpty ? 6 : (isHeader ? 13 : 11),
+        fontFace: 'Meiryo',
+        color: isHeader ? ACCENT : TEXT_COLOR,
+        bold: isHeader,
+        indentLevel: isIndent ? 1 : 0,
+        bullet: (!isEmpty && !isIndent && !isHeader) ? {type: 'bullet', color: TITLE_COLOR} : false,
+        paraSpaceAfter: isEmpty ? 2 : 2
+      }
+    });
+  }
+  sl.addText(bulletObjs, {x: x, y: y, w: w, h: h, valign: 'top'});
+}
+
+function buildPptx(imgs) {
   var pptx = new PptxGenJS();
-  pptx.layout = 'LAYOUT_WIDE';
   pptx.defineLayout({name:'WIDE16x9', width:13.33, height:7.5});
   pptx.layout = 'WIDE16x9';
 
   var BG = '0F172A';
-  var TITLE_COLOR = '60A5FA';
-  var TEXT_COLOR = 'CBD5E1';
-  var ACCENT = '34D399';
+  var TC = '60A5FA';
+  var TX = 'CBD5E1';
+  var AC = '34D399';
+  var DIM = '64748B';
+  var totalSlides = 0;
+  var allSlides = [];
 
-  // --- Title Slide ---
-  var s0 = pptx.addSlide();
-  s0.background = {color: BG};
-  s0.addText('OFK3 配送管理システム', {x: 0.8, y: 2.0, w: 11.7, h: 1.2, fontSize: 40, fontFace: 'Meiryo', bold: true, color: TITLE_COLOR, align: 'center'});
-  s0.addText('管理者向け操作マニュアル', {x: 0.8, y: 3.3, w: 11.7, h: 0.8, fontSize: 24, fontFace: 'Meiryo', color: TEXT_COLOR, align: 'center'});
-  s0.addText('2026年7月版', {x: 0.8, y: 4.3, w: 11.7, h: 0.5, fontSize: 14, fontFace: 'Meiryo', color: '64748B', align: 'center'});
-
-  // --- Slide definitions ---
-  var slides = [
-    {
-      title: '📖 はじめに',
-      bullets: [
-        'アクセスURL: https://ofk3-line-proxy-1.onrender.com/index.html',
-        'PC・タブレット・スマホ対応',
-        '初回アクセス時は30秒〜1分の読み込み（Render無料枠）',
-        '',
-        '【タブ一覧】',
-        '経営ダッシュボード / 本日のダッシュボード / ドライバー管理',
-        'マスタ管理 / コース最適化 / 点呼管理 / 点呼照合',
-        'MAP管理 / 仕分けスキャン / 住所検索 / 請求照合 / 物量管理'
-      ]
-    },
-    {
-      title: '💰 経営ダッシュボード',
-      bullets: [
-        'シフト表（Excel）をドラッグ＆ドロップするだけで自動計算',
-        '',
-        '■ 本日KPIカード：売上・配送費・利益・予算差',
-        '■ 月間見通し：累計売上・配送費・利益・予算消化率',
-        '■ 所属別構成比：GDSダイレクト / 管理パート / 自社以外',
-        '■ コース種別明細：○(11h) / ❽(8h) / bike(10h) / c1(6.5h) / c3(4.5h) / b1,b2(5h)',
-        '■ 日別損益テーブル：予算超過日は赤、クリア日は緑',
-        '',
-        'データはlocalStorageに保存 → ページ更新しても消えない'
-      ]
-    },
-    {
-      title: '📋 本日のダッシュボード',
-      bullets: [
-        '配送データ（CYCLE xlsx）をドロップ → ルート・DA情報を読込',
-        'アサインデータをドロップ → ドライバー割当を読込',
-        '',
-        '■ 配送完了予測の計算式:',
-        '  出発時間 + 積み込み15分 + 往路移動 + 件数÷能力値 + 復路移動',
-        '',
-        '■ LINE一斉送信:',
-        '  アサイン完了後、ドライバー全員＋内勤管理者全員にコース内容＋MAPを一斉送信',
-        '',
-        '■ MAP送信:',
-        '  配送MAPはスマホでスワイプ操作可能（未配達:赤 / 完了:緑 / 現在地:青）'
-      ]
-    },
-    {
-      title: '👷 ドライバー管理 / 🔧 マスタ管理',
-      bullets: [
-        '【ドライバー管理】能力データベース',
-        '  個/時間・配完率・誤配率・稼働日数・総配送数を管理',
-        '  実績データ更新・QR一括印刷',
-        '',
-        '【マスタ管理】基本情報の一括管理',
-        '  名前（日本語）/ ドライバー名 / LINE ID / 電話番号',
-        '  Transport ID / 所属（GDS管理/ダイレクト/JHS/AE物流等）',
-        '',
-        '  LINE Botを友だち追加→Transport ID送信で自動連携',
-        '  緑●＝LINE連携済み、灰色●＝未連携'
-      ]
-    },
-    {
-      title: '🚛 コース最適化',
-      bullets: [
-        '配送データからコース別の荷物数・件数・エリアを分析',
-        'ドライバーの能力（個/h）に基づいた入替提案を自動生成',
-        '各提案には終了予測時間の短縮効果が表示される',
-        '',
-        '「最適化を実行」ボタンで提案一覧を表示'
-      ]
-    },
-    {
-      title: '📱 点呼管理 / ✅ 点呼照合',
-      bullets: [
-        '【2段階QR認証】',
-        '  第1段階：Transport ID紐づきQRコードをカメラで認証',
-        '  第2段階：メンター起動画面をカメラで認証',
-        '  → メンター起動率を向上',
-        '',
-        '【LINEアラート】',
-        '  着車5分前で未完了 → ドライバー本人にLINE自動送信',
-        '  着車時間で未完了 → 管理者にLINE自動送信',
-        '',
-        '【点呼照合】',
-        '  DAシフト表とスケジュールUIを照合 → 請求漏れ・過請求を防止'
-      ]
-    },
-    {
-      title: '🗺️ MAP管理 / 🏷️ 仕分けスキャン',
-      bullets: [
-        '【MAP管理】住所マスタを自動構築',
-        '  配送データ取り込み → 住所を自動抽出・マスタ登録',
-        '  過去に配送したエリアは経度・緯度を1秒足らずで検索可能',
-        '  未取得住所を一括ジオコーディング',
-        '',
-        '【仕分けスキャン】スキャン1回で即コース表示',
-        '  従来：Excel→Ctrl+F→スキャン→目視確認（4工程）',
-        '  OFK3：スキャンのみ（1工程）→ 圧倒的な時間短縮',
-        '  音声読み上げで手元を見ずに判定可能'
-      ]
-    },
-    {
-      title: '🔍 住所検索 / 💳 請求照合',
-      bullets: [
-        '【住所検索】',
-        '  DA番号または住所から配送先を検索',
-        '  地図プレビュー・住所コピー・LINE送信の3アクション',
-        '',
-        '【請求照合】',
-        '  請求Excel読込 → 対象者数・合計金額・LINE送信可能数を表示',
-        '  稼働日数・チャーター料金・走行距離連動・控除・税別・消費税・合計を一覧',
-        '  請求書PDFをドラッグ＆ドロップで自動照合（ファイル名【ドライバー名DA】）',
-        '  LINE一斉送信で請求金額通知＋PDF添付'
-      ]
-    },
-    {
-      title: '📊 物量管理',
-      bullets: [
-        'サイクルデータ（xlsx / ZIP）をドラッグ＆ドロップで読込',
-        '',
-        '■ 蓄積モード：複数回ドロップでデータ追加、同日は自動上書き',
-        '■ ZIP対応：ZIP内のxlsxを自動展開（一時ファイル自動除外）',
-        '',
-        '■ 折れ線グラフ：',
-        '  個口数(黄) / 件数(シアン) / コース数(緑) / 全台数(ピンク)',
-        '',
-        '■ GAS連携：',
-        '  Google Apps Script経由でスプレッドシートと双方向マージ'
-      ]
-    },
-    {
-      title: '💡 よくある質問',
-      bullets: [
-        'Q. ページ更新でデータは消える？',
-        '  → 経営DBのシフトデータはlocalStorageで保持。配送データは都度読込',
-        '',
-        'Q. 初回アクセスが遅い',
-        '  → Render無料枠のスリープ。初回30秒〜1分、以降は通常速度',
-        '',
-        'Q. ドライバーにLINEが届かない',
-        '  → Bot友だち追加・マスタのLINE ID・API月間上限を確認',
-        '',
-        'Q. シフト表が読み込めない',
-        '  → .xlsx形式・シート名「メイン」・日付行（1〜31）を確認',
-        '',
-        'Q. 別のPC/スマホからアクセスできる？',
-        '  → URL共有でどの端末からでもOK。localStorageは端末ごと独立'
-      ]
-    }
-  ];
-
-  for (var i = 0; i < slides.length; i++) {
-    var sd = slides[i];
+  function mkSlide(title) {
     var sl = pptx.addSlide();
     sl.background = {color: BG};
+    sl.addText(title, {x: 0.5, y: 0.2, w: 12.3, h: 0.6, fontSize: 24, fontFace: 'Meiryo', bold: true, color: TC});
+    sl.addShape(pptx.ShapeType.rect, {x: 0.5, y: 0.85, w: 4, h: 0.03, fill: {color: TC}});
+    allSlides.push(sl);
+    return sl;
+  }
 
-    // Title
-    sl.addText(sd.title, {x: 0.6, y: 0.3, w: 12, h: 0.7, fontSize: 28, fontFace: 'Meiryo', bold: true, color: TITLE_COLOR});
-
-    // Title underline
-    sl.addShape(pptx.ShapeType.rect, {x: 0.6, y: 1.05, w: 5, h: 0.04, fill: {color: TITLE_COLOR}});
-
-    // Bullets
-    var bulletObjs = [];
-    for (var b = 0; b < sd.bullets.length; b++) {
-      var line = sd.bullets[b];
-      var isHeader = line.indexOf('■') === 0 || line.indexOf('【') === 0;
-      var isIndent = line.indexOf('  ') === 0;
-      var isEmpty = line === '';
-      bulletObjs.push({
-        text: line,
-        options: {
-          fontSize: isEmpty ? 8 : (isHeader ? 15 : 13),
-          fontFace: 'Meiryo',
-          color: isHeader ? ACCENT : TEXT_COLOR,
-          bold: isHeader,
-          indentLevel: isIndent ? 1 : 0,
-          bullet: (!isEmpty && !isIndent && !isHeader) ? {type: 'bullet', color: TITLE_COLOR} : false,
-          breakType: isEmpty ? 'none' : undefined,
-          paraSpaceAfter: isEmpty ? 4 : 3
-        }
-      });
+  function addImg(sl, base64, x, y, w, h, caption) {
+    if (base64) {
+      sl.addImage({data: base64, x: x, y: y, w: w, h: h, rounding: true});
     }
-    sl.addText(bulletObjs, {x: 0.8, y: 1.3, w: 11.5, h: 5.8, valign: 'top'});
+    if (caption) {
+      sl.addText(caption, {x: x, y: y + h + 0.05, w: w, h: 0.3, fontSize: 9, fontFace: 'Meiryo', color: DIM, align: 'center'});
+    }
+  }
 
-    // Page number
-    sl.addText((i + 2) + ' / ' + (slides.length + 1), {x: 11, y: 7.0, w: 2, h: 0.4, fontSize: 10, fontFace: 'Meiryo', color: '64748B', align: 'right'});
+  // ===== 1. Title =====
+  var s0 = pptx.addSlide();
+  s0.background = {color: BG};
+  s0.addText('OFK3 配送管理システム', {x: 0.8, y: 1.8, w: 11.7, h: 1.2, fontSize: 44, fontFace: 'Meiryo', bold: true, color: TC, align: 'center'});
+  s0.addText('管理者向け操作マニュアル', {x: 0.8, y: 3.2, w: 11.7, h: 0.8, fontSize: 26, fontFace: 'Meiryo', color: TX, align: 'center'});
+  s0.addText('2026年7月版', {x: 0.8, y: 4.2, w: 11.7, h: 0.5, fontSize: 14, fontFace: 'Meiryo', color: DIM, align: 'center'});
+  s0.addShape(pptx.ShapeType.rect, {x: 4, y: 5.0, w: 5.3, h: 0.04, fill: {color: AC}});
+  allSlides.push(s0);
+
+  // ===== 2. はじめに =====
+  var sl = mkSlide('📖 はじめに — アクセス方法・タブ一覧');
+  addBullets(sl, [
+    'アクセスURL: https://ofk3-line-proxy-1.onrender.com/index.html',
+    'PC・タブレット・スマホ対応（レスポンシブデザイン）',
+    '初回アクセス時は30秒〜1分の読み込み（Render無料枠によるスリープ）',
+    '一度開けばその後はスムーズに動作',
+    '',
+    '【全12タブの機能一覧】',
+    '  💰 経営ダッシュボード — 売上・利益・傭車費予算の管理',
+    '  📋 本日のダッシュボード — 配送データ読込・LINE/MAP送信',
+    '  👷 ドライバー管理 — ドライバー登録・能力データベース',
+    '  🔧 マスタ管理 — ドライバーマスタの編集・LINE連携',
+    '  🚛 コース最適化 — コース割当の最適化支援',
+    '  📱 点呼管理 — QRコード表示・2段階認証管理',
+    '  ✅ 点呼照合 — DAシフト表との照合・請求漏れ防止',
+    '  🗺️ MAP管理 — 住所マスタ構築・座標管理',
+    '  🏷️ 仕分けスキャン — バーコードスキャンで仕分け管理',
+    '  🔍 住所検索 — 住所マスタ検索・座標取得',
+    '  💳 請求照合 — 請求データの照合・LINE一斉送信',
+    '  📊 物量管理 — サイクルデータ分析・推移グラフ'
+  ], 0.5, 1.0, 12.3, 6.2);
+
+  // ===== 3. 経営ダッシュボード（説明） =====
+  sl = mkSlide('💰 経営ダッシュボード');
+  addBullets(sl, [
+    'シフト表（Excel）をドラッグ＆ドロップするだけで自動計算',
+    'シート名「メイン」から日別×人別のコース種別を自動抽出',
+    'データはlocalStorageに保存 → ページ更新しても消えない',
+    '',
+    '■ 本日KPIカード（4枚）',
+    '  売上：コース構成から算出した売上合計',
+    '  配送費：走行距離連動費 + 車建て経費の合計',
+    '  利益：売上 - 配送費',
+    '  予算差：日割予算 - 配送費（緑＝クリア、赤＝超過）',
+    '',
+    '■ 月間見通しカード（4枚）',
+    '  月間累計の売上・配送費・利益・予算消化率',
+    '',
+    '■ 所属別構成比（円グラフ）',
+    '  GDSダイレクト / GDS管理・パート / 自社以外の比率（%常時表示）',
+    '',
+    '■ 日別損益テーブル',
+    '  月内の各日の売上・経費・利益・予算差を一覧（超過は赤/クリアは緑）'
+  ], 0.5, 1.0, 6.3, 6.2);
+  addImg(sl, imgs['exec'], 7.0, 1.0, 5.8, 4.0, '▲ KPIカード・所属別円グラフ・コース種別明細');
+
+  // コース種別テーブルスライド
+  sl = mkSlide('💰 経営ダッシュボード — コース種別・料金マスタ');
+  var courseRows = [
+    ['コース種別', '時間', '表記例', '売上単価'],
+    ['maru（○）', '11h', '○、〇、◯', '¥19,092'],
+    ['hachi（❽）', '8h', '❽、⑧、8', '¥13,887'],
+    ['bike', '10h', 'bike、Bike', '¥15,800'],
+    ['c1', '6.5h', 'c1、C1', '¥11,284'],
+    ['c3', '4.5h', 'c3、C3', '¥7,808'],
+    ['b1 / b2', '5h', 'b1、B1 / b2、B2', '¥7,900']
+  ];
+  sl.addTable(courseRows, {
+    x: 0.5, y: 1.1, w: 8, colW: [2.5, 1.2, 2.5, 1.8],
+    fontSize: 11, fontFace: 'Meiryo', color: TX,
+    border: {type: 'solid', pt: 0.5, color: '334155'},
+    rowH: 0.4,
+    autoPage: false
+  });
+  addBullets(sl, [
+    '',
+    '■ 売上計算',
+    '  売上 = コース基本売上 + 燃料S/C日割',
+    '  燃料S/C: 8,500km × 17.1円/km × 5週 ÷ 稼働日数',
+    '',
+    '■ 経費計算',
+    '  経費 = 走行距離連動費(円/h × コース時間) + 車建て経費',
+    '  GDS管理/パート = 走行距離連動費のみ（車建て経費ゼロ）',
+    '',
+    '■ 予算差',
+    '  日割予算 - 配送費（全経費）'
+  ], 0.5, 4.2, 12.3, 3.0);
+
+  // ===== 4. 本日のダッシュボード =====
+  sl = mkSlide('📋 本日のダッシュボード — 配送データ読込・配送予測');
+  addBullets(sl, [
+    '■ 操作手順',
+    '  1. 「住所データ」エリアにCYCLEファイル（.xlsx）をドロップ',
+    '  2. 「アサインデータ」エリアにルートファイル（.xlsx）をドロップ',
+    '  3. 総ルート数・稼働人数・総配達数・予測最終完了が表示',
+    '',
+    '■ 配送完了予測の計算式',
+    '  出発時間 + 積み込み15分 + 往路移動 + 件数÷能力値 + 復路移動',
+    '',
+    '  ①積み込み時間: OFK3固定値15分',
+    '  ②移動時間(往路): ステーション→最短ピンへの移動',
+    '  ③配達時間: 荷物件数 ÷ 能力値(個/H)',
+    '  ④帰庫時間(復路): 最長ピン→ステーションへの移動'
+  ], 0.5, 1.0, 6.3, 5.5);
+  addImg(sl, imgs['dashboard'], 7.0, 1.0, 5.8, 4.0, '▲ 64ルート・38名稼働・5,047配達のルート別配送予測');
+
+  // LINE/MAP送信スライド
+  sl = mkSlide('📋 本日のダッシュボード — LINE一斉送信・MAP送信');
+  addBullets(sl, [
+    '■ LINE一斉送信',
+    '  アサイン完了後、ワンクリックでドライバー全員＋内勤管理者全員に',
+    '  コース内容（コース番号・エリア・配達数・出発予定・終了目安）と',
+    '  配送MAPを一斉にLINE送信。個別送信も可能。',
+    '',
+    '■ MAP送信',
+    '  ルート一覧のMAPアイコンをクリック → モーダルで地図確認',
+    '  エリア別の配達件数と全ピンが地図上に表示',
+    '  確認後「LINE送信」でドライバーに配送情報＋地図を送信',
+    '',
+    '■ ドライバー側の配送MAP',
+    '  スマホでスワイプ操作（拡大・移動）が可能',
+    '  ピンの色: 未配達=赤 / 完了=緑 / 現在地=青'
+  ], 0.5, 1.0, 6.3, 5.5);
+  // Right side: 3 mobile screenshots stacked
+  if (imgs['map-modal']) addImg(sl, imgs['map-modal'], 7.2, 0.9, 2.5, 3.0, 'MAPモーダル');
+  if (imgs['line-message']) addImg(sl, imgs['line-message'], 10.0, 0.9, 2.5, 3.0, 'LINE配送情報');
+  if (imgs['map']) addImg(sl, imgs['map'], 8.5, 4.2, 2.8, 3.0, '配送MAP（スワイプ対応）');
+
+  // ===== 5. ドライバー管理 =====
+  sl = mkSlide('👷 ドライバー管理 — 能力データベース');
+  addBullets(sl, [
+    '週次で更新される配送実績を基に、予測エンジンの基礎データとして使用',
+    '',
+    '■ 管理項目',
+    '  個/時間: 1時間あたりの配達個数（配送完了予測の計算に使用）',
+    '  配完率%: 配達完了率（高いほど安定したドライバー）',
+    '  誤配率%: 誤配送の発生率',
+    '  稼働日数: 累計の稼働日数',
+    '  総配送数: 累計の配達個数',
+    '  正配依頼: 正しい配送先への案内を依頼した回数',
+    '',
+    '■ 主な操作',
+    '  「実績データ更新」ボタンで最新の配送実績を反映',
+    '  「QR一括印刷」で全ドライバーのQRコードを一括印刷'
+  ], 0.5, 1.0, 6.3, 6.0);
+  addImg(sl, imgs['drivers'], 7.0, 1.0, 5.8, 4.5, '▲ ドライバー能力データベース');
+
+  // ===== 6. マスタ管理 =====
+  sl = mkSlide('🔧 マスタ管理 — ドライバー基本情報の一括管理');
+  addBullets(sl, [
+    '■ 管理項目',
+    '  名前（日本語）/ ドライバー名（LINEプロフィール名）',
+    '  LINE User ID（Bot友だち追加で自動取得）',
+    '  電話番号 / Transport ID（点呼QRコードと紐付け）',
+    '  所属（GDS管理 / GDSダイレクト / JHS / AE物流 / OFK6 等）',
+    '',
+    '■ 主な操作',
+    '  ドライバー追加: 名前・所属・Transport IDを入力して登録',
+    '  LINE連携: ドライバーがBotを友だち追加→Transport ID送信で自動連携',
+    '  QR表示: 各ドライバーのQRコードを個別表示',
+    '  個別LINE送信: マスタ画面から直接メッセージ送信',
+    '  インライン編集: 所属変更・Transport ID修正等',
+    '',
+    '■ 状態インジケータ',
+    '  緑●＝LINE連携済み / 灰色●＝未連携'
+  ], 0.5, 1.0, 6.3, 6.0);
+  addImg(sl, imgs['master'], 7.0, 1.0, 5.8, 4.5, '▲ マスタ管理画面');
+
+  // ===== 7. コース最適化 =====
+  sl = mkSlide('🚛 コース最適化 — コース割当の最適化支援');
+  addBullets(sl, [
+    '配送データからコース別の荷物数・件数・エリアを分析し、',
+    'ドライバーの能力（個/h）に基づいた入替提案を自動生成',
+    '',
+    '■ 機能',
+    '  「最適化を実行」ボタンで提案一覧を表示',
+    '  各提案に入替による終了予測時間の短縮効果が表示される',
+    '  能力の高いドライバーに荷物の多いコースを割り当て',
+    '  遅延リスクのあるルートを事前に把握'
+  ], 0.5, 1.0, 6.3, 4.5);
+  addImg(sl, imgs['optimization'], 7.0, 1.0, 5.8, 4.5, '▲ コース割最適化提案');
+
+  // ===== 8. 点呼管理 =====
+  sl = mkSlide('📱 点呼管理 — 2段階QR認証・LINEアラート');
+  addBullets(sl, [
+    '■ 2段階認証の流れ',
+    '  1. 決まった時間にドライバーのスマホで点呼が自動開始',
+    '  2. 第1段階: Transport ID紐づきQRコードをカメラで認証（本人確認）',
+    '  3. 第2段階: メンター起動画面をカメラで認証（メンター起動確認）',
+    '  4. 2段階クリアで点呼完了 → メンター起動率を向上',
+    '',
+    '■ LINEアラート機能',
+    '  着車5分前で点呼未完了 → ドライバー本人にLINE自動送信',
+    '  着車時間で点呼未完了 → 管理者にLINE自動送信',
+    '  → 点呼漏れ・メンター起動漏れを防止'
+  ], 0.5, 1.0, 6.3, 5.5);
+  // QR + Mentor side by side
+  if (imgs['qr-sample']) addImg(sl, imgs['qr-sample'], 7.2, 1.0, 2.2, 2.5, '第1段階: QRコード');
+  if (imgs['mentor']) addImg(sl, imgs['mentor'], 9.8, 1.0, 2.8, 3.2, '第2段階: メンター起動認証');
+  if (imgs['tenko-alert']) addImg(sl, imgs['tenko-alert'], 7.5, 4.5, 4.5, 2.5, '▲ 管理者LINEへの未完了通知');
+
+  // ===== 9. 点呼照合 =====
+  sl = mkSlide('✅ 点呼照合 — シフト表との照合・請求漏れ防止');
+  addBullets(sl, [
+    'AmazonスケジュールUIとDAシフト表を照合し、請求漏れや過請求を防止',
+    '',
+    '■ 操作手順',
+    '  1. DAシフト表（当日の出勤者リスト）を読み込み',
+    '  2. スケジュールUIと点呼実績を自動照合',
+    '  3. 各ドライバーの状態を表示:',
+    '    ✅ 点呼済（正常完了）',
+    '    ❌ 未点呼（点呼が完了していない）',
+    '    ⚠ シフト表なし（スケジュールUIに存在するがシフト表に未登録）',
+    '',
+    '■ DAシフト表が正（マスター）',
+    '  Amazon配送データの着車時間はルート割り当て＋時間予測の補助として使用'
+  ], 0.5, 1.0, 6.3, 5.5);
+  addImg(sl, imgs['tenko'], 7.0, 1.0, 5.8, 4.5, '▲ 点呼照合画面');
+
+  // ===== 10. MAP管理 =====
+  sl = mkSlide('🗺️ MAP管理 — 住所マスタ構築・座標管理');
+  addBullets(sl, [
+    '配送データを取り込むことで住所マスタを自動構築',
+    '過去に配送したエリアの住所は、経度・緯度を1秒足らずで検索可能',
+    '',
+    '■ 機能',
+    '  CYCLEファイル取込: 配送データから住所を自動抽出しマスタ登録',
+    '  住所マスターJSON読込: 既存のマスタデータを読み込み',
+    '  住所マスターDL: 現在のマスタデータをJSONでダウンロード',
+    '  未取得を一括ジオコーディング: Google Geocoding APIで一括変換',
+    '  重複住所を統合: 同一住所の重複エントリを統合',
+    '',
+    '■ 住所マスタの成長',
+    '  配送データを取り込むたびに自動で蓄積',
+    '  一度ジオコーディングした住所は以降API不要で瞬時に座標取得'
+  ], 0.5, 1.0, 6.3, 5.5);
+  addImg(sl, imgs['map-master'], 7.0, 1.0, 5.8, 4.0, '▲ 住所マスター（38,006件登録 / 30,438件座標取得済）');
+
+  // ===== 11. 仕分けスキャン =====
+  sl = mkSlide('🏷️ 仕分けスキャン — スキャン1回で即コース表示');
+  addBullets(sl, [
+    '■ 従来の差し込み作業（4工程）',
+    '  1. マニフェストデータのExcelを開く',
+    '  2. Ctrl+F で検索ウィンドウを開く',
+    '  3. DA番号をスキャンして検索',
+    '  4. 結果からコース番号を目視確認',
+    '',
+    '■ OFK3 仕分けスキャン（1工程）',
+    '  スキャン1回で即コース表示 → 圧倒的な時間短縮',
+    '  音声読み上げで手元を見ずに判定可能',
+    '  Excel不要・検索操作ゼロ',
+    '',
+    '■ 操作手順',
+    '  1. 「仕分けスキャン」タブを開く（入力欄に自動フォーカス）',
+    '  2. バーコードリーダーまたは手入力でDA番号をスキャン',
+    '  3. 該当するコース番号が大きく表示される',
+    '  4. スキャン履歴が下部にリアルタイムで蓄積'
+  ], 0.5, 1.0, 6.3, 6.0);
+  addImg(sl, imgs['scan'], 7.0, 1.5, 5.8, 4.0, '▲ DA番号スキャン→コース番号表示');
+
+  // ===== 12. 住所検索 =====
+  sl = mkSlide('🔍 住所検索 — DA番号・住所から配送先検索');
+  addBullets(sl, [
+    '■ 操作手順',
+    '  1. 「住所検索」タブを開く（入力欄に自動フォーカス）',
+    '  2. DA番号で検索 → コース・住所・地図が表示',
+    '  3. 「住所コピー」「地図で見る」「LINE送信」の3アクション',
+    '  4. 住所から直接検索も可能（下部の入力欄）',
+    '',
+    '■ 追加読込',
+    '  事前に配送データを読み込んでおくとDA番号から自動判定'
+  ], 0.5, 1.0, 6.3, 4.0);
+  if (imgs['addr-search']) addImg(sl, imgs['addr-search'], 7.0, 1.0, 5.8, 3.5, '▲ DA番号→コース・住所・地図プレビュー');
+  if (imgs['line-send']) addImg(sl, imgs['line-send'], 8.5, 4.8, 3.5, 2.3, '個別LINE送信');
+
+  // ===== 13. 請求照合 =====
+  sl = mkSlide('💳 請求照合 — 請求金額算出・LINE一斉送信');
+  addBullets(sl, [
+    '■ 操作手順',
+    '  1. 「請求照合」タブを選択',
+    '  2. 請求Excel（.xlsx）を読み込み',
+    '  3. 対象者数・合計金額・LINE送信可能数が表示',
+    '  4. 各ドライバーの稼働日数・チャーター料金・走行距離連動・',
+    '     控除・税別・消費税・システム使用料・合計を一覧表示',
+    '  5. 「メッセージプレビュー」で送信内容を事前確認',
+    '  6. 請求書PDFをドラッグ＆ドロップ（ファイル名の【】内で自動照合）',
+    '  7. 「LINE一斉送信」で全対象者に請求金額通知＋PDF添付',
+    '',
+    '■ PDF自動照合',
+    '  ファイル名に【ドライバー名DA】を含めると該当ドライバーに自動紐付け'
+  ], 0.5, 1.0, 6.3, 5.5);
+  if (imgs['billing']) addImg(sl, imgs['billing'], 7.0, 1.0, 5.8, 3.0, '▲ 18名対象・合計¥4,179,848');
+  if (imgs['billing-preview']) addImg(sl, imgs['billing-preview'], 8.5, 4.3, 3.5, 2.8, 'メッセージプレビュー');
+
+  // ===== 14. 物量管理 =====
+  sl = mkSlide('📊 物量管理 — サイクルデータ分析・推移グラフ');
+  addBullets(sl, [
+    '■ 操作手順',
+    '  1. 「物量管理」タブを選択',
+    '  2. サイクルデータ（.xlsx / .zip）をドラッグ＆ドロップ',
+    '  3. 自動解析 → テーブルとグラフが表示',
+    '',
+    '■ 蓄積モード',
+    '  複数回ドロップでデータが追加蓄積（同日は自動上書き）',
+    '  ZIP内のxlsxを自動展開（一時ファイル自動除外）',
+    '',
+    '■ 折れ線グラフ（4系列）',
+    '  個口数(黄) / 件数(シアン) / コース数(緑) / 全台数(ピンク)',
+    '',
+    '■ GAS連携',
+    '  Google Apps Script経由でスプレッドシートと双方向マージ'
+  ], 0.5, 1.0, 6.3, 6.0);
+  if (imgs['volume-graph']) addImg(sl, imgs['volume-graph'], 7.0, 1.0, 5.8, 3.0, '▲ 物量推移グラフ');
+  if (imgs['volume-table']) addImg(sl, imgs['volume-table'], 7.0, 4.3, 5.8, 2.8, '▲ 物量推移テーブル');
+
+  // ===== 15. よくある質問 =====
+  sl = mkSlide('💡 よくある質問（FAQ）');
+  addBullets(sl, [
+    'Q. ページを更新したらデータは消える？',
+    '  → 経営DBのシフトデータはlocalStorageに保存。ページ更新しても消えません。',
+    '  → 「クリア」ボタンで明示的に削除するまで保持。配送データは都度読込が必要。',
+    '',
+    'Q. 初回アクセスが遅い',
+    '  → Render無料枠を使用。一定時間アクセスがないとサーバーがスリープ。',
+    '  → 初回30秒〜1分の読み込み後は通常速度で動作。',
+    '',
+    'Q. ドライバーにLINEが届かない',
+    '  → ①Bot友だち追加の確認 ②マスタのLINE IDの確認 ③API月間送信上限の確認',
+    '',
+    'Q. シフト表が読み込めない',
+    '  → ①.xlsx形式であること ②シート名が「メイン」であること ③日付行（1〜31）が28日分以上あること',
+    '',
+    'Q. 別のPC/スマホからアクセスできる？',
+    '  → URLを共有すればどの端末からでもブラウザでアクセス可能。',
+    '  → ただしlocalStorageのデータ（シフト表等）は端末ごとに独立。'
+  ], 0.5, 1.0, 12.3, 6.2);
+
+  // Page numbers
+  for (var i = 0; i < allSlides.length; i++) {
+    allSlides[i].addText((i + 1) + ' / ' + allSlides.length, {x: 11, y: 7.0, w: 2, h: 0.4, fontSize: 10, fontFace: 'Meiryo', color: DIM, align: 'right'});
   }
 
   pptx.writeFile({fileName: 'OFK3_操作マニュアル.pptx'});
