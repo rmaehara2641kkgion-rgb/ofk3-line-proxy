@@ -10431,7 +10431,10 @@
       }
 
       if (colDate < 0 || colService < 0 || colDuration < 0 || colRoutes < 0) {
-        alert('GDS Weekly Reportの形式ではありません（日付・サービスタイプ・計画された時間・完了したルート列が必要）');
+        var debugInfo = 'ヘッダー検出結果: 日付=' + colDate + ' サービスタイプ=' + colService + ' 計画された時間=' + colDuration + ' 完了したルート=' + colRoutes + '\n';
+        debugInfo += 'ヘッダー行: ' + header.join(' | ') + '\n';
+        debugInfo += '先頭3文字コード: ' + header[0].charCodeAt(0) + ',' + header[0].charCodeAt(1) + ',' + header[0].charCodeAt(2);
+        alert('GDS Weekly Reportの形式ではありません\n\n' + debugInfo);
         return;
       }
 
