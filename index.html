@@ -10432,34 +10432,75 @@
         return;
       }
 
-      // InputFileはファイル全体がOFK3対象（ファイル名にOFK3含む）
-      // Row3=ヘッダー、Row4以降=データ、col8=Block
+      // Find Block column dynamically from header row (Row3)
+      var colBlock = -1;
+      var row3 = data[3] || [];
+      for (var c = 0; c < row3.length; c++) {
+        var hv = String(row3[c]).trim().toLowerCase();
+        if (hv === 'block' || hv === 'b/s') {
+          if (colBlock < 0 || hv === 'block') colBlock = c;
+        }
+      }
+
+      // If Block column not found in row3, try scanning all header-like rows
+      if (colBlock < 0) {
+        for (var r = 0; r < Math.min(data.length, 10); r++) {
+          var row = data[r];
+          if (!row) continue;
+          for (var c = 0; c < row.length; c++) {
+            if (String(row[c]).trim().toLowerCase() === 'block') { colBlock = c; break; }
+          }
+          if (colBlock >= 0) break;
+        }
+      }
+
       var blockCounts = {}; // hours -> count
       var blockPattern = /^(\d+B\d*S?)$/i;
       var foundBlocks = [];
+      var dataStartRow = colBlock >= 0 ? 4 : 0;
 
-      for (var r = 4; r < data.length; r++) {
-        var row = data[r];
-        if (!row || row.length < 9) continue;
-        var block = String(row[8]).trim();
-        if (blockPattern.test(block)) {
-          var h = blockToHours(block);
-          if (h > 0) {
-            blockCounts[h] = (blockCounts[h] || 0) + 1;
-            foundBlocks.push({row: r, block: block, hours: h});
+      if (colBlock >= 0) {
+        // Use identified Block column
+        for (var r = dataStartRow; r < data.length; r++) {
+          var row = data[r];
+          if (!row || row.length <= colBlock) continue;
+          var block = String(row[colBlock]).trim();
+          if (blockPattern.test(block)) {
+            var h = blockToHours(block);
+            if (h > 0) {
+              blockCounts[h] = (blockCounts[h] || 0) + 1;
+              foundBlocks.push({row: r, block: block, hours: h});
+            }
+          }
+        }
+      }
+
+      // Fallback: scan ALL cells for block patterns
+      if (foundBlocks.length === 0) {
+        for (var r = 0; r < data.length; r++) {
+          var row = data[r];
+          if (!row) continue;
+          for (var c = 0; c < row.length; c++) {
+            var v = String(row[c]).trim();
+            if (blockPattern.test(v)) {
+              var h = blockToHours(v);
+              if (h > 0) {
+                blockCounts[h] = (blockCounts[h] || 0) + 1;
+                foundBlocks.push({row: r, col: c, block: v, hours: h});
+              }
+            }
           }
         }
       }
 
       if (foundBlocks.length === 0) {
-        // Debug: show ALL columns of first data row to find block column
-        var sampleRow = data[4] || data[5] || [];
-        var headerRow3 = data[3] || [];
+        // Show row3 header + row4 data for debugging
         var debugParts = [];
-        for (var c = 0; c < Math.min(sampleRow.length, 20); c++) {
-          debugParts.push('col' + c + '(' + String(headerRow3[c] || '') + ')=' + String(sampleRow[c] || ''));
+        var sampleRow = data[4] || data[5] || [];
+        for (var c = 0; c < Math.min(row3.length, 20); c++) {
+          debugParts.push('col' + c + '(' + String(row3[c] || '') + ')=' + String((sampleRow[c] !== undefined ? sampleRow[c] : '') + ''));
         }
-        alert('Block値が見つかりません\n行数: ' + data.length + '\n\nヘッダー+データ:\n' + debugParts.join('\n'));
+        alert('Block値が見つかりません (Block列=' + colBlock + ')\n行数: ' + data.length + '\n\n' + debugParts.join('\n'));
         return;
       }
 
