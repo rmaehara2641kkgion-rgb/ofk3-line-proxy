@@ -10432,7 +10432,7 @@
         return;
       }
 
-      // Find header row and station column for OFK3 filtering
+      // Find header row and station/block columns
       var headerRow = -1;
       var colStation = -1;
       var colBlock = -1;
@@ -10441,14 +10441,16 @@
         if (!row) continue;
         for (var c = 0; c < row.length; c++) {
           var v = String(row[c]).trim().toLowerCase();
-          if (v.indexOf('station') >= 0 || v.indexOf('ステーション') >= 0 || v === 'ds_name' || v === 'delivery_station') {
-            headerRow = r; colStation = c;
+          if (v === 'ds name' || v === 'ds_name' || v === 'delivery_station' || v.indexOf('station') >= 0 || v.indexOf('ステーション') >= 0) {
+            colStation = c;
+            if (headerRow < 0) headerRow = r;
           }
-          if (v === 'block' || v === 'block_code' || v === 'block_id' || v === 'route_block' || v.indexOf('ブロック') >= 0) {
+          if (v === 'block' || v === 'block_code' || v.indexOf('ブロック') >= 0) {
             colBlock = c;
+            if (headerRow < 0) headerRow = r;
           }
         }
-        if (headerRow >= 0) break;
+        if (colStation >= 0 && colBlock >= 0) break;
       }
 
       // Scan for block patterns, filtering by OFK3 if station column found
@@ -10461,10 +10463,17 @@
         var row = data[r];
         if (!row) continue;
 
-        // OFK3 filter: if station column found, check if row contains OFK3
+        // OFK3 filter: check station column, or fallback check all columns for OFK3
         if (colStation >= 0) {
           var stationVal = String(row[colStation]).trim();
-          if (stationVal.indexOf('OFK3') < 0) continue;
+          if (stationVal.indexOf('OFK3') < 0) {
+            // Also check neighboring columns (Node, NodeP, DS Name may vary)
+            var rowHasOFK3 = false;
+            for (var cc = 0; cc < Math.min(row.length, 10); cc++) {
+              if (String(row[cc]).indexOf('OFK3') >= 0) { rowHasOFK3 = true; break; }
+            }
+            if (!rowHasOFK3) continue;
+          }
         }
 
         // If block column identified, only check that column
