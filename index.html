@@ -10596,11 +10596,12 @@
       if (lines.length < 2) { alert('データが空です'); return; }
 
       var header = parseCSVLine(lines[0]);
-      var colDate = -1, colStation = -1, colDuration = -1, colExcluded = -1;
+      var colDate = -1, colStation = -1, colDuration = -1, colExcluded = -1, colRoute = -1;
       for (var h = 0; h < header.length; h++) {
         var hv = header[h].trim();
         if (hv === '日付') colDate = h;
         else if (hv.indexOf('ステーション') >= 0) colStation = h;
+        else if (hv.indexOf('経路') >= 0) colRoute = h;
         else if (hv.indexOf('計画された時間') >= 0) colDuration = h;
         else if (hv.indexOf('除外') >= 0) colExcluded = h;
       }
@@ -10610,8 +10611,9 @@
         return;
       }
 
-      // Count routes per date per hours (each row = 1 route)
+      // Count unique routes per date per hours（日付+経路の重複は1台としてカウント）
       var dateMap = {};
+      var seenRoutes = {}; // "date|route" -> true
       for (var i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
         var cols = parseCSVLine(lines[i]);
@@ -10619,6 +10621,13 @@
         var date = cols[colDate];
         var hours = parseDurationToHours(cols[colDuration]);
         if (hours <= 0) continue;
+        // 同じ日付+同じ経路（コース）は重複カウントしない
+        var route = colRoute >= 0 ? String(cols[colRoute]).trim() : '';
+        if (route) {
+          var routeKey = date + '|' + route;
+          if (seenRoutes[routeKey]) continue;
+          seenRoutes[routeKey] = true;
+        }
         if (!dateMap[date]) dateMap[date] = {};
         dateMap[date][hours] = (dateMap[date][hours] || 0) + 1;
       }
