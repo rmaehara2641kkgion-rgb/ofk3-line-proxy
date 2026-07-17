@@ -10596,12 +10596,13 @@
       if (lines.length < 2) { alert('データが空です'); return; }
 
       var header = parseCSVLine(lines[0]);
-      var colDate = -1, colStation = -1, colDuration = -1, colExcluded = -1, colRoute = -1;
+      var colDate = -1, colStation = -1, colDuration = -1, colExcluded = -1, colRoute = -1, colDriver = -1;
       for (var h = 0; h < header.length; h++) {
         var hv = header[h].trim();
         var hvl = hv.toLowerCase();
         if (hv === '日付' || hvl === 'date') colDate = h;
         else if (hv.indexOf('ステーション') >= 0 || hvl === 'station') colStation = h;
+        else if (hv.indexOf('配達アソシエイト') >= 0 || hv.indexOf('配送アソシエイト') >= 0 || hvl === 'driver' || hvl === 'da name') colDriver = h;
         else if (hv.indexOf('経路') >= 0 || hvl === 'route' || hvl === 'route id') colRoute = h;
         else if (hv.indexOf('計画された時間') >= 0 || hvl.indexOf('planned') >= 0) colDuration = h;
         else if (hv.indexOf('除外') >= 0 || hvl === 'excluded') colExcluded = h;
@@ -10620,9 +10621,9 @@
         return s;
       }
 
-      // Count unique routes per date per hours（日付+経路の重複は1台としてカウント）
+      // Count unique per date（日付+名前+時間の重複は1台としてカウント）
       var dateMap = {};
-      var seenRoutes = {}; // "date|route" -> true
+      var seenKeys = {}; // "date|driver|hours" -> true
       var dupCount = 0;
       for (var i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
@@ -10631,12 +10632,12 @@
         var date = normalizeDate(cols[colDate]);
         var hours = parseDurationToHours(cols[colDuration]);
         if (hours <= 0) continue;
-        // 同じ日付+同じ経路（コース）は重複カウントしない
-        var route = colRoute >= 0 ? String(cols[colRoute]).trim().toUpperCase() : '';
-        if (route) {
-          var routeKey = date + '|' + route;
-          if (seenRoutes[routeKey]) { dupCount++; continue; }
-          seenRoutes[routeKey] = true;
+        // 同じ日付+同じ名前+同じ時間 = 同一ルートの重複データ → スキップ
+        var driver = colDriver >= 0 ? String(cols[colDriver]).trim().toUpperCase() : '';
+        if (driver) {
+          var dupKey = date + '|' + driver + '|' + hours;
+          if (seenKeys[dupKey]) { dupCount++; continue; }
+          seenKeys[dupKey] = true;
         }
         if (!dateMap[date]) dateMap[date] = {};
         dateMap[date][hours] = (dateMap[date][hours] || 0) + 1;
@@ -10645,8 +10646,8 @@
       var resultDiv = document.getElementById('fleet-sdr-result');
       resultDiv.classList.remove('hidden');
       var dates = Object.keys(dateMap).sort();
-      var routeInfo = colRoute >= 0 ? ' / 重複除外: ' + dupCount + '件 / 経路列: col' + colRoute : ' / ⚠️経路列未検出';
-      resultDiv.innerHTML = '<div class="card p-3 border border-blue-300"><div class="text-xs font-medium" style="color:#2563eb">📊 ' + fileName + ' （' + dates.length + '日分 / ' + (lines.length - 1) + '行' + routeInfo + '）</div></div>';
+      var dedupInfo = colDriver >= 0 ? ' / 重複除外: ' + dupCount + '件（名前+時間）' : ' / ⚠️配達アソシエイト列未検出';
+      resultDiv.innerHTML = '<div class="card p-3 border border-blue-300"><div class="text-xs font-medium" style="color:#2563eb">📊 ' + fileName + ' （' + dates.length + '日分 / ' + (lines.length - 1) + '行' + dedupInfo + '）</div></div>';
 
       renderFleetComparison(dateMap, 'Service Details');
     }
