@@ -10602,7 +10602,7 @@
         var hvl = hv.toLowerCase();
         if (hv === '日付' || hvl === 'date') colDate = h;
         else if (hv.indexOf('ステーション') >= 0 || hvl === 'station') colStation = h;
-        else if (hv.indexOf('配達アソシエイト') >= 0 || hv.indexOf('配送アソシエイト') >= 0 || hvl === 'driver' || hvl === 'da name') colDriver = h;
+        else if (hv.indexOf('アソシエ') >= 0 || hvl === 'driver' || hvl === 'da name') colDriver = h;
         else if (hv.indexOf('経路') >= 0 || hvl === 'route' || hvl === 'route id') colRoute = h;
         else if (hv.indexOf('計画された時間') >= 0 || hvl.indexOf('planned') >= 0) colDuration = h;
         else if (hv.indexOf('除外') >= 0 || hvl === 'excluded') colExcluded = h;
