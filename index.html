@@ -10634,7 +10634,17 @@
     // ===== Shared comparison =====
     function renderFleetComparison(dateMap, sourceName) {
       var masterLookup = buildMasterLookup(); // hours -> {count, block}
-      var dates = Object.keys(dateMap).sort();
+      // 日付フィルタ: 過去1週間〜未来1ヶ月
+      var now = new Date();
+      var pastLimit = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+      var futureLimit = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+      var allDates = Object.keys(dateMap).sort();
+      var dates = [];
+      for (var i = 0; i < allDates.length; i++) {
+        var parts = allDates[i].split('-');
+        var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        if (d >= pastLimit && d <= futureLimit) dates.push(allDates[i]);
+      }
       var okCount = 0, ngCount = 0;
       var results = [];
 
