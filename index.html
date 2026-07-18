@@ -9173,6 +9173,12 @@
                 results[dateStr] = { courses: {} };
               }
 
+              // デバッグ用シート名記録
+              if (!window._volDebugSheets) window._volDebugSheets = [];
+              for (var _ds = 0; _ds < workbook.SheetNames.length; _ds++) {
+                window._volDebugSheets.push(file.name + ' → ' + workbook.SheetNames[_ds]);
+              }
+
               for (var si = 0; si < workbook.SheetNames.length; si++) {
                 try {
                   var sheetName = workbook.SheetNames[si];
@@ -9182,9 +9188,19 @@
                   var routeCode = '';
                   var sheetRouteMatch = sheetName.match(/sequencedRoute_(\w+)/);
                   if (sheetRouteMatch) routeCode = sheetRouteMatch[1].trim();
+                  if (!routeCode) {
+                    // シート名自体がコースコードっぽい場合（例: DCX50, CX12, X12）
+                    var directMatch = sheetName.trim().match(/^([A-Za-z]*\d+)$/);
+                    if (directMatch) routeCode = directMatch[1].trim();
+                  }
                   if (!routeCode && json.length > 0 && json[0] && json[0][0]) {
                     var routeMatch = String(json[0][0]).match(/Route for\s+(\w+)/);
                     if (routeMatch) routeCode = routeMatch[1].trim();
+                  }
+                  // 最終フォールバック: シート名に英数字含みでSummary等でなければ使う
+                  if (!routeCode && sheetName.trim() && !sheetName.match(/summary|合計|total|sheet/i)) {
+                    var cleaned = sheetName.replace(/[^A-Za-z0-9]/g, '');
+                    if (cleaned.length >= 2 && cleaned.length <= 10) routeCode = cleaned;
                   }
                   if (!routeCode) continue;
 
@@ -9232,8 +9248,12 @@
 
       // 蓄積状況を表示
       var totalCourses = 0;
+      var allSheetNames = []; // デバッグ用
       for (var di = 0; di < dates.length; di++) {
         totalCourses += Object.keys(results[dates[di]].courses).length;
+      }
+      if (totalCourses === 0 && window._volDebugSheets) {
+        alert('コースが検出できませんでした\nシート名一覧:\n' + window._volDebugSheets.join('\n'));
       }
       var infoEl = document.getElementById('volume-pending-info');
       if (infoEl) {
