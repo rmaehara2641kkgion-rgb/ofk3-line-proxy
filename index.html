@@ -7825,20 +7825,67 @@
       btn.disabled = true;
       btn.textContent = '🧹 統合中...';
       try {
+        // フロント側で重複住所を統合
         var gasUrl = getAddrMasterGasUrl();
-        var res = await fetch(gasUrl + '?action=dedup', { redirect: 'follow' });
-        var data = await res.json();
-        if (data.status === 'ok') {
-          alert('統合完了！\n削除: ' + data.removed + '件\n残り: ' + data.kept + '件');
+        // 1) 全住所取得
+        var res = await fetch(gasUrl + '?action=list', { redirect: 'follow' });
+        var listData = await res.json();
+        if (listData.status !== 'ok') {
+          alert('住所リスト取得失敗: ' + (listData.message || 'unknown'));
+          return;
+        }
+        var all = listData.data || {};
+        var addresses = Object.keys(all);
+        if (addresses.length === 0) {
+          alert('住所データが空です');
+          return;
+        }
+        if (!confirm(addresses.length + '件の住所を確認し、重複を統合します。\n元のデータは上書きされますが、リストア方法はありません。\n実行しますか？')) {
+          return;
+        }
+        // 2) 正規化してユニーク化（座標ありを優先）
+        var seen = {};
+        var dupCount = 0;
+        for (var i = 0; i < addresses.length; i++) {
+          var addr = addresses[i];
+          var e = all[addr];
+          var key = normalizeAddress(addr);
+          if (!key) continue;
+          var hasCoord = e && typeof e.lat === 'number' && typeof e.lng === 'number';
+          if (!seen[key]) {
+            seen[key] = { addr: addr, lat: e.lat, lng: e.lng };
+          } else {
+            dupCount++;
+            var seenHasCoord = typeof seen[key].lat === 'number' && typeof seen[key].lng === 'number';
+            if (!seenHasCoord && hasCoord) {
+              seen[key] = { addr: addr, lat: e.lat, lng: e.lng };
+            }
+          }
+        }
+        // 3) GASへreplaceAll送信（全クリア+一括書き込み）
+        var payload = {};
+        for (var key in seen) {
+          payload[seen[key].addr] = { lat: seen[key].lat, lng: seen[key].lng };
+        }
+        var saveRes = await fetch(gasUrl + '?action=replaceAll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          redirect: 'follow'
+        });
+        var saveData = await saveRes.json();
+        if (saveData.status === 'ok') {
+          alert('統合完了！\n重複判定: ' + dupCount + '件\nGAS保存件数: ' + saveData.count + '件');
           loadAddrMasterStats();
         } else {
-          alert('統合エラー: ' + (data.message || 'unknown'));
+          alert('統合エラー: ' + (saveData.message || 'unknown'));
         }
       } catch (e) {
         alert('統合失敗: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🧹 重複住所を統合';
       }
-      btn.disabled = false;
-      btn.textContent = '🧹 重複住所を統合';
     }
 
     // 未取得住所を一括ジオコーディング
