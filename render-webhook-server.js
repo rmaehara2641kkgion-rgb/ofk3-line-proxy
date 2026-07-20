@@ -300,12 +300,28 @@ app.post('/addr-master', async (req, res) => {
     var action = req.query.action || '';
     var url = ADDR_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
     console.log('addr-master POST:', url, 'body:', JSON.stringify(req.body).substring(0, 200));
+
+    // GAS WebアプリはPOST時に302リダイレクトを返す。
+    // axiosのリダイレクトフォローはPOST→GETに変換してしまうため、手動でリダイレクトをフォローする。
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
-      maxRedirects: 5,
+      maxRedirects: 0,
       timeout: 55000,
-      validateStatus: function() { return true; }
+      validateStatus: function(s) { return s < 400 || s === 302; }
     });
+
+    // 302リダイレクトの場合、locationヘッダーのURLにPOSTし直す
+    if (response.status === 302 && response.headers.location) {
+      var redirectUrl = response.headers.location;
+      console.log('addr-master POST redirect to:', redirectUrl);
+      response = await axios.post(redirectUrl, req.body, {
+        headers: { 'Content-Type': 'application/json' },
+        maxRedirects: 5,
+        timeout: 55000,
+        validateStatus: function() { return true; }
+      });
+    }
+
     console.log('addr-master POST response status:', response.status, 'data:', JSON.stringify(response.data).substring(0, 500));
     res.status(response.status).json(response.data);
   } catch (e) {
