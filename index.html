@@ -256,6 +256,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC分析</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
       </nav>
 
       <!-- Executive Dashboard Tab -->
@@ -1506,6 +1507,87 @@
         </div>
       </div>
 
+      <!-- WH60 労働時間管理 Tab -->
+      <div id="panel-wh60" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">⏱ WH60 労働時間管理</h2>
+            <p class="text-sm text-ink-lighter">週60時間超過防止 - アラート&LINE通知</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="wh60SendAlerts()" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">🚨 危険DA LINE送信</button>
+            <button onclick="wh60Send30minReminders()" class="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700">⏰ 帰庫30分前リマインド</button>
+          </div>
+        </div>
+
+        <!-- ファイル読込エリア -->
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          <div class="card p-4">
+            <h3 class="text-sm font-bold mb-2">① Amazon WHデータ読込</h3>
+            <p class="text-xs text-ink-lighter mb-2">Daily_AMZL_JP_Working_Hour の Excel をアップ</p>
+            <input type="file" id="wh60-file-wh" accept=".xlsx,.xls,.csv" onchange="wh60LoadWHFile(this)" class="block w-full text-sm text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700" />
+            <div id="wh60-wh-status" class="text-xs mt-2 text-ink-lighter"></div>
+          </div>
+          <div class="card p-4">
+            <h3 class="text-sm font-bold mb-2">② アサインデータ読込</h3>
+            <p class="text-xs text-ink-lighter mb-2">ルート_OFK3 の Excel をアップ（今日の予測時間）</p>
+            <input type="file" id="wh60-file-assign" accept=".xlsx,.xls,.csv" onchange="wh60LoadAssignFile(this)" class="block w-full text-sm text-gray-400 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700" />
+            <div id="wh60-assign-status" class="text-xs mt-2 text-ink-lighter"></div>
+          </div>
+        </div>
+
+        <!-- サマリーカード -->
+        <div class="grid grid-cols-4 gap-3 mb-4" id="wh60-summary">
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold" id="wh60-total-da">-</div>
+            <div class="text-xs text-ink-lighter">対象DA数</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-red-500">
+            <div class="text-2xl font-bold text-red-500" id="wh60-danger-count">-</div>
+            <div class="text-xs text-ink-lighter">🔴 危険（残≤12:30）</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-yellow-500">
+            <div class="text-2xl font-bold text-yellow-500" id="wh60-warn-count">-</div>
+            <div class="text-xs text-ink-lighter">🟡 注意（残≤24:00）</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-green-500">
+            <div class="text-2xl font-bold text-green-500" id="wh60-safe-count">-</div>
+            <div class="text-xs text-ink-lighter">🟢 安全</div>
+          </div>
+        </div>
+
+        <!-- DA一覧テーブル -->
+        <div class="card p-4">
+          <h3 class="text-sm font-bold mb-3">DA別 週間稼働状況</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs" id="wh60-table">
+              <thead>
+                <tr class="text-left text-ink-lighter border-b border-gray-700">
+                  <th class="p-2">状態</th>
+                  <th class="p-2">社名</th>
+                  <th class="p-2">名前</th>
+                  <th class="p-2">日</th>
+                  <th class="p-2">月</th>
+                  <th class="p-2">火</th>
+                  <th class="p-2">水</th>
+                  <th class="p-2">木</th>
+                  <th class="p-2">金</th>
+                  <th class="p-2">土</th>
+                  <th class="p-2 font-bold">合計</th>
+                  <th class="p-2 font-bold">残り</th>
+                  <th class="p-2">今日予測</th>
+                  <th class="p-2 font-bold">帰庫リミット</th>
+                  <th class="p-2">LINE</th>
+                </tr>
+              </thead>
+              <tbody id="wh60-tbody"></tbody>
+            </table>
+          </div>
+          <div id="wh60-empty" class="text-center text-ink-lighter py-8">Amazon WHデータを読み込んでください</div>
+        </div>
+        <div id="wh60-line-result" class="mt-3 text-sm"></div>
+      </div>
+
       <!-- MAP管理 Tab -->
       <div id="panel-map-master" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -2046,11 +2128,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume'];
+      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume', 'wh60'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -9737,6 +9819,474 @@
           }
         }
       });
+    }
+
+    // ===== WH60 労働時間管理 =====
+    var wh60Data = {};       // { transporter_id: { name, dsp, days: {0..6: hours}, weekTotal } }
+    var wh60AssignData = {};  // { transporter_id: { name, routeMin, departureTime } }
+    var wh60WeekStart = null; // 週の日曜日
+
+    function wh60LoadWHFile(input) {
+      var file = input.files[0];
+      if (!file) return;
+      var statusEl = document.getElementById('wh60-wh-status');
+      statusEl.textContent = '読み込み中...';
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var wb = XLSX.read(e.target.result, { type: 'array' });
+          // Report5_Daily_Data or 貼付 シートを探す
+          var sheetName = null;
+          for (var i = 0; i < wb.SheetNames.length; i++) {
+            var sn = wb.SheetNames[i];
+            if (sn === 'Report5_Daily_Data' || sn === '貼付') {
+              sheetName = sn;
+              break;
+            }
+          }
+          if (!sheetName) {
+            statusEl.innerHTML = '<span class="text-red-400">Report5_Daily_Data または 貼付 シートが見つかりません</span>';
+            return;
+          }
+          var ws = wb.Sheets[sheetName];
+          var rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          if (rows.length < 2) {
+            statusEl.innerHTML = '<span class="text-red-400">データが空です</span>';
+            return;
+          }
+          // ヘッダー検出
+          var hdr = rows[0];
+          var colTid = -1, colDay = -1, colHour = -1, colDsp = -1, colStart = -1, colEnd = -1;
+          for (var c = 0; c < hdr.length; c++) {
+            var h = String(hdr[c] || '').toLowerCase().trim();
+            if (h === 'transporter_id' || h === 'トランスポーターid') colTid = c;
+            else if (h === 'working_day' || h === '稼働日') colDay = c;
+            else if (h === 'estimated_working_hour' || h === '稼働時間') colHour = c;
+            else if (h === 'dsp') colDsp = c;
+            else if (h === 'estimated_start_time' || h === '開始時刻') colStart = c;
+            else if (h === 'estimated_end_time' || h === '終了時刻') colEnd = c;
+          }
+          // 貼付シートの場合、列番号で検出（A-R = Report5と同じ構造）
+          if (colTid === -1) {
+            // J列=transporter_id(9), F列=working_day(5), O列=hours(14), I列=dsp(8)
+            colTid = 9; colDay = 5; colHour = 14; colDsp = 8; colStart = 12; colEnd = 13;
+          }
+          if (colTid === -1 || colDay === -1 || colHour === -1) {
+            statusEl.innerHTML = '<span class="text-red-400">必要な列が見つかりません（transporter_id, working_day, estimated_working_hour）</span>';
+            return;
+          }
+
+          // 今週の日曜〜土曜を計算（日曜始まり）
+          var today = new Date();
+          var dayOfWeek = today.getDay(); // 0=日
+          wh60WeekStart = new Date(today);
+          wh60WeekStart.setDate(today.getDate() - dayOfWeek);
+          wh60WeekStart.setHours(0, 0, 0, 0);
+          var weekEnd = new Date(wh60WeekStart);
+          weekEnd.setDate(wh60WeekStart.getDate() + 7);
+
+          wh60Data = {};
+          var totalRows = 0;
+          var matchedRows = 0;
+          for (var r = 1; r < rows.length; r++) {
+            var row = rows[r];
+            var tid = String(row[colTid] || '').trim();
+            if (!tid) continue;
+            totalRows++;
+            var dayStr = String(row[colDay] || '').trim();
+            var workDate = wh60ParseDate(dayStr);
+            if (!workDate) continue;
+            // 今週のデータのみ
+            if (workDate < wh60WeekStart || workDate >= weekEnd) continue;
+            matchedRows++;
+            var hours = parseFloat(row[colHour]) || 0;
+            var dsp = String(row[colDsp] || '').trim();
+            var dow = workDate.getDay(); // 0=日〜6=土
+
+            if (!wh60Data[tid]) {
+              wh60Data[tid] = { name: '', dsp: dsp, days: {}, weekTotal: 0, startTimes: {} };
+            }
+            wh60Data[tid].days[dow] = (wh60Data[tid].days[dow] || 0) + hours;
+            wh60Data[tid].weekTotal += hours;
+            // 開始・終了時刻を保存（最新）
+            if (colStart >= 0 && row[colStart]) {
+              wh60Data[tid].startTimes[dow] = String(row[colStart] || '');
+            }
+          }
+
+          // ドライバー名はアサインデータ or lineMappingで後から紐付け
+          statusEl.innerHTML = '<span class="text-green-400">✓ ' + Object.keys(wh60Data).length + '名のDAデータ読込（今週 ' + matchedRows + '行 / 全' + totalRows + '行）</span>';
+          wh60Render();
+        } catch (ex) {
+          statusEl.innerHTML = '<span class="text-red-400">読込エラー: ' + ex.message + '</span>';
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function wh60ParseDate(str) {
+      if (!str) return null;
+      str = String(str).trim();
+      // 2026-07-18 or 2026/07/18 or Excel serial
+      if (/^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}/.test(str)) {
+        var parts = str.split(/[-\/T\s]/);
+        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      }
+      // Excel serial number
+      var num = parseFloat(str);
+      if (!isNaN(num) && num > 40000 && num < 60000) {
+        var d = new Date((num - 25569) * 86400000);
+        return d;
+      }
+      return null;
+    }
+
+    function wh60LoadAssignFile(input) {
+      var file = input.files[0];
+      if (!file) return;
+      var statusEl = document.getElementById('wh60-assign-status');
+      statusEl.textContent = '読み込み中...';
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          var wb = XLSX.read(e.target.result, { type: 'array' });
+          var ws = wb.Sheets[wb.SheetNames[0]];
+          var rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          if (rows.length < 2) {
+            statusEl.innerHTML = '<span class="text-red-400">データが空です</span>';
+            return;
+          }
+          var hdr = rows[0];
+          var colTid = -1, colName = -1, colDur = -1, colDepart = -1, colDsp = -1;
+          for (var c = 0; c < hdr.length; c++) {
+            var h = String(hdr[c] || '').trim();
+            if (h === '運送業者ID' || h.toLowerCase() === 'transporter_id') colTid = c;
+            else if (h === 'ドライバー名' || h.toLowerCase() === 'driver_name') colName = c;
+            else if (h === 'ルート所要時間' || h.toLowerCase() === 'route_duration') colDur = c;
+            else if (h === '出発予定時刻' || h.toLowerCase() === 'departure_time') colDepart = c;
+            else if (h === 'DSP' || h.toLowerCase() === 'dsp') colDsp = c;
+          }
+          if (colTid === -1) {
+            statusEl.innerHTML = '<span class="text-red-400">運送業者ID 列が見つかりません</span>';
+            return;
+          }
+
+          wh60AssignData = {};
+          var count = 0;
+          for (var r = 1; r < rows.length; r++) {
+            var row = rows[r];
+            var tidRaw = String(row[colTid] || '').trim();
+            if (!tidRaw) continue;
+            // 複数ID対応（A164ODSWJ41ITR|A3EMHDC2KJER40）
+            var tids = tidRaw.split('|');
+            var names = colName >= 0 ? String(row[colName] || '').split('|') : [];
+            var durMin = colDur >= 0 ? (parseFloat(row[colDur]) || 0) : 0;
+            var depart = colDepart >= 0 ? String(row[colDepart] || '').trim() : '';
+            var dsp = colDsp >= 0 ? String(row[colDsp] || '').trim() : '';
+            for (var t = 0; t < tids.length; t++) {
+              var tid = tids[t].trim();
+              if (!tid) continue;
+              var nm = (names[t] || '').trim();
+              if (!wh60AssignData[tid]) {
+                wh60AssignData[tid] = { name: nm, routeMin: 0, departureTime: depart, dsp: dsp };
+              }
+              wh60AssignData[tid].routeMin += durMin;
+              if (nm && !wh60AssignData[tid].name) wh60AssignData[tid].name = nm;
+              count++;
+            }
+          }
+
+          // WHデータに名前を紐付け
+          for (var tid in wh60AssignData) {
+            if (wh60Data[tid] && wh60AssignData[tid].name) {
+              wh60Data[tid].name = wh60AssignData[tid].name;
+            }
+            if (wh60Data[tid] && wh60AssignData[tid].dsp) {
+              wh60Data[tid].dsp = wh60AssignData[tid].dsp;
+            }
+          }
+
+          statusEl.innerHTML = '<span class="text-green-400">✓ ' + Object.keys(wh60AssignData).length + '名のアサインデータ読込（' + count + 'ルート）</span>';
+          wh60Render();
+        } catch (ex) {
+          statusEl.innerHTML = '<span class="text-red-400">読込エラー: ' + ex.message + '</span>';
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function wh60FormatHours(h) {
+      if (h === 0 || h === undefined || h === null) return '-';
+      var hrs = Math.floor(h);
+      var mins = Math.round((h - hrs) * 60);
+      if (mins === 60) { hrs++; mins = 0; }
+      return hrs + ':' + (mins < 10 ? '0' : '') + mins;
+    }
+
+    function wh60GetStatus(remaining) {
+      if (remaining <= 12.5) return { icon: '🔴', cls: 'text-red-500 font-bold', level: 'danger' };
+      if (remaining <= 24) return { icon: '🟡', cls: 'text-yellow-500', level: 'warn' };
+      return { icon: '🟢', cls: 'text-green-500', level: 'safe' };
+    }
+
+    function wh60CalcReturnLimit(tid) {
+      // 帰庫リミット = 出発時刻 + 残り時間（60h - 今週合計）
+      var assign = wh60AssignData[tid];
+      var wh = wh60Data[tid];
+      if (!assign || !wh) return '--:--';
+      var remaining = 60 - wh.weekTotal;
+      if (remaining <= 0) return '超過！';
+      var depart = assign.departureTime;
+      if (!depart) return '--:--';
+      // 出発時刻をパース "07:16" or "2026-07-20 07:16"
+      var timeParts = depart.match(/(\d{1,2}):(\d{2})/);
+      if (!timeParts) return '--:--';
+      var depH = parseInt(timeParts[1]);
+      var depM = parseInt(timeParts[2]);
+      var limitH = depH + Math.floor(remaining);
+      var limitM = depM + Math.round((remaining % 1) * 60);
+      if (limitM >= 60) { limitH++; limitM -= 60; }
+      if (limitH >= 24) return '--:--'; // 24時間超え=今日中は安全
+      return (limitH < 10 ? '0' : '') + limitH + ':' + (limitM < 10 ? '0' : '') + limitM;
+    }
+
+    function wh60Render() {
+      var tbody = document.getElementById('wh60-tbody');
+      var emptyEl = document.getElementById('wh60-empty');
+      var tids = Object.keys(wh60Data);
+      if (tids.length === 0) {
+        tbody.innerHTML = '';
+        emptyEl.classList.remove('hidden');
+        return;
+      }
+      emptyEl.classList.add('hidden');
+
+      // アサインデータから今日の予測時間を加算
+      var today = new Date();
+      var todayDow = today.getDay();
+      var daList = [];
+      for (var i = 0; i < tids.length; i++) {
+        var tid = tids[i];
+        var da = wh60Data[tid];
+        var assign = wh60AssignData[tid];
+        var todayPredictH = assign ? (assign.routeMin / 60) : 0;
+        // 今日の実績がまだない場合、予測を使う
+        if (!da.days[todayDow] && todayPredictH > 0) {
+          da.days[todayDow] = todayPredictH;
+          da.weekTotal = 0;
+          for (var d = 0; d < 7; d++) da.weekTotal += (da.days[d] || 0);
+        }
+        var remaining = 60 - da.weekTotal;
+        var status = wh60GetStatus(remaining);
+        var name = da.name || (assign ? assign.name : '') || tid.substring(0, 8) + '...';
+        var dsp = da.dsp || (assign ? assign.dsp : '') || '';
+        var lineId = wh60FindLineId(name);
+        daList.push({
+          tid: tid, name: name, dsp: dsp, da: da,
+          remaining: remaining, status: status,
+          todayPredictH: todayPredictH,
+          lineId: lineId
+        });
+      }
+
+      // 残り時間昇順（危険順）
+      daList.sort(function(a, b) { return a.remaining - b.remaining; });
+
+      var html = '';
+      var dangerCount = 0, warnCount = 0, safeCount = 0;
+      for (var i = 0; i < daList.length; i++) {
+        var d = daList[i];
+        if (d.status.level === 'danger') dangerCount++;
+        else if (d.status.level === 'warn') warnCount++;
+        else safeCount++;
+
+        var returnLimit = wh60CalcReturnLimit(d.tid);
+        var rowClass = d.status.level === 'danger' ? 'bg-red-900 bg-opacity-30' : (d.status.level === 'warn' ? 'bg-yellow-900 bg-opacity-20' : '');
+
+        html += '<tr class="border-b border-gray-800 ' + rowClass + '">';
+        html += '<td class="p-2 ' + d.status.cls + '">' + d.status.icon + '</td>';
+        html += '<td class="p-2">' + d.dsp + '</td>';
+        html += '<td class="p-2 font-medium">' + d.name + '</td>';
+        for (var dow = 0; dow < 7; dow++) {
+          var val = d.da.days[dow] || 0;
+          var tdCls = dow === todayDow ? 'bg-blue-900 bg-opacity-30 font-bold' : '';
+          html += '<td class="p-2 text-center ' + tdCls + '">' + (val ? wh60FormatHours(val) : '-') + '</td>';
+        }
+        html += '<td class="p-2 text-center font-bold">' + wh60FormatHours(d.da.weekTotal) + '</td>';
+        html += '<td class="p-2 text-center ' + d.status.cls + ' font-bold">' + wh60FormatHours(d.remaining > 0 ? d.remaining : 0) + '</td>';
+        html += '<td class="p-2 text-center">' + (d.todayPredictH > 0 ? wh60FormatHours(d.todayPredictH) : '-') + '</td>';
+        html += '<td class="p-2 text-center font-bold">' + returnLimit + '</td>';
+        html += '<td class="p-2 text-center">' + (d.lineId ? '<span class="text-green-400">✓</span>' : '<span class="text-gray-500">-</span>') + '</td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+
+      // サマリー更新
+      document.getElementById('wh60-total-da').textContent = daList.length;
+      document.getElementById('wh60-danger-count').textContent = dangerCount;
+      document.getElementById('wh60-warn-count').textContent = warnCount;
+      document.getElementById('wh60-safe-count').textContent = safeCount;
+    }
+
+    function wh60FindLineId(name) {
+      // lineMapping（ドライバー管理の連携済みマッピング）から検索
+      if (!name) return '';
+      // 完全一致
+      if (typeof lineMapping !== 'undefined' && lineMapping[name]) return lineMapping[name];
+      // 「姓名」逆順や空白違いに対応
+      var normalized = name.replace(/[\s　]+/g, '');
+      for (var key in lineMapping) {
+        if (key.replace(/[\s　]+/g, '') === normalized) return lineMapping[key];
+      }
+      // アサインデータの名前は「名 姓」形式（涼太 山口）→ 「山口 涼太」にも対応
+      var parts = name.split(/[\s　]+/);
+      if (parts.length === 2) {
+        var reversed = parts[1] + parts[0];
+        var reversedSp = parts[1] + ' ' + parts[0];
+        var reversedSpFull = parts[1] + '　' + parts[0];
+        for (var key in lineMapping) {
+          var k = key.replace(/[\s　]+/g, '');
+          if (k === reversed) return lineMapping[key];
+          if (key === reversedSp || key === reversedSpFull) return lineMapping[key];
+        }
+      }
+      return '';
+    }
+
+    async function wh60SendAlerts() {
+      var proxyUrl = (typeof lineSettings !== 'undefined' && lineSettings.gasProxyUrl) ? lineSettings.gasProxyUrl.trim() : '/proxy';
+      if (!proxyUrl) proxyUrl = '/proxy';
+      var adminId = 'U48be7d67e979988a2298c2b9b8cb8035';
+      var resultEl = document.getElementById('wh60-line-result');
+      resultEl.innerHTML = '送信中...';
+
+      var dangerDAs = [];
+      var tids = Object.keys(wh60Data);
+      for (var i = 0; i < tids.length; i++) {
+        var tid = tids[i];
+        var da = wh60Data[tid];
+        var remaining = 60 - da.weekTotal;
+        if (remaining <= 12.5) {
+          var assign = wh60AssignData[tid];
+          var name = da.name || (assign ? assign.name : '') || tid.substring(0, 10);
+          var lineId = wh60FindLineId(name);
+          var returnLimit = wh60CalcReturnLimit(tid);
+          dangerDAs.push({ tid: tid, name: name, remaining: remaining, lineId: lineId, returnLimit: returnLimit, dsp: da.dsp });
+        }
+      }
+
+      if (dangerDAs.length === 0) {
+        resultEl.innerHTML = '<span class="text-green-400">危険なDAはいません。全員安全です。</span>';
+        return;
+      }
+
+      // 管理者向けサマリーメッセージ
+      var adminMsg = '【WH60超過危険アラート】\n';
+      for (var i = 0; i < dangerDAs.length; i++) {
+        var d = dangerDAs[i];
+        adminMsg += '\n' + d.name + '（' + d.dsp + '）\n';
+        adminMsg += '  残り: ' + wh60FormatHours(d.remaining > 0 ? d.remaining : 0) + ' / 帰庫リミット: ' + d.returnLimit + '\n';
+      }
+
+      var sentCount = 0;
+      var failCount = 0;
+      try {
+        // 管理者に送信
+        var res = await fetch(proxyUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: adminMsg }] })
+        });
+        if (res.ok) sentCount++; else failCount++;
+
+        // 個別DAに送信
+        for (var i = 0; i < dangerDAs.length; i++) {
+          var d = dangerDAs[i];
+          if (!d.lineId) continue;
+          var personalMsg = '【60時間超過危険】\n' + d.name + 'さん\n\n';
+          personalMsg += '今週の稼働: ' + wh60FormatHours(60 - d.remaining) + '\n';
+          personalMsg += '残り: ' + wh60FormatHours(d.remaining > 0 ? d.remaining : 0) + '\n';
+          personalMsg += '帰庫リミット: ' + d.returnLimit + '\n\n';
+          personalMsg += '超過しないよう早めの帰庫をお願いします。';
+          var res2 = await fetch(proxyUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: d.lineId, messages: [{ type: 'text', text: personalMsg }] })
+          });
+          if (res2.ok) sentCount++; else failCount++;
+        }
+
+        resultEl.innerHTML = '<span class="text-green-400">✓ 送信完了（' + sentCount + '件送信' + (failCount > 0 ? '、' + failCount + '件失敗' : '') + '）</span>';
+      } catch (ex) {
+        resultEl.innerHTML = '<span class="text-red-400">通信エラー: ' + ex.message + '</span>';
+      }
+    }
+
+    async function wh60Send30minReminders() {
+      var proxyUrl = (typeof lineSettings !== 'undefined' && lineSettings.gasProxyUrl) ? lineSettings.gasProxyUrl.trim() : '/proxy';
+      if (!proxyUrl) proxyUrl = '/proxy';
+      var adminId = 'U48be7d67e979988a2298c2b9b8cb8035';
+      var resultEl = document.getElementById('wh60-line-result');
+      resultEl.innerHTML = '帰庫30分前リマインド送信中...';
+
+      var now = new Date();
+      var nowMin = now.getHours() * 60 + now.getMinutes();
+      var targets = [];
+      var tids = Object.keys(wh60Data);
+      for (var i = 0; i < tids.length; i++) {
+        var tid = tids[i];
+        var da = wh60Data[tid];
+        var remaining = 60 - da.weekTotal;
+        if (remaining <= 0 || remaining > 12.5) continue; // 危険レベルのみ
+        var returnLimit = wh60CalcReturnLimit(tid);
+        if (returnLimit === '--:--' || returnLimit === '超過！') continue;
+        var parts = returnLimit.split(':');
+        var limitMin = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        var diff = limitMin - nowMin;
+        // 帰庫30分前〜帰庫時刻の間のDAに送信（-5〜35分の範囲）
+        if (diff >= -5 && diff <= 35) {
+          var assign = wh60AssignData[tid];
+          var name = da.name || (assign ? assign.name : '') || tid.substring(0, 10);
+          var lineId = wh60FindLineId(name);
+          targets.push({ name: name, lineId: lineId, returnLimit: returnLimit, dsp: da.dsp, remaining: remaining });
+        }
+      }
+
+      if (targets.length === 0) {
+        resultEl.innerHTML = '<span class="text-yellow-400">帰庫30分前のDAはいません（現在 ' + (now.getHours() < 10 ? '0' : '') + now.getHours() + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + '）</span>';
+        return;
+      }
+
+      var sentCount = 0, failCount = 0;
+      try {
+        // 管理者にまとめ送信
+        var adminMsg = '【帰庫リマインド】\n';
+        for (var i = 0; i < targets.length; i++) {
+          adminMsg += targets[i].name + '（' + targets[i].dsp + '）→ ' + targets[i].returnLimit + ' 帰庫必須\n';
+        }
+        var res = await fetch(proxyUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: adminMsg }] })
+        });
+        if (res.ok) sentCount++; else failCount++;
+
+        // 個別DA
+        for (var i = 0; i < targets.length; i++) {
+          var t = targets[i];
+          if (!t.lineId) continue;
+          var msg = '【帰庫リマインド】\n' + t.name + 'さん\n\n';
+          msg += '帰庫リミット: ' + t.returnLimit + '\n';
+          msg += '残り稼働可能: ' + wh60FormatHours(t.remaining) + '\n\n';
+          msg += '60時間超過防止のため、早めの帰庫をお願いします。';
+          var res2 = await fetch(proxyUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: t.lineId, messages: [{ type: 'text', text: msg }] })
+          });
+          if (res2.ok) sentCount++; else failCount++;
+        }
+
+        resultEl.innerHTML = '<span class="text-green-400">✓ リマインド送信完了（' + sentCount + '件送信' + (failCount > 0 ? '、' + failCount + '件失敗' : '') + '）</span>';
+      } catch (ex) {
+        resultEl.innerHTML = '<span class="text-red-400">通信エラー: ' + ex.message + '</span>';
+      }
     }
 
     // ===== Actual Report パーサー =====
