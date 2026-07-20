@@ -9913,20 +9913,21 @@
           }
           // ヘッダー検出
           var hdr = rows[0];
-          var colTid = -1, colDay = -1, colHour = -1, colDsp = -1, colStart = -1, colEnd = -1;
+          var colTid = -1, colDay = -1, colHour = -1, colDsp = -1, colStart = -1, colEnd = -1, colStation = -1;
           for (var c = 0; c < hdr.length; c++) {
             var h = String(hdr[c] || '').toLowerCase().trim();
             if (h === 'transporter_id' || h === 'トランスポーターid') colTid = c;
             else if (h === 'working_day' || h === '稼働日') colDay = c;
             else if (h === 'estimated_working_hour' || h === '稼働時間') colHour = c;
             else if (h === 'dsp') colDsp = c;
+            else if (h === 'station_code' || h === 'ステーションコード') colStation = c;
             else if (h === 'estimated_start_time' || h === '開始時刻') colStart = c;
             else if (h === 'estimated_end_time' || h === '終了時刻') colEnd = c;
           }
           // 貼付シートの場合、列番号で検出（A-R = Report5と同じ構造）
           if (colTid === -1) {
-            // J列=transporter_id(9), F列=working_day(5), O列=hours(14), I列=dsp(8)
-            colTid = 9; colDay = 5; colHour = 14; colDsp = 8; colStart = 12; colEnd = 13;
+            // J列=transporter_id(9), F列=working_day(5), O列=hours(14), I列=dsp(8), G列=station_code(6)
+            colTid = 9; colDay = 5; colHour = 14; colDsp = 8; colStart = 12; colEnd = 13; colStation = 6;
           }
           if (colTid === -1 || colDay === -1 || colHour === -1) {
             statusEl.innerHTML = '<span class="text-red-400">必要な列が見つかりません（transporter_id, working_day, estimated_working_hour）</span>';
@@ -9958,10 +9959,11 @@
             matchedRows++;
             var hours = parseFloat(row[colHour]) || 0;
             var dsp = String(row[colDsp] || '').trim();
+            var station = colStation >= 0 ? String(row[colStation] || '').trim().toUpperCase() : '';
             var dow = workDate.getDay(); // 0=日〜6=土
 
-            // OFK3（GION）所属のみ
-            if (dsp.toUpperCase() !== 'GION') continue;
+            // OFK3ステーションのみ
+            if (station !== 'OFK3') continue;
             if (!wh60Data[tid]) {
               wh60Data[tid] = { name: '', dsp: dsp, days: {}, weekTotal: 0, startTimes: {} };
             }
