@@ -93,6 +93,7 @@ function jsonResponse(obj) {
 }
 
 function getSheet() {
+  Logger.log('SHEET_NAME=' + SHEET_NAME);
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
@@ -176,12 +177,10 @@ function batchSaveAddresses(entries) {
 function replaceAllAddresses(entries) {
   if (!entries || Object.keys(entries).length === 0) return 0;
   var sheet = getSheet();
-  // ヘッダー以外を全クリア
   var lastRow = sheet.getLastRow();
   if (lastRow > 1) {
     sheet.getRange(2, 1, lastRow - 1, 4).clear();
   }
-  // ユニーク化（同じ住所は座標ありを優先）
   var unique = {};
   for (var addr in entries) {
     var e = entries[addr];
@@ -304,11 +303,9 @@ function deduplicateAddresses() {
       var prevHasCoord = values[prevIdx][1] !== '' && values[prevIdx][2] !== '';
       var curHasCoord = values[i][1] !== '' && values[i][2] !== '';
       if (!prevHasCoord && curHasCoord) {
-        // 前のは座標なし、今のは座標あり → 前を削除
         rowsToDelete.push(prevIdx + 2);
         seen[addr] = i;
       } else {
-        // 今のを削除（前のを残す）
         rowsToDelete.push(i + 2);
       }
     } else {
@@ -316,7 +313,6 @@ function deduplicateAddresses() {
     }
   }
 
-  // 下の行から削除（行番号ズレ防止）
   rowsToDelete.sort(function(a, b) { return b - a; });
   for (var i = 0; i < rowsToDelete.length; i++) {
     sheet.deleteRow(rowsToDelete[i]);
