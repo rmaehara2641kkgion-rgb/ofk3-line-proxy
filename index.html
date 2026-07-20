@@ -516,6 +516,7 @@
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">実績データ更新</button>
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
+            <button onclick="sendBulkLineMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
           </div>
         </div>
         <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
@@ -6491,6 +6492,60 @@
       }
     }
 
+    // ===== 一斉LINE送信機能 =====
+    function sendBulkLineMessage() {
+      // LINE連携済みドライバー一覧を取得
+      var linkedDrivers = [];
+      for (var name in lineMapping) {
+        if (lineMapping[name] && lineMapping[name].indexOf('U') === 0) {
+          linkedDrivers.push(name);
+        }
+      }
+      if (linkedDrivers.length === 0) {
+        alert('LINE連携済みのドライバーがいません。\nドライバー管理タブでLINE IDを設定してください。');
+        return;
+      }
+      linkedDrivers.sort();
+      var msg = prompt('一斉送信メッセージを入力してください\n（LINE連携済み ' + linkedDrivers.length + '名に送信）\n\n対象: ' + linkedDrivers.join(', '));
+      if (!msg || !msg.trim()) return;
+      if (!confirm(linkedDrivers.length + '名に以下のメッセージを送信します:\n\n' + msg + '\n\nよろしいですか？')) return;
+      doBulkLineSend(linkedDrivers, msg.trim());
+    }
+
+    async function doBulkLineSend(drivers, message) {
+      var proxyUrl = (typeof lineSettings !== 'undefined' && lineSettings.gasProxyUrl) ? lineSettings.gasProxyUrl.trim() : '/proxy';
+      if (!proxyUrl) proxyUrl = '/proxy';
+      var sentCount = 0;
+      var failCount = 0;
+      var failNames = [];
+      for (var i = 0; i < drivers.length; i++) {
+        var name = drivers[i];
+        var lineId = lineMapping[name];
+        if (!lineId) continue;
+        try {
+          var res = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: lineId, messages: [{ type: 'text', text: message }] })
+          });
+          if (res.ok) {
+            sentCount++;
+          } else {
+            failCount++;
+            failNames.push(name);
+          }
+        } catch (e) {
+          failCount++;
+          failNames.push(name);
+        }
+      }
+      var result = '一斉LINE送信完了: ' + sentCount + '/' + drivers.length + '名に送信';
+      if (failCount > 0) {
+        result += '\n失敗(' + failCount + '名): ' + failNames.join(', ');
+      }
+      alert(result);
+    }
+
     // ===== 仕分けスキャン機能 =====
     var scanVoiceEnabled = true;
     var scanHistory = [];
@@ -9905,6 +9960,8 @@
             var dsp = String(row[colDsp] || '').trim();
             var dow = workDate.getDay(); // 0=日〜6=土
 
+            // OFK3（GION）所属のみ
+            if (dsp.toUpperCase() !== 'GION') continue;
             if (!wh60Data[tid]) {
               wh60Data[tid] = { name: '', dsp: dsp, days: {}, weekTotal: 0, startTimes: {} };
             }
