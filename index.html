@@ -1516,6 +1516,7 @@
             <p class="text-sm text-ink-lighter">週60時間超過防止 - アラート&LINE通知</p>
           </div>
           <div class="flex gap-2">
+            <button onclick="wh60SaveToServer()" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">💾 サーバー保存（自動アラートON）</button>
             <button onclick="wh60SendAlerts()" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">🚨 危険DA LINE送信</button>
             <button onclick="wh60Send30minReminders()" class="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700">⏰ 帰庫1時間前リマインド</button>
           </div>
@@ -10367,6 +10368,49 @@
         }
 
         resultEl.innerHTML = '<span class="text-green-400">✓ リマインド送信完了（' + sentCount + '件送信' + (failCount > 0 ? '、' + failCount + '件失敗' : '') + '）</span>';
+      } catch (ex) {
+        resultEl.innerHTML = '<span class="text-red-400">通信エラー: ' + ex.message + '</span>';
+      }
+    }
+
+    async function wh60SaveToServer() {
+      var resultEl = document.getElementById('wh60-line-result');
+      var tids = Object.keys(wh60Data);
+      if (tids.length === 0) {
+        resultEl.innerHTML = '<span class="text-red-400">先にWHデータを読み込んでください</span>';
+        return;
+      }
+      resultEl.innerHTML = 'サーバーに保存中...';
+      var drivers = [];
+      for (var i = 0; i < tids.length; i++) {
+        var tid = tids[i];
+        var da = wh60Data[tid];
+        var assign = wh60AssignData[tid];
+        var name = da.name || wh60NameMaster[tid] || (assign ? assign.name : '') || '';
+        var lineId = wh60FindLineId(name);
+        var returnLimit = wh60CalcReturnLimit(tid);
+        drivers.push({
+          tid: tid,
+          name: name,
+          dsp: da.dsp || '',
+          weekTotal: da.weekTotal,
+          remaining: 60 - da.weekTotal,
+          returnLimit: returnLimit,
+          lineId: lineId
+        });
+      }
+      try {
+        var res = await fetch('/wh60/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ drivers: drivers })
+        });
+        var data = await res.json();
+        if (res.ok) {
+          resultEl.innerHTML = '<span class="text-green-400">✓ サーバーに保存完了（' + data.count + '名）— 10分ごとに自動チェック＆LINE送信が有効です</span>';
+        } else {
+          resultEl.innerHTML = '<span class="text-red-400">保存エラー: ' + (data.error || res.status) + '</span>';
+        }
       } catch (ex) {
         resultEl.innerHTML = '<span class="text-red-400">通信エラー: ' + ex.message + '</span>';
       }
