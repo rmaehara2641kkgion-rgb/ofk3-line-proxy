@@ -10131,7 +10131,12 @@
     function wh60Render() {
       var tbody = document.getElementById('wh60-tbody');
       var emptyEl = document.getElementById('wh60-empty');
-      var tids = Object.keys(wh60Data);
+      // WHデータ + 名前マスタの全TIDを統合
+      var tidSet = {};
+      var tid;
+      for (tid in wh60Data) tidSet[tid] = true;
+      for (tid in wh60NameMaster) tidSet[tid] = true;
+      var tids = Object.keys(tidSet);
       if (tids.length === 0) {
         tbody.innerHTML = '';
         emptyEl.classList.remove('hidden');
@@ -10145,7 +10150,7 @@
       var daList = [];
       for (var i = 0; i < tids.length; i++) {
         var tid = tids[i];
-        var da = wh60Data[tid];
+        var da = wh60Data[tid] || { name: '', dsp: '', days: {}, weekTotal: 0, startTimes: {} };
         var assign = wh60AssignData[tid];
         var todayPredictH = assign ? (assign.routeMin / 60) : 0;
         // 今日の実績がまだない場合、予測を使う
@@ -10156,7 +10161,7 @@
         }
         var remaining = 60 - da.weekTotal;
         var status = wh60GetStatus(remaining);
-        var name = da.name || (assign ? assign.name : '') || tid.substring(0, 8) + '...';
+        var name = da.name || wh60NameMaster[tid] || (assign ? assign.name : '') || tid.substring(0, 8) + '...';
         var dsp = da.dsp || (assign ? assign.dsp : '') || '';
         var lineId = wh60FindLineId(name);
         daList.push({
