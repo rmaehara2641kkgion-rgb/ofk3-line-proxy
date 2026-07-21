@@ -2152,6 +2152,7 @@
       if (tab === 'scan') { updateScanStatus(); document.getElementById('scan-input') && document.getElementById('scan-input').focus(); }
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
+      if (tab === 'map-master') wh60LoadAddrStats();
     }
 
     // ===== File Upload - Assignment Data =====
@@ -7778,6 +7779,26 @@
     }
 
     // ============== MAP管理 - 住所マスター機能 ==============
+
+    // タブ切替時にGASからstatsだけ軽量取得（全件listを呼ばない）
+    async function wh60LoadAddrStats() {
+      var gasUrl = getAddrMasterGasUrl();
+      if (!gasUrl) return;
+      try {
+        var res = await fetch(gasUrl + '?action=stats', { redirect: 'follow' });
+        var data = await res.json();
+        if (data && data.status === 'ok') {
+          var elTotal = document.getElementById('addrmaster-total');
+          var elGeocoded = document.getElementById('addrmaster-geocoded');
+          var elPending = document.getElementById('addrmaster-pending');
+          if (elTotal) elTotal.textContent = data.total || 0;
+          if (elGeocoded) elGeocoded.textContent = data.geocoded || 0;
+          if (elPending) elPending.textContent = data.pending || 0;
+        }
+      } catch (e) {
+        console.error('wh60LoadAddrStats error:', e);
+      }
+    }
 
     async function refreshAddrMaster() {
       await loadAddrMasterFromSheet();
