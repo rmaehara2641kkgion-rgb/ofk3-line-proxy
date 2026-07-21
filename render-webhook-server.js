@@ -422,6 +422,149 @@ async function sendWelcomeMessage(userId) {
   }
 }
 
+// ===== WH60 自動アラート =====
+var wh60AlertData = []; // [{ tid, name, dsp, weekTotal, remaining, returnLimit, lineId, date }]
+var wh60SentAlerts = {}; // { "tid_date_type": true } — 重複送信防止
+
+// フロントからWH60データ保存
+app.post('/wh60/save', (req, res) => {
+  try {
+    var data = req.body;
+    if (!data || !Array.isArray(data.drivers)) {
+      return res.status(400).json({ error: 'drivers array required' });
+    }
+    wh60AlertData = data.drivers;
+    wh60SentAlerts = {}; // 新データで送信済みリセット
+    log('WH60 alert data saved: ' + wh60AlertData.length + ' drivers');
+    res.json({ status: 'ok', count: wh60AlertData.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// WH60データ確認用
+app.get('/wh60/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    driverCount: wh60AlertData.length,
+    sentAlerts: Object.keys(wh60SentAlerts).length,
+    lastCheck: wh60LastCheck || null
+  });
+});
+
+var wh60LastCheck = null;
+
+function wh60AutoCheck() {
+  if (wh60AlertData.length === 0) return;
+  var now = new Date();
+  var nowMin = now.getHours() * 60 + now.getMinutes();
+  var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  wh60LastCheck = now.toISOString();
+
+  var dangerDAs = [];
+  var reminderDAs = [];
+
+  for (var i = 0; i < wh60AlertData.length; i++) {
+    var da = wh60AlertData[i];
+    var remaining = parseFloat(da.remaining) || 60;
+    var returnLimit = da.returnLimit || '--:--';
+
+    // 危険アラート（残り≤12.5h、1回だけ送信）
+    if (remaining <= 12.5) {
+      var dangerKey = da.tid + '_' + today + '_danger';
+      if (!wh60SentAlerts[dangerKey]) {
+        dangerDAs.push(da);
+        wh60SentAlerts[dangerKey] = true;
+      }
+    }
+
+    // 帰庫1時間前リマインド
+    if (returnLimit !== '--:--' && returnLimit !== '超過！' && remaining > 0 && remaining <= 12.5) {
+      var parts = returnLimit.split(':');
+      var limitMin = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+      var diff = limitMin - nowMin;
+      if (diff >= -5 && diff <= 65) {
+        var reminderKey = da.tid + '_' + today + '_reminder';
+        if (!wh60SentAlerts[reminderKey]) {
+          reminderDAs.push(da);
+          wh60SentAlerts[reminderKey] = true;
+        }
+      }
+    }
+  }
+
+  // 危険アラート送信
+  if (dangerDAs.length > 0) {
+    var adminMsg = '【WH60超過危険アラート（自動）】\n';
+    for (var i = 0; i < dangerDAs.length; i++) {
+      var d = dangerDAs[i];
+      var rh = Math.floor(d.remaining);
+      var rm = Math.round((d.remaining - rh) * 60);
+      adminMsg += '\n' + d.name + '（' + (d.dsp || '') + '）\n';
+      adminMsg += '  残り: ' + rh + ':' + String(rm).padStart(2, '0') + ' / 帰庫リミット: ' + (d.returnLimit || '--:--') + '\n';
+    }
+    wh60SendLine(ADMIN_LINE_ID || 'U48be7d67e979988a2298c2b9b8cb8035', adminMsg);
+
+    // 個別DA送信
+    for (var i = 0; i < dangerDAs.length; i++) {
+      var d = dangerDAs[i];
+      if (!d.lineId) continue;
+      var rh = Math.floor(d.remaining);
+      var rm = Math.round((d.remaining - rh) * 60);
+      var msg = '【60時間超過危険】\n' + d.name + 'さん\n\n';
+      msg += '今週の稼働: ' + Math.floor(60 - d.remaining) + ':' + String(Math.round(((60 - d.remaining) % 1) * 60)).padStart(2, '0') + '\n';
+      msg += '残り: ' + rh + ':' + String(rm).padStart(2, '0') + '\n';
+      msg += '帰庫リミット: ' + (d.returnLimit || '--:--') + '\n\n';
+      msg += '超過しないよう早めの帰庫をお願いします。';
+      wh60SendLine(d.lineId, msg);
+    }
+    log('WH60 danger alerts sent: ' + dangerDAs.length + ' drivers');
+  }
+
+  // 帰庫1時間前リマインド送信
+  if (reminderDAs.length > 0) {
+    var adminMsg2 = '【帰庫リマインド（自動）】\n';
+    for (var i = 0; i < reminderDAs.length; i++) {
+      adminMsg2 += reminderDAs[i].name + '（' + (reminderDAs[i].dsp || '') + '）→ ' + reminderDAs[i].returnLimit + ' 帰庫必須\n';
+    }
+    wh60SendLine(ADMIN_LINE_ID || 'U48be7d67e979988a2298c2b9b8cb8035', adminMsg2);
+
+    for (var i = 0; i < reminderDAs.length; i++) {
+      var t = reminderDAs[i];
+      if (!t.lineId) continue;
+      var rh2 = Math.floor(t.remaining);
+      var rm2 = Math.round((t.remaining - rh2) * 60);
+      var msg2 = '【帰庫リマインド】\n' + t.name + 'さん\n\n';
+      msg2 += '帰庫リミット: ' + t.returnLimit + '\n';
+      msg2 += '残り稼働可能: ' + rh2 + ':' + String(rm2).padStart(2, '0') + '\n\n';
+      msg2 += '60時間超過防止のため、帰庫時刻を意識して行動してください。';
+      wh60SendLine(t.lineId, msg2);
+    }
+    log('WH60 reminder alerts sent: ' + reminderDAs.length + ' drivers');
+  }
+}
+
+async function wh60SendLine(to, text) {
+  if (!to || !CHANNEL_ACCESS_TOKEN) return;
+  try {
+    await axios.post('https://api.line.me/v2/bot/message/push', {
+      to: to,
+      messages: [{ type: 'text', text: text }]
+    }, {
+      headers: {
+        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (err) {
+    log('WH60 LINE send error:', err.response ? err.response.data : err.message);
+  }
+}
+
+// 10分ごとに自動チェック
+setInterval(wh60AutoCheck, 10 * 60 * 1000);
+log('WH60 auto-alert started (every 10 min)');
+
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
 });
