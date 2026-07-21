@@ -1517,7 +1517,7 @@
           </div>
           <div class="flex gap-2">
             <button onclick="wh60SendAlerts()" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">🚨 危険DA LINE送信</button>
-            <button onclick="wh60Send30minReminders()" class="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700">⏰ 帰庫30分前リマインド</button>
+            <button onclick="wh60Send30minReminders()" class="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700">⏰ 帰庫1時間前リマインド</button>
           </div>
         </div>
 
@@ -9882,6 +9882,16 @@
     var wh60Data = {};       // { transporter_id: { name, dsp, days: {0..6: hours}, weekTotal } }
     var wh60AssignData = {};  // { transporter_id: { name, routeMin, departureTime } }
     var wh60WeekStart = null; // 週の日曜日
+    // TransportID→名前マスタ（localStorageに永続化）
+    var wh60NameMaster = {};
+    try {
+      var savedMaster = localStorage.getItem('wh60NameMaster');
+      if (savedMaster) wh60NameMaster = JSON.parse(savedMaster);
+    } catch(e) {}
+
+    function wh60SaveNameMaster() {
+      try { localStorage.setItem('wh60NameMaster', JSON.stringify(wh60NameMaster)); } catch(e) {}
+    }
 
     function wh60LoadWHFile(input) {
       var file = input.files[0];
@@ -9975,7 +9985,10 @@
             }
           }
 
-          // ドライバー名はアサインデータ or lineMappingで後から紐付け
+          // ドライバー名はアサインデータ or 名前マスタから紐付け
+          for (var tid in wh60Data) {
+            if (wh60NameMaster[tid]) wh60Data[tid].name = wh60NameMaster[tid];
+          }
           statusEl.innerHTML = '<span class="text-green-400">✓ ' + Object.keys(wh60Data).length + '名のDAデータ読込（今週 ' + matchedRows + '行 / 全' + totalRows + '行）</span>';
           wh60Render();
         } catch (ex) {
@@ -10057,8 +10070,11 @@
             }
           }
 
-          // WHデータに名前を紐付け
+          // WHデータに名前を紐付け + 名前マスタ保存
           for (var tid in wh60AssignData) {
+            if (wh60AssignData[tid].name) {
+              wh60NameMaster[tid] = wh60AssignData[tid].name;
+            }
             if (wh60Data[tid] && wh60AssignData[tid].name) {
               wh60Data[tid].name = wh60AssignData[tid].name;
             }
@@ -10066,6 +10082,7 @@
               wh60Data[tid].dsp = wh60AssignData[tid].dsp;
             }
           }
+          wh60SaveNameMaster();
 
           statusEl.innerHTML = '<span class="text-green-400">✓ ' + Object.keys(wh60AssignData).length + '名のアサインデータ読込（' + count + 'ルート）</span>';
           wh60Render();
@@ -10286,7 +10303,7 @@
       if (!proxyUrl) proxyUrl = '/proxy';
       var adminId = 'U48be7d67e979988a2298c2b9b8cb8035';
       var resultEl = document.getElementById('wh60-line-result');
-      resultEl.innerHTML = '帰庫30分前リマインド送信中...';
+      resultEl.innerHTML = '帰庫1時間前リマインド送信中...';
 
       var now = new Date();
       var nowMin = now.getHours() * 60 + now.getMinutes();
@@ -10302,8 +10319,8 @@
         var parts = returnLimit.split(':');
         var limitMin = parseInt(parts[0]) * 60 + parseInt(parts[1]);
         var diff = limitMin - nowMin;
-        // 帰庫30分前〜帰庫時刻の間のDAに送信（-5〜35分の範囲）
-        if (diff >= -5 && diff <= 35) {
+        // 帰庫1時間前〜帰庫時刻の間のDAに送信（-5〜65分の範囲）
+        if (diff >= -5 && diff <= 65) {
           var assign = wh60AssignData[tid];
           var name = da.name || (assign ? assign.name : '') || tid.substring(0, 10);
           var lineId = wh60FindLineId(name);
@@ -10312,7 +10329,7 @@
       }
 
       if (targets.length === 0) {
-        resultEl.innerHTML = '<span class="text-yellow-400">帰庫30分前のDAはいません（現在 ' + (now.getHours() < 10 ? '0' : '') + now.getHours() + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + '）</span>';
+        resultEl.innerHTML = '<span class="text-yellow-400">帰庫1時間前のDAはいません（現在 ' + (now.getHours() < 10 ? '0' : '') + now.getHours() + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + '）</span>';
         return;
       }
 
@@ -10336,7 +10353,7 @@
           var msg = '【帰庫リマインド】\n' + t.name + 'さん\n\n';
           msg += '帰庫リミット: ' + t.returnLimit + '\n';
           msg += '残り稼働可能: ' + wh60FormatHours(t.remaining) + '\n\n';
-          msg += '60時間超過防止のため、早めの帰庫をお願いします。';
+          msg += '60時間超過防止のため、帰庫時刻を意識して行動してください。';
           var res2 = await fetch(proxyUrl, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ to: t.lineId, messages: [{ type: 'text', text: msg }] })
