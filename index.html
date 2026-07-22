@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>配送管理 - OFK3</title>
+  <link rel="icon" type="image/png" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
+  <link rel="apple-touch-icon" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -75,10 +77,16 @@
 
     /* === Header (light translucent) === */
     header#app-header {
-      background: rgba(255, 255, 255, 0.72);
+      background: rgba(10, 10, 15, 0.92);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
-      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    header#app-header h1,
+    header#app-header span,
+    header#app-header .text-sm,
+    header#app-header button {
+      color: #f1f5f9;
     }
 
     /* === Text Colors (light theme) === */
