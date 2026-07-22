@@ -255,7 +255,8 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC/LAT/DNR</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('quality')" id="tab-quality">🛡 品質管理</button>
         <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
@@ -1097,13 +1098,12 @@
       <div id="panel-ftds" class="hidden">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h2 class="text-sm font-medium">📋 FTDS / CC / LAT分析</h2>
-            <p class="text-xs text-ink-lighter mt-1">FTDS・Contact Compliance・LATのTransportIDをマスタと突合してドライバー名を特定</p>
+            <h2 class="text-sm font-medium">📋 FTDS / CC</h2>
+            <p class="text-xs text-ink-lighter mt-1">FTDS・Contact ComplianceのTransportIDをマスタと突合してドライバー名を特定</p>
           </div>
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled>CC エクスポート</button>
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportLatResult()" id="lat-export-btn" disabled>LAT エクスポート</button>
           </div>
         </div>
 
@@ -1126,29 +1126,6 @@
             <p class="text-ink-lighter text-sm font-medium">📞 Contact Compliance</p>
             <p class="text-xs text-ink-lighter mt-1">xlsxをドラッグ＆ドロップ</p>
             <input type="file" id="cc-file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleCcFile(this.files[0])">
-          </div>
-        </div>
-
-        <!-- LAT分析 Drop zones -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-          <div id="dsp-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-orange-500 hover:bg-orange-50 transition"
-               ondragover="event.preventDefault();this.classList.add('border-orange-500','bg-orange-50')"
-               ondragleave="this.classList.remove('border-orange-500','bg-orange-50')"
-               ondrop="event.preventDefault();this.classList.remove('border-orange-500','bg-orange-50');handleDspDrop(event)"
-               onclick="document.getElementById('dsp-file-input').click()">
-            <p class="text-ink-lighter text-sm font-medium">🚛 DSPルートファイル</p>
-            <p class="text-xs text-ink-lighter mt-1">CSVをドラッグ＆ドロップ（route_id→TransportID紐づけ用）</p>
-            <p class="text-xs text-green-600 mt-1 hidden" id="dsp-loaded-msg">✅ 読込済</p>
-            <input type="file" id="dsp-file-input" accept=".csv,.xlsx,.xls" class="hidden" onchange="handleDspFile(this.files[0])">
-          </div>
-          <div id="lat-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition"
-               ondragover="event.preventDefault();this.classList.add('border-purple-500','bg-purple-50')"
-               ondragleave="this.classList.remove('border-purple-500','bg-purple-50')"
-               ondrop="event.preventDefault();this.classList.remove('border-purple-500','bg-purple-50');handleLatDrop(event)"
-               onclick="document.getElementById('lat-file-input').click()">
-            <p class="text-ink-lighter text-sm font-medium">📡 LAT（フライングログイン）</p>
-            <p class="text-xs text-ink-lighter mt-1">xlsxをドラッグ＆ドロップ</p>
-            <input type="file" id="lat-file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleLatFile(this.files[0])">
           </div>
         </div>
 
@@ -1294,7 +1271,161 @@
           </div>
         </div>
 
-        <!-- ===== LAT分析 Section ===== -->
+      </div>
+
+      <!-- ===== 品質管理 Tab ===== -->
+      <div id="panel-quality" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-medium">🛡 品質管理（Quality）</h2>
+            <p class="text-xs text-ink-lighter mt-1">DNR・LAT・クレームデータを統合分析</p>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportDnrResult()" id="dnr-export-btn" disabled>DNR エクスポート</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportLatResult()" id="lat-export-btn" disabled>LAT エクスポート</button>
+          </div>
+        </div>
+
+        <!-- 品質統合サマリー -->
+        <div id="quality-summary" class="hidden mb-4">
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div class="card p-3 text-center border-l-4 border-yellow-500">
+              <div class="text-xs text-ink-lighter">DNR件数</div>
+              <div class="text-lg font-bold text-yellow-500" id="q-dnr-count">0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-red-500">
+              <div class="text-xs text-ink-lighter">DNR損害金額</div>
+              <div class="text-lg font-bold text-red-500" id="q-dnr-cost">¥0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-orange-500">
+              <div class="text-xs text-ink-lighter">LAT早着出発</div>
+              <div class="text-lg font-bold text-orange-500" id="q-lat-early">0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-green-500">
+              <div class="text-xs text-ink-lighter">LAT定刻出発</div>
+              <div class="text-lg font-bold text-green-500" id="q-lat-ontime">0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-purple-500">
+              <div class="text-xs text-ink-lighter">品質スコア</div>
+              <div class="text-lg font-bold text-purple-500" id="q-score">-</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ドロップゾーン3列 -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div id="dnr-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-yellow-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#eab308'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDnrDrop(event)">
+            <p class="text-sm text-ink-lighter mb-1">🚫 DNRデータ</p>
+            <p class="text-xs text-ink-lighter">xlsxドロップ</p>
+            <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="dnr-file-input" onchange="handleDnrFile(this.files[0])">
+            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dnr-file-input').click()">選択</button>
+            <p id="dnr-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
+          </div>
+          <div id="dsp-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-orange-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#f97316'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDspDrop(event)">
+            <p class="text-sm text-ink-lighter mb-1">🚛 DSPルート</p>
+            <p class="text-xs text-ink-lighter">CSV（LAT用）</p>
+            <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="handleDspFile(this.files[0])">
+            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dsp-file-input').click()">選択</button>
+            <p id="dsp-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
+          </div>
+          <div id="lat-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-purple-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#a855f7'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleLatDrop(event)">
+            <p class="text-sm text-ink-lighter mb-1">📡 LATデータ</p>
+            <p class="text-xs text-ink-lighter">xlsxドロップ</p>
+            <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="lat-file-input" onchange="handleLatFile(this.files[0])">
+            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('lat-file-input').click()">選択</button>
+          </div>
+        </div>
+
+        <!-- ========== DNR分析セクション ========== -->
+        <div id="dnr-section">
+          <!-- DNRダッシュボード -->
+          <div id="dnr-dashboard" class="hidden mb-4">
+            <h3 class="text-sm font-medium mb-2">🚫 DNR分析（Delivered Not Received）</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <div class="card p-3 text-center">
+                <div class="text-xs text-ink-lighter">DNR件数</div>
+                <div class="text-2xl font-bold text-yellow-500" id="dnr-total">0</div>
+              </div>
+              <div class="card p-3 text-center">
+                <div class="text-xs text-ink-lighter">損害金額</div>
+                <div class="text-2xl font-bold text-red-500" id="dnr-cost-total">¥0</div>
+              </div>
+              <div class="card p-3 text-center">
+                <div class="text-xs text-ink-lighter">ドライバー特定</div>
+                <div class="text-2xl font-bold text-emerald-500" id="dnr-matched">0</div>
+              </div>
+              <div class="card p-3 text-center">
+                <div class="text-xs text-ink-lighter">未特定</div>
+                <div class="text-2xl font-bold text-red-600" id="dnr-unmatched-count">0</div>
+              </div>
+            </div>
+
+            <!-- DNR理由ランキング + ドライバーランキング -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div class="card p-4">
+                <h4 class="text-xs font-medium mb-2 text-ink-lighter">📊 DNR理由ランキング</h4>
+                <div id="dnr-reason-ranking"></div>
+              </div>
+              <div class="card p-4">
+                <h4 class="text-xs font-medium mb-2 text-ink-lighter">👤 ドライバーランキング</h4>
+                <div id="dnr-driver-ranking"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- DNR地図 -->
+          <div id="dnr-map-section" class="hidden mb-4">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-sm font-medium">📍 DNR発生地図</h3>
+              <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="dnrOpenLineModal()">📱 LINE送信</button>
+            </div>
+            <div id="dnr-map" style="height:400px; border-radius:8px;" class="card"></div>
+          </div>
+
+          <!-- DNR明細テーブル -->
+          <div id="dnr-detail-section" class="hidden mb-4">
+            <h3 class="text-sm font-medium mb-2">DNR明細</h3>
+            <div class="card overflow-hidden">
+              <div class="overflow-x-auto" style="max-height:500px; overflow-y:auto;">
+                <table class="w-full text-sm">
+                  <thead class="sticky top-0 bg-surface z-10">
+                    <tr class="border-b border-border">
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
+                      <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">配達日</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DS</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DSP</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">TrackingID</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DNR理由</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">住所</th>
+                      <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">個数</th>
+                      <th class="px-2 py-2 text-right text-xs font-medium text-ink-lighter">金額</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dnr-detail-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DNR LINE送信モーダル -->
+        <div id="dnr-line-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center">
+          <div class="bg-surface rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b border-border">
+              <h3 class="text-sm font-bold">📱 DNR LINE送信プレビュー</h3>
+              <button onclick="dnrCloseLineModal()" class="text-ink-lighter hover:text-ink text-xl">&times;</button>
+            </div>
+            <div class="p-4 overflow-y-auto flex-1">
+              <div id="dnr-line-preview" class="rounded-lg p-4" style="background:#7494C0; min-height:200px;"></div>
+            </div>
+            <div class="p-4 border-t border-border flex gap-2">
+              <button onclick="dnrCloseLineModal()" class="btn-secondary text-xs px-4 py-2 rounded flex-1">キャンセル</button>
+              <button onclick="dnrConfirmLineSend()" class="bg-green-600 text-white text-xs px-4 py-2 rounded flex-1 font-bold">LINE送信</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========== LAT分析セクション ========== -->
         <hr class="my-6 border-border">
 
         <!-- LAT Summary -->
@@ -1372,80 +1503,6 @@
         <div id="lat-timeline-visual" class="hidden mb-4">
           <h3 class="text-sm font-medium mb-2">⏱ タイムライン視覚化</h3>
           <div class="card p-4" id="lat-timeline-bars"></div>
-        </div>
-
-        <!-- ===== DNR分析 Section ===== -->
-        <hr class="my-6 border-border">
-        <div class="card p-4 mb-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-medium">🚫 DNR分析（Did Not Receive）</h3>
-            <div class="flex gap-2">
-              <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportDnrResult()" id="dnr-export-btn" disabled>DNR エクスポート</button>
-            </div>
-          </div>
-          <div id="dnr-drop-zone" class="border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-yellow-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#eab308'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDnrDrop(event)">
-            <p class="text-sm text-ink-lighter mb-1">📄 DNRデータ (.xlsx) をドロップ</p>
-            <p class="text-xs text-ink-lighter">TransportIDからドライバーを自動照合</p>
-            <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="dnr-file-input" onchange="handleDnrFile(this.files[0])">
-            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dnr-file-input').click()">ファイル選択</button>
-            <p id="dnr-loaded-msg" class="text-xs text-green-400 mt-2 hidden"></p>
-          </div>
-        </div>
-
-        <!-- DNR Summary -->
-        <div id="dnr-summary" class="hidden mb-4">
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">総件数</div>
-              <div class="text-lg font-bold" id="dnr-total">0</div>
-            </div>
-            <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">ドライバー特定</div>
-              <div class="text-lg font-bold text-emerald-600" id="dnr-matched">0</div>
-            </div>
-            <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">未特定</div>
-              <div class="text-lg font-bold text-red-600" id="dnr-unmatched-count">0</div>
-            </div>
-            <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">対象ドライバー数</div>
-              <div class="text-lg font-bold text-yellow-500" id="dnr-driver-count">0</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- DNR Driver Summary Table -->
-        <div id="dnr-driver-summary" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">ドライバー別DNR集計</h3>
-          <div class="card overflow-hidden mb-4">
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead class="sticky top-0 bg-surface z-10">
-                  <tr class="border-b border-border">
-                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">件数</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">ルートID</th>
-                  </tr>
-                </thead>
-                <tbody id="dnr-driver-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <!-- DNR Detail Table -->
-        <div id="dnr-detail-section" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">DNR明細</h3>
-          <div class="card overflow-hidden">
-            <div class="overflow-x-auto" style="max-height:500px; overflow-y:auto;">
-              <table class="w-full text-sm">
-                <thead class="sticky top-0 bg-surface z-10">
-                  <tr class="border-b border-border" id="dnr-detail-thead"></tr>
-                </thead>
-                <tbody id="dnr-detail-tbody"></tbody>
-              </table>
-            </div>
-          </div>
         </div>
 
       </div>
@@ -2468,11 +2525,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract','tab-quality'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract','quality':'tab-quality'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['dashboard', 'optimization', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'exec', 'billing'];
+      var allTabs = ['dashboard', 'optimization', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'quality', 'exec', 'billing'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -12258,6 +12315,7 @@
       }
 
       renderLatResults();
+      updateQualitySummary();
     }
 
     function renderLatResults() {
@@ -12449,7 +12507,17 @@
 
     // ===== DNR分析 =====
     var dnrResultData = [];
-    var dnrHeaders = [];
+    var dnrMap = null; // Leaflet map
+
+    // DNR保持列定義
+    var DNR_KEEP_COLS = ['delivery_date_jst', 'delivery_station_code', 'provider_company_name', 'transporter_id', 'tracking_id', 'shipment_reason', 'state', 'postal_code', 'address', 'scan_gps_latitude', 'scan_gps_longitude', 'conceded_units', 'dnr_cost_jpy'];
+    var DNR_COL_LABELS = {
+      'delivery_date_jst': '配達日', 'delivery_station_code': 'DS', 'provider_company_name': 'DSP名',
+      'transporter_id': 'TransportID', 'tracking_id': 'TrackingID', 'shipment_reason': 'DNR理由',
+      'state': '都道府県', 'postal_code': '郵便番号', 'address': '住所',
+      'scan_gps_latitude': '緯度', 'scan_gps_longitude': '経度',
+      'conceded_units': '個数', 'dnr_cost_jpy': '金額(円)'
+    };
 
     function handleDnrDrop(event) {
       var file = event.dataTransfer.files[0];
@@ -12466,26 +12534,23 @@
         var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
         if (json.length < 2) { alert('DNRファイルにデータがありません'); return; }
 
-        var headers = json[0];
-        dnrHeaders = [];
+        var headers = [];
+        for (var h = 0; h < json[0].length; h++) {
+          headers.push(String(json[0][h] || '').trim().toLowerCase());
+        }
+
+        // 列インデックスマップ
+        var colIdx = {};
         for (var h = 0; h < headers.length; h++) {
-          dnrHeaders.push(String(headers[h] || '').trim());
+          colIdx[headers[h]] = h;
         }
 
-        // TransportID列を探す（I列=index8 or ヘッダー名で検索）
-        var tidIdx = -1;
-        for (var h = 0; h < dnrHeaders.length; h++) {
-          var hn = dnrHeaders[h].toLowerCase().replace(/[\s_-]/g, '');
-          if (hn === 'transportid' || hn === 'transport_id') { tidIdx = h; break; }
+        // transporter_id列を探す（フォールバック: I列）
+        var tidIdx = colIdx['transporter_id'] !== undefined ? colIdx['transporter_id'] : -1;
+        if (tidIdx < 0) {
+          for (var hh in colIdx) { if (hh.replace(/[_\s]/g, '') === 'transporterid' || hh.replace(/[_\s]/g, '') === 'transportid') { tidIdx = colIdx[hh]; break; } }
         }
-        if (tidIdx < 0 && dnrHeaders.length > 8) tidIdx = 8; // I列 fallback
-
-        // route_id列を探す
-        var ridIdx = -1;
-        for (var h = 0; h < dnrHeaders.length; h++) {
-          var hn2 = dnrHeaders[h].toLowerCase().replace(/[\s_-]/g, '');
-          if (hn2 === 'routeid' || hn2 === 'route_id') { ridIdx = h; break; }
-        }
+        if (tidIdx < 0 && headers.length > 8) tidIdx = 8;
 
         var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
 
@@ -12495,34 +12560,32 @@
           if (!row || row.length === 0) continue;
 
           var transportId = tidIdx >= 0 && row[tidIdx] ? String(row[tidIdx]).trim() : '';
-          var routeId = ridIdx >= 0 && row[ridIdx] ? String(row[ridIdx]).trim() : '';
 
-          // TransportIDからドライバー名照合
+          // ドライバー照合
           var driverName = '';
           if (transportId) {
             for (var tname in tids) {
-              if (tids[tname] === transportId) {
-                driverName = tname;
-                break;
-              }
+              if (tids[tname] === transportId) { driverName = tname; break; }
             }
             if (driverName && driverJapaneseNames[driverName]) {
               driverName = driverJapaneseNames[driverName] + ' (' + driverName + ')';
             }
           }
 
-          // 全列のデータを保持
-          var rowData = [];
-          for (var c = 0; c < dnrHeaders.length; c++) {
-            rowData.push(row[c] !== undefined && row[c] !== null ? String(row[c]) : '');
+          // 必要列のみ抽出
+          var rec = { driverName: driverName };
+          for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
+            var col = DNR_KEEP_COLS[k];
+            var idx = colIdx[col];
+            rec[col] = (idx !== undefined && row[idx] !== undefined && row[idx] !== null) ? String(row[idx]).trim() : '';
           }
+          // 金額を数値化
+          rec._cost = parseFloat(rec.dnr_cost_jpy) || 0;
+          rec._units = parseInt(rec.conceded_units) || 0;
+          rec._lat = parseFloat(rec.scan_gps_latitude) || 0;
+          rec._lng = parseFloat(rec.scan_gps_longitude) || 0;
 
-          dnrResultData.push({
-            rowData: rowData,
-            transportId: transportId,
-            routeId: routeId,
-            driverName: driverName
-          });
+          dnrResultData.push(rec);
         }
 
         var cnt = dnrResultData.length;
@@ -12531,6 +12594,7 @@
         document.getElementById('dnr-drop-zone').style.borderColor = '#eab308';
 
         renderDnrResults();
+        updateQualitySummary();
       };
       reader.readAsArrayBuffer(file);
     }
@@ -12538,80 +12602,225 @@
     function renderDnrResults() {
       if (dnrResultData.length === 0) return;
 
-      var matched = 0, unmatched = 0;
-      var driverMap = {}; // driverName -> { count, routeIds }
+      var matched = 0, unmatched = 0, totalCost = 0;
+      var driverMap = {};
+      var reasonMap = {};
 
       for (var i = 0; i < dnrResultData.length; i++) {
         var r = dnrResultData[i];
+        totalCost += r._cost;
+
         if (r.driverName) {
           matched++;
-          if (!driverMap[r.driverName]) driverMap[r.driverName] = { count: 0, routeIds: {} };
+          if (!driverMap[r.driverName]) driverMap[r.driverName] = { count: 0, cost: 0 };
           driverMap[r.driverName].count++;
-          if (r.routeId) driverMap[r.driverName].routeIds[r.routeId] = true;
+          driverMap[r.driverName].cost += r._cost;
         } else {
           unmatched++;
         }
+
+        var reason = r.shipment_reason || '不明';
+        if (!reasonMap[reason]) reasonMap[reason] = 0;
+        reasonMap[reason]++;
       }
 
-      var driverCount = Object.keys(driverMap).length;
-
-      // サマリー表示
-      document.getElementById('dnr-summary').classList.remove('hidden');
+      // ダッシュボード表示
+      document.getElementById('dnr-dashboard').classList.remove('hidden');
       document.getElementById('dnr-total').textContent = dnrResultData.length;
+      document.getElementById('dnr-cost-total').textContent = '¥' + totalCost.toLocaleString();
       document.getElementById('dnr-matched').textContent = matched;
       document.getElementById('dnr-unmatched-count').textContent = unmatched;
-      document.getElementById('dnr-driver-count').textContent = driverCount;
 
-      // ドライバー別集計テーブル（件数降順）
-      var driverList = [];
-      for (var dn in driverMap) {
-        driverList.push({ name: dn, count: driverMap[dn].count, routeIds: Object.keys(driverMap[dn].routeIds) });
+      // 理由ランキング
+      var reasons = [];
+      for (var rn in reasonMap) reasons.push({ name: rn, count: reasonMap[rn] });
+      reasons.sort(function(a, b) { return b.count - a.count; });
+      var rhtml = '';
+      var topR = reasons[0] ? reasons[0].count : 1;
+      for (var i = 0; i < Math.min(reasons.length, 8); i++) {
+        var pct = Math.max(5, reasons[i].count / topR * 100);
+        rhtml += '<div class="flex items-center gap-2 mb-1">';
+        rhtml += '<div class="text-xs w-32 truncate text-ink-lighter" title="' + reasons[i].name + '">' + reasons[i].name + '</div>';
+        rhtml += '<div class="flex-1 bg-surface-secondary rounded-full h-4"><div class="h-4 rounded-full bg-yellow-600" style="width:' + pct + '%;"></div></div>';
+        rhtml += '<span class="text-xs font-bold w-8 text-right">' + reasons[i].count + '</span>';
+        rhtml += '</div>';
       }
-      driverList.sort(function(a, b) { return b.count - a.count; });
+      document.getElementById('dnr-reason-ranking').innerHTML = rhtml;
 
-      document.getElementById('dnr-driver-summary').classList.remove('hidden');
+      // ドライバーランキング
+      var drivers = [];
+      for (var dn in driverMap) drivers.push({ name: dn, count: driverMap[dn].count, cost: driverMap[dn].cost });
+      drivers.sort(function(a, b) { return b.count - a.count; });
       var dhtml = '';
-      for (var i = 0; i < driverList.length; i++) {
-        var d = driverList[i];
-        var barWidth = Math.max(5, Math.min(100, d.count / (driverList[0].count || 1) * 100));
-        dhtml += '<tr class="border-b border-border">';
-        dhtml += '<td class="px-3 py-2 text-xs font-medium">' + d.name + '</td>';
-        dhtml += '<td class="px-3 py-2 text-center"><div class="flex items-center gap-2 justify-center"><div class="h-4 rounded bg-yellow-600" style="width:' + barWidth + 'px;"></div><span class="text-xs font-bold">' + d.count + '</span></div></td>';
-        dhtml += '<td class="px-3 py-2 text-xs text-ink-lighter">' + d.routeIds.join(', ') + '</td>';
-        dhtml += '</tr>';
+      for (var i = 0; i < Math.min(drivers.length, 10); i++) {
+        var d = drivers[i];
+        dhtml += '<div class="flex items-center justify-between py-1 border-b border-border">';
+        dhtml += '<span class="text-xs font-medium">' + d.name + '</span>';
+        dhtml += '<span class="text-xs"><span class="font-bold text-yellow-500">' + d.count + '件</span> <span class="text-ink-lighter ml-1">¥' + d.cost.toLocaleString() + '</span></span>';
+        dhtml += '</div>';
       }
-      document.getElementById('dnr-driver-tbody').innerHTML = dhtml;
+      document.getElementById('dnr-driver-ranking').innerHTML = dhtml;
 
       // 明細テーブル
       document.getElementById('dnr-detail-section').classList.remove('hidden');
-      var thead = '<th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>';
-      for (var h = 0; h < dnrHeaders.length; h++) {
-        thead += '<th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">' + dnrHeaders[h] + '</th>';
-      }
-      document.getElementById('dnr-detail-thead').innerHTML = thead;
-
       var tbody = '';
       for (var i = 0; i < dnrResultData.length; i++) {
         var r = dnrResultData[i];
         var rowColor = r.driverName ? '' : 'bg-red-900 bg-opacity-10';
         tbody += '<tr class="border-b border-border ' + rowColor + '">';
         tbody += '<td class="px-2 py-1.5 text-xs font-medium ' + (r.driverName ? 'text-emerald-400' : 'text-red-400') + '">' + (r.driverName || '未特定') + '</td>';
-        for (var c = 0; c < r.rowData.length; c++) {
-          tbody += '<td class="px-2 py-1.5 text-xs">' + r.rowData[c] + '</td>';
-        }
+        tbody += '<td class="px-2 py-1.5 text-xs text-center">' + r.delivery_date_jst + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + r.delivery_station_code + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + r.provider_company_name + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs font-mono">' + r.tracking_id + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + r.shipment_reason + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + (r.address || r.state) + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs text-center">' + (r._units || '') + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs text-right font-bold text-red-400">' + (r._cost ? '¥' + r._cost.toLocaleString() : '') + '</td>';
         tbody += '</tr>';
       }
       document.getElementById('dnr-detail-tbody').innerHTML = tbody;
 
+      // 地図表示
+      renderDnrMap();
+
       document.getElementById('dnr-export-btn').disabled = false;
+    }
+
+    function renderDnrMap() {
+      // GPS座標がある件だけ
+      var pins = [];
+      for (var i = 0; i < dnrResultData.length; i++) {
+        if (dnrResultData[i]._lat && dnrResultData[i]._lng) pins.push(dnrResultData[i]);
+      }
+      if (pins.length === 0) return;
+
+      document.getElementById('dnr-map-section').classList.remove('hidden');
+
+      if (dnrMap) { dnrMap.remove(); dnrMap = null; }
+      dnrMap = L.map('dnr-map').setView([pins[0]._lat, pins[0]._lng], 12);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(dnrMap);
+
+      var bounds = [];
+      for (var i = 0; i < pins.length; i++) {
+        var p = pins[i];
+        var popupContent = '<b>' + (p.driverName || '未特定') + '</b><br>'
+          + p.delivery_date_jst + '<br>'
+          + '<b>理由:</b> ' + p.shipment_reason + '<br>'
+          + '<b>住所:</b> ' + (p.address || '') + '<br>'
+          + '<b>金額:</b> ¥' + p._cost.toLocaleString();
+        var marker = L.marker([p._lat, p._lng], {
+          icon: L.divIcon({
+            className: '',
+            html: '<div style="background:#ef4444;color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);">' + (i + 1) + '</div>',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          })
+        }).bindPopup(popupContent);
+        marker.addTo(dnrMap);
+        bounds.push([p._lat, p._lng]);
+      }
+      if (bounds.length > 1) dnrMap.fitBounds(bounds, { padding: [30, 30] });
+
+      setTimeout(function() { dnrMap.invalidateSize(); }, 200);
+    }
+
+    // DNR LINE送信
+    function dnrOpenLineModal() {
+      if (!dnrResultData.length) return;
+      document.getElementById('dnr-line-modal').classList.remove('hidden');
+
+      // ドライバー別に集計してプレビュー
+      var driverMap = {};
+      var totalCost = 0;
+      for (var i = 0; i < dnrResultData.length; i++) {
+        var r = dnrResultData[i];
+        totalCost += r._cost;
+        var dn = r.driverName || '未特定';
+        if (!driverMap[dn]) driverMap[dn] = { count: 0, cost: 0, reasons: {} };
+        driverMap[dn].count++;
+        driverMap[dn].cost += r._cost;
+        var rs = r.shipment_reason || '不明';
+        if (!driverMap[dn].reasons[rs]) driverMap[dn].reasons[rs] = 0;
+        driverMap[dn].reasons[rs]++;
+      }
+
+      var msg = '🚫 DNRレポート\n';
+      msg += '━━━━━━━━━━━━\n';
+      msg += '総件数: ' + dnrResultData.length + '件\n';
+      msg += '損害金額: ¥' + totalCost.toLocaleString() + '\n';
+      msg += '━━━━━━━━━━━━\n\n';
+
+      var driverList = [];
+      for (var dn in driverMap) driverList.push({ name: dn, d: driverMap[dn] });
+      driverList.sort(function(a, b) { return b.d.count - a.d.count; });
+
+      for (var i = 0; i < driverList.length; i++) {
+        var dl = driverList[i];
+        msg += '👤 ' + dl.name + '\n';
+        msg += '  件数: ' + dl.d.count + ' / 金額: ¥' + dl.d.cost.toLocaleString() + '\n';
+        for (var rs in dl.d.reasons) {
+          msg += '  ・' + rs + ': ' + dl.d.reasons[rs] + '件\n';
+        }
+        msg += '\n';
+      }
+
+      var previewHtml = '<div style="background:white;border-radius:12px;padding:12px;margin:4px 0;max-width:85%;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+      document.getElementById('dnr-line-preview').innerHTML = previewHtml;
+    }
+
+    function dnrCloseLineModal() {
+      document.getElementById('dnr-line-modal').classList.add('hidden');
+    }
+
+    function dnrConfirmLineSend() {
+      // ドライバー別集計メッセージ構築
+      var totalCost = 0;
+      var driverMap = {};
+      for (var i = 0; i < dnrResultData.length; i++) {
+        var r = dnrResultData[i];
+        totalCost += r._cost;
+        var dn = r.driverName || '未特定';
+        if (!driverMap[dn]) driverMap[dn] = { count: 0, cost: 0 };
+        driverMap[dn].count++;
+        driverMap[dn].cost += r._cost;
+      }
+
+      var msg = '🚫 DNRレポート\n総件数: ' + dnrResultData.length + '件 / 損害金額: ¥' + totalCost.toLocaleString() + '\n\n';
+      var driverList = [];
+      for (var dn in driverMap) driverList.push({ name: dn, d: driverMap[dn] });
+      driverList.sort(function(a, b) { return b.d.count - a.d.count; });
+      for (var i = 0; i < driverList.length; i++) {
+        msg += driverList[i].name + ': ' + driverList[i].d.count + '件 ¥' + driverList[i].d.cost.toLocaleString() + '\n';
+      }
+
+      var ADMIN_LINE_ID = 'U48be7d67e979988a2298c2b9b8cb8035';
+      fetch('https://ofk3-line-proxy-1.onrender.com/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: ADMIN_LINE_ID, messages: [{ type: 'text', text: msg }] })
+      }).then(function(res) {
+        if (res.ok) { alert('LINE送信完了'); dnrCloseLineModal(); }
+        else { alert('LINE送信失敗: ' + res.status); }
+      }).catch(function(err) { alert('LINE送信エラー: ' + err.message); });
     }
 
     function exportDnrResult() {
       if (!dnrResultData.length) return;
-      var csvRows = [['ドライバー'].concat(dnrHeaders)];
+      var csvHeaders = ['ドライバー'];
+      for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
+        csvHeaders.push(DNR_COL_LABELS[DNR_KEEP_COLS[k]] || DNR_KEEP_COLS[k]);
+      }
+      var csvRows = [csvHeaders];
       for (var i = 0; i < dnrResultData.length; i++) {
         var r = dnrResultData[i];
-        csvRows.push([r.driverName || '未特定'].concat(r.rowData));
+        var row = [r.driverName || '未特定'];
+        for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
+          row.push(r[DNR_KEEP_COLS[k]] || '');
+        }
+        csvRows.push(row);
       }
       var csv = csvRows.map(function(row) {
         return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
@@ -12623,6 +12832,36 @@
       a.download = 'DNR分析_' + new Date().toISOString().split('T')[0] + '.csv';
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    // ===== 品質統合サマリー =====
+    function updateQualitySummary() {
+      var hasDnr = dnrResultData.length > 0;
+      var hasLat = latResultData.length > 0;
+      if (!hasDnr && !hasLat) return;
+
+      document.getElementById('quality-summary').classList.remove('hidden');
+
+      // DNR
+      var dnrCount = dnrResultData.length;
+      var dnrCost = 0;
+      for (var i = 0; i < dnrResultData.length; i++) dnrCost += dnrResultData[i]._cost;
+      document.getElementById('q-dnr-count').textContent = dnrCount;
+      document.getElementById('q-dnr-cost').textContent = '¥' + dnrCost.toLocaleString();
+
+      // LAT
+      var latEarly = 0, latOntime = 0;
+      for (var i = 0; i < latResultData.length; i++) {
+        if (latResultData[i].judgment === '早着出発') latEarly++;
+        if (latResultData[i].judgment === '定刻') latOntime++;
+      }
+      document.getElementById('q-lat-early').textContent = latEarly;
+      document.getElementById('q-lat-ontime').textContent = latOntime;
+
+      // 品質スコア（100点 - DNR件数×2 - LAT早着×0.5）
+      var score = 100 - dnrCount * 2 - latEarly * 0.5;
+      if (score < 0) score = 0;
+      document.getElementById('q-score').textContent = Math.round(score) + '点';
     }
 
     // ===== 台数照合 =====
