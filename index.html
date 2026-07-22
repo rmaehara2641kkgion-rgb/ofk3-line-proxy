@@ -230,7 +230,7 @@
     }
     #splash-screen.splash-hidden { display: none; }
     #splash-logo-wrap {
-      position: relative; width: 180px; height: 180px;
+      position: relative; width: 300px; height: 300px;
       animation: splashLogoReveal 1.8s ease-out 0.3s both;
     }
     #splash-logo-wrap img {
@@ -247,7 +247,7 @@
       animation: splashSweep 1.4s ease-in-out 0.8s forwards;
     }
     #splash-title {
-      margin-top: 24px; font-size: 14px; letter-spacing: 6px; text-transform: uppercase;
+      margin-top: 32px; font-size: 18px; letter-spacing: 8px; text-transform: uppercase;
       color: rgba(255,215,0,0); font-family: system-ui, sans-serif; font-weight: 600;
       animation: splashTextIn 1s ease-out 1.4s forwards;
     }
@@ -3498,6 +3498,7 @@
       if (d.licenseAuth && d.mentorAuth) {
         if (!d.attendanceStatus) d.attendanceStatus = '正常';
         saveTenkoLog(d);
+        playSound('complete');
       }
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
@@ -3573,11 +3574,10 @@
           osc.stop(ctx.currentTime + n.start + n.dur);
         }
       } else if (type === 'complete') {
-        // 達成感のある3和音チャイム「ピンポンパン♪」
+        // 明るい「ピンポーン！」— インターホン風2音チャイム
         var notes2 = [
-          { freq: 784, start: 0, dur: 0.2, vol: 0.4, wave: 'sine' },
-          { freq: 988, start: 0.18, dur: 0.2, vol: 0.35, wave: 'sine' },
-          { freq: 1319, start: 0.36, dur: 0.5, vol: 0.35, wave: 'sine' }
+          { freq: 852, start: 0, dur: 0.35, vol: 0.5, wave: 'sine' },
+          { freq: 1136, start: 0.3, dur: 0.7, vol: 0.45, wave: 'sine' }
         ];
         for (var i = 0; i < notes2.length; i++) {
           var n2 = notes2[i];
