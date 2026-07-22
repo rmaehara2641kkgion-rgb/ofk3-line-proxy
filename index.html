@@ -2910,10 +2910,11 @@
       // Sort by arrival time
       tenkoSchedule.sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
 
-      // Save to localStorage
+      // メモリ保持のみ（localStorageには保存しない — 容量節約）
       const todayStr = today.toISOString().slice(0, 10);
       localStorage.setItem('tenkoDate', todayStr);
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // 古いtenkoScheduleがlocalStorageに残っていたら削除
+      localStorage.removeItem('tenkoSchedule');
 
       renderTenkoTable();
     }
@@ -2997,14 +2998,14 @@
       var d = tenkoSchedule[index];
       if (d.licenseAuth && d.mentorAuth) saveTenkoLog(d);
       const todayStr = new Date().toISOString().slice(0, 10);
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
     }
 
     function resetTenkoStatus() {
       if (!confirm('全ドライバーの認証状態をリセットしますか？')) return;
       tenkoSchedule.forEach(d => { d.licenseAuth = false; d.mentorAuth = false; });
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
     }
 
@@ -3013,14 +3014,14 @@
       tenkoSchedule[index].licenseAuth = true;
       tenkoSchedule[index].mentorAuth = true;
       saveTenkoLog(tenkoSchedule[index]);
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
     }
 
     function updateTenkoShift(index, newCode) {
       if (index < 0 || index >= tenkoSchedule.length) return;
       tenkoSchedule[index].shiftCode = newCode;
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       // ログにも反映
       if (tenkoSchedule[index].licenseAuth && tenkoSchedule[index].mentorAuth) {
         saveTenkoLog(tenkoSchedule[index]);
@@ -3031,7 +3032,7 @@
       if (index < 0 || index >= tenkoSchedule.length) return;
       tenkoSchedule[index].licenseAuth = false;
       tenkoSchedule[index].mentorAuth = false;
-      localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+      // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
     }
 
@@ -3203,7 +3204,7 @@
 
       if (cameraAuthType === 'license') {
         d.licenseAuth = true;
-        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        // tenkoScheduleはメモリ保持のみ（localStorage不使用）
 
         if (d.mentorAuth) {
           saveTenkoLog(d);
@@ -3230,7 +3231,7 @@
       } else if (cameraAuthType === 'mentor') {
         d.mentorAuth = true;
         saveTenkoLog(d);
-        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        // tenkoScheduleはメモリ保持のみ（localStorage不使用）
         resultEl.textContent = '🎉 メンター認証OK — 点呼完了！';
         resultEl.className = 'text-sm mt-2 text-emerald-600 font-bold text-lg';
         playSound('complete');
@@ -3322,18 +3323,8 @@
     // Load saved tenko data on startup
     function loadTenkoData() {
       const todayStr = new Date().toISOString().slice(0, 10);
-      const savedDate = localStorage.getItem('tenkoDate');
-      if (savedDate === todayStr) {
-        const saved = localStorage.getItem('tenkoSchedule');
-        if (saved) {
-          try { tenkoSchedule = JSON.parse(saved); } catch(e) { tenkoSchedule = []; }
-          renderTenkoTable();
-        }
-      } else {
-        // Different day — clear old data
-        localStorage.removeItem('tenkoSchedule');
-        localStorage.removeItem('tenkoDate');
-      }
+      // tenkoScheduleはメモリ保持のみ。ページ再読み込み時はExcelを再読込してください
+      localStorage.removeItem('tenkoSchedule'); // 古いデータがあれば削除して容量確保
     }
 
     // Auto-refresh overdue highlights every minute
@@ -3477,7 +3468,7 @@
           temporary: true
         });
         matchedIndex = tenkoSchedule.length - 1;
-        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        // tenkoScheduleはメモリ保持のみ（localStorage不使用）
         renderTenkoTable();
         addScanLog('🟠 臨時点呼追加：' + driverName, 'info');
       }
@@ -3490,7 +3481,7 @@
 
       if (!d.licenseAuth) {
         d.licenseAuth = true;
-        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        // tenkoScheduleはメモリ保持のみ（localStorage不使用）
         renderTenkoTable();
         playSound('success');
         addScanLog('✅ ' + driverName + ' — QR認証OK', 'success');
@@ -3630,7 +3621,7 @@
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
         saveTenkoLog(d);
-        localStorage.setItem('tenkoSchedule', JSON.stringify(tenkoSchedule));
+        // tenkoScheduleはメモリ保持のみ（localStorage不使用）
         renderTenkoTable();
         playSound('complete');
         addScanLog('🎉 ' + d.name + ' — メンター認証OK（紫検出' + percentText + '%）→ 点呼完了！', 'success');
