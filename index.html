@@ -219,9 +219,77 @@
     .print-preview-table th { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); padding: 6px 10px; font-weight: 600; text-align: left; color: #94a3b8; }
     .print-preview-table td { border: 1px solid rgba(255,255,255,0.06); padding: 5px 10px; color: #e2e8f0; }
     .print-preview-table tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+
+    /* === Splash Screen === */
+    #splash-screen {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: #0a0a0f;
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+      z-index: 9999;
+      animation: splashFadeOut 0.6s ease-in 2.8s forwards;
+    }
+    #splash-screen.splash-hidden { display: none; }
+    #splash-logo-wrap {
+      position: relative; width: 180px; height: 180px;
+      animation: splashLogoReveal 1.8s ease-out 0.3s both;
+    }
+    #splash-logo-wrap img {
+      width: 100%; height: 100%; object-fit: contain;
+      filter: brightness(0) opacity(0);
+      animation: splashLogoBright 1.6s ease-out 0.4s forwards;
+    }
+    /* Light sweep across logo */
+    #splash-logo-wrap::after {
+      content: '';
+      position: absolute; top: -20%; left: -60%; width: 40%; height: 140%;
+      background: linear-gradient(105deg, transparent 20%, rgba(255,215,0,0.08) 35%, rgba(255,255,255,0.35) 50%, rgba(255,215,0,0.08) 65%, transparent 80%);
+      transform: skewX(-15deg);
+      animation: splashSweep 1.4s ease-in-out 0.8s forwards;
+    }
+    #splash-title {
+      margin-top: 24px; font-size: 14px; letter-spacing: 6px; text-transform: uppercase;
+      color: rgba(255,215,0,0); font-family: system-ui, sans-serif; font-weight: 600;
+      animation: splashTextIn 1s ease-out 1.4s forwards;
+    }
+    @keyframes splashLogoBright {
+      0%   { filter: brightness(0) opacity(0); }
+      40%  { filter: brightness(0.5) opacity(0.6); }
+      100% { filter: brightness(1.1) opacity(1) drop-shadow(0 0 30px rgba(255,200,50,0.4)); }
+    }
+    @keyframes splashLogoReveal {
+      0%   { transform: scale(0.7); }
+      100% { transform: scale(1); }
+    }
+    @keyframes splashSweep {
+      0%   { left: -60%; opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      100% { left: 120%; opacity: 0; }
+    }
+    @keyframes splashTextIn {
+      0%   { color: rgba(255,215,0,0); letter-spacing: 12px; }
+      100% { color: rgba(255,215,0,0.7); letter-spacing: 6px; }
+    }
+    @keyframes splashFadeOut {
+      0%   { opacity: 1; }
+      100% { opacity: 0; pointer-events: none; }
+    }
   </style>
 </head>
 <body class="min-h-screen text-ink tab-exec">
+  <!-- Splash Screen -->
+  <div id="splash-screen">
+    <div id="splash-logo-wrap">
+      <img src="b10eaee0-7936-4dd7-a922-6bdf3914c296.png" alt="OFK3">
+    </div>
+    <div id="splash-title">OFK3 配送管理</div>
+  </div>
+  <script>
+    setTimeout(function() {
+      var sp = document.getElementById('splash-screen');
+      if (sp) { sp.classList.add('splash-hidden'); }
+    }, 3500);
+  </script>
   <div id="app">
     <!-- Header -->
     <header id="app-header" class="px-6 py-3 flex items-center justify-between sticky top-0 z-50">
