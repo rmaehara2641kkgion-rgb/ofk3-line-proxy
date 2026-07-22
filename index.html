@@ -242,26 +242,26 @@
     <main class="max-w-7xl mx-auto px-6 py-6">
       <!-- Tabs -->
       <nav class="flex gap-6 mb-6 border-b border-border overflow-x-auto">
-        <button class="tab-active pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
-        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
+        <button class="tab-active pb-3 text-sm whitespace-nowrap" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tw-extract')" id="tab-tw-extract">📦 時間指定</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko-match')" id="tab-tenko-match">点呼照合</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC/LAT</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tw-extract')" id="tab-tw-extract">📦 時間指定</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC/LAT</button>
+        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
 
       <!-- Executive Dashboard Tab -->
-      <div id="panel-exec">
+      <div id="panel-exec" class="hidden">
         <!-- シフト表アップロード -->
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
@@ -412,7 +412,7 @@
       </div>
 
       <!-- Dashboard Tab -->
-      <div id="panel-dashboard" class="hidden">
+      <div id="panel-dashboard">
         <!-- Upload Section -->
         <div id="upload-section">
           <div class="grid grid-cols-2 gap-4">
@@ -2396,7 +2396,7 @@
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
       var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume', 'wh60', 'tw-extract'];
+      var allTabs = ['dashboard', 'optimization', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'exec', 'billing'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -12046,13 +12046,36 @@
       reader.readAsArrayBuffer(file);
     }
 
-    // 時刻文字列から HH:MM:SS を抽出
+    // 時刻文字列から HH:MM:SS を抽出（Excelシリアル値対応）
     function latExtractTime(str) {
+      if (!str && str !== 0) return '';
+      str = String(str).trim();
       if (!str) return '';
-      str = str.trim();
-      // "2026/6/28 11:00" → "11:00"
+      // まずHH:MM形式があればそれを返す
       var m = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
-      return m ? m[1] : str;
+      if (m) return m[1];
+      // Excelシリアル値の判定（数値のみ）
+      var num = parseFloat(str);
+      if (!isNaN(num) && str.match(/^\d+\.?\d*$/)) {
+        // Excel日付+時刻シリアル（例: 46203.770833 → 小数部分が時刻）
+        if (num > 40000) {
+          var timeFrac = num - Math.floor(num);
+          var totalSec = Math.round(timeFrac * 86400);
+          var hh = Math.floor(totalSec / 3600);
+          var mm = Math.floor((totalSec % 3600) / 60);
+          var ss = totalSec % 60;
+          return (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+        }
+        // Excel時刻のみシリアル（0〜1の範囲、例: 0.729166 = 17:30）
+        if (num >= 0 && num < 1) {
+          var totalSec2 = Math.round(num * 86400);
+          var hh2 = Math.floor(totalSec2 / 3600);
+          var mm2 = Math.floor((totalSec2 % 3600) / 60);
+          var ss2 = totalSec2 % 60;
+          return (hh2 < 10 ? '0' : '') + hh2 + ':' + (mm2 < 10 ? '0' : '') + mm2 + ':' + (ss2 < 10 ? '0' : '') + ss2;
+        }
+      }
+      return str;
     }
 
     function latTimeToMin(t) {
