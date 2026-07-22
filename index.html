@@ -12910,8 +12910,11 @@
         + '📦 TrackingID: ' + r.tracking_id + '\n'
         + '❓ 理由: ' + r.shipment_reason + '\n'
         + '📍 住所: ' + (r.address || r.state || '') + '\n'
-        + '💰 金額: ¥' + r._cost.toLocaleString() + '\n'
-        + '━━━━━━━━━━━━\n'
+        + '💰 金額: ¥' + r._cost.toLocaleString() + '\n';
+      if (r._lat && r._lng) {
+        msg += '🗺 地図: https://maps.google.com/maps?q=' + r._lat + ',' + r._lng + '\n';
+      }
+      msg += '━━━━━━━━━━━━\n'
         + '確認をお願いします。';
 
       // 簡易送信ダイアログ
@@ -12959,8 +12962,11 @@
         + '📦 ' + r.tracking_id + '\n'
         + '❓ ' + r.shipment_reason + '\n'
         + '📍 ' + (r.address || r.state || '') + '\n'
-        + '💰 ¥' + r._cost.toLocaleString() + '\n'
-        + '確認をお願いします。';
+        + '💰 ¥' + r._cost.toLocaleString() + '\n';
+      if (r._lat && r._lng) {
+        msg += '🗺 地図: https://maps.google.com/maps?q=' + r._lat + ',' + r._lng + '\n';
+      }
+      msg += '確認をお願いします。';
 
       fetch('https://ofk3-line-proxy-1.onrender.com/push', {
         method: 'POST',
