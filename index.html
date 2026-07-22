@@ -1399,6 +1399,7 @@
                       <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">住所</th>
                       <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">個数</th>
                       <th class="px-2 py-2 text-right text-xs font-medium text-ink-lighter">金額</th>
+                      <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">操作</th>
                     </tr>
                   </thead>
                   <tbody id="dnr-detail-tbody"></tbody>
@@ -3358,7 +3359,8 @@
         completedAt: timeStr,
         licenseAuth: !!d.licenseAuth,
         mentorAuth: !!d.mentorAuth,
-        isTemporary: !!d.temporary
+        isTemporary: !!d.temporary,
+        attendanceStatus: d.attendanceStatus || '正常'
       };
 
       // 同日同ドライバーの既存レコードを更新（上書き）
@@ -3407,16 +3409,25 @@
       if (type === 'license') tenkoSchedule[index].licenseAuth = !tenkoSchedule[index].licenseAuth;
       if (type === 'mentor') tenkoSchedule[index].mentorAuth = !tenkoSchedule[index].mentorAuth;
       var d = tenkoSchedule[index];
-      if (d.licenseAuth && d.mentorAuth) saveTenkoLog(d);
-      const todayStr = new Date().toISOString().slice(0, 10);
+      if (d.licenseAuth && d.mentorAuth) {
+        if (!d.attendanceStatus) d.attendanceStatus = '正常';
+        saveTenkoLog(d);
+      }
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
     }
 
     function resetTenkoStatus() {
       if (!confirm('全ドライバーの認証状態をリセットしますか？')) return;
-      tenkoSchedule.forEach(d => { d.licenseAuth = false; d.mentorAuth = false; });
+      tenkoSchedule.forEach(d => { d.licenseAuth = false; d.mentorAuth = false; d.attendanceStatus = ''; });
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
+      renderTenkoTable();
+    }
+
+    function updateAttendanceStatus(index, value) {
+      if (index < 0 || index >= tenkoSchedule.length) return;
+      tenkoSchedule[index].attendanceStatus = value;
+      saveTenkoLog(tenkoSchedule[index]);
       renderTenkoTable();
     }
 
@@ -3424,6 +3435,7 @@
       if (index < 0 || index >= tenkoSchedule.length) return;
       tenkoSchedule[index].licenseAuth = true;
       tenkoSchedule[index].mentorAuth = true;
+      if (!tenkoSchedule[index].attendanceStatus) tenkoSchedule[index].attendanceStatus = '正常';
       saveTenkoLog(tenkoSchedule[index]);
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
@@ -3713,13 +3725,34 @@
           '<option value=""' + (!d.shiftCode ? ' selected' : '') + '>-</option>' +
           '</select>';
 
+        // 出勤ステータス
+        const attStatus = d.attendanceStatus || '';
+        let attCell;
+        if (bothDone) {
+          // 完了: ステータス表示（デフォルト正常）
+          const st = attStatus || '正常';
+          const stColor = st === '正常' ? 'text-emerald-600' : st === '遅刻' ? 'text-amber-500' : st === '欠勤' ? 'text-red-500' : 'text-ink-lighter';
+          attCell = '<span class="text-xs font-bold ' + stColor + '">' + st + '</span>';
+        } else if (overdue) {
+          // 超過中: プルダウン表示
+          attCell = '<select class="border border-red-300 rounded px-1 py-0.5 text-xs bg-white focus:outline-none" onchange="updateAttendanceStatus(' + i + ', this.value)">'
+            + '<option value=""' + (!attStatus ? ' selected' : '') + '>-- 選択 --</option>'
+            + '<option value="遅刻"' + (attStatus === '遅刻' ? ' selected' : '') + '>遅刻</option>'
+            + '<option value="欠勤"' + (attStatus === '欠勤' ? ' selected' : '') + '>欠勤</option>'
+            + '<option value="正常"' + (attStatus === '正常' ? ' selected' : '') + '>正常</option>'
+            + '</select>';
+        } else {
+          // 通常: 進行状態
+          attCell = '<span class="text-xs ' + statusClass + '">' + status + '</span>';
+        }
+
         return `<tr class="border-b border-border hover:bg-accent-light/30 transition-colors ${rowBg}">
           <td class="px-4 py-2.5 text-sm font-medium"><span class="inline-flex items-center gap-1.5">${getDriverIcon(d.name, 'w-6 h-6')}${d.name}</span></td>
           <td class="px-4 py-2.5 text-center">${shiftSelect}</td>
           <td class="px-4 py-2.5 text-center text-sm font-mono">${d.arrivalTime}${overdueIcon}</td>
           <td class="px-4 py-2.5 text-center">${licDot}</td>
           <td class="px-4 py-2.5 text-center">${menDot}</td>
-          <td class="px-4 py-2.5 text-center ${statusClass}">${status}</td>
+          <td class="px-4 py-2.5 text-center">${attCell}</td>
           <td class="px-4 py-2.5 text-center">${forceBtn}${cameraBtn}</td>
         </tr>`;
       }).join('');
@@ -12189,7 +12222,7 @@
       if (m) return m[1];
       // Excelシリアル値の判定（数値のみ）
       var num = parseFloat(str);
-      if (!isNaN(num) && str.match(/^\d+\.?\d*$/)) {
+      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/)) {
         // Excel日付+時刻シリアル（例: 46203.770833 → 小数部分が時刻）
         if (num > 40000) {
           var timeFrac = num - Math.floor(num);
@@ -12206,6 +12239,13 @@
           var mm2 = Math.floor((totalSec2 % 3600) / 60);
           var ss2 = totalSec2 % 60;
           return (hh2 < 10 ? '0' : '') + hh2 + ':' + (mm2 < 10 ? '0' : '') + mm2 + ':' + (ss2 < 10 ? '0' : '') + ss2;
+        }
+        // 秒数（1〜86400の範囲、LATのbeacon_firstpackagescan等）
+        if (num >= 1 && num < 86400) {
+          var hh3 = Math.floor(num / 3600);
+          var mm3 = Math.floor((num % 3600) / 60);
+          var ss3 = Math.round(num % 60);
+          return (hh3 < 10 ? '0' : '') + hh3 + ':' + (mm3 < 10 ? '0' : '') + mm3 + ':' + (ss3 < 10 ? '0' : '') + ss3;
         }
       }
       return str;
@@ -12677,6 +12717,13 @@
         tbody += '<td class="px-2 py-1.5 text-xs">' + (r.address || r.state) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-center">' + (r._units || '') + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-right font-bold text-red-400">' + (r._cost ? '¥' + r._cost.toLocaleString() : '') + '</td>';
+        // 操作ボタン（MAP + LINE）
+        var actionBtns = '';
+        if (r._lat && r._lng) {
+          actionBtns += '<button onclick="dnrShowSingleMap(' + i + ')" class="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 mr-1" title="地図">📍</button>';
+        }
+        actionBtns += '<button onclick="dnrSendSingleLine(' + i + ')" class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 hover:bg-green-200" title="LINE送信">📱</button>';
+        tbody += '<td class="px-2 py-1.5 text-xs text-center whitespace-nowrap">' + actionBtns + '</td>';
         tbody += '</tr>';
       }
       document.getElementById('dnr-detail-tbody').innerHTML = tbody;
@@ -12804,6 +12851,129 @@
       }).then(function(res) {
         if (res.ok) { alert('LINE送信完了'); dnrCloseLineModal(); }
         else { alert('LINE送信失敗: ' + res.status); }
+      }).catch(function(err) { alert('LINE送信エラー: ' + err.message); });
+    }
+
+    function dnrShowSingleMap(idx) {
+      var r = dnrResultData[idx];
+      if (!r || !r._lat || !r._lng) return;
+      // 地図セクションを表示してスクロール、単一ピンにフォーカス
+      document.getElementById('dnr-map-section').classList.remove('hidden');
+      if (dnrMap) { dnrMap.remove(); dnrMap = null; }
+      dnrMap = L.map('dnr-map').setView([r._lat, r._lng], 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(dnrMap);
+      var popupContent = '<b>' + (r.driverName || '未特定') + '</b><br>'
+        + r.delivery_date_jst + '<br>'
+        + '<b>理由:</b> ' + r.shipment_reason + '<br>'
+        + '<b>住所:</b> ' + (r.address || '') + '<br>'
+        + '<b>金額:</b> ¥' + r._cost.toLocaleString();
+      L.marker([r._lat, r._lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="background:#ef4444;color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);">!</div>',
+          iconSize: [28, 28], iconAnchor: [14, 14]
+        })
+      }).bindPopup(popupContent).addTo(dnrMap).openPopup();
+      setTimeout(function() { dnrMap.invalidateSize(); }, 200);
+      document.getElementById('dnr-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function dnrSendSingleLine(idx) {
+      var r = dnrResultData[idx];
+      if (!r) return;
+
+      // ドライバー選択モーダルを開く（本人が最初）
+      var driverList = JSON.parse(localStorage.getItem('driverList') || '[]');
+      var options = '';
+
+      // 本人を最初に
+      if (r.driverName) {
+        // driverNameから英語名を抽出
+        var match = r.driverName.match(/\(([^)]+)\)/);
+        var engName = match ? match[1] : r.driverName;
+        options += '<option value="' + engName + '" selected>' + r.driverName + '（本人）</option>';
+      }
+      // 管理者
+      options += '<option value="__admin__">管理者に送信</option>';
+      // 他のドライバー
+      for (var i = 0; i < driverList.length; i++) {
+        var dn = driverList[i].name || driverList[i];
+        if (r.driverName && r.driverName.indexOf(dn) >= 0) continue;
+        var jpName = driverJapaneseNames[dn] ? driverJapaneseNames[dn] + ' (' + dn + ')' : dn;
+        options += '<option value="' + dn + '">' + jpName + '</option>';
+      }
+
+      var msg = '🚫 DNR通知\n━━━━━━━━━━━━\n'
+        + '📅 配達日: ' + r.delivery_date_jst + '\n'
+        + '📦 TrackingID: ' + r.tracking_id + '\n'
+        + '❓ 理由: ' + r.shipment_reason + '\n'
+        + '📍 住所: ' + (r.address || r.state || '') + '\n'
+        + '💰 金額: ¥' + r._cost.toLocaleString() + '\n'
+        + '━━━━━━━━━━━━\n'
+        + '確認をお願いします。';
+
+      // 簡易送信ダイアログ
+      var modal = document.createElement('div');
+      modal.id = 'dnr-single-line-modal';
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+      modal.innerHTML = '<div class="bg-surface rounded-xl shadow-2xl w-full max-w-md mx-4 p-4">'
+        + '<h3 class="text-sm font-bold mb-3">📱 DNR LINE送信</h3>'
+        + '<label class="text-xs text-ink-lighter block mb-1">送信先</label>'
+        + '<select id="dnr-single-target" class="w-full border border-border rounded px-2 py-1.5 text-sm mb-3">' + options + '</select>'
+        + '<label class="text-xs text-ink-lighter block mb-1">メッセージ</label>'
+        + '<div class="rounded-lg p-3 mb-3 text-xs" style="background:#7494C0;"><div style="background:white;border-radius:8px;padding:8px;white-space:pre-wrap;line-height:1.5;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div></div>'
+        + '<div class="flex gap-2">'
+        + '<button onclick="document.getElementById(\'dnr-single-line-modal\').remove()" class="btn-secondary text-xs px-4 py-2 rounded flex-1">キャンセル</button>'
+        + '<button onclick="dnrExecSingleSend(' + idx + ')" class="bg-green-600 text-white text-xs px-4 py-2 rounded flex-1 font-bold">送信</button>'
+        + '</div></div>';
+      document.body.appendChild(modal);
+    }
+
+    function dnrExecSingleSend(idx) {
+      var r = dnrResultData[idx];
+      var target = document.getElementById('dnr-single-target').value;
+      var ADMIN_LINE_ID = 'U48be7d67e979988a2298c2b9b8cb8035';
+      var lineId = '';
+
+      if (target === '__admin__') {
+        lineId = ADMIN_LINE_ID;
+      } else {
+        var driverList = JSON.parse(localStorage.getItem('driverList') || '[]');
+        for (var i = 0; i < driverList.length; i++) {
+          var dn = driverList[i].name || driverList[i];
+          if (dn === target && driverList[i].lineUserId) {
+            lineId = driverList[i].lineUserId;
+            break;
+          }
+        }
+      }
+
+      if (!lineId) {
+        lineId = ADMIN_LINE_ID; // フォールバック
+      }
+
+      var msg = '🚫 DNR通知\n'
+        + '📅 ' + r.delivery_date_jst + '\n'
+        + '📦 ' + r.tracking_id + '\n'
+        + '❓ ' + r.shipment_reason + '\n'
+        + '📍 ' + (r.address || r.state || '') + '\n'
+        + '💰 ¥' + r._cost.toLocaleString() + '\n'
+        + '確認をお願いします。';
+
+      fetch('https://ofk3-line-proxy-1.onrender.com/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: lineId, messages: [{ type: 'text', text: msg }] })
+      }).then(function(res) {
+        if (res.ok) {
+          alert('LINE送信完了');
+          var modal = document.getElementById('dnr-single-line-modal');
+          if (modal) modal.remove();
+        } else {
+          alert('LINE送信失敗: ' + res.status);
+        }
       }).catch(function(err) { alert('LINE送信エラー: ' + err.message); });
     }
 
