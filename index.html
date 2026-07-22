@@ -256,7 +256,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('quality')" id="tab-quality">🛡 品質管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('quality')" id="tab-quality">✅ 品質管理</button>
         <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
@@ -1277,7 +1277,7 @@
       <div id="panel-quality" class="hidden">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h2 class="text-sm font-medium">🛡 品質管理（Quality）</h2>
+            <h2 class="text-sm font-medium">✅ 品質管理（Quality）</h2>
             <p class="text-xs text-ink-lighter mt-1">DNR・LAT・クレームデータを統合分析</p>
           </div>
           <div class="flex gap-2">
@@ -12680,7 +12680,8 @@
       for (var i = 0; i < Math.min(reasons.length, 8); i++) {
         var pct = Math.max(5, reasons[i].count / topR * 100);
         rhtml += '<div class="flex items-center gap-2 mb-1">';
-        rhtml += '<div class="text-xs w-32 truncate text-ink-lighter" title="' + reasons[i].name + '">' + reasons[i].name + '</div>';
+        var displayName = reasons[i].name.replace(/^DELIVERED_TO_/i, '').replace(/_/g, ' ');
+        rhtml += '<div class="text-xs w-32 truncate text-ink-lighter" title="' + reasons[i].name + '">' + displayName + '</div>';
         rhtml += '<div class="flex-1 bg-surface-secondary rounded-full h-4"><div class="h-4 rounded-full bg-yellow-600" style="width:' + pct + '%;"></div></div>';
         rhtml += '<span class="text-xs font-bold w-8 text-right">' + reasons[i].count + '</span>';
         rhtml += '</div>';
@@ -12814,7 +12815,7 @@
         msg += '\n';
       }
 
-      var previewHtml = '<div style="background:white;border-radius:12px;padding:12px;margin:4px 0;max-width:85%;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+      var previewHtml = '<textarea id="dnr-bulk-msg" class="w-full border-0 rounded-lg px-3 py-3 text-xs font-mono" rows="16" style="line-height:1.6;background:white;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>';
       document.getElementById('dnr-line-preview').innerHTML = previewHtml;
     }
 
@@ -12823,25 +12824,9 @@
     }
 
     function dnrConfirmLineSend() {
-      // ドライバー別集計メッセージ構築
-      var totalCost = 0;
-      var driverMap = {};
-      for (var i = 0; i < dnrResultData.length; i++) {
-        var r = dnrResultData[i];
-        totalCost += r._cost;
-        var dn = r.driverName || '未特定';
-        if (!driverMap[dn]) driverMap[dn] = { count: 0, cost: 0 };
-        driverMap[dn].count++;
-        driverMap[dn].cost += r._cost;
-      }
-
-      var msg = '🚫 DNRレポート\n総件数: ' + dnrResultData.length + '件 / 損害金額: ¥' + totalCost.toLocaleString() + '\n\n';
-      var driverList = [];
-      for (var dn in driverMap) driverList.push({ name: dn, d: driverMap[dn] });
-      driverList.sort(function(a, b) { return b.d.count - a.d.count; });
-      for (var i = 0; i < driverList.length; i++) {
-        msg += driverList[i].name + ': ' + driverList[i].d.count + '件 ¥' + driverList[i].d.cost.toLocaleString() + '\n';
-      }
+      // テキストエリアの編集済みメッセージを使用
+      var msgEl = document.getElementById('dnr-bulk-msg');
+      var msg = msgEl ? msgEl.value : '';
 
       var ADMIN_LINE_ID = 'U48be7d67e979988a2298c2b9b8cb8035';
       fetch('https://ofk3-line-proxy-1.onrender.com/push', {
@@ -12925,8 +12910,8 @@
         + '<h3 class="text-sm font-bold mb-3">📱 DNR LINE送信</h3>'
         + '<label class="text-xs text-ink-lighter block mb-1">送信先</label>'
         + '<select id="dnr-single-target" class="w-full border border-border rounded px-2 py-1.5 text-sm mb-3">' + options + '</select>'
-        + '<label class="text-xs text-ink-lighter block mb-1">メッセージ</label>'
-        + '<div class="rounded-lg p-3 mb-3 text-xs" style="background:#7494C0;"><div style="background:white;border-radius:8px;padding:8px;white-space:pre-wrap;line-height:1.5;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div></div>'
+        + '<label class="text-xs text-ink-lighter block mb-1">メッセージ（編集可）</label>'
+        + '<textarea id="dnr-single-msg" class="w-full border border-border rounded px-2 py-2 text-xs mb-3 font-mono" rows="10" style="line-height:1.6;">' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</textarea>'
         + '<div class="flex gap-2">'
         + '<button onclick="document.getElementById(\'dnr-single-line-modal\').remove()" class="btn-secondary text-xs px-4 py-2 rounded flex-1">キャンセル</button>'
         + '<button onclick="dnrExecSingleSend(' + idx + ')" class="bg-green-600 text-white text-xs px-4 py-2 rounded flex-1 font-bold">送信</button>'
@@ -12957,16 +12942,9 @@
         lineId = ADMIN_LINE_ID; // フォールバック
       }
 
-      var msg = '🚫 DNR通知\n'
-        + '📅 ' + r.delivery_date_jst + '\n'
-        + '📦 ' + r.tracking_id + '\n'
-        + '❓ ' + r.shipment_reason + '\n'
-        + '📍 ' + (r.address || r.state || '') + '\n'
-        + '💰 ¥' + r._cost.toLocaleString() + '\n';
-      if (r._lat && r._lng) {
-        msg += '🗺 地図: https://maps.google.com/maps?q=' + r._lat + ',' + r._lng + '\n';
-      }
-      msg += '確認をお願いします。';
+      // テキストエリアの編集済みメッセージを使用
+      var msgEl = document.getElementById('dnr-single-msg');
+      var msg = msgEl ? msgEl.value : '';
 
       fetch('https://ofk3-line-proxy-1.onrender.com/push', {
         method: 'POST',
