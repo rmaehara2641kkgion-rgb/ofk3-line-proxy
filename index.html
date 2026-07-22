@@ -5816,7 +5816,7 @@
         count++;
       }
 
-      localStorage.setItem('shiftMasterData', JSON.stringify(shiftMasterData));
+      // メモリ保持のみ（localStorage容量節約）
       renderTenkoMatchTable();
       switchTab('tenko-match');
       alert('シフト表を読み込みました。本日（' + dayOfMonth + '日）の出勤者: ' + count + '名\n\n点呼照合タブで差異を確認してください。');
@@ -5827,12 +5827,6 @@
       if (!tbody) return;
 
       var todayStr = new Date().toISOString().slice(0, 10);
-
-      // シフト表データをロード（ページリロード対応）
-      if (shiftMasterData.length === 0) {
-        var saved = localStorage.getItem('shiftMasterData');
-        if (saved) shiftMasterData = JSON.parse(saved);
-      }
 
       // tenkoSchedule（Amazon配送データから生成）のTransportID→データマップと名前→データマップ
       var tenkoMap = {};
