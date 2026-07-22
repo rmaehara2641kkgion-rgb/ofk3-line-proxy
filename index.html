@@ -6388,8 +6388,11 @@
       // tenkoSchedule（Amazon配送データから生成）のTransportID→データマップと名前→データマップ
       var tenkoMap = {};
       var tenkoTidMap = {};
+      var tenkoNormalMap = {}; // スペース除去キー → データ
       for (var i = 0; i < tenkoSchedule.length; i++) {
         tenkoMap[tenkoSchedule[i].name] = tenkoSchedule[i];
+        var tNorm = tenkoSchedule[i].name.replace(/[\s　]+/g, '');
+        tenkoNormalMap[tNorm] = tenkoSchedule[i];
         if (tenkoSchedule[i].transportId) {
           tenkoTidMap[tenkoSchedule[i].transportId.replace(/[\s\-]/g, '')] = tenkoSchedule[i];
         }
@@ -6398,17 +6401,43 @@
       // shiftMasterData（DAシフト表）のTransportID→データマップと名前→データマップ
       var masterMap = {};
       var masterTidMap = {};
+      var masterNormalMap = {}; // スペース除去キー → データ
       for (var m = 0; m < shiftMasterData.length; m++) {
         masterMap[shiftMasterData[m].name] = shiftMasterData[m];
+        var mNorm = shiftMasterData[m].name.replace(/[\s　]+/g, '');
+        masterNormalMap[mNorm] = shiftMasterData[m];
         if (shiftMasterData[m].transportId) {
           masterTidMap[shiftMasterData[m].transportId.replace(/[\s\-]/g, '')] = shiftMasterData[m];
         }
       }
 
-      // 全ドライバーをマージ
+      // 姓名反転＋スペース除去でマッチを試みるヘルパー
+      function fuzzyNameMatch(name, normalMap) {
+        var norm = name.replace(/[\s　]+/g, '');
+        if (normalMap[norm]) return normalMap[norm];
+        // 2文字以上の名前をスペースで分割して反転
+        var parts = name.replace(/[\s　]+/g, ' ').trim().split(' ');
+        if (parts.length === 2) {
+          var reversed = parts[1] + parts[0];
+          if (normalMap[reversed]) return normalMap[reversed];
+        }
+        return null;
+      }
+
+      // 全ドライバーをマージ（姓名反転の重複を排除）
       var allNames = {};
+      var mergedPairs = {}; // 既にマージ済みの名前ペア
       for (var n1 in tenkoMap) allNames[n1] = true;
-      for (var n2 in masterMap) allNames[n2] = true;
+      for (var n2 in masterMap) {
+        // tenkoMapに姓名反転で既に存在するか確認
+        var matchedTenko = fuzzyNameMatch(n2, tenkoNormalMap);
+        if (matchedTenko && !tenkoMap[n2]) {
+          // 反転マッチ: シフト表名をスキップし、tenkoの名前側にマージ
+          mergedPairs[matchedTenko.name] = shiftMasterData[masterMap[n2] ? Object.keys(masterMap).indexOf(n2) : 0] ? masterMap[n2] : null;
+        } else {
+          allNames[n2] = true;
+        }
+      }
 
       var allEntries = [];
       var doneCount = 0, pendingCount = 0, tempCount = 0, mismatchCount = 0;
@@ -6417,6 +6446,18 @@
       for (var name in allNames) {
         var tenko = tenkoMap[name] || null;
         var master = masterMap[name] || null;
+
+        // 姓名反転マッチ（mergedPairsから取得）
+        if (!master && mergedPairs[name]) {
+          master = mergedPairs[name];
+        }
+        // fuzzyマッチ: スペース除去＋姓名反転で照合
+        if (!tenko && master) {
+          tenko = fuzzyNameMatch(name, tenkoNormalMap);
+        }
+        if (!master && tenko) {
+          master = fuzzyNameMatch(name, masterNormalMap);
+        }
 
         // Transport ID でも紐付け試行
         if (!tenko && master && master.transportId && tenkoTidMap[master.transportId.replace(/[\s\-]/g, '')]) {
@@ -6479,7 +6520,7 @@
         if (bothDone) shiftBreakdown[sc].done++;
 
         allEntries.push({
-          name: name,
+          name: master ? master.name : name,
           tenkoShift: tenkoShift,
           masterShift: masterShift,
           arrivalTime: tenko ? (tenko.arrivalTime || '') : (master && SHIFT_MASTER[masterShift] ? SHIFT_MASTER[masterShift].arrival : ''),
