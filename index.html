@@ -3284,6 +3284,7 @@
     }
 
     // 姓名反転修正: マスタ登録名（driverJapaneseNames）と照合し、反転で一致すればマスタ名を使用
+    // ※マスタに完全一致の登録があればそのまま返す（ユーザーが意図的に設定した名前を優先）
     function normalizeDriverNameOrder(displayName) {
       if (!displayName) return displayName;
       // マスタに登録済みの全日本語名を取得
@@ -3292,16 +3293,14 @@
         var jn = driverJapaneseNames[key];
         if (jn) masterNames[jn.replace(/[\s　]+/g, '')] = jn;
       }
-      // displayNameをスペースで分割して反転
-      var clean = displayName.replace(/[\s　]+/g, ' ').trim();
-      var parts = clean.split(' ');
+      // そのままマスタに存在すればそのまま返す（変更しない）
+      var origNoSpace = displayName.replace(/[\s　]+/g, '');
+      if (masterNames[origNoSpace]) return masterNames[origNoSpace];
+      // スペース分割して反転でマスタに一致すれば反転名を使用
+      var parts = displayName.replace(/[\s　]+/g, ' ').trim().split(' ');
       if (parts.length === 2) {
         var reversedNoSpace = parts[1] + parts[0];
-        // マスタに反転名が存在すれば反転名を使用
         if (masterNames[reversedNoSpace]) return masterNames[reversedNoSpace];
-        // 元の順番でマスタに存在すればそのまま
-        var origNoSpace = parts[0] + parts[1];
-        if (masterNames[origNoSpace]) return masterNames[origNoSpace];
       }
       return displayName;
     }
@@ -6411,15 +6410,21 @@
         }
       }
 
-      // 姓名反転＋スペース除去でマッチを試みるヘルパー
+      // 姓名反転＋文字セット一致でマッチを試みるヘルパー
       function fuzzyNameMatch(name, normalMap) {
         var norm = name.replace(/[\s　]+/g, '');
         if (normalMap[norm]) return normalMap[norm];
-        // 2文字以上の名前をスペースで分割して反転
+        // 2語に分割して反転
         var parts = name.replace(/[\s　]+/g, ' ').trim().split(' ');
         if (parts.length === 2) {
           var reversed = parts[1] + parts[0];
           if (normalMap[reversed]) return normalMap[reversed];
+        }
+        // 文字セット一致: 同じ漢字の組み合わせなら同一人物（聖良執行 = 良聖執行）
+        var sortedChars = norm.split('').sort().join('');
+        for (var key in normalMap) {
+          var keySorted = key.split('').sort().join('');
+          if (sortedChars === keySorted) return normalMap[key];
         }
         return null;
       }
