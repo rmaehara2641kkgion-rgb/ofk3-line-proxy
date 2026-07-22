@@ -444,6 +444,11 @@
           </div>
         </div>
 
+        <!-- ヒーロー画像（データ未読込時表示） -->
+        <div id="dashboard-hero" class="flex justify-center mt-6 mb-4">
+          <img src="hero.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
+        </div>
+
         <!-- Dashboard Content (after upload) -->
         <div id="dashboard-content" class="hidden fade-in">
           <!-- Summary Stats -->
@@ -616,6 +621,7 @@
         </div>
 
         <div id="optimization-empty" class="text-center py-16">
+          <img src="hero.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
           <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
         </div>
       </div>
@@ -1151,6 +1157,11 @@
           </div>
         </div>
 
+        <!-- ヒーロー画像（FTDS/CC未読込時） -->
+        <div id="ftds-hero" class="flex justify-center my-6">
+          <img src="hero.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
+        </div>
+
         <!-- Driver summary -->
         <div id="ftds-driver-summary" class="hidden mb-4">
           <h3 class="text-sm font-medium mb-2">ドライバー別集計</h3>
@@ -1334,6 +1345,11 @@
             <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="lat-file-input" onchange="handleLatFile(this.files[0])">
             <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('lat-file-input').click()">選択</button>
           </div>
+        </div>
+
+        <!-- ヒーロー画像（データ未読込時） -->
+        <div id="quality-hero" class="flex justify-center my-6">
+          <img src="hero.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
         </div>
 
         <!-- ========== DNR分析セクション ========== -->
@@ -2752,6 +2768,8 @@
 
     function renderDashboard() {
       document.getElementById('dashboard-content').classList.remove('hidden');
+      var heroEl = document.getElementById('dashboard-hero');
+      if (heroEl) heroEl.style.display = 'none';
       document.getElementById('assign-status').textContent = `✓ ${assignmentData.length}ルート読込済み`;
       document.getElementById('assign-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
 
@@ -11856,6 +11874,8 @@
 
       // Enable export
       document.getElementById('ftds-export-btn').disabled = false;
+      var fh = document.getElementById('ftds-hero');
+      if (fh) fh.style.display = 'none';
     }
 
     function exportFtdsResult() {
@@ -12057,6 +12077,8 @@
 
       // Enable export
       document.getElementById('cc-export-btn').disabled = false;
+      var fh2 = document.getElementById('ftds-hero');
+      if (fh2) fh2.style.display = 'none';
     }
 
     function exportCcResult() {
@@ -12356,6 +12378,8 @@
 
       renderLatResults();
       updateQualitySummary();
+      var qh2 = document.getElementById('quality-hero');
+      if (qh2) qh2.style.display = 'none';
     }
 
     function renderLatResults() {
@@ -12635,6 +12659,8 @@
 
         renderDnrResults();
         updateQualitySummary();
+        var qh = document.getElementById('quality-hero');
+        if (qh) qh.style.display = 'none';
       };
       reader.readAsArrayBuffer(file);
     }
