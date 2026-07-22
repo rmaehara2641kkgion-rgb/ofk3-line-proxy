@@ -2760,32 +2760,7 @@
 
     // tenkoLog保存（30日制限 + 容量チェック）
     function saveTenkoLog() {
-      // 30日以上前のログを削除
-      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      tenkoLog = tenkoLog.filter(function(item) {
-        var t = item.time || item.date;
-        if (!t) return false;
-        return new Date(t).getTime() >= limit;
-      });
-      // さらに1000件に制限
-      if (tenkoLog.length > 1000) {
-        tenkoLog = tenkoLog.slice(tenkoLog.length - 1000);
-      }
-      try {
-        var data = JSON.stringify(tenkoLog);
-        if (data.length < 4500000) {
-          localStorage.setItem('tenkoLog', data);
-        } else {
-          // それでも大きければ直近500件に絞る
-          tenkoLog = tenkoLog.slice(tenkoLog.length - 500);
-          localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
-        }
-      } catch (e) {
-        console.warn('tenkoLog保存エラー（容量超過）:', e.message);
-        // 最終手段: 直近200件だけ
-        tenkoLog = tenkoLog.slice(tenkoLog.length - 200);
-        try { localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog)); } catch(e2) {}
-      }
+      persistTenkoLog();
     }
 
     // 着車時間（分）→ デフォルトシフトコード自動判定
@@ -2896,8 +2871,12 @@
         // マスタの日本語名があれば変換（DAシフト表との名前一致用）
         var dispName = driverJapaneseNames[name] || name;
 
+        // Transport ID がマスタに登録されていれば保持
+        var transportId = transportIDs[name] || '';
+
         tenkoSchedule.push({
           name: dispName,
+          transportId: transportId,
           shiftCode: autoShiftCode,
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
@@ -2969,6 +2948,7 @@
       var record = {
         date: todayStr,
         driverName: d.name,
+        transportId: d.transportId || '',
         shiftCode: d.shiftCode || '',
         scheduledArrival: d.arrivalTime || '',
         completedAt: timeStr,
@@ -2988,7 +2968,34 @@
       }
       if (!found) tenkoLog.push(record);
 
-      saveTenkoLog();
+      // 容量制限付きでlocalStorageに保存
+      persistTenkoLog();
+    }
+
+    // tenkoLog永続化（30日制限 + 容量チェック）
+    function persistTenkoLog() {
+      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      tenkoLog = tenkoLog.filter(function(item) {
+        var t = item.time || item.date;
+        if (!t) return false;
+        return new Date(t).getTime() >= limit;
+      });
+      if (tenkoLog.length > 1000) {
+        tenkoLog = tenkoLog.slice(tenkoLog.length - 1000);
+      }
+      try {
+        var data = JSON.stringify(tenkoLog);
+        if (data.length < 4500000) {
+          localStorage.setItem('tenkoLog', data);
+        } else {
+          tenkoLog = tenkoLog.slice(tenkoLog.length - 500);
+          localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+        }
+      } catch (e) {
+        console.warn('tenkoLog保存エラー（容量超過）:', e.message);
+        tenkoLog = tenkoLog.slice(tenkoLog.length - 200);
+        try { localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog)); } catch(e2) {}
+      }
     }
 
     function toggleAuth(index, type) {
@@ -3447,19 +3454,34 @@
     }
 
     function onQrCodeScanned(decodedText) {
-      var driverName = findDriverByQr(decodedText);
+      var scanResult = findDriverByQr(decodedText);
+      var driverName = scanResult ? scanResult.name : null;
+      var transportId = scanResult ? scanResult.transportId : null;
 
       if (!driverName) {
         addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
         return;
       }
 
-      var matchedIndex = findTenkoDriver(driverName);
+      // Transport ID で点呼スケジュールを照合。該当がなければ名前で照合
+      var matchedIndex = -1;
+      if (transportId) {
+        for (var i = 0; i < tenkoSchedule.length; i++) {
+          if (tenkoSchedule[i].transportId && tenkoSchedule[i].transportId.replace(/[\s\-]/g, '') === transportId.replace(/[\s\-]/g, '')) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+      if (matchedIndex < 0) {
+        matchedIndex = findTenkoDriver(driverName);
+      }
 
       // シフト外なら臨時点呼として自動追加
       if (matchedIndex < 0) {
         tenkoSchedule.push({
           name: driverName,
+          transportId: transportId || '',
           shiftCode: '',
           arrivalTime: '臨時',
           arrivalMinutes: 9999,
@@ -3494,41 +3516,42 @@
       }
     }
 
+    // QRコード → ドライバー情報
     function findDriverByQr(decodedText) {
+      var clean = decodedText.replace(/[\s\-]/g, '');
+
       // OFK3_LICENSE: 形式
       if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
-        return decodedText.replace('OFK3_LICENSE:', '').trim();
+        return { name: decodedText.replace('OFK3_LICENSE:', '').trim(), transportId: null };
       }
 
       // OFK3_DRIVER: 形式
       if (decodedText.indexOf('OFK3_DRIVER:') === 0) {
-        return decodedText.replace('OFK3_DRIVER:', '').trim();
+        return { name: decodedText.replace('OFK3_DRIVER:', '').trim(), transportId: null };
       }
 
       // OFK3_D0001 形式（自動生成ID）
-      // 注意：driverDBの並び順に依存するため、長期運用では推奨されません
-      // 新規発行は OFK3_DRIVER:名前 の形式を推奨します
       if (decodedText.indexOf('OFK3_D') === 0 && decodedText.length <= 12) {
         var keys = Object.keys(driverDB).sort();
         var idx = parseInt(decodedText.replace('OFK3_D', ''), 10);
         if (idx > 0 && idx <= keys.length) {
-          return keys[idx - 1];
+          return { name: keys[idx - 1], transportId: transportIDs[keys[idx - 1]] || null };
         }
       }
 
-      // Transport ID で照合
-      var clean = decodedText.replace(/[\s\-]/g, '');
+      // Transport ID で照合（Transport IDをQRデータとするケースを含む）
       for (var name in transportIDs) {
         if (!transportIDs[name]) continue;
-        if (clean === transportIDs[name].toString().replace(/[\s\-]/g, '')) {
-          return name;
+        var tidClean = transportIDs[name].toString().replace(/[\s\-]/g, '');
+        if (clean === tidClean) {
+          return { name: name, transportId: transportIDs[name] };
         }
       }
 
       return null;
     }
 
-    // ファジーマッチ: スペース・全角半角を無視して点呼スケジュールから検索
+    // ファジーマッチ: スペース・全角半角を無視して点呼スケジュールから名前検索
     function findTenkoDriver(name) {
       var clean = name.replace(/[\s　]/g, '');
       for (var i = 0; i < tenkoSchedule.length; i++) {
@@ -5779,8 +5802,14 @@
           localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
         }
 
+        var dispName = driverJapaneseNames[name] || name;
+
+        // Transport ID がマスタに登録されていれば保持
+        var transportId = transportIDs[name] || '';
+
         shiftMasterData.push({
-          name: name,
+          name: dispName,
+          transportId: transportId,
           shiftCode: normalizedCode || shiftCode,
           company: company
         });
@@ -5805,16 +5834,24 @@
         if (saved) shiftMasterData = JSON.parse(saved);
       }
 
-      // tenkoSchedule（Amazon配送データから生成）の名前→データマップ
+      // tenkoSchedule（Amazon配送データから生成）のTransportID→データマップと名前→データマップ
       var tenkoMap = {};
+      var tenkoTidMap = {};
       for (var i = 0; i < tenkoSchedule.length; i++) {
         tenkoMap[tenkoSchedule[i].name] = tenkoSchedule[i];
+        if (tenkoSchedule[i].transportId) {
+          tenkoTidMap[tenkoSchedule[i].transportId.replace(/[\s\-]/g, '')] = tenkoSchedule[i];
+        }
       }
 
-      // shiftMasterData（DAシフト表）の名前→データマップ
+      // shiftMasterData（DAシフト表）のTransportID→データマップと名前→データマップ
       var masterMap = {};
+      var masterTidMap = {};
       for (var m = 0; m < shiftMasterData.length; m++) {
         masterMap[shiftMasterData[m].name] = shiftMasterData[m];
+        if (shiftMasterData[m].transportId) {
+          masterTidMap[shiftMasterData[m].transportId.replace(/[\s\-]/g, '')] = shiftMasterData[m];
+        }
       }
 
       // 全ドライバーをマージ
@@ -5829,6 +5866,15 @@
       for (var name in allNames) {
         var tenko = tenkoMap[name] || null;
         var master = masterMap[name] || null;
+
+        // Transport ID でも紐付け試行
+        if (!tenko && master && master.transportId && tenkoTidMap[master.transportId.replace(/[\s\-]/g, '')]) {
+          tenko = tenkoTidMap[master.transportId.replace(/[\s\-]/g, '')];
+        }
+        if (!master && tenko && tenko.transportId && masterTidMap[tenko.transportId.replace(/[\s\-]/g, '')]) {
+          master = masterTidMap[tenko.transportId.replace(/[\s\-]/g, '')];
+        }
+
         var bothDone = tenko ? (tenko.licenseAuth && tenko.mentorAuth) : false;
         var oneDone = tenko ? (tenko.licenseAuth || tenko.mentorAuth) : false;
         var isTemp = tenko ? !!tenko.temporary : false;
