@@ -253,7 +253,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC分析</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC/LAT</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
@@ -1097,12 +1097,13 @@
       <div id="panel-ftds" class="hidden">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h2 class="text-sm font-medium">📋 FTDS / CC分析</h2>
-            <p class="text-xs text-ink-lighter mt-1">FTDS・Contact ComplianceのTransportIDをマスタと突合してドライバー名を特定</p>
+            <h2 class="text-sm font-medium">📋 FTDS / CC / LAT分析</h2>
+            <p class="text-xs text-ink-lighter mt-1">FTDS・Contact Compliance・LATのTransportIDをマスタと突合してドライバー名を特定</p>
           </div>
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled>CC エクスポート</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportLatResult()" id="lat-export-btn" disabled>LAT エクスポート</button>
           </div>
         </div>
 
@@ -1125,6 +1126,29 @@
             <p class="text-ink-lighter text-sm font-medium">📞 Contact Compliance</p>
             <p class="text-xs text-ink-lighter mt-1">xlsxをドラッグ＆ドロップ</p>
             <input type="file" id="cc-file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleCcFile(this.files[0])">
+          </div>
+        </div>
+
+        <!-- LAT分析 Drop zones -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <div id="dsp-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-orange-500 hover:bg-orange-50 transition"
+               ondragover="event.preventDefault();this.classList.add('border-orange-500','bg-orange-50')"
+               ondragleave="this.classList.remove('border-orange-500','bg-orange-50')"
+               ondrop="event.preventDefault();this.classList.remove('border-orange-500','bg-orange-50');handleDspDrop(event)"
+               onclick="document.getElementById('dsp-file-input').click()">
+            <p class="text-ink-lighter text-sm font-medium">🚛 DSPルートファイル</p>
+            <p class="text-xs text-ink-lighter mt-1">CSVをドラッグ＆ドロップ（route_id→TransportID紐づけ用）</p>
+            <p class="text-xs text-green-600 mt-1 hidden" id="dsp-loaded-msg">✅ 読込済</p>
+            <input type="file" id="dsp-file-input" accept=".csv,.xlsx,.xls" class="hidden" onchange="handleDspFile(this.files[0])">
+          </div>
+          <div id="lat-drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition"
+               ondragover="event.preventDefault();this.classList.add('border-purple-500','bg-purple-50')"
+               ondragleave="this.classList.remove('border-purple-500','bg-purple-50')"
+               ondrop="event.preventDefault();this.classList.remove('border-purple-500','bg-purple-50');handleLatDrop(event)"
+               onclick="document.getElementById('lat-file-input').click()">
+            <p class="text-ink-lighter text-sm font-medium">📡 LAT（フライングログイン）</p>
+            <p class="text-xs text-ink-lighter mt-1">xlsxをドラッグ＆ドロップ</p>
+            <input type="file" id="lat-file-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleLatFile(this.files[0])">
           </div>
         </div>
 
@@ -1265,6 +1289,60 @@
                   </tr>
                 </thead>
                 <tbody id="cc-detail-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== LAT分析 Section ===== -->
+        <hr class="my-6 border-border">
+
+        <!-- LAT Summary -->
+        <div id="lat-summary" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">📡 LAT（フライングログイン）分析</h3>
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">総レコード</div>
+              <div class="text-lg font-bold" id="lat-total">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">ドライバー特定</div>
+              <div class="text-lg font-bold text-emerald-600" id="lat-matched">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">未特定</div>
+              <div class="text-lg font-bold text-red-600" id="lat-unmatched">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">フライング検出</div>
+              <div class="text-lg font-bold text-orange-500" id="lat-flying">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">DSPマッピング</div>
+              <div class="text-lg font-bold" id="lat-dsp-count">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LAT Driver Summary -->
+        <div id="lat-driver-summary" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">ドライバー別LAT</h3>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー名</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">日付</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ルートID</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">ログイン時刻(JST)</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">出発予定</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">差分(分)</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">判定</th>
+                  </tr>
+                </thead>
+                <tbody id="lat-detail-tbody"></tbody>
               </table>
             </div>
           </div>
@@ -11806,6 +11884,305 @@
       var a = document.createElement('a');
       a.href = url;
       a.download = 'ContactCompliance分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ===== LAT分析 =====
+    var dspRouteMap = {}; // route_id -> { employeeId, date, plannedDeparture, ... }
+    var latResultData = [];
+
+    function handleDspDrop(event) {
+      var file = event.dataTransfer.files[0];
+      if (file) handleDspFile(file);
+    }
+
+    function handleDspFile(file) {
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, { type: 'array' });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var json = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        if (json.length < 2) { alert('DSPファイルにデータがありません'); return; }
+
+        // ヘッダーからインデックス検出
+        var headers = json[0];
+        var routeIdx = -1, empIdx = -1, dateIdx = -1, depIdx = -1;
+        for (var h = 0; h < headers.length; h++) {
+          var hv = String(headers[h]).toLowerCase().trim();
+          if (hv === 'route_id') routeIdx = h;
+          if (hv === 'employee_id') empIdx = h;
+          if (hv === 'date') dateIdx = h;
+          if (hv === 'planned_departure' || hv === 'route_actual_departure') {
+            if (depIdx < 0) depIdx = h;
+          }
+        }
+        if (routeIdx < 0 || empIdx < 0) {
+          alert('route_id列またはemployee_id列が見つかりません');
+          return;
+        }
+
+        dspRouteMap = {};
+        for (var i = 1; i < json.length; i++) {
+          var row = json[i];
+          var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
+          var eid = row[empIdx] ? String(row[empIdx]).trim() : '';
+          if (rid && eid) {
+            dspRouteMap[rid] = {
+              employeeId: eid,
+              date: row[dateIdx] ? String(row[dateIdx]).trim() : '',
+              plannedDeparture: depIdx >= 0 && row[depIdx] ? String(row[depIdx]).trim() : ''
+            };
+          }
+        }
+
+        var count = Object.keys(dspRouteMap).length;
+        document.getElementById('dsp-loaded-msg').classList.remove('hidden');
+        document.getElementById('dsp-loaded-msg').textContent = '✅ ' + count + 'ルート読込済';
+        document.getElementById('dsp-drop-zone').style.borderColor = '#22c55e';
+
+        // LATデータが既にあれば再解析
+        if (latResultData.length > 0) renderLatResults();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function handleLatDrop(event) {
+      var file = event.dataTransfer.files[0];
+      if (file) handleLatFile(file);
+    }
+
+    function handleLatFile(file) {
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, { type: 'array', cellDates: true });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+        if (json.length < 2) { alert('LATファイルにデータがありません'); return; }
+
+        var headers = json[0];
+        // ヘッダーからインデックス検出
+        var routeIdx = -1, dateIdx = -1;
+        var timeColumns = []; // {idx, name} — 時刻系の列を全部拾う
+        for (var h = 0; h < headers.length; h++) {
+          var hv = String(headers[h]).toLowerCase().trim();
+          if (hv === 'route_id' || hv.indexOf('route') >= 0 && hv.indexOf('id') >= 0) { if (routeIdx < 0) routeIdx = h; }
+          if (hv === 'date' || hv === 'delivery_date') { if (dateIdx < 0) dateIdx = h; }
+          // 時刻に関する列
+          if (hv.indexOf('time') >= 0 || hv.indexOf('login') >= 0 || hv.indexOf('lat') >= 0 || hv.indexOf('actual') >= 0 || hv.indexOf('start') >= 0) {
+            timeColumns.push({ idx: h, name: String(headers[h]).trim() });
+          }
+        }
+
+        if (routeIdx < 0) {
+          alert('route_id列が見つかりません。ヘッダー: ' + headers.join(', '));
+          return;
+        }
+
+        latResultData = [];
+        for (var i = 1; i < json.length; i++) {
+          var row = json[i];
+          var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
+          if (!rid) continue;
+
+          // DSPマッピングからTransportID取得
+          var dspInfo = dspRouteMap[rid] || null;
+          var empId = dspInfo ? dspInfo.employeeId : '';
+          var driverName = '';
+
+          // マスタからドライバー名特定
+          if (empId) {
+            var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+            for (var tname in tids) {
+              if (tids[tname] === empId) { driverName = tname; break; }
+            }
+            // driverJapaneseNamesで日本語名変換
+            if (driverName && driverJapaneseNames[driverName]) {
+              driverName = driverJapaneseNames[driverName] + ' (' + driverName + ')';
+            }
+          }
+
+          var dateVal = '';
+          if (dateIdx >= 0 && row[dateIdx]) {
+            dateVal = String(row[dateIdx]).trim();
+          } else if (dspInfo && dspInfo.date) {
+            dateVal = dspInfo.date;
+          }
+
+          // 時刻列をすべて取得
+          var times = {};
+          for (var tc = 0; tc < timeColumns.length; tc++) {
+            var tcol = timeColumns[tc];
+            var tv = row[tcol.idx] ? String(row[tcol.idx]).trim() : '';
+            if (tv) times[tcol.name] = tv;
+          }
+
+          // メインのログイン時刻を検出
+          var loginTime = '';
+          var loginColName = '';
+          for (var tn in times) {
+            var tlower = tn.toLowerCase();
+            if (tlower.indexOf('lat') >= 0 || tlower.indexOf('login') >= 0 || tlower.indexOf('actual') >= 0 || tlower.indexOf('start') >= 0) {
+              loginTime = times[tn];
+              loginColName = tn;
+              break;
+            }
+          }
+          // フォールバック: 最初の時刻列
+          if (!loginTime && timeColumns.length > 0 && row[timeColumns[0].idx]) {
+            loginTime = String(row[timeColumns[0].idx]).trim();
+            loginColName = timeColumns[0].name;
+          }
+
+          // JST変換
+          var jstTime = convertToJST(loginTime);
+          var plannedDep = dspInfo ? dspInfo.plannedDeparture : '';
+          var plannedDepJst = convertToJST(plannedDep);
+
+          // 差分計算（分）
+          var diffMin = '';
+          var judgment = '';
+          if (jstTime && plannedDepJst) {
+            var loginMin = parseTimeToMinutes(jstTime);
+            var depMin = parseTimeToMinutes(plannedDepJst);
+            if (loginMin !== null && depMin !== null) {
+              diffMin = loginMin - depMin;
+              if (diffMin < -30) {
+                judgment = 'フライング';
+              } else if (diffMin < 0) {
+                judgment = '早めログイン';
+              } else {
+                judgment = '正常';
+              }
+            }
+          }
+
+          // 全列データも保持
+          var allData = {};
+          for (var ah = 0; ah < headers.length; ah++) {
+            allData[String(headers[ah])] = row[ah] ? String(row[ah]) : '';
+          }
+
+          latResultData.push({
+            routeId: rid,
+            employeeId: empId,
+            driverName: driverName,
+            date: dateVal,
+            loginTime: loginTime,
+            loginTimeJst: jstTime,
+            loginColName: loginColName,
+            plannedDeparture: plannedDepJst || plannedDep,
+            diffMin: diffMin,
+            judgment: judgment,
+            allData: allData
+          });
+        }
+
+        renderLatResults();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function convertToJST(timeStr) {
+      if (!timeStr) return '';
+      // "2026/6/28 11:00" → そのまま
+      // "11:00:26" → そのまま（時刻のみ）
+      // ISO形式でUTC判定
+      var str = String(timeStr).trim();
+      if (str.indexOf('T') >= 0 && (str.indexOf('Z') >= 0 || str.indexOf('+00') >= 0)) {
+        // UTC → JST (+9h)
+        var d = new Date(str);
+        if (!isNaN(d.getTime())) {
+          d.setHours(d.getHours() + 9);
+          return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes() + ':' + (d.getSeconds() < 10 ? '0' : '') + d.getSeconds();
+        }
+      }
+      // "2026/6/28 02:00" — 日付付き時刻の場合、時刻部分を抽出してUTC→JSTの可能性チェック
+      var match = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if (match) {
+        return match[0];
+      }
+      return str;
+    }
+
+    function parseTimeToMinutes(timeStr) {
+      var m = String(timeStr).match(/(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      return parseInt(m[1]) * 60 + parseInt(m[2]);
+    }
+
+    function renderLatResults() {
+      if (latResultData.length === 0) return;
+
+      var matched = 0, unmatched = 0, flying = 0;
+      for (var i = 0; i < latResultData.length; i++) {
+        if (latResultData[i].driverName) { matched++; } else { unmatched++; }
+        if (latResultData[i].judgment === 'フライング') flying++;
+      }
+
+      document.getElementById('lat-summary').classList.remove('hidden');
+      document.getElementById('lat-total').textContent = latResultData.length;
+      document.getElementById('lat-matched').textContent = matched;
+      document.getElementById('lat-unmatched').textContent = unmatched;
+      document.getElementById('lat-flying').textContent = flying;
+      document.getElementById('lat-dsp-count').textContent = Object.keys(dspRouteMap).length;
+
+      // ソート: フライング → 早めログイン → 正常
+      var sortOrder = { 'フライング': 0, '早めログイン': 1, '正常': 2, '': 3 };
+      latResultData.sort(function(a, b) {
+        var sa = sortOrder[a.judgment] !== undefined ? sortOrder[a.judgment] : 3;
+        var sb = sortOrder[b.judgment] !== undefined ? sortOrder[b.judgment] : 3;
+        if (sa !== sb) return sa - sb;
+        return (a.diffMin || 0) - (b.diffMin || 0);
+      });
+
+      // テーブル描画
+      document.getElementById('lat-driver-summary').classList.remove('hidden');
+      var tbody = document.getElementById('lat-detail-tbody');
+      var html = '';
+      for (var i = 0; i < latResultData.length; i++) {
+        var rec = latResultData[i];
+        var rowColor = '';
+        var badgeColor = '';
+        if (rec.judgment === 'フライング') { rowColor = 'bg-red-900 bg-opacity-30'; badgeColor = 'bg-red-600 text-white'; }
+        else if (rec.judgment === '早めログイン') { rowColor = 'bg-yellow-900 bg-opacity-20'; badgeColor = 'bg-yellow-600 text-white'; }
+        else if (rec.judgment === '正常') { badgeColor = 'bg-green-700 text-white'; }
+
+        html += '<tr class="border-b border-border ' + rowColor + '">';
+        html += '<td class="px-3 py-2 text-xs">' + (rec.driverName || '<span class="text-red-500">(未特定)</span>') + '</td>';
+        html += '<td class="px-3 py-2 text-xs font-mono">' + rec.employeeId + '</td>';
+        html += '<td class="px-3 py-2 text-xs text-center">' + rec.date + '</td>';
+        html += '<td class="px-3 py-2 text-xs font-mono">' + rec.routeId + '</td>';
+        html += '<td class="px-3 py-2 text-xs text-center font-bold">' + rec.loginTimeJst + '</td>';
+        html += '<td class="px-3 py-2 text-xs text-center">' + rec.plannedDeparture + '</td>';
+        html += '<td class="px-3 py-2 text-xs text-center font-bold">' + (rec.diffMin !== '' ? rec.diffMin : '-') + '</td>';
+        html += '<td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ' + badgeColor + '">' + (rec.judgment || '-') + '</span></td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+
+      document.getElementById('lat-export-btn').disabled = false;
+    }
+
+    function exportLatResult() {
+      if (!latResultData.length) return;
+      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', 'ログイン時刻(JST)', '出発予定', '差分(分)', '判定']];
+      for (var i = 0; i < latResultData.length; i++) {
+        var r = latResultData[i];
+        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.loginTimeJst, r.plannedDeparture, r.diffMin, r.judgment]);
+      }
+      var csv = csvRows.map(function(row) {
+        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+      }).join('\n');
+      var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'LAT分析_' + new Date().toISOString().split('T')[0] + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
