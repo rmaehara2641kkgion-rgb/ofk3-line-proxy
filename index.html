@@ -257,6 +257,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('volume')" id="tab-volume">📊 物量管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tw-extract')" id="tab-tw-extract">📦 時間指定</button>
       </nav>
 
       <!-- Executive Dashboard Tab -->
@@ -1592,6 +1593,99 @@
         <div id="wh60-line-result" class="mt-3 text-sm"></div>
       </div>
 
+      <!-- 時間指定抽出 Tab -->
+      <div id="panel-tw-extract" class="hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">📦 時間指定抽出</h2>
+            <p class="text-sm text-ink-lighter">サイクルデータから午前時間指定荷物を抽出・MAP表示・LINE送信</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="twExtract()" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">🔍 抽出実行</button>
+            <button onclick="twExportCSV()" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">📥 CSVエクスポート</button>
+            <button onclick="twShowMap()" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-bold hover:bg-purple-700">🗺 MAP表示</button>
+            <button onclick="twLineSend()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700">📲 LINE送信</button>
+          </div>
+        </div>
+
+        <!-- フィルター設定 -->
+        <div class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">抽出条件</h3>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="text-xs text-ink-lighter">時間指定終了（これ以前）</label>
+              <select id="tw-end-filter" class="w-full mt-1 p-2 rounded bg-surface-secondary text-ink text-sm">
+                <option value="13:00" selected>13:00まで（午前指定）</option>
+                <option value="14:00">14:00まで</option>
+                <option value="12:00">12:00まで</option>
+                <option value="all">全時間指定</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter">出発時刻フィルター</label>
+              <select id="tw-departure-filter" class="w-full mt-1 p-2 rounded bg-surface-secondary text-ink text-sm">
+                <option value="11" selected>11時台出発のみ</option>
+                <option value="10">10時台出発のみ</option>
+                <option value="all">全ルート</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-ink-lighter">データソース</label>
+              <p class="text-xs mt-2 text-ink-lighter">① ダッシュボードでサイクル+ルートExcelを読込</p>
+              <p class="text-xs text-ink-lighter">② 抽出実行ボタンで解析</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- サマリー -->
+        <div class="grid grid-cols-4 gap-3 mb-4" id="tw-summary">
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold" id="tw-total-routes">-</div>
+            <div class="text-xs text-ink-lighter">対象ルート数</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-red-500">
+            <div class="text-2xl font-bold text-red-500" id="tw-total-packages">-</div>
+            <div class="text-xs text-ink-lighter">時間指定荷物数</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-yellow-500">
+            <div class="text-2xl font-bold text-yellow-500" id="tw-routes-with-tw">-</div>
+            <div class="text-xs text-ink-lighter">該当ルート数</div>
+          </div>
+          <div class="card p-3 text-center border-l-4 border-blue-500">
+            <div class="text-2xl font-bold text-blue-500" id="tw-avg-per-route">-</div>
+            <div class="text-xs text-ink-lighter">平均/ルート</div>
+          </div>
+        </div>
+
+        <!-- 抽出結果テーブル -->
+        <div class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-3">抽出結果</h3>
+          <div class="overflow-x-auto" style="max-height:500px; overflow-y:auto;">
+            <table class="w-full text-xs">
+              <thead class="sticky top-0 bg-surface">
+                <tr class="text-left text-ink-lighter border-b border-gray-700">
+                  <th class="p-2">ルート</th>
+                  <th class="p-2">ドライバー</th>
+                  <th class="p-2">出発時刻</th>
+                  <th class="p-2">DA番号</th>
+                  <th class="p-2">時間指定</th>
+                  <th class="p-2">住所</th>
+                  <th class="p-2">Stop</th>
+                </tr>
+              </thead>
+              <tbody id="tw-tbody"></tbody>
+            </table>
+          </div>
+          <div id="tw-empty" class="text-center text-ink-lighter py-8">サイクルデータ＋ルートデータを読み込んでから「抽出実行」を押してください</div>
+        </div>
+
+        <!-- MAP表示エリア -->
+        <div class="card p-4 mb-4 hidden" id="tw-map-container">
+          <h3 class="text-sm font-bold mb-3">📍 時間指定荷物マップ</h3>
+          <div id="tw-map" style="width:100%; height:500px; border-radius:8px;"></div>
+        </div>
+      </div>
+
       <!-- MAP管理 Tab -->
       <div id="panel-map-master" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -2132,11 +2226,11 @@
     function switchTab(tab) {
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume', 'wh60'];
+      var allTabs = ['exec', 'dashboard', 'drivers', 'master', 'optimization', 'tenko', 'tenko-match', 'billing', 'map-master', 'scan', 'addr-search', 'ftds', 'fleet', 'volume', 'wh60', 'tw-extract'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -2427,6 +2521,7 @@
     let routeAreas = JSON.parse(localStorage.getItem('routeAreas') || '{}');
     let daNumberMap = {}; // DA番号 → ルートコード 逆引き
     let daAddressMap = {}; // DA番号 → 住所 逆引き
+    let cycleDetailData = {}; // routeCode -> [{trackingId, address, timeWindow, stop}]
 
     function updateArea(index, value) {
       assignmentData[index].area = value;
@@ -2521,6 +2616,7 @@
         let daCount = 0;
         daNumberMap = {}; // リセット
         daAddressMap = {}; // リセット
+        cycleDetailData = {}; // リセット
         workbook.SheetNames.forEach(sheetName => {
           try {
           const sheet = workbook.Sheets[sheetName];
@@ -2541,6 +2637,7 @@
 
           if (routeCode) {
               const addresses = [];
+              var details = [];
               for (let i = 1; i < json.length; i++) {
                 const row = json[i];
                 // ヘッダー行スキップ
@@ -2557,12 +2654,20 @@
                       daAddressMap[da] = String(row[5]).trim();
                     }
                     daCount++;
+                    // 詳細データ保持（Time Window = index 4）
+                    details.push({
+                      trackingId: da,
+                      address: row[5] ? String(row[5]).trim() : '',
+                      timeWindow: row[4] ? String(row[4]).trim() : '',
+                      stop: row[0] ? String(row[0]).trim() : ''
+                    });
                   }
                 }
               }
 
               if (addresses.length > 0) {
                 cycleData[routeCode] = addresses;
+                cycleDetailData[routeCode] = details;
                 const area = extractAreaFromAddresses(addresses);
                 if (area) routeAreas[routeCode] = area;
                 routeCount++;
@@ -10022,6 +10127,319 @@
           }
         }
       });
+    }
+
+    // ===== 時間指定抽出 =====
+    var twExtractedData = []; // [{routeCode, driverName, departure, trackingId, timeWindow, address, stop}]
+
+    function twParseTimeWindow(tw) {
+      // "05:00:00 - 13:00:00" → {start: "05:00", end: "13:00"}
+      if (!tw) return null;
+      var parts = tw.split('-');
+      if (parts.length < 2) return null;
+      var startRaw = parts[0].trim();
+      var endRaw = parts[parts.length - 1].trim();
+      // "05:00:00" → "05:00"
+      var sMatch = startRaw.match(/(\d{1,2}):(\d{2})/);
+      var eMatch = endRaw.match(/(\d{1,2}):(\d{2})/);
+      if (!sMatch || !eMatch) return null;
+      var startH = parseInt(sMatch[1]);
+      var startM = parseInt(sMatch[2]);
+      var endH = parseInt(eMatch[1]);
+      var endM = parseInt(eMatch[2]);
+      return {
+        start: (startH < 10 ? '0' : '') + startH + ':' + (startM < 10 ? '0' : '') + startM,
+        end: (endH < 10 ? '0' : '') + endH + ':' + (endM < 10 ? '0' : '') + endM,
+        startMin: startH * 60 + startM,
+        endMin: endH * 60 + endM
+      };
+    }
+
+    function twExtract() {
+      if (Object.keys(cycleDetailData).length === 0) {
+        alert('先にダッシュボードでサイクルデータ（CYCLE Excel）を読み込んでください');
+        return;
+      }
+      if (assignmentData.length === 0) {
+        alert('先にダッシュボードでルートデータ（ルート_OFK3 Excel）を読み込んでください');
+        return;
+      }
+
+      var endFilter = document.getElementById('tw-end-filter').value;
+      var depFilter = document.getElementById('tw-departure-filter').value;
+      var endLimitMin = 24 * 60; // default: all
+      if (endFilter !== 'all') {
+        var ep = endFilter.split(':');
+        endLimitMin = parseInt(ep[0]) * 60 + parseInt(ep[1]);
+      }
+
+      twExtractedData = [];
+      var routeSet = {};
+
+      for (var ri = 0; ri < assignmentData.length; ri++) {
+        var route = assignmentData[ri];
+        if (!route.routeCode || !route.departure) continue;
+
+        // 出発時刻フィルター
+        if (depFilter !== 'all') {
+          var depHour = parseInt(route.departure.split(':')[0]);
+          if (depHour !== parseInt(depFilter)) continue;
+        }
+
+        var details = cycleDetailData[route.routeCode];
+        if (!details || details.length === 0) continue;
+
+        for (var di = 0; di < details.length; di++) {
+          var d = details[di];
+          var parsed = twParseTimeWindow(d.timeWindow);
+          if (!parsed) continue;
+
+          // 時間指定フィルター: 終了時刻がendLimitMin以下
+          if (endFilter !== 'all' && parsed.endMin > endLimitMin) continue;
+          // 全日指定（08:00-20:00等）は除外
+          if (parsed.endMin - parsed.startMin >= 720) continue;
+
+          twExtractedData.push({
+            routeCode: route.routeCode,
+            driverName: route.driverName || '',
+            departure: route.departure || '',
+            trackingId: d.trackingId,
+            timeWindow: d.timeWindow,
+            timeWindowParsed: parsed,
+            address: d.address,
+            stop: d.stop
+          });
+          routeSet[route.routeCode] = true;
+        }
+      }
+
+      // ソート: ルートコード → Stop番号
+      twExtractedData.sort(function(a, b) {
+        if (a.routeCode !== b.routeCode) return a.routeCode < b.routeCode ? -1 : 1;
+        return (parseInt(a.stop) || 0) - (parseInt(b.stop) || 0);
+      });
+
+      // サマリー更新
+      var routeKeys = Object.keys(routeSet);
+      document.getElementById('tw-total-routes').textContent = assignmentData.length;
+      document.getElementById('tw-total-packages').textContent = twExtractedData.length;
+      document.getElementById('tw-routes-with-tw').textContent = routeKeys.length;
+      document.getElementById('tw-avg-per-route').textContent = routeKeys.length > 0 ? (twExtractedData.length / routeKeys.length).toFixed(1) : '0';
+
+      // テーブル描画
+      var tbody = document.getElementById('tw-tbody');
+      var emptyEl = document.getElementById('tw-empty');
+      if (twExtractedData.length === 0) {
+        tbody.innerHTML = '';
+        emptyEl.textContent = '条件に一致する時間指定荷物はありませんでした';
+        emptyEl.classList.remove('hidden');
+        return;
+      }
+      emptyEl.classList.add('hidden');
+
+      var html = '';
+      var prevRoute = '';
+      for (var i = 0; i < twExtractedData.length; i++) {
+        var item = twExtractedData[i];
+        var rowClass = item.routeCode !== prevRoute ? 'border-t border-gray-600' : '';
+        var twColor = item.timeWindowParsed.endMin <= 780 ? 'text-red-400 font-bold' : 'text-yellow-400';
+        html += '<tr class="' + rowClass + ' hover:bg-surface-secondary">';
+        html += '<td class="p-2 font-mono">' + item.routeCode + '</td>';
+        html += '<td class="p-2">' + item.driverName + '</td>';
+        html += '<td class="p-2">' + item.departure + '</td>';
+        html += '<td class="p-2 font-mono text-xs">' + item.trackingId + '</td>';
+        html += '<td class="p-2 ' + twColor + '">' + item.timeWindow + '</td>';
+        html += '<td class="p-2 text-xs">' + item.address + '</td>';
+        html += '<td class="p-2 text-center">' + item.stop + '</td>';
+        html += '</tr>';
+        prevRoute = item.routeCode;
+      }
+      tbody.innerHTML = html;
+    }
+
+    function twExportCSV() {
+      if (twExtractedData.length === 0) {
+        alert('先に抽出を実行してください');
+        return;
+      }
+      var csv = '\uFEFF' + 'ルートコード,ドライバー,出発時刻,DA番号,時間指定,住所,Stop\n';
+      for (var i = 0; i < twExtractedData.length; i++) {
+        var d = twExtractedData[i];
+        csv += d.routeCode + ',' + d.driverName + ',' + d.departure + ',' + d.trackingId + ',"' + d.timeWindow + '","' + d.address.replace(/"/g, '""') + '",' + d.stop + '\n';
+      }
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = '時間指定抽出_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function twShowMap() {
+      if (twExtractedData.length === 0) {
+        alert('先に抽出を実行してください');
+        return;
+      }
+      var container = document.getElementById('tw-map-container');
+      container.classList.remove('hidden');
+
+      // ジオコーディング済み住所からピン表示
+      var mapDiv = document.getElementById('tw-map');
+      var pins = [];
+      for (var i = 0; i < twExtractedData.length; i++) {
+        var addr = twExtractedData[i].address;
+        var geo = inMemoryAddrMaster[addr];
+        if (geo && geo.lat && geo.lng) {
+          pins.push({
+            lat: geo.lat,
+            lng: geo.lng,
+            label: twExtractedData[i].routeCode + ' #' + twExtractedData[i].stop,
+            timeWindow: twExtractedData[i].timeWindow,
+            address: addr,
+            trackingId: twExtractedData[i].trackingId,
+            driver: twExtractedData[i].driverName
+          });
+        }
+      }
+
+      if (pins.length === 0) {
+        mapDiv.innerHTML = '<div class="text-center py-12 text-ink-lighter">ジオコーディング済みの住所が見つかりませんでした。<br>MAP管理タブでジオコーディングを実行してください。</div>';
+        return;
+      }
+
+      // Leaflet map
+      if (window.twMapInstance) {
+        window.twMapInstance.remove();
+      }
+      var map = L.map('tw-map').setView([pins[0].lat, pins[0].lng], 13);
+      window.twMapInstance = map;
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      var bounds = [];
+      // ルートごとに色分け
+      var routeColors = {};
+      var colorList = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
+      var colorIdx = 0;
+
+      for (var p = 0; p < pins.length; p++) {
+        var pin = pins[p];
+        if (!routeColors[pin.label.split(' ')[0]]) {
+          routeColors[pin.label.split(' ')[0]] = colorList[colorIdx % colorList.length];
+          colorIdx++;
+        }
+        var color = routeColors[pin.label.split(' ')[0]];
+        var marker = L.circleMarker([pin.lat, pin.lng], {
+          radius: 8,
+          fillColor: color,
+          color: '#fff',
+          weight: 2,
+          fillOpacity: 0.9
+        }).addTo(map);
+        marker.bindPopup(
+          '<b>' + pin.label + '</b><br>' +
+          '🕐 ' + pin.timeWindow + '<br>' +
+          '🚗 ' + pin.driver + '<br>' +
+          '📦 ' + pin.trackingId + '<br>' +
+          '📍 ' + pin.address
+        );
+        bounds.push([pin.lat, pin.lng]);
+      }
+      if (bounds.length > 1) {
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+    }
+
+    function twLineSend() {
+      if (twExtractedData.length === 0) {
+        alert('先に抽出を実行してください');
+        return;
+      }
+
+      // ルートごとにグループ化
+      var routeGroups = {};
+      for (var i = 0; i < twExtractedData.length; i++) {
+        var d = twExtractedData[i];
+        if (!routeGroups[d.routeCode]) {
+          routeGroups[d.routeCode] = { driver: d.driverName, departure: d.departure, items: [] };
+        }
+        routeGroups[d.routeCode].items.push(d);
+      }
+
+      var routeKeys = Object.keys(routeGroups);
+      var msg = '📦 午前時間指定アラート\n';
+      msg += '━━━━━━━━━━━━━━━\n';
+      msg += '対象: ' + routeKeys.length + 'ルート / ' + twExtractedData.length + '件\n\n';
+
+      for (var r = 0; r < routeKeys.length; r++) {
+        var rk = routeKeys[r];
+        var grp = routeGroups[rk];
+        msg += '🚛 ' + rk + ' (' + grp.driver + ') 出発' + grp.departure + '\n';
+        for (var j = 0; j < grp.items.length; j++) {
+          var it = grp.items[j];
+          msg += '  #' + it.stop + ' ' + it.timeWindow + ' ' + it.address + '\n';
+        }
+        msg += '\n';
+      }
+
+      // LINE送信（管理者へ）
+      if (!confirm('管理者LINE + 各ドライバーに送信しますか？\n\n' + routeKeys.length + 'ルート / ' + twExtractedData.length + '件')) return;
+
+      var adminId = lineSettings.adminUserId;
+      if (!adminId) {
+        alert('LINE管理者IDが未設定です。マスタ管理で設定してください。');
+        return;
+      }
+
+      // 管理者にサマリー送信
+      fetch(lineSettings.webhookUrl + '/proxy/line/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: adminId, message: msg })
+      }).then(function(res) {
+        if (res.ok) {
+          console.log('管理者へ時間指定アラート送信成功');
+        }
+      }).catch(function(err) {
+        console.error('管理者LINE送信エラー:', err);
+      });
+
+      // 各ドライバーに個別送信
+      var sentCount = 0;
+      for (var rr = 0; rr < routeKeys.length; rr++) {
+        var rkk = routeKeys[rr];
+        var group = routeGroups[rkk];
+        if (!group.driver) continue;
+
+        // ドライバーのLINE IDを検索
+        var driverLineId = lineMapping[group.driver];
+        if (!driverLineId) continue;
+
+        var driverMsg = '📦 時間指定のお知らせ\n';
+        driverMsg += 'コース: ' + rkk + ' 出発: ' + group.departure + '\n';
+        driverMsg += '━━━━━━━━━━━━━━━\n';
+        for (var k = 0; k < group.items.length; k++) {
+          var pkg = group.items[k];
+          driverMsg += '#' + pkg.stop + ' 🕐' + pkg.timeWindow + '\n  ' + pkg.address + '\n';
+        }
+        driverMsg += '\n⚠ 時間指定に注意してください';
+
+        (function(did, dmsg) {
+          fetch(lineSettings.webhookUrl + '/proxy/line/push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: did, message: dmsg })
+          }).then(function(res) {
+            if (res.ok) sentCount++;
+          }).catch(function(err) {
+            console.error('LINE送信エラー:', err);
+          });
+        })(driverLineId, driverMsg);
+      }
+
+      alert('LINE送信を実行しました\n管理者 + ドライバー個別送信中...');
     }
 
     // ===== WH60 労働時間管理 =====
