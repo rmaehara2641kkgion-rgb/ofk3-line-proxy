@@ -3283,6 +3283,35 @@
         .replace(/[○◯〇Ｏ]/g, '〇');
     }
 
+    // 姓名反転修正: マスタ登録名（driverMaster）と照合し、反転で一致すればマスタ名を使用
+    function normalizeDriverNameOrder(displayName) {
+      if (!displayName) return displayName;
+      // マスタに登録済みの全日本語名を取得
+      var masterNames = {};
+      for (var i = 0; i < driverMaster.length; i++) {
+        var jp = driverMaster[i].japaneseName || '';
+        if (jp) masterNames[jp.replace(/[\s　]+/g, '')] = jp;
+      }
+      // driverJapaneseNamesの値も含める
+      for (var key in driverJapaneseNames) {
+        var jn = driverJapaneseNames[key];
+        if (jn) masterNames[jn.replace(/[\s　]+/g, '')] = jn;
+      }
+      // displayNameをスペースで分割して反転
+      var clean = displayName.replace(/[\s　]+/g, ' ').trim();
+      var parts = clean.split(' ');
+      if (parts.length === 2) {
+        var reversed = parts[1] + ' ' + parts[0];
+        var reversedNoSpace = parts[1] + parts[0];
+        // マスタに反転名が存在すれば反転名を使用
+        if (masterNames[reversedNoSpace]) return masterNames[reversedNoSpace];
+        // 元の順番でマスタに存在すればそのまま
+        var origNoSpace = parts[0] + parts[1];
+        if (masterNames[origNoSpace]) return masterNames[origNoSpace];
+      }
+      return displayName;
+    }
+
     function guessShiftCodePrecise(minutes) {
       if (minutes >= 530 && minutes <= 550) return 'bike';
       if (minutes >= 640 && minutes <= 680) return '\u3007';
@@ -3369,6 +3398,8 @@
 
         // マスタの日本語名があれば変換（DAシフト表との名前一致用）
         var dispName = driverJapaneseNames[name] || name;
+        // 姓名反転チェック: マスタ登録名と比較し、反転で一致すればマスタ名を使用
+        dispName = normalizeDriverNameOrder(dispName);
 
         // Transport ID がマスタに登録されていれば保持
         var transportId = transportIDs[name] || '';
@@ -6334,6 +6365,7 @@
         }
 
         var dispName = driverJapaneseNames[name] || name;
+        dispName = normalizeDriverNameOrder(dispName);
 
         // Transport ID がマスタに登録されていれば保持
         var transportId = transportIDs[name] || '';
