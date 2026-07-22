@@ -10337,9 +10337,9 @@
         var item = twExtractedData[i];
         var rowClass = item.routeCode !== prevRoute ? 'border-t border-gray-600' : '';
         var twColor = item.timeWindowParsed.endMin <= 780 ? 'text-red-400 font-bold' : 'text-yellow-400';
-        var circleNum = item.seqNo <= 50 ? String.fromCodePoint(9311 + item.seqNo) : item.seqNo;
+        var circleNum = item.seqNo;
         html += '<tr class="' + rowClass + ' hover:bg-surface-secondary">';
-        html += '<td class="p-2 text-center text-base font-bold">' + circleNum + '</td>';
+        html += '<td class="p-2 text-center"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#3b82f6;color:#fff;font-size:11px;font-weight:bold;">' + circleNum + '</span></td>';
         html += '<td class="p-2 font-mono">' + item.routeCode + '</td>';
         html += '<td class="p-2">' + item.driverName + '</td>';
         html += '<td class="p-2">' + item.departure + '</td>';
@@ -10507,8 +10507,8 @@
         msg += '🚛 コース: ' + rk + '\n';
         for (var j = 0; j < grp.length; j++) {
           var sn = grp[j].seqNo;
-          var circleN = sn && sn <= 50 ? String.fromCodePoint(9311 + sn) : (sn || '');
-          msg += '  ' + circleN + ' 🕐' + grp[j].timeWindow + '\n';
+          var circleN = sn || '';
+          msg += '  [' + circleN + '] 🕐' + grp[j].timeWindow + '\n';
           msg += '  📦 ' + grp[j].trackingId + '\n';
           msg += '  📍 ' + grp[j].address + '\n';
         }
