@@ -3283,16 +3283,11 @@
         .replace(/[○◯〇Ｏ]/g, '〇');
     }
 
-    // 姓名反転修正: マスタ登録名（driverMaster）と照合し、反転で一致すればマスタ名を使用
+    // 姓名反転修正: マスタ登録名（driverJapaneseNames）と照合し、反転で一致すればマスタ名を使用
     function normalizeDriverNameOrder(displayName) {
       if (!displayName) return displayName;
       // マスタに登録済みの全日本語名を取得
       var masterNames = {};
-      for (var i = 0; i < driverMaster.length; i++) {
-        var jp = driverMaster[i].japaneseName || '';
-        if (jp) masterNames[jp.replace(/[\s　]+/g, '')] = jp;
-      }
-      // driverJapaneseNamesの値も含める
       for (var key in driverJapaneseNames) {
         var jn = driverJapaneseNames[key];
         if (jn) masterNames[jn.replace(/[\s　]+/g, '')] = jn;
@@ -3301,7 +3296,6 @@
       var clean = displayName.replace(/[\s　]+/g, ' ').trim();
       var parts = clean.split(' ');
       if (parts.length === 2) {
-        var reversed = parts[1] + ' ' + parts[0];
         var reversedNoSpace = parts[1] + parts[0];
         // マスタに反転名が存在すれば反転名を使用
         if (masterNames[reversedNoSpace]) return masterNames[reversedNoSpace];
