@@ -1689,45 +1689,56 @@
       </div>
 
       <!-- LINE送信プレビューモーダル -->
-      <div id="tw-line-modal" class="fixed inset-0 z-50 hidden" style="background:rgba(0,0,0,0.7);">
+      <div id="tw-line-modal" class="fixed inset-0 z-50 hidden" style="background:rgba(0,0,0,0.85);">
         <div class="flex items-center justify-center min-h-screen p-4">
-          <div class="bg-surface rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+          <div class="rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col" style="background:#1e1e2e;">
             <!-- ヘッダー -->
-            <div class="flex items-center justify-between p-4 border-b border-gray-700">
-              <h3 class="text-lg font-bold">📲 LINE送信プレビュー</h3>
-              <button onclick="twCloseLineSendModal()" class="text-ink-lighter hover:text-ink text-xl">&times;</button>
+            <div class="flex items-center justify-between px-6 py-4" style="background:#252540; border-radius:16px 16px 0 0;">
+              <div>
+                <h3 class="text-xl font-bold text-white">📲 LINE送信プレビュー</h3>
+                <p class="text-xs text-gray-400 mt-0.5">送信先を選択 → プレビュー確認 → 送信</p>
+              </div>
+              <button onclick="twCloseLineSendModal()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-600 text-gray-400 hover:text-white text-lg">&times;</button>
             </div>
             <!-- 送信先選択 -->
-            <div class="p-4 border-b border-gray-700">
-              <h4 class="text-sm font-bold mb-2">送信先ドライバー選択</h4>
-              <div class="flex gap-2 mb-2">
-                <button onclick="twSelectAllDrivers(true)" class="px-2 py-1 bg-blue-600 text-white rounded text-xs">全選択</button>
-                <button onclick="twSelectAllDrivers(false)" class="px-2 py-1 bg-gray-600 text-white rounded text-xs">全解除</button>
-                <span class="text-xs text-ink-lighter ml-2 self-center" id="tw-send-count">0名選択中</span>
+            <div class="px-6 py-3" style="background:#2a2a3e;">
+              <div class="flex items-center gap-3 mb-2">
+                <h4 class="text-sm font-bold text-white">送信先</h4>
+                <button onclick="twSelectAllDrivers(true)" class="px-3 py-1 bg-blue-600 text-white rounded-full text-xs font-medium hover:bg-blue-500">全選択</button>
+                <button onclick="twSelectAllDrivers(false)" class="px-3 py-1 bg-gray-600 text-white rounded-full text-xs font-medium hover:bg-gray-500">全解除</button>
+                <span class="text-sm text-blue-400 font-bold ml-auto" id="tw-send-count">0名選択中</span>
               </div>
-              <div id="tw-driver-select-list" class="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto"></div>
+              <div id="tw-driver-select-list" class="grid grid-cols-4 gap-1.5 max-h-28 overflow-y-auto py-1"></div>
             </div>
-            <!-- プレビュー（スワイプ） -->
-            <div class="flex-1 overflow-y-auto p-4">
-              <div class="flex items-center justify-between mb-2">
-                <button onclick="twPreviewPrev()" class="px-3 py-1 bg-gray-600 text-white rounded text-sm" id="tw-prev-btn">&larr; 前</button>
-                <span class="text-sm font-bold" id="tw-preview-page">1 / 1</span>
-                <button onclick="twPreviewNext()" class="px-3 py-1 bg-gray-600 text-white rounded text-sm" id="tw-next-btn">次 &rarr;</button>
+            <!-- プレビュー本体 -->
+            <div class="flex-1 overflow-y-auto px-6 py-4">
+              <!-- ページ切替 -->
+              <div class="flex items-center justify-between mb-3">
+                <button onclick="twPreviewPrev()" class="px-4 py-2 rounded-lg text-sm font-bold text-white" style="background:#3a3a5c;" id="tw-prev-btn">&larr; 前のコース</button>
+                <span class="text-base font-bold text-white" id="tw-preview-page">1 / 1</span>
+                <button onclick="twPreviewNext()" class="px-4 py-2 rounded-lg text-sm font-bold text-white" style="background:#3a3a5c;" id="tw-next-btn">次のコース &rarr;</button>
               </div>
               <!-- LINEメッセージプレビュー -->
-              <div class="rounded-xl p-4 mb-3 border border-green-700" style="background:#1a2e1a;" id="tw-msg-preview">
-                <div class="text-xs text-green-400 mb-1">LINE プレビュー</div>
-                <pre class="text-sm text-ink whitespace-pre-wrap" id="tw-msg-text" style="background:#1e3a1e; padding:12px; border-radius:8px;"></pre>
+              <div class="rounded-2xl p-1 mb-4" style="background:#7bb563;">
+                <div class="rounded-xl p-5" style="background:#f5f5f0;">
+                  <div class="flex items-center gap-2 mb-3 pb-2" style="border-bottom:1px solid #ddd;">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold" style="background:#06c755;">OFK</div>
+                    <span class="text-sm font-bold" style="color:#333;">OFK3 配送管理</span>
+                  </div>
+                  <pre class="whitespace-pre-wrap text-sm leading-relaxed" id="tw-msg-text" style="color:#222; font-family:'Hiragino Sans','Meiryo',sans-serif; margin:0;"></pre>
+                </div>
               </div>
               <!-- ミニMAP -->
-              <div id="tw-preview-map" style="width:100%; height:300px; border-radius:8px; position:relative;"></div>
+              <div class="rounded-xl overflow-hidden" style="border:2px solid #3a3a5c;">
+                <div id="tw-preview-map" style="width:100%; height:300px; position:relative;"></div>
+              </div>
             </div>
             <!-- フッター -->
-            <div class="p-4 border-t border-gray-700 flex justify-between items-center">
-              <div class="text-xs text-ink-lighter" id="tw-send-summary"></div>
-              <div class="flex gap-2">
-                <button onclick="twCloseLineSendModal()" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm">キャンセル</button>
-                <button onclick="twConfirmSend()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700">📲 送信する</button>
+            <div class="px-6 py-4 flex justify-between items-center" style="background:#252540; border-radius:0 0 16px 16px;">
+              <div class="text-sm text-gray-300" id="tw-send-summary"></div>
+              <div class="flex gap-3">
+                <button onclick="twCloseLineSendModal()" class="px-5 py-2.5 rounded-lg text-sm font-medium text-gray-300 hover:text-white" style="background:#3a3a5c;">キャンセル</button>
+                <button onclick="twConfirmSend()" class="px-6 py-2.5 rounded-lg text-sm font-bold text-white shadow-lg hover:opacity-90" style="background:#06c755;">📲 送信する</button>
               </div>
             </div>
           </div>
@@ -1782,7 +1793,10 @@
 
         <!-- ジオコーディング進捗 -->
         <div id="geocode-progress" class="hidden mb-4 card p-3">
-          <h4 class="text-xs font-bold text-ink-lighter mb-2">ジオコーディング進捗</h4>
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-xs font-bold text-ink-lighter">ジオコーディング進捗</h4>
+            <button onclick="stopBatchGeocode()" id="btn-stop-geocode" class="px-3 py-1 bg-red-600 text-white rounded text-xs font-bold hover:bg-red-700">⏹ 中断</button>
+          </div>
           <div class="w-full bg-gray-200 rounded-full h-3 mb-2">
             <div id="geocode-progress-bar" class="bg-green-500 h-3 rounded-full transition-all" style="width:0%"></div>
           </div>
@@ -8327,18 +8341,31 @@
     }
 
     // 未取得住所を一括ジオコーディング
+    var batchGeocodeAbort = false;
+
+    function stopBatchGeocode() {
+      if (!batchGeocodeRunning) return;
+      batchGeocodeAbort = true;
+      var progressText = document.getElementById('geocode-progress-text');
+      if (progressText) progressText.textContent = '中断処理中... 取得済みデータを保存しています...';
+      var stopBtn = document.getElementById('btn-stop-geocode');
+      if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = '保存中...'; }
+    }
+
     async function startBatchGeocode() {
       if (batchGeocodeRunning) {
         alert('ジオコーディング実行中です');
         return;
       }
+      batchGeocodeAbort = false;
       var pending = await loadPendingAddrFromSheet();
       var pendingKeys = Object.keys(pending);
       if (pendingKeys.length === 0) {
         alert('未取得の住所はありません');
         return;
       }
-      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\n' + Math.ceil(pendingKeys.length / 60) + '分程度かかります。\n実行しますか？')) {
+      var estMin = Math.ceil(pendingKeys.length * 0.2 / 60);
+      if (!confirm(pendingKeys.length + '件の住所をジオコーディングします。\n約' + estMin + '分かかります。\n途中で中断しても取得済み分は保存されます。\n実行しますか？')) {
         return;
       }
       batchGeocodeRunning = true;
@@ -8358,6 +8385,17 @@
       var failedAddrs = [];
 
       function processNext() {
+        // 中断チェック
+        if (batchGeocodeAbort) {
+          var remaining = Object.keys(updatedCoords);
+          var p = remaining.length > 0 ? batchUpdateCoordsToSheet(updatedCoords) : Promise.resolve();
+          p.then(function() {
+            updatedCoords = {};
+            batchGeocodeAbort = false;
+            finishGeocode('中断: 成功 ' + success + '件 / 失敗 ' + fail + '件 (残り' + (total - done) + '件)');
+          });
+          return;
+        }
         if (done >= total) {
           // 残りを保存
           var remaining = Object.keys(updatedCoords);
@@ -8401,7 +8439,7 @@
       }
 
       function retryFailed(idx) {
-        if (idx >= failedAddrs.length) {
+        if (batchGeocodeAbort || idx >= failedAddrs.length) {
           // 再試行の残りを保存
           var remaining = Object.keys(updatedCoords);
           var p = remaining.length > 0 ? batchUpdateCoordsToSheet(updatedCoords) : Promise.resolve();
@@ -8430,11 +8468,14 @@
         });
       }
 
-      function finishGeocode() {
+      function finishGeocode(msg) {
         batchGeocodeRunning = false;
+        batchGeocodeAbort = false;
         refreshAddrMaster();
         if (btn) btn.disabled = false;
-        if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+        if (progressText) progressText.textContent = msg || ('完了: 成功 ' + success + '件 / 失敗 ' + fail + '件');
+        var stopBtn = document.getElementById('btn-stop-geocode');
+        if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = '⏹ 中断'; }
       }
 
       processNext();
