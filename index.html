@@ -1663,6 +1663,7 @@
             <table class="w-full text-xs">
               <thead class="sticky top-0 bg-surface">
                 <tr class="text-left text-ink-lighter border-b border-gray-700">
+                  <th class="p-2 w-10">No.</th>
                   <th class="p-2">ルート</th>
                   <th class="p-2">ドライバー</th>
                   <th class="p-2">出発時刻</th>
@@ -10307,6 +10308,10 @@
         if (a.routeCode !== b.routeCode) return a.routeCode < b.routeCode ? -1 : 1;
         return (parseInt(a.stop) || 0) - (parseInt(b.stop) || 0);
       });
+      // 連番付与
+      for (var si = 0; si < twExtractedData.length; si++) {
+        twExtractedData[si].seqNo = si + 1;
+      }
 
       // サマリー更新
       var routeKeys = Object.keys(routeSet);
@@ -10332,7 +10337,9 @@
         var item = twExtractedData[i];
         var rowClass = item.routeCode !== prevRoute ? 'border-t border-gray-600' : '';
         var twColor = item.timeWindowParsed.endMin <= 780 ? 'text-red-400 font-bold' : 'text-yellow-400';
+        var circleNum = item.seqNo <= 50 ? String.fromCodePoint(9311 + item.seqNo) : item.seqNo;
         html += '<tr class="' + rowClass + ' hover:bg-surface-secondary">';
+        html += '<td class="p-2 text-center text-base font-bold">' + circleNum + '</td>';
         html += '<td class="p-2 font-mono">' + item.routeCode + '</td>';
         html += '<td class="p-2">' + item.driverName + '</td>';
         html += '<td class="p-2">' + item.departure + '</td>';
@@ -10390,7 +10397,8 @@
             timeWindow: items[i].timeWindow,
             address: addr,
             trackingId: items[i].trackingId,
-            driver: items[i].driverName || ''
+            driver: items[i].driverName || '',
+            seqNo: items[i].seqNo || ''
           });
         } else if (addr) {
           needGeocode.push(items[i]);
@@ -10416,10 +10424,16 @@
       function addPin(pin) {
         var rc = pin.label.split(' ')[0];
         if (!routeColors[rc]) { routeColors[rc] = colorList[colorIdx % colorList.length]; colorIdx++; }
-        L.circleMarker([pin.lat, pin.lng], {
-          radius: 8, fillColor: routeColors[rc], color: '#fff', weight: 2, fillOpacity: 0.9
-        }).addTo(map).bindPopup(
-          '<b>' + pin.label + '</b><br>🕐 ' + pin.timeWindow + '<br>🚗 ' + pin.driver + '<br>📦 ' + pin.trackingId + '<br>📍 ' + pin.address
+        var color = routeColors[rc];
+        var numLabel = pin.seqNo || '';
+        var icon = L.divIcon({
+          className: '',
+          html: '<div style="background:' + color + '; color:#fff; width:28px; height:28px; border-radius:50%; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.4);">' + numLabel + '</div>',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+        L.marker([pin.lat, pin.lng], { icon: icon }).addTo(map).bindPopup(
+          '<b>' + numLabel + ' ' + pin.label + '</b><br>🕐 ' + pin.timeWindow + '<br>🚗 ' + pin.driver + '<br>📦 ' + pin.trackingId + '<br>📍 ' + pin.address
         );
         bounds.push([pin.lat, pin.lng]);
       }
@@ -10450,7 +10464,8 @@
                   timeWindow: item.timeWindow,
                   address: item.address,
                   trackingId: item.trackingId,
-                  driver: item.driverName || ''
+                  driver: item.driverName || '',
+                  seqNo: item.seqNo || ''
                 });
                 // マスターにもキャッシュ
                 inMemoryAddrMaster[item.address] = { lat: data.lat, lng: data.lng };
@@ -10491,7 +10506,9 @@
         var grp = routeGroups[rk];
         msg += '🚛 コース: ' + rk + '\n';
         for (var j = 0; j < grp.length; j++) {
-          msg += '  #' + grp[j].stop + ' 🕐' + grp[j].timeWindow + '\n';
+          var sn = grp[j].seqNo;
+          var circleN = sn && sn <= 50 ? String.fromCodePoint(9311 + sn) : (sn || '');
+          msg += '  ' + circleN + ' 🕐' + grp[j].timeWindow + '\n';
           msg += '  📦 ' + grp[j].trackingId + '\n';
           msg += '  📍 ' + grp[j].address + '\n';
         }
@@ -10517,9 +10534,9 @@
         var lid = lineMapping[name];
         if (!lid) continue;
         var jpName = driverJapaneseNames[name] || name;
-        html += '<label class="flex items-center gap-2 p-1.5 rounded hover:bg-surface-secondary cursor-pointer text-xs">';
+        html += '<label class="flex items-center gap-2 p-1.5 rounded hover:bg-surface-secondary cursor-pointer text-xs text-white">';
         html += '<input type="checkbox" class="tw-driver-cb" data-name="' + name.replace(/"/g, '&quot;') + '" data-lineid="' + lid + '" onchange="twUpdateSendCount()">';
-        html += '<span>' + jpName + '</span>';
+        html += '<span class="text-white">' + jpName + '</span>';
         html += '</label>';
       }
       // 管理者もリストに
