@@ -2742,6 +2742,52 @@
     // 点呼ログ（日別履歴）— localStorage保存、将来GAS/スプレッドシート連携用フラット構造
     var tenkoLog = JSON.parse(localStorage.getItem('tenkoLog') || '[]');
 
+    // 起動時に古いログをクリーンアップ
+    (function() {
+      var before = tenkoLog.length;
+      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      tenkoLog = tenkoLog.filter(function(item) {
+        var t = item.time || item.date;
+        if (!t) return false;
+        return new Date(t).getTime() >= limit;
+      });
+      if (tenkoLog.length > 1000) tenkoLog = tenkoLog.slice(tenkoLog.length - 1000);
+      if (before !== tenkoLog.length) {
+        console.log('tenkoLog cleanup: ' + before + ' → ' + tenkoLog.length + '件');
+        try { localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog)); } catch(e) {}
+      }
+    })();
+
+    // tenkoLog保存（30日制限 + 容量チェック）
+    function saveTenkoLog() {
+      // 30日以上前のログを削除
+      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      tenkoLog = tenkoLog.filter(function(item) {
+        var t = item.time || item.date;
+        if (!t) return false;
+        return new Date(t).getTime() >= limit;
+      });
+      // さらに1000件に制限
+      if (tenkoLog.length > 1000) {
+        tenkoLog = tenkoLog.slice(tenkoLog.length - 1000);
+      }
+      try {
+        var data = JSON.stringify(tenkoLog);
+        if (data.length < 4500000) {
+          localStorage.setItem('tenkoLog', data);
+        } else {
+          // それでも大きければ直近500件に絞る
+          tenkoLog = tenkoLog.slice(tenkoLog.length - 500);
+          localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+        }
+      } catch (e) {
+        console.warn('tenkoLog保存エラー（容量超過）:', e.message);
+        // 最終手段: 直近200件だけ
+        tenkoLog = tenkoLog.slice(tenkoLog.length - 200);
+        try { localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog)); } catch(e2) {}
+      }
+    }
+
     // 着車時間（分）→ デフォルトシフトコード自動判定
     // 9:00=bike, 11:00=○, 14:40=❽, 15:00=b2, 18:30=C3
     function guessShiftCode(minutes) {
@@ -2941,7 +2987,7 @@
       }
       if (!found) tenkoLog.push(record);
 
-      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+      saveTenkoLog();
     }
 
     function toggleAuth(index, type) {
@@ -6027,7 +6073,7 @@
       tenkoLog[idx].shiftCode = newShift;
       tenkoLog[idx].scheduledArrival = newArrival;
       tenkoLog[idx].completedAt = newCompleted;
-      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+      saveTenkoLog();
 
       alert('✅ 変更を保存しました');
       renderTenkoEditList();
@@ -6039,7 +6085,7 @@
       if (!confirm('⚠ 以下の点呼ログを削除します。よろしいですか？\n\n' + log.driverName + '\n日付: ' + log.date + '\nシフト: ' + log.shiftCode)) return;
 
       tenkoLog.splice(idx, 1);
-      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+      saveTenkoLog();
 
       alert('✅ 削除しました');
       renderTenkoEditList();
@@ -6064,7 +6110,7 @@
         mentorVerified: false,
         isTemporary: false
       });
-      localStorage.setItem('tenkoLog', JSON.stringify(tenkoLog));
+      saveTenkoLog();
 
       alert('✅ 追加しました');
       renderTenkoEditList();
