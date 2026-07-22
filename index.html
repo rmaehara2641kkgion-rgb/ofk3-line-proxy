@@ -1684,7 +1684,7 @@
         <!-- MAP表示エリア（スワイプ対応） -->
         <div class="card p-4 mb-4 hidden" id="tw-map-container">
           <h3 class="text-sm font-bold mb-3">📍 時間指定荷物マップ</h3>
-          <div id="tw-map" style="width:100%; height:500px; border-radius:8px;"></div>
+          <div id="tw-map" style="width:100%; height:500px; border-radius:8px; position:relative;"></div>
         </div>
       </div>
 
@@ -1715,12 +1715,12 @@
                 <button onclick="twPreviewNext()" class="px-3 py-1 bg-gray-600 text-white rounded text-sm" id="tw-next-btn">次 &rarr;</button>
               </div>
               <!-- LINEメッセージプレビュー -->
-              <div class="bg-green-900 bg-opacity-30 rounded-xl p-4 mb-3 border border-green-700" id="tw-msg-preview">
+              <div class="rounded-xl p-4 mb-3 border border-green-700" style="background:#1a2e1a;" id="tw-msg-preview">
                 <div class="text-xs text-green-400 mb-1">LINE プレビュー</div>
-                <pre class="text-sm text-ink whitespace-pre-wrap" id="tw-msg-text"></pre>
+                <pre class="text-sm text-ink whitespace-pre-wrap" id="tw-msg-text" style="background:#1e3a1e; padding:12px; border-radius:8px;"></pre>
               </div>
               <!-- ミニMAP -->
-              <div id="tw-preview-map" style="width:100%; height:300px; border-radius:8px;"></div>
+              <div id="tw-preview-map" style="width:100%; height:300px; border-radius:8px; position:relative;"></div>
             </div>
             <!-- フッター -->
             <div class="p-4 border-t border-gray-700 flex justify-between items-center">
@@ -10331,12 +10331,14 @@
       }
       var container = document.getElementById('tw-map-container');
       container.classList.remove('hidden');
-      twRenderMap('tw-map', twExtractedData, true);
+      twRenderMapAsync('tw-map', twExtractedData, true);
     }
 
-    function twRenderMap(divId, items, fitAll) {
+    function twRenderMapAsync(divId, items, fitAll) {
       var mapDiv = document.getElementById(divId);
+      // まずマスターから即取得できるピンを集める
       var pins = [];
+      var needGeocode = [];
       for (var i = 0; i < items.length; i++) {
         var addr = items[i].address;
         var geo = inMemoryAddrMaster[addr];
@@ -10349,28 +10351,28 @@
             trackingId: items[i].trackingId,
             driver: items[i].driverName || ''
           });
+        } else if (addr) {
+          needGeocode.push(items[i]);
         }
       }
-      if (pins.length === 0) {
-        mapDiv.innerHTML = '<div class="text-center py-8 text-ink-lighter text-sm">ジオコーディング済み住所なし</div>';
-        return null;
-      }
 
+      // MAPインスタンス作成（まずマスター分のピンを表示）
       var mapKey = divId + '_instance';
       if (window[mapKey]) { window[mapKey].remove(); }
-      var map = L.map(divId).setView([pins[0].lat, pins[0].lng], 14);
+      var center = pins.length > 0 ? [pins[0].lat, pins[0].lng] : [33.58, 130.34];
+      var map = L.map(divId).setView(center, 13);
       window[mapKey] = map;
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
+      setTimeout(function() { map.invalidateSize(); }, 200);
 
       var bounds = [];
       var routeColors = {};
       var colorList = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
       var colorIdx = 0;
 
-      for (var p = 0; p < pins.length; p++) {
-        var pin = pins[p];
+      function addPin(pin) {
         var rc = pin.label.split(' ')[0];
         if (!routeColors[rc]) { routeColors[rc] = colorList[colorIdx % colorList.length]; colorIdx++; }
         L.circleMarker([pin.lat, pin.lng], {
@@ -10380,7 +10382,49 @@
         );
         bounds.push([pin.lat, pin.lng]);
       }
+
+      // マスター分のピンをまず追加
+      for (var p = 0; p < pins.length; p++) { addPin(pins[p]); }
       if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
+
+      // ジオコーディング未取得分をAPIで取得して追加
+      if (needGeocode.length > 0) {
+        mapDiv.insertAdjacentHTML('afterbegin', '<div id="' + divId + '-loading" class="absolute top-2 left-2 z-[1000] bg-yellow-600 text-white text-xs px-3 py-1 rounded shadow">📍 未取得住所をジオコーディング中... 0/' + needGeocode.length + '</div>');
+        var doneCount = 0;
+        var batchGeocode = function(idx) {
+          if (idx >= needGeocode.length) {
+            var loadEl = document.getElementById(divId + '-loading');
+            if (loadEl) loadEl.remove();
+            if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
+            return;
+          }
+          var item = needGeocode[idx];
+          fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(item.address))
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (data.status === 'ok' && data.lat && data.lng) {
+                addPin({
+                  lat: data.lat, lng: data.lng,
+                  label: item.routeCode + ' #' + item.stop,
+                  timeWindow: item.timeWindow,
+                  address: item.address,
+                  trackingId: item.trackingId,
+                  driver: item.driverName || ''
+                });
+                // マスターにもキャッシュ
+                inMemoryAddrMaster[item.address] = { lat: data.lat, lng: data.lng };
+              }
+            })
+            .catch(function() {})
+            .then(function() {
+              doneCount++;
+              var loadEl = document.getElementById(divId + '-loading');
+              if (loadEl) loadEl.textContent = '📍 ジオコーディング中... ' + doneCount + '/' + needGeocode.length;
+              setTimeout(function() { batchGeocode(idx + 1); }, 200);
+            });
+        };
+        batchGeocode(0);
+      }
       return map;
     }
 
@@ -10517,8 +10561,8 @@
 
       // ミニMAP更新
       setTimeout(function() {
-        twRenderMap('tw-preview-map', page.items, true);
-      }, 100);
+        twRenderMapAsync('tw-preview-map', page.items, true);
+      }, 150);
     }
 
     function twConfirmSend() {
