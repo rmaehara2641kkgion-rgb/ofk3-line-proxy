@@ -1299,10 +1299,10 @@
 
         <!-- LAT Summary -->
         <div id="lat-summary" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">📡 LAT（フライングログイン）分析</h3>
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <h3 class="text-sm font-medium mb-2">📡 LAT分析（Login Adherence Tool）</h3>
+          <div class="grid grid-cols-2 sm:grid-cols-6 gap-3">
             <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">総レコード</div>
+              <div class="text-xs text-ink-lighter">総ルート</div>
               <div class="text-lg font-bold" id="lat-total">0</div>
             </div>
             <div class="card p-3 text-center">
@@ -1314,38 +1314,63 @@
               <div class="text-lg font-bold text-red-600" id="lat-unmatched">0</div>
             </div>
             <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">フライング検出</div>
-              <div class="text-lg font-bold text-orange-500" id="lat-flying">0</div>
+              <div class="text-xs text-ink-lighter">早着出発</div>
+              <div class="text-lg font-bold text-orange-500" id="lat-early">0</div>
             </div>
             <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">DSPマッピング</div>
-              <div class="text-lg font-bold" id="lat-dsp-count">0</div>
+              <div class="text-xs text-ink-lighter">定刻出発</div>
+              <div class="text-lg font-bold text-green-600" id="lat-ontime">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">平均積込時間</div>
+              <div class="text-lg font-bold text-blue-500" id="lat-avg-loading">-</div>
             </div>
           </div>
         </div>
 
-        <!-- LAT Driver Summary -->
+        <!-- LAT Timeline Table -->
         <div id="lat-driver-summary" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">ドライバー別LAT</h3>
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-medium">ドライバー別タイムライン</h3>
+            <div class="flex gap-2">
+              <select id="lat-sort-select" class="text-xs p-1 rounded bg-surface-secondary text-ink" onchange="renderLatResults()">
+                <option value="diff">差分順（早着順）</option>
+                <option value="entrance">入場順</option>
+                <option value="driver">ドライバー名順</option>
+                <option value="loading">積込時間順</option>
+              </select>
+            </div>
+          </div>
           <div class="card overflow-hidden">
-            <div class="overflow-x-auto">
+            <div class="overflow-x-auto" style="max-height:600px; overflow-y:auto;">
               <table class="w-full text-sm">
-                <thead>
-                  <tr class="border-b border-border bg-surface">
-                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー名</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">日付</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ルートID</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">ログイン時刻(JST)</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">出発予定</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">差分(分)</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">判定</th>
+                <thead class="sticky top-0 bg-surface z-10">
+                  <tr class="border-b border-border">
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ルートID</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">着車予定</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">DS入場</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">First Scan</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">Last Scan</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">出発予定</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">実出発</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">DS退出</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">差分(分)</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">積込時間</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">滞在時間</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">判定</th>
                   </tr>
                 </thead>
                 <tbody id="lat-detail-tbody"></tbody>
               </table>
             </div>
           </div>
+        </div>
+
+        <!-- タイムライン視覚化 -->
+        <div id="lat-timeline-visual" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">⏱ タイムライン視覚化</h3>
+          <div class="card p-4" id="lat-timeline-bars"></div>
         </div>
       </div>
 
@@ -11889,7 +11914,8 @@
     }
 
     // ===== LAT分析 =====
-    var dspRouteMap = {}; // route_id -> { employeeId, date, plannedDeparture, ... }
+    var dspRouteMap = {}; // route_id -> { employeeId, date, plannedArrival, plannedDeparture, actualDeparture, beaconEntrance, diffMins, onTime }
+    var latBeaconMap = {}; // route_id -> { arrival, entrance, departure, exit, firstScan, lastScan, turnover }
     var latResultData = [];
 
     function handleDspDrop(event) {
@@ -11907,19 +11933,23 @@
         var json = XLSX.utils.sheet_to_json(ws, { header: 1 });
         if (json.length < 2) { alert('DSPファイルにデータがありません'); return; }
 
-        // ヘッダーからインデックス検出
         var headers = json[0];
-        var routeIdx = -1, empIdx = -1, dateIdx = -1, depIdx = -1;
+        var colMap = {};
         for (var h = 0; h < headers.length; h++) {
-          var hv = String(headers[h]).toLowerCase().trim();
-          if (hv === 'route_id') routeIdx = h;
-          if (hv === 'employee_id') empIdx = h;
-          if (hv === 'date') dateIdx = h;
-          if (hv === 'planned_departure' || hv === 'route_actual_departure') {
-            if (depIdx < 0) depIdx = h;
-          }
+          colMap[String(headers[h]).toLowerCase().trim()] = h;
         }
-        if (routeIdx < 0 || empIdx < 0) {
+
+        var routeIdx = colMap['route_id'] !== undefined ? colMap['route_id'] : colMap['routeid'];
+        var empIdx = colMap['employee_id'] !== undefined ? colMap['employee_id'] : -1;
+        var dateIdx = colMap['date'] !== undefined ? colMap['date'] : -1;
+        var paIdx = colMap['planned_arrival'] !== undefined ? colMap['planned_arrival'] : -1;
+        var pdIdx = colMap['planned_departure'] !== undefined ? colMap['planned_departure'] : -1;
+        var adIdx = colMap['route_actual_departure'] !== undefined ? colMap['route_actual_departure'] : -1;
+        var beIdx = colMap['beacon_entrance'] !== undefined ? colMap['beacon_entrance'] : -1;
+        var diffIdx = colMap['diff_plan_vs_actual_mins'] !== undefined ? colMap['diff_plan_vs_actual_mins'] : -1;
+        var otIdx = colMap['on_time_departure'] !== undefined ? colMap['on_time_departure'] : -1;
+
+        if (routeIdx === undefined || empIdx < 0) {
           alert('route_id列またはemployee_id列が見つかりません');
           return;
         }
@@ -11929,13 +11959,17 @@
           var row = json[i];
           var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
           var eid = row[empIdx] ? String(row[empIdx]).trim() : '';
-          if (rid && eid) {
-            dspRouteMap[rid] = {
-              employeeId: eid,
-              date: row[dateIdx] ? String(row[dateIdx]).trim() : '',
-              plannedDeparture: depIdx >= 0 && row[depIdx] ? String(row[depIdx]).trim() : ''
-            };
-          }
+          if (!rid) continue;
+          dspRouteMap[rid] = {
+            employeeId: eid,
+            date: dateIdx >= 0 && row[dateIdx] ? String(row[dateIdx]).trim() : '',
+            plannedArrival: paIdx >= 0 && row[paIdx] ? latExtractTime(String(row[paIdx])) : '',
+            plannedDeparture: pdIdx >= 0 && row[pdIdx] ? latExtractTime(String(row[pdIdx])) : '',
+            actualDeparture: adIdx >= 0 && row[adIdx] ? latExtractTime(String(row[adIdx])) : '',
+            beaconEntrance: beIdx >= 0 && row[beIdx] ? latExtractTime(String(row[beIdx])) : '',
+            diffMins: diffIdx >= 0 && row[diffIdx] ? parseFloat(row[diffIdx]) : null,
+            onTime: otIdx >= 0 && row[otIdx] ? String(row[otIdx]).trim() : ''
+          };
         }
 
         var count = Object.keys(dspRouteMap).length;
@@ -11943,8 +11977,7 @@
         document.getElementById('dsp-loaded-msg').textContent = '✅ ' + count + 'ルート読込済';
         document.getElementById('dsp-drop-zone').style.borderColor = '#22c55e';
 
-        // LATデータが既にあれば再解析
-        if (latResultData.length > 0) renderLatResults();
+        mergeAndRender();
       };
       reader.readAsArrayBuffer(file);
     }
@@ -11959,186 +11992,194 @@
       var reader = new FileReader();
       reader.onload = function(e) {
         var data = new Uint8Array(e.target.result);
-        var wb = XLSX.read(data, { type: 'array', cellDates: true });
+        var wb = XLSX.read(data, { type: 'array' });
         var ws = wb.Sheets[wb.SheetNames[0]];
-        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
         if (json.length < 2) { alert('LATファイルにデータがありません'); return; }
 
         var headers = json[0];
-        // ヘッダーからインデックス検出
-        var routeIdx = -1, dateIdx = -1;
-        var timeColumns = []; // {idx, name} — 時刻系の列を全部拾う
+        var colMap = {};
         for (var h = 0; h < headers.length; h++) {
-          var hv = String(headers[h]).toLowerCase().trim();
-          if (hv === 'route_id' || hv.indexOf('route') >= 0 && hv.indexOf('id') >= 0) { if (routeIdx < 0) routeIdx = h; }
-          if (hv === 'date' || hv === 'delivery_date') { if (dateIdx < 0) dateIdx = h; }
-          // 時刻に関する列
-          if (hv.indexOf('time') >= 0 || hv.indexOf('login') >= 0 || hv.indexOf('lat') >= 0 || hv.indexOf('actual') >= 0 || hv.indexOf('start') >= 0) {
-            timeColumns.push({ idx: h, name: String(headers[h]).trim() });
-          }
+          colMap[String(headers[h]).toLowerCase().trim()] = h;
         }
 
+        var routeIdx = colMap['route_id'] !== undefined ? colMap['route_id'] : -1;
+        // フォールバック検索
         if (routeIdx < 0) {
-          alert('route_id列が見つかりません。ヘッダー: ' + headers.join(', '));
+          for (var k in colMap) { if (k.indexOf('route') >= 0 && k.indexOf('id') >= 0) { routeIdx = colMap[k]; break; } }
+        }
+        if (routeIdx < 0) {
+          alert('route_id列が見つかりません。\nヘッダー: ' + headers.join(', '));
           return;
         }
 
-        latResultData = [];
+        var baIdx = colMap['beacon_arrival'] !== undefined ? colMap['beacon_arrival'] : -1;
+        var benIdx = colMap['beacon_entrance'] !== undefined ? colMap['beacon_entrance'] : -1;
+        var bdIdx = colMap['beacon_departure'] !== undefined ? colMap['beacon_departure'] : -1;
+        var bexIdx = colMap['beacon_exit'] !== undefined ? colMap['beacon_exit'] : -1;
+        var fsIdx = colMap['beacon_firstpackagescan'] !== undefined ? colMap['beacon_firstpackagescan'] : -1;
+        var lsIdx = colMap['beacon_lastpackagescan'] !== undefined ? colMap['beacon_lastpackagescan'] : -1;
+        var toIdx = colMap['loading_area_turnover'] !== undefined ? colMap['loading_area_turnover'] : -1;
+
+        latBeaconMap = {};
         for (var i = 1; i < json.length; i++) {
           var row = json[i];
           var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
           if (!rid) continue;
-
-          // DSPマッピングからTransportID取得
-          var dspInfo = dspRouteMap[rid] || null;
-          var empId = dspInfo ? dspInfo.employeeId : '';
-          var driverName = '';
-
-          // マスタからドライバー名特定
-          if (empId) {
-            var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
-            for (var tname in tids) {
-              if (tids[tname] === empId) { driverName = tname; break; }
-            }
-            // driverJapaneseNamesで日本語名変換
-            if (driverName && driverJapaneseNames[driverName]) {
-              driverName = driverJapaneseNames[driverName] + ' (' + driverName + ')';
-            }
-          }
-
-          var dateVal = '';
-          if (dateIdx >= 0 && row[dateIdx]) {
-            dateVal = String(row[dateIdx]).trim();
-          } else if (dspInfo && dspInfo.date) {
-            dateVal = dspInfo.date;
-          }
-
-          // 時刻列をすべて取得
-          var times = {};
-          for (var tc = 0; tc < timeColumns.length; tc++) {
-            var tcol = timeColumns[tc];
-            var tv = row[tcol.idx] ? String(row[tcol.idx]).trim() : '';
-            if (tv) times[tcol.name] = tv;
-          }
-
-          // メインのログイン時刻を検出
-          var loginTime = '';
-          var loginColName = '';
-          for (var tn in times) {
-            var tlower = tn.toLowerCase();
-            if (tlower.indexOf('lat') >= 0 || tlower.indexOf('login') >= 0 || tlower.indexOf('actual') >= 0 || tlower.indexOf('start') >= 0) {
-              loginTime = times[tn];
-              loginColName = tn;
-              break;
-            }
-          }
-          // フォールバック: 最初の時刻列
-          if (!loginTime && timeColumns.length > 0 && row[timeColumns[0].idx]) {
-            loginTime = String(row[timeColumns[0].idx]).trim();
-            loginColName = timeColumns[0].name;
-          }
-
-          // JST変換
-          var jstTime = convertToJST(loginTime);
-          var plannedDep = dspInfo ? dspInfo.plannedDeparture : '';
-          var plannedDepJst = convertToJST(plannedDep);
-
-          // 差分計算（分）
-          var diffMin = '';
-          var judgment = '';
-          if (jstTime && plannedDepJst) {
-            var loginMin = parseTimeToMinutes(jstTime);
-            var depMin = parseTimeToMinutes(plannedDepJst);
-            if (loginMin !== null && depMin !== null) {
-              diffMin = loginMin - depMin;
-              if (diffMin < -30) {
-                judgment = 'フライング';
-              } else if (diffMin < 0) {
-                judgment = '早めログイン';
-              } else {
-                judgment = '正常';
-              }
-            }
-          }
-
-          // 全列データも保持
-          var allData = {};
-          for (var ah = 0; ah < headers.length; ah++) {
-            allData[String(headers[ah])] = row[ah] ? String(row[ah]) : '';
-          }
-
-          latResultData.push({
-            routeId: rid,
-            employeeId: empId,
-            driverName: driverName,
-            date: dateVal,
-            loginTime: loginTime,
-            loginTimeJst: jstTime,
-            loginColName: loginColName,
-            plannedDeparture: plannedDepJst || plannedDep,
-            diffMin: diffMin,
-            judgment: judgment,
-            allData: allData
-          });
+          latBeaconMap[rid] = {
+            arrival: baIdx >= 0 && row[baIdx] ? latExtractTime(String(row[baIdx])) : '',
+            entrance: benIdx >= 0 && row[benIdx] ? latExtractTime(String(row[benIdx])) : '',
+            departure: bdIdx >= 0 && row[bdIdx] ? latExtractTime(String(row[bdIdx])) : '',
+            exit: bexIdx >= 0 && row[bexIdx] ? latExtractTime(String(row[bexIdx])) : '',
+            firstScan: fsIdx >= 0 && row[fsIdx] ? latExtractTime(String(row[fsIdx])) : '',
+            lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : '',
+            turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : ''
+          };
         }
 
-        renderLatResults();
+        var cnt = Object.keys(latBeaconMap).length;
+        document.getElementById('lat-drop-zone').style.borderColor = '#a855f7';
+        alert('LATファイル読込完了: ' + cnt + 'ルート');
+
+        mergeAndRender();
       };
       reader.readAsArrayBuffer(file);
     }
 
-    function convertToJST(timeStr) {
-      if (!timeStr) return '';
-      // "2026/6/28 11:00" → そのまま
-      // "11:00:26" → そのまま（時刻のみ）
-      // ISO形式でUTC判定
-      var str = String(timeStr).trim();
-      if (str.indexOf('T') >= 0 && (str.indexOf('Z') >= 0 || str.indexOf('+00') >= 0)) {
-        // UTC → JST (+9h)
-        var d = new Date(str);
-        if (!isNaN(d.getTime())) {
-          d.setHours(d.getHours() + 9);
-          return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes() + ':' + (d.getSeconds() < 10 ? '0' : '') + d.getSeconds();
-        }
-      }
-      // "2026/6/28 02:00" — 日付付き時刻の場合、時刻部分を抽出してUTC→JSTの可能性チェック
-      var match = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-      if (match) {
-        return match[0];
-      }
-      return str;
+    // 時刻文字列から HH:MM:SS を抽出
+    function latExtractTime(str) {
+      if (!str) return '';
+      str = str.trim();
+      // "2026/6/28 11:00" → "11:00"
+      var m = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+      return m ? m[1] : str;
     }
 
-    function parseTimeToMinutes(timeStr) {
-      var m = String(timeStr).match(/(\d{1,2}):(\d{2})/);
+    function latTimeToMin(t) {
+      if (!t) return null;
+      var m = t.match(/(\d{1,2}):(\d{2})/);
       if (!m) return null;
       return parseInt(m[1]) * 60 + parseInt(m[2]);
+    }
+
+    function latMinDiff(t1, t2) {
+      var a = latTimeToMin(t1);
+      var b = latTimeToMin(t2);
+      if (a === null || b === null) return null;
+      return a - b;
+    }
+
+    function mergeAndRender() {
+      // DSPとLATをroute_idで結合
+      var allRouteIds = {};
+      var rid;
+      for (rid in dspRouteMap) allRouteIds[rid] = true;
+      for (rid in latBeaconMap) allRouteIds[rid] = true;
+
+      latResultData = [];
+      var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+
+      for (rid in allRouteIds) {
+        var dsp = dspRouteMap[rid] || {};
+        var lat = latBeaconMap[rid] || {};
+        var empId = dsp.employeeId || '';
+        var driverName = '';
+
+        if (empId) {
+          for (var tname in tids) {
+            if (tids[tname] === empId) { driverName = tname; break; }
+          }
+          if (driverName && driverJapaneseNames[driverName]) {
+            driverName = driverJapaneseNames[driverName] + ' (' + driverName + ')';
+          }
+        }
+
+        var dsEntrance = dsp.beaconEntrance || lat.entrance || lat.arrival || '';
+        var plannedArr = dsp.plannedArrival || '';
+        var plannedDep = dsp.plannedDeparture || '';
+        var actualDep = dsp.actualDeparture || lat.departure || '';
+        var firstScan = lat.firstScan || '';
+        var lastScan = lat.lastScan || '';
+        var dsExit = lat.exit || lat.departure || '';
+
+        // 積込時間 = LastScan - FirstScan
+        var loadingMin = latMinDiff(lastScan, firstScan);
+
+        // 滞在時間
+        var stayMin = lat.turnover ? parseFloat(lat.turnover) : latMinDiff(dsExit, dsEntrance);
+
+        // 差分（予定出発 vs 実出発）
+        var diffMin = dsp.diffMins !== null && dsp.diffMins !== undefined ? dsp.diffMins : latMinDiff(actualDep, plannedDep);
+
+        // 判定
+        var judgment = '';
+        if (diffMin !== null && diffMin !== undefined && !isNaN(diffMin)) {
+          if (diffMin < -10) judgment = '早着出発';
+          else if (diffMin <= 5) judgment = '定刻';
+          else judgment = '遅延';
+        }
+
+        latResultData.push({
+          routeId: rid,
+          employeeId: empId,
+          driverName: driverName,
+          date: dsp.date || '',
+          plannedArrival: plannedArr,
+          dsEntrance: dsEntrance,
+          firstScan: firstScan,
+          lastScan: lastScan,
+          plannedDeparture: plannedDep,
+          actualDeparture: actualDep,
+          dsExit: dsExit,
+          diffMin: diffMin !== null && !isNaN(diffMin) ? Math.round(diffMin * 10) / 10 : '',
+          loadingMin: loadingMin !== null ? loadingMin : '',
+          stayMin: stayMin !== null && !isNaN(stayMin) ? Math.round(stayMin * 10) / 10 : '',
+          judgment: judgment
+        });
+      }
+
+      renderLatResults();
     }
 
     function renderLatResults() {
       if (latResultData.length === 0) return;
 
-      var matched = 0, unmatched = 0, flying = 0;
+      // ソート
+      var sortKey = document.getElementById('lat-sort-select') ? document.getElementById('lat-sort-select').value : 'diff';
+      latResultData.sort(function(a, b) {
+        if (sortKey === 'diff') {
+          var da = a.diffMin !== '' ? a.diffMin : 999;
+          var db = b.diffMin !== '' ? b.diffMin : 999;
+          return da - db;
+        } else if (sortKey === 'entrance') {
+          return (a.dsEntrance || 'zz').localeCompare(b.dsEntrance || 'zz');
+        } else if (sortKey === 'driver') {
+          return (a.driverName || 'zzz').localeCompare(b.driverName || 'zzz');
+        } else if (sortKey === 'loading') {
+          var la = a.loadingMin !== '' ? a.loadingMin : 999;
+          var lb = b.loadingMin !== '' ? b.loadingMin : 999;
+          return lb - la; // 長い順
+        }
+        return 0;
+      });
+
+      var matched = 0, unmatched = 0, early = 0, ontime = 0;
+      var loadingSum = 0, loadingCnt = 0;
       for (var i = 0; i < latResultData.length; i++) {
-        if (latResultData[i].driverName) { matched++; } else { unmatched++; }
-        if (latResultData[i].judgment === 'フライング') flying++;
+        var r = latResultData[i];
+        if (r.driverName) matched++; else unmatched++;
+        if (r.judgment === '早着出発') early++;
+        if (r.judgment === '定刻') ontime++;
+        if (r.loadingMin !== '' && !isNaN(r.loadingMin)) { loadingSum += r.loadingMin; loadingCnt++; }
       }
 
       document.getElementById('lat-summary').classList.remove('hidden');
       document.getElementById('lat-total').textContent = latResultData.length;
       document.getElementById('lat-matched').textContent = matched;
       document.getElementById('lat-unmatched').textContent = unmatched;
-      document.getElementById('lat-flying').textContent = flying;
-      document.getElementById('lat-dsp-count').textContent = Object.keys(dspRouteMap).length;
-
-      // ソート: フライング → 早めログイン → 正常
-      var sortOrder = { 'フライング': 0, '早めログイン': 1, '正常': 2, '': 3 };
-      latResultData.sort(function(a, b) {
-        var sa = sortOrder[a.judgment] !== undefined ? sortOrder[a.judgment] : 3;
-        var sb = sortOrder[b.judgment] !== undefined ? sortOrder[b.judgment] : 3;
-        if (sa !== sb) return sa - sb;
-        return (a.diffMin || 0) - (b.diffMin || 0);
-      });
+      document.getElementById('lat-early').textContent = early;
+      document.getElementById('lat-ontime').textContent = ontime;
+      document.getElementById('lat-avg-loading').textContent = loadingCnt > 0 ? Math.round(loadingSum / loadingCnt) + '分' : '-';
 
       // テーブル描画
       document.getElementById('lat-driver-summary').classList.remove('hidden');
@@ -12147,33 +12188,132 @@
       for (var i = 0; i < latResultData.length; i++) {
         var rec = latResultData[i];
         var rowColor = '';
-        var badgeColor = '';
-        if (rec.judgment === 'フライング') { rowColor = 'bg-red-900 bg-opacity-30'; badgeColor = 'bg-red-600 text-white'; }
-        else if (rec.judgment === '早めログイン') { rowColor = 'bg-yellow-900 bg-opacity-20'; badgeColor = 'bg-yellow-600 text-white'; }
-        else if (rec.judgment === '正常') { badgeColor = 'bg-green-700 text-white'; }
+        var badgeHtml = '';
+        if (rec.judgment === '早着出発') {
+          rowColor = 'bg-orange-900 bg-opacity-20';
+          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-600 text-white">早着</span>';
+        } else if (rec.judgment === '定刻') {
+          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-green-700 text-white">定刻</span>';
+        } else if (rec.judgment === '遅延') {
+          rowColor = 'bg-red-900 bg-opacity-20';
+          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">遅延</span>';
+        } else {
+          badgeHtml = '<span class="text-xs text-ink-lighter">-</span>';
+        }
 
         html += '<tr class="border-b border-border ' + rowColor + '">';
-        html += '<td class="px-3 py-2 text-xs">' + (rec.driverName || '<span class="text-red-500">(未特定)</span>') + '</td>';
-        html += '<td class="px-3 py-2 text-xs font-mono">' + rec.employeeId + '</td>';
-        html += '<td class="px-3 py-2 text-xs text-center">' + rec.date + '</td>';
-        html += '<td class="px-3 py-2 text-xs font-mono">' + rec.routeId + '</td>';
-        html += '<td class="px-3 py-2 text-xs text-center font-bold">' + rec.loginTimeJst + '</td>';
-        html += '<td class="px-3 py-2 text-xs text-center">' + rec.plannedDeparture + '</td>';
-        html += '<td class="px-3 py-2 text-xs text-center font-bold">' + (rec.diffMin !== '' ? rec.diffMin : '-') + '</td>';
-        html += '<td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ' + badgeColor + '">' + (rec.judgment || '-') + '</span></td>';
+        html += '<td class="px-2 py-2 text-xs">' + (rec.driverName || '<span class="text-red-400">' + rec.employeeId + '</span>') + '</td>';
+        html += '<td class="px-2 py-2 text-xs font-mono">' + rec.routeId + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + rec.plannedArrival + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center font-bold text-blue-400">' + rec.dsEntrance + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + rec.firstScan + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + rec.lastScan + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + rec.plannedDeparture + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center font-bold text-emerald-400">' + rec.actualDeparture + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + rec.dsExit + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center font-bold">' + (rec.diffMin !== '' ? rec.diffMin : '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + (rec.loadingMin !== '' ? rec.loadingMin + '分' : '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + (rec.stayMin !== '' ? rec.stayMin + '分' : '-') + '</td>';
+        html += '<td class="px-2 py-2 text-center">' + badgeHtml + '</td>';
         html += '</tr>';
       }
       tbody.innerHTML = html;
 
       document.getElementById('lat-export-btn').disabled = false;
+
+      // タイムラインバー描画
+      renderLatTimeline();
+    }
+
+    function renderLatTimeline() {
+      var container = document.getElementById('lat-timeline-bars');
+      var visual = document.getElementById('lat-timeline-visual');
+      // 表示対象（DSP入場時刻があるもの）
+      var items = [];
+      for (var i = 0; i < latResultData.length; i++) {
+        if (latResultData[i].dsEntrance) items.push(latResultData[i]);
+      }
+      if (items.length === 0) { visual.classList.add('hidden'); return; }
+      visual.classList.remove('hidden');
+
+      // 時間範囲特定
+      var minMin = 999, maxMin = 0;
+      for (var i = 0; i < items.length; i++) {
+        var times = [items[i].dsEntrance, items[i].firstScan, items[i].lastScan, items[i].actualDeparture, items[i].dsExit, items[i].plannedArrival, items[i].plannedDeparture];
+        for (var t = 0; t < times.length; t++) {
+          var m = latTimeToMin(times[t]);
+          if (m !== null) { if (m < minMin) minMin = m; if (m > maxMin) maxMin = m; }
+        }
+      }
+      minMin = Math.max(0, minMin - 10);
+      maxMin = Math.min(1440, maxMin + 10);
+      var range = maxMin - minMin || 60;
+
+      var html = '<div class="text-xs text-ink-lighter mb-2">凡例: <span style="color:#60a5fa">■DS入場</span> <span style="color:#c084fc">■積込</span> <span style="color:#34d399">■出発</span> <span style="color:#f87171">▼予定着車</span> <span style="color:#fbbf24">▼予定出発</span></div>';
+      html += '<div class="space-y-1">';
+
+      var showCount = Math.min(items.length, 40);
+      for (var i = 0; i < showCount; i++) {
+        var r = items[i];
+        var name = r.driverName ? r.driverName.split('(')[0].trim() : r.routeId;
+        if (name.length > 8) name = name.substring(0, 8) + '..';
+
+        html += '<div class="flex items-center gap-2">';
+        html += '<div class="text-xs text-ink-lighter w-24 truncate text-right" title="' + (r.driverName || r.routeId) + '">' + name + '</div>';
+        html += '<div class="flex-1 relative" style="height:18px; background:#1e1e2e; border-radius:4px;">';
+
+        // 予定着車マーカー
+        if (r.plannedArrival) {
+          var paPos = ((latTimeToMin(r.plannedArrival) - minMin) / range * 100);
+          html += '<div style="position:absolute;left:' + paPos + '%;top:0;width:2px;height:18px;background:#f87171;" title="予定着車 ' + r.plannedArrival + '"></div>';
+        }
+        // 予定出発マーカー
+        if (r.plannedDeparture) {
+          var pdPos = ((latTimeToMin(r.plannedDeparture) - minMin) / range * 100);
+          html += '<div style="position:absolute;left:' + pdPos + '%;top:0;width:2px;height:18px;background:#fbbf24;" title="予定出発 ' + r.plannedDeparture + '"></div>';
+        }
+        // DS入場→FirstScan
+        if (r.dsEntrance && r.firstScan) {
+          var eL = ((latTimeToMin(r.dsEntrance) - minMin) / range * 100);
+          var eW = ((latTimeToMin(r.firstScan) - latTimeToMin(r.dsEntrance)) / range * 100);
+          if (eW > 0) html += '<div style="position:absolute;left:' + eL + '%;width:' + eW + '%;top:2px;height:14px;background:#60a5fa;border-radius:3px 0 0 3px;opacity:0.8;" title="入場→FirstScan ' + r.dsEntrance + '→' + r.firstScan + '"></div>';
+        }
+        // 積込（FirstScan→LastScan）
+        if (r.firstScan && r.lastScan) {
+          var fL = ((latTimeToMin(r.firstScan) - minMin) / range * 100);
+          var fW = ((latTimeToMin(r.lastScan) - latTimeToMin(r.firstScan)) / range * 100);
+          if (fW > 0) html += '<div style="position:absolute;left:' + fL + '%;width:' + fW + '%;top:2px;height:14px;background:#c084fc;border-radius:0;opacity:0.8;" title="積込 ' + r.firstScan + '→' + r.lastScan + '"></div>';
+        }
+        // 実出発ポイント
+        if (r.actualDeparture) {
+          var adPos = ((latTimeToMin(r.actualDeparture) - minMin) / range * 100);
+          html += '<div style="position:absolute;left:' + adPos + '%;top:2px;width:8px;height:14px;background:#34d399;border-radius:0 3px 3px 0;" title="実出発 ' + r.actualDeparture + '"></div>';
+        }
+
+        html += '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+
+      // 時間軸
+      html += '<div class="relative mt-1" style="margin-left:112px;">';
+      for (var mm = minMin; mm <= maxMin; mm += 10) {
+        var pos = (mm - minMin) / range * 100;
+        var hh = Math.floor(mm / 60);
+        var mmm = mm % 60;
+        html += '<span class="absolute text-xs text-ink-lighter" style="left:' + pos + '%;transform:translateX(-50%);">' + (hh < 10 ? '0' : '') + hh + ':' + (mmm < 10 ? '0' : '') + mmm + '</span>';
+      }
+      html += '</div>';
+
+      container.innerHTML = html;
     }
 
     function exportLatResult() {
       if (!latResultData.length) return;
-      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', 'ログイン時刻(JST)', '出発予定', '差分(分)', '判定']];
+      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', '着車予定', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', '滞在時間(分)', '判定']];
       for (var i = 0; i < latResultData.length; i++) {
         var r = latResultData[i];
-        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.loginTimeJst, r.plannedDeparture, r.diffMin, r.judgment]);
+        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.plannedArrival, r.dsEntrance, r.firstScan, r.lastScan, r.plannedDeparture, r.actualDeparture, r.dsExit, r.diffMin, r.loadingMin, r.stayMin, r.judgment]);
       }
       var csv = csvRows.map(function(row) {
         return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
