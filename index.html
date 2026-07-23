@@ -2507,6 +2507,14 @@
     let masterNotes = JSON.parse(localStorage.getItem('masterNotes') || '{}');
     let phoneMapping = JSON.parse(localStorage.getItem('phoneMapping') || '{}');
     let transportIDs = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+    // transportIDsが空ならバックアップから復元
+    if (Object.keys(transportIDs).length === 0) {
+      var backup = localStorage.getItem('transportIDs_backup');
+      if (backup) {
+        transportIDs = JSON.parse(backup);
+        localStorage.setItem('transportIDs', backup);
+      }
+    }
     let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
     let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
     var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
@@ -3494,6 +3502,103 @@
 
       // 容量制限付きでlocalStorageに保存
       persistTenkoLog();
+
+      // サーバー同期（GASスプレッドシート）
+      syncTenkoLogToServer(record);
+    }
+
+    // サーバーに点呼ログを送信
+    function syncTenkoLogToServer(record) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/tenko-master', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          console.log('点呼ログ サーバー同期OK:', record.driverName);
+        } else {
+          console.warn('点呼ログ サーバー同期エラー:', xhr.status);
+        }
+      };
+      xhr.onerror = function() {
+        console.warn('点呼ログ サーバー同期失敗（オフライン）');
+      };
+      xhr.send(JSON.stringify({
+        action: 'saveTenkoLog',
+        data: {
+          date: record.date,
+          name: record.driverName,
+          transportId: record.transportId,
+          licenseAuth: record.licenseAuth,
+          mentorAuth: record.mentorAuth,
+          licenseTime: record.licenseAuth ? record.completedAt : '',
+          mentorTime: record.mentorAuth ? record.completedAt : '',
+          attendanceStatus: record.attendanceStatus || '',
+          company: '',
+          routeCode: record.shiftCode || ''
+        }
+      }));
+    }
+
+    // サーバーにマスタフィールドを同期
+    function syncMasterFieldToServer(name, field, value) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/tenko-master', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          console.log('マスタ同期OK:', name, field);
+        } else {
+          console.warn('マスタ同期エラー:', xhr.status);
+        }
+      };
+      xhr.onerror = function() {
+        console.warn('マスタ同期失敗（オフライン）');
+      };
+      xhr.send(JSON.stringify({
+        action: 'updateMasterField',
+        name: name,
+        field: field,
+        value: value || ''
+      }));
+    }
+
+    // サーバーからマスタデータを読み込み（起動時）
+    function loadMasterFromServer() {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', '/tenko-master?action=getMaster', true);
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          try {
+            var res = JSON.parse(xhr.responseText);
+            if (res.status === 'ok' && res.drivers) {
+              var updated = false;
+              for (var i = 0; i < res.drivers.length; i++) {
+                var d = res.drivers[i];
+                if (d.englishName && d.japaneseName && !driverJapaneseNames[d.englishName]) {
+                  driverJapaneseNames[d.englishName] = d.japaneseName;
+                  updated = true;
+                }
+                if (d.englishName && d.transportId && !transportIDs[d.englishName]) {
+                  transportIDs[d.englishName] = d.transportId;
+                  updated = true;
+                }
+              }
+              if (updated) {
+                localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
+                localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+                localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
+                console.log('サーバーからマスタデータ復元完了');
+              }
+            }
+          } catch (e) {
+            console.warn('マスタ読み込みパースエラー:', e.message);
+          }
+        }
+      };
+      xhr.onerror = function() {
+        console.warn('マスタ読み込み失敗（オフライン）');
+      };
+      xhr.send();
     }
 
     // tenkoLog永続化（30日制限 + 容量チェック）
@@ -4799,6 +4904,8 @@
         delete transportIDs[name];
       }
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+      localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
+      syncMasterFieldToServer(name, 'transportId', value);
       renderMasterTable();
     }
 
@@ -4821,6 +4928,7 @@
         delete driverJapaneseNames[name];
       }
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
+      syncMasterFieldToServer(name, 'japaneseName', value);
       renderMasterTable();
     }
 
@@ -13691,6 +13799,9 @@
       a.click();
       URL.revokeObjectURL(url);
     }
+
+    // 起動時にサーバーからマスタデータ復元
+    loadMasterFromServer();
 
   </script>
 </body>
