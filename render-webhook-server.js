@@ -593,19 +593,35 @@ app.post('/tenko-master', async (req, res) => {
     }
     var url = TENKO_MASTER_GAS_URL;
     console.log('tenko-master POST:', JSON.stringify(req.body).substring(0, 200));
+
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
       maxRedirects: 0,
-      timeout: 30000,
+      timeout: 55000,
       validateStatus: function(s) { return s < 400 || s === 302; }
     });
+
     if (response.status === 302 && response.headers.location) {
-      response = await axios.get(response.headers.location, { maxRedirects: 5, timeout: 30000 });
+      var redirectUrl = response.headers.location;
+      console.log('tenko-master POST redirect to:', redirectUrl);
+      response = await axios.get(redirectUrl, {
+        maxRedirects: 5,
+        timeout: 55000,
+        validateStatus: function() { return true; }
+      });
     }
-    res.json(response.data);
+
+    console.log('tenko-master POST response:', response.status, JSON.stringify(response.data).substring(0, 300));
+    res.status(response.status).json(response.data);
   } catch (e) {
     console.error('tenko-master POST error:', e.message);
-    res.status(500).json({ status: 'error', message: e.message });
+    if (e.response) {
+      console.error('Status:', e.response.status, 'Data:', e.response.data);
+    }
+    res.status(e.response && e.response.status ? e.response.status : 500).json({
+      status: 'error',
+      message: e.message
+    });
   }
 });
 
