@@ -228,6 +228,7 @@ app.get('/static-map', async (req, res) => {
 
 const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
 const VOLUME_MASTER_GAS_URL = process.env.VOLUME_MASTER_GAS_URL || '';
+const TENKO_MASTER_GAS_URL = process.env.TENKO_MASTER_GAS_URL || '';
 
 // 物量マスターGASプロキシ
 app.get('/volume-master', async (req, res) => {
@@ -564,6 +565,49 @@ async function wh60SendLine(to, text) {
 // 10分ごとに自動チェック
 setInterval(wh60AutoCheck, 10 * 60 * 1000);
 log('WH60 auto-alert started (every 10 min)');
+
+// ===== 点呼マスタ＋ログ GASプロキシ =====
+app.get('/tenko-master', async (req, res) => {
+  try {
+    if (!TENKO_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'TENKO_MASTER_GAS_URL not configured' });
+    }
+    var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
+    var url = TENKO_MASTER_GAS_URL + '?' + qs;
+    console.log('tenko-master GET:', url);
+    var response = await axios.get(url, { maxRedirects: 5, timeout: 30000 });
+    if (typeof response.data === 'string' && response.data.indexOf('<') >= 0) {
+      return res.status(502).json({ status: 'error', message: 'GAS returned HTML' });
+    }
+    res.json(response.data);
+  } catch (e) {
+    console.error('tenko-master GET error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.post('/tenko-master', async (req, res) => {
+  try {
+    if (!TENKO_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'TENKO_MASTER_GAS_URL not configured' });
+    }
+    var url = TENKO_MASTER_GAS_URL;
+    console.log('tenko-master POST:', JSON.stringify(req.body).substring(0, 200));
+    var response = await axios.post(url, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 0,
+      timeout: 30000,
+      validateStatus: function(s) { return s < 400 || s === 302; }
+    });
+    if (response.status === 302 && response.headers.location) {
+      response = await axios.get(response.headers.location, { maxRedirects: 5, timeout: 30000 });
+    }
+    res.json(response.data);
+  } catch (e) {
+    console.error('tenko-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
