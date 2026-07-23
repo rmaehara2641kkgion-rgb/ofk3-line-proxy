@@ -636,6 +636,7 @@
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="addNewDriver()">+ ドライバー追加</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportMasterData()">エクスポート</button>
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="syncAllMasterToServer()">☁ サーバー同期</button>
           </div>
         </div>
 
@@ -3559,6 +3560,58 @@
         name: name,
         field: field,
         value: value || ''
+      }));
+    }
+
+    // 全マスタデータをサーバーに一括同期
+    function syncAllMasterToServer() {
+      var drivers = [];
+      for (var name in driverJapaneseNames) {
+        drivers.push({
+          englishName: name,
+          japaneseName: driverJapaneseNames[name] || '',
+          transportId: transportIDs[name] || '',
+          lineId: lineMapping[name] || '',
+          company: driverDepartments[name] || ''
+        });
+      }
+      // driverJapaneseNamesにないがtransportIDsにある名前も追加
+      for (var name2 in transportIDs) {
+        if (!driverJapaneseNames[name2]) {
+          drivers.push({
+            englishName: name2,
+            japaneseName: '',
+            transportId: transportIDs[name2] || '',
+            lineId: lineMapping[name2] || '',
+            company: driverDepartments[name2] || ''
+          });
+        }
+      }
+      if (drivers.length === 0) {
+        alert('同期するマスタデータがありません');
+        return;
+      }
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/tenko-master', true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          try {
+            var res = JSON.parse(xhr.responseText);
+            alert('サーバー同期完了: ' + (res.count || 0) + '件');
+          } catch (e) {
+            alert('サーバー同期完了');
+          }
+        } else {
+          alert('同期エラー: ' + xhr.status);
+        }
+      };
+      xhr.onerror = function() {
+        alert('同期失敗（サーバー接続エラー）');
+      };
+      xhr.send(JSON.stringify({
+        action: 'saveMaster',
+        data: drivers
       }));
     }
 
