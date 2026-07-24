@@ -182,8 +182,8 @@ var routeDataStore = {};
 app.post('/route-data', function(req, res) {
   var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
   routeDataStore[id] = { data: req.body, created: Date.now() };
-  // 1時間後に自動削除
-  setTimeout(function() { delete routeDataStore[id]; }, 3600000);
+  // 6時間後に自動削除
+  setTimeout(function() { delete routeDataStore[id]; }, 21600000);
   res.json({ status: 'ok', id: id });
 });
 
