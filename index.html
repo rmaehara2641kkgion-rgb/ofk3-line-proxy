@@ -12964,7 +12964,6 @@
           diffMin: diffMin !== null && !isNaN(diffMin) ? Math.round(diffMin * 10) / 10 : '',
           loadingMin: loadingMin !== null ? loadingMin : '',
           stayMin: stayMin !== null && !isNaN(stayMin) ? Math.round(stayMin * 10) / 10 : '',
-          turnover: lat.turnover || '',
           judgment: judgment
         });
       }
@@ -13161,10 +13160,10 @@
 
     function exportLatResult() {
       if (!latResultData.length) return;
-      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', '着車予定', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', 'loading_area_turnover', '滞在時間(分)', '判定']];
+      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', '着車予定', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', '滞在時間(分)', '判定']];
       for (var i = 0; i < latResultData.length; i++) {
         var r = latResultData[i];
-        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.plannedArrival, r.dsEntrance, r.firstScan, r.lastScan, r.plannedDeparture, r.actualDeparture, r.dsExit, r.diffMin, r.loadingMin, r.turnover, r.stayMin, r.judgment]);
+        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.plannedArrival, r.dsEntrance, r.firstScan, r.lastScan, r.plannedDeparture, r.actualDeparture, r.dsExit, r.diffMin, r.loadingMin, r.stayMin, r.judgment]);
       }
       var csv = csvRows.map(function(row) {
         return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
