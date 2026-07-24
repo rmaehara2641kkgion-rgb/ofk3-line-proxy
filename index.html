@@ -12491,7 +12491,7 @@
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, { type: 'array' });
         var ws = wb.Sheets[wb.SheetNames[0]];
-        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
         if (json.length < 2) { alert('LATファイルにデータがありません'); return; }
 
         var headers = json[0];
@@ -12571,7 +12571,7 @@
           var ss2 = totalSec2 % 60;
           return (hh2 < 10 ? '0' : '') + hh2 + ':' + (mm2 < 10 ? '0' : '') + mm2 + ':' + (ss2 < 10 ? '0' : '') + ss2;
         }
-        // 秒数（1〜86400の範囲、LATのbeacon_firstpackagescan等）
+        // 秒数（1〜86400の範囲）→ 時刻として変換
         if (num >= 1 && num < 86400) {
           var hh3 = Math.floor(num / 3600);
           var mm3 = Math.floor((num % 3600) / 60);
@@ -12592,13 +12592,28 @@
       // Excelシリアル値
       var num = parseFloat(str);
       if (!isNaN(num) && num > 40000) {
-        // Excel epoch: 1900-01-01 = 1, but with leap year bug (day 60 = 1900-02-29 which doesn't exist)
         var d = new Date((num - 25569) * 86400 * 1000);
         var yy = d.getUTCFullYear();
         var mm = d.getUTCMonth() + 1;
         var dd = d.getUTCDate();
         return yy + '/' + (mm < 10 ? '0' : '') + mm + '/' + (dd < 10 ? '0' : '') + dd;
       }
+      // 6桁数字 YYMMDD（例: 040203 → 2004/02/03）または MMDDYY
+      var m6 = str.match(/^(\d{6})$/);
+      if (m6) {
+        var n = m6[1];
+        var y = parseInt(n.substring(0, 2));
+        var mo = parseInt(n.substring(2, 4));
+        var da = parseInt(n.substring(4, 6));
+        // YYMMDDとして妥当か判定
+        if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+          var fullY = y < 50 ? 2000 + y : 1900 + y;
+          return fullY + '/' + (mo < 10 ? '0' : '') + mo + '/' + (da < 10 ? '0' : '') + da;
+        }
+      }
+      // 8桁数字 YYYYMMDD（例: 20040203）
+      var m8 = str.match(/^(\d{4})(\d{2})(\d{2})$/);
+      if (m8) return m8[1] + '/' + m8[2] + '/' + m8[3];
       return str;
     }
 
