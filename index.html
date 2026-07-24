@@ -12169,7 +12169,7 @@
         var rec = results[i];
         var isUnk = !rec.driverName;
         detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.date + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec.date) + '</td>' +
           '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
           '<td class="px-2 py-1.5 text-xs">' + rec.cycle + '</td>' +
@@ -12372,7 +12372,7 @@
         var rec = results[i];
         var isUnk = !rec.driverName;
         detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.date + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec.date) + '</td>' +
           '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
