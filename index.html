@@ -12427,13 +12427,50 @@
 
     function exportCcResult() {
       if (!ccResultData.length) return;
-      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']];
+
+      // ドライバー別集計を作成
+      var driverStats = {};
       for (var i = 0; i < ccResultData.length; i++) {
         var r = ccResultData[i];
-        csvRows.push([r.date, r.driverName || '(未特定)', r.transporterId, r.tracking, r.reason, r.method, r.contactType, r.duration]);
+        var dName = r.driverName || '(未特定)';
+        if (!driverStats[dName]) driverStats[dName] = {tid: r.transporterId, count: 0, calls: 0, duration: 0, reasons: {}, dates: {}};
+        driverStats[dName].count++;
+        if (r.duration > 0) driverStats[dName].calls++;
+        driverStats[dName].duration += (r.duration || 0);
+        if (r.reason) {
+          driverStats[dName].reasons[r.reason] = (driverStats[dName].reasons[r.reason] || 0) + 1;
+        }
+        if (r.date) driverStats[dName].dates[r.date] = true;
       }
+
+      // ドライバー別集計CSV
+      var csvRows = [['ドライバー名', 'TransportID', '件数', '通話回数', '通話時間(秒)', '日付', '理由内訳']];
+      var dKeys = Object.keys(driverStats).sort(function(a, b) {
+        return driverStats[b].count - driverStats[a].count;
+      });
+      for (var d = 0; d < dKeys.length; d++) {
+        var dk = dKeys[d];
+        var ds = driverStats[dk];
+        var reasonParts = [];
+        var rKeys = Object.keys(ds.reasons);
+        for (var ri = 0; ri < rKeys.length; ri++) {
+          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+        }
+        var dateList = Object.keys(ds.dates).sort().join(' / ');
+        csvRows.push([dk, ds.tid, ds.count, ds.calls, ds.duration, dateList, reasonParts.join(' | ')]);
+      }
+
+      // 空行で区切り、詳細データも追加
+      csvRows.push([]);
+      csvRows.push(['=== 詳細データ ===']);
+      csvRows.push(['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']);
+      for (var j = 0; j < ccResultData.length; j++) {
+        var rec = ccResultData[j];
+        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, rec.reason, rec.method, rec.contactType, rec.duration]);
+      }
+
       var csv = csvRows.map(function(row) {
-        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+        return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
       }).join('\n');
       var bom = '\uFEFF';
       var blob = new Blob([bom + csv], {type: 'text/csv;charset=utf-8;'});
