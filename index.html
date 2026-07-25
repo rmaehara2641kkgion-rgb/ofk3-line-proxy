@@ -6177,7 +6177,7 @@
         for (var j = 0; j < noMatch.length; j++) {
           try {
             var gc = await geocodeWithProxy(noMatch[j]);
-            if (gc) {
+            if (gc && !gc.failed) {
               result.push({
                 address: noMatch[j],
                 lat: gc.lat,
@@ -9060,10 +9060,11 @@
 
       // 2. Geocoding APIで取得
       var coord = await geocodeWithProxy(addr);
-      if (coord) {
+      if (coord && !coord.failed) {
         await saveAddrToSheet(addr, coord.lat, coord.lng);
+        return coord;
       }
-      return coord;
+      return null;
     }
 
     async function geocodeWithProxy(addr) {
@@ -9074,10 +9075,14 @@
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
         }
+        // 失敗理由をコンソールに表示
+        var reason = (data && data.googleStatus) || (data && data.status) || 'unknown';
+        console.warn('Geocode failed:', addr, 'reason:', reason, 'error:', data && (data.error || data.message));
+        return { failed: true, reason: reason };
       } catch (e) {
         console.warn('Geocode proxy failed:', addr, e);
+        return { failed: true, reason: e.message || 'network error' };
       }
-      return null;
     }
 
     async function lookupAddrFromSheet(addr) {
@@ -9519,6 +9524,7 @@
       var updatedCoords = {};
       var BATCH_SIZE = 50;
       var failedAddrs = [];
+      var lastFailReason = '';
 
       function processNext() {
         // 中断チェック
@@ -9548,17 +9554,22 @@
           return;
         }
         var addr = pendingKeys[done];
-        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (成功:' + success + ' 失敗:' + fail + ')';
+        if (progressText) progressText.textContent = (done + 1) + ' / ' + total + ' (成功:' + success + ' 失敗:' + fail + ')' + (lastFailReason ? ' [' + lastFailReason + ']' : '');
         if (progressBar) progressBar.style.width = Math.round((done + 1) / total * 100) + '%';
 
         // geocodeだけ（lookupとsaveはスキップ）
         geocodeWithProxy(addr).then(function(coord) {
-          if (coord) {
+          if (coord && !coord.failed) {
             updatedCoords[addr] = coord;
             success++;
           } else {
             fail++;
             failedAddrs.push(addr);
+            if (coord && coord.reason) lastFailReason = coord.reason;
+            // 最初の5件失敗で全部同じ理由なら早期中断
+            if (fail === 5 && success === 0 && lastFailReason) {
+              alert('ジオコーディング連続失敗中\\nGoogle API応答: ' + lastFailReason + '\\n\\nAPIキーの課金上限・有効期限を確認してください。');
+            }
           }
           done++;
           // BATCH_SIZE件ごとにまとめて保存
@@ -9587,7 +9598,7 @@
         var addr = failedAddrs[idx];
         if (progressText) progressText.textContent = '再試行 ' + (idx + 1) + ' / ' + failedAddrs.length + ' (成功:' + success + ')';
         geocodeWithProxy(addr).then(function(coord) {
-          if (coord) {
+          if (coord && !coord.failed) {
             updatedCoords[addr] = coord;
             success++;
             fail--;
