@@ -3369,15 +3369,20 @@
         // 誤配率 = 累積誤配 ÷ 累積配送個数
         var accGohaiRate = accTotalPkg > 0 ? Math.round(accGohai / accTotalPkg * 10000) / 100 : 0;
 
-        // 配管率は週ごとの値を履歴に追加して平均
-        var newHaikanRates = prevHaikanRates.slice();
-        if (r.haikanRate != null) newHaikanRates.push(r.haikanRate);
-        var avgHaikan = null;
-        if (newHaikanRates.length > 0) {
-          var hSum = 0;
-          for (var h = 0; h < newHaikanRates.length; h++) hSum += newHaikanRates[h];
-          avgHaikan = Math.round(hSum / newHaikanRates.length * 100) / 100;
+        // 配管率は件数+合計で累積平均（配列保持しない）
+        var prevHaikanCount = existing.haikanCount || 0;
+        var prevHaikanSum = existing.haikanSum || 0;
+        var newHaikanCount = prevHaikanCount;
+        var newHaikanSum = prevHaikanSum;
+        if (r.haikanRate != null) {
+          newHaikanCount++;
+          newHaikanSum += r.haikanRate;
         }
+        var avgHaikan = newHaikanCount > 0 ? Math.round(newHaikanSum / newHaikanCount * 100) / 100 : null;
+
+        // history: 直近12件まで保持（容量節約）
+        var newHistory = prevHistory.concat([{ d: today, p: r.perHour, n: r.workDays }]);
+        if (newHistory.length > 12) newHistory = newHistory.slice(newHistory.length - 12);
 
         driverDB[r.name] = {
           driverId: existing.driverId || getNextDriverId(),
@@ -3393,11 +3398,34 @@
           gohai: accGohai,
           incidents: accSeihai,
           lastUpdated: today,
-          haikanRateHistory: newHaikanRates,
-          history: prevHistory.concat([{ date: today, pph: r.perHour, days: r.workDays, pkg: r.totalPkg, hours: r.totalHours, km: r.totalKm }])
+          haikanCount: newHaikanCount,
+          haikanSum: newHaikanSum,
+          history: newHistory
         };
       }
-      localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      // 旧フォーマットのhaikanRateHistory配列を削除（全ドライバー）
+      var allKeys = Object.keys(driverDB);
+      for (var k = 0; k < allKeys.length; k++) {
+        var drv = driverDB[allKeys[k]];
+        if (drv.haikanRateHistory) {
+          if (!drv.haikanCount) {
+            drv.haikanCount = drv.haikanRateHistory.length;
+            var s = 0;
+            for (var m = 0; m < drv.haikanRateHistory.length; m++) s += drv.haikanRateHistory[m];
+            drv.haikanSum = s;
+          }
+          delete drv.haikanRateHistory;
+        }
+        // historyの古いフォーマットも圧縮
+        if (drv.history && drv.history.length > 12) {
+          drv.history = drv.history.slice(drv.history.length - 12);
+        }
+      }
+      try {
+        localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      } catch (e) {
+        alert('ストレージ容量超過: ブラウザのデベロッパーツール > Application > Local Storage からdriverDBを削除してください');
+      }
       renderDriverTable();
 
       document.getElementById('agg-export-btn').disabled = false;
