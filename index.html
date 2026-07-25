@@ -2180,7 +2180,7 @@
             <input type="file" accept=".json" onchange="handleAddrMasterImport(event)" class="hidden">
           </label>
           <button onclick="downloadAddrMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">💾 住所マスターDL</button>
-          <button onclick="startBatchGeocode()" class="bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-600 cursor-pointer" id="btn-batch-geocode">🌍 未取得を一括ジオコーディング</button>
+          <button disabled class="bg-gray-400 text-white px-3 py-1.5 rounded text-xs font-bold cursor-not-allowed" id="btn-batch-geocode" title="8月まで停止中（課金防止）">🌍 ジオコーディング停止中（8月〜再開）</button>
           <button onclick="startDedup()" class="bg-yellow-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-yellow-600 cursor-pointer" id="btn-dedup">🧹 重複住所を統合</button>
         </div>
 
@@ -7772,9 +7772,29 @@
         return;
       }
 
-      statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
+      // ★ ジオコーディング一時停止中（8月まで）— 住所マスタから既存座標のみ検索
+      statusEl.innerHTML = '<span class="text-blue-500">座標検索中...</span>';
+      var cached = await lookupAddrFromSheet(address);
+      if (cached) {
+        dmGeoCache[type] = { lat: cached.lat, lng: cached.lng, address: address };
+        statusEl.innerHTML = '<span class="text-green-600">\u2713 座標取得OK（' + cached.lat.toFixed(6) + ', ' + cached.lng.toFixed(6) + '）</span>';
+        previewEl.classList.remove('hidden');
+        if (dmLeafletMaps[type]) { dmLeafletMaps[type].remove(); }
+        var map = L.map(mapDiv).setView([cached.lat, cached.lng], 17);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '\u00a9 OpenStreetMap', maxZoom: 19 }).addTo(map);
+        var markerColor = type === 'gohai' ? 'red' : 'green';
+        var iconHtml = '<div style="background:' + markerColor + ';width:12px;height:12px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>';
+        var icon = L.divIcon({ html: iconHtml, className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+        L.marker([cached.lat, cached.lng], { icon: icon }).addTo(map);
+        dmLeafletMaps[type] = map;
+        setTimeout(function() { map.invalidateSize(); }, 200);
+        return;
+      }
+      statusEl.innerHTML = '<span class="text-orange-500">座標未登録（8月以降にジオコーディング予定）</span>';
+      return;
 
-      // Render経由でGoogle Maps Geocoding API直接（CORS回避・GAS不要）
+      /* --- 8月に復活するコード ---
+      statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
       try {
         var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(address));
         var data = await res.json();
@@ -8301,29 +8321,21 @@
       var container = document.getElementById('addr-search-map-container');
       container.classList.remove('hidden');
 
-      // geocode
+      // ★ ジオコーディング停止中 — 住所マスタから既存座標のみ
       try {
-        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(addrSearchCurrentAddress));
-        var data = await res.json();
-
-        if (data.status === 'ok' && data.lat && data.lng) {
-          // Leaflet map
-          if (addrSearchMap) {
-            addrSearchMap.remove();
-          }
-          addrSearchMap = L.map('addr-search-map').setView([data.lat, data.lng], 17);
+        var cached = await lookupAddrFromSheet(addrSearchCurrentAddress);
+        if (cached) {
+          if (addrSearchMap) { addrSearchMap.remove(); }
+          addrSearchMap = L.map('addr-search-map').setView([cached.lat, cached.lng], 17);
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap',
-            maxZoom: 19
+            attribution: '\u00a9 OpenStreetMap', maxZoom: 19
           }).addTo(addrSearchMap);
-          L.marker([data.lat, data.lng]).addTo(addrSearchMap)
+          L.marker([cached.lat, cached.lng]).addTo(addrSearchMap)
             .bindPopup('<b>' + addrSearchCurrentAddress + '</b><br>DA: ' + addrSearchCurrentDA)
             .openPopup();
-
-          // Leafletのサイズ修正（hiddenから表示した直後）
           setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
         } else {
-          alert('座標取得できませんでした: ' + (data.message || data.googleStatus || '不明'));
+          alert('座標未登録（8月以降にジオコーディング予定）');
           container.classList.add('hidden');
         }
       } catch (e) {
@@ -8385,29 +8397,26 @@
 
       var statusEl = document.getElementById('addr-free-status');
       var mapContainer = document.getElementById('addr-free-map-container');
-      statusEl.innerHTML = '<span class="text-blue-500">座標取得中...</span>';
+      statusEl.innerHTML = '<span class="text-blue-500">座標検索中...</span>';
 
+      // ★ ジオコーディング停止中 — 住所マスタから既存座標のみ
       try {
-        var res = await fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(address));
-        var data = await res.json();
-
-        if (data.status === 'ok' && data.lat && data.lng) {
+        var cached = await lookupAddrFromSheet(address);
+        if (cached) {
           addrFreeCurrentAddress = address;
-          addrFreeCurrentGeo = { lat: data.lat, lng: data.lng };
-          statusEl.innerHTML = '<span class="text-green-600">\u2713 ' + data.lat.toFixed(6) + ', ' + data.lng.toFixed(6) + '</span>';
-
+          addrFreeCurrentGeo = { lat: cached.lat, lng: cached.lng };
+          statusEl.innerHTML = '<span class="text-green-600">\u2713 ' + cached.lat.toFixed(6) + ', ' + cached.lng.toFixed(6) + '</span>';
           mapContainer.classList.remove('hidden');
           if (addrFreeMap) addrFreeMap.remove();
-          addrFreeMap = L.map('addr-free-map').setView([data.lat, data.lng], 17);
+          addrFreeMap = L.map('addr-free-map').setView([cached.lat, cached.lng], 17);
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '\u00a9 OpenStreetMap',
-            maxZoom: 19
+            attribution: '\u00a9 OpenStreetMap', maxZoom: 19
           }).addTo(addrFreeMap);
-          L.marker([data.lat, data.lng]).addTo(addrFreeMap)
+          L.marker([cached.lat, cached.lng]).addTo(addrFreeMap)
             .bindPopup('<b>' + address + '</b>').openPopup();
           setTimeout(function() { addrFreeMap.invalidateSize(); }, 150);
         } else {
-          statusEl.innerHTML = '<span class="text-red-500">座標取得失敗: ' + (data.message || data.googleStatus || '不明') + '</span>';
+          statusEl.innerHTML = '<span class="text-orange-500">座標未登録（8月以降にジオコーディング予定）</span>';
           mapContainer.classList.add('hidden');
         }
       } catch (e) {
@@ -9067,7 +9076,10 @@
       return null;
     }
 
+    // ★ ジオコーディング一時停止中（2026年8月まで課金防止）
     async function geocodeWithProxy(addr) {
+      return null;
+      /* --- 8月に復活するコード ---
       try {
         var url = '/geocode?address=' + encodeURIComponent(addr);
         var response = await fetch(url);
@@ -9075,7 +9087,6 @@
         if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
           return { lat: data.lat, lng: data.lng };
         }
-        // 失敗理由をコンソールに表示
         var reason = (data && data.googleStatus) || (data && data.status) || 'unknown';
         console.warn('Geocode failed:', addr, 'reason:', reason, 'error:', data && (data.error || data.message));
         return { failed: true, reason: reason };
@@ -9083,6 +9094,7 @@
         console.warn('Geocode proxy failed:', addr, e);
         return { failed: true, reason: e.message || 'network error' };
       }
+      */
     }
 
     async function lookupAddrFromSheet(addr) {
@@ -11737,44 +11749,9 @@
       for (var p = 0; p < pins.length; p++) { addPin(pins[p]); }
       if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
 
-      // ジオコーディング未取得分をAPIで取得して追加
+      // ★ ジオコーディング停止中（8月まで）— 未取得分はスキップ
       if (needGeocode.length > 0) {
-        mapDiv.insertAdjacentHTML('afterbegin', '<div id="' + divId + '-loading" class="absolute top-2 left-2 z-[1000] bg-yellow-600 text-white text-xs px-3 py-1 rounded shadow">📍 未取得住所をジオコーディング中... 0/' + needGeocode.length + '</div>');
-        var doneCount = 0;
-        var batchGeocode = function(idx) {
-          if (idx >= needGeocode.length) {
-            var loadEl = document.getElementById(divId + '-loading');
-            if (loadEl) loadEl.remove();
-            if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
-            return;
-          }
-          var item = needGeocode[idx];
-          fetch('https://ofk3-line-proxy-1.onrender.com/geocode?address=' + encodeURIComponent(item.address))
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-              if (data.status === 'ok' && data.lat && data.lng) {
-                addPin({
-                  lat: data.lat, lng: data.lng,
-                  label: item.routeCode + ' #' + item.stop,
-                  timeWindow: item.timeWindow,
-                  address: item.address,
-                  trackingId: item.trackingId,
-                  driver: item.driverName || '',
-                  seqNo: item.seqNo || ''
-                });
-                // マスターにもキャッシュ
-                inMemoryAddrMaster[item.address] = { lat: data.lat, lng: data.lng };
-              }
-            })
-            .catch(function() {})
-            .then(function() {
-              doneCount++;
-              var loadEl = document.getElementById(divId + '-loading');
-              if (loadEl) loadEl.textContent = '📍 ジオコーディング中... ' + doneCount + '/' + needGeocode.length;
-              setTimeout(function() { batchGeocode(idx + 1); }, 200);
-            });
-        };
-        batchGeocode(0);
+        console.log('[GEOCODE停止中] 未取得住所 ' + needGeocode.length + '件をスキップ');
       }
       return map;
     }
