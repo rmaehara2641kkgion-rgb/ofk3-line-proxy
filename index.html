@@ -12837,7 +12837,7 @@
         var reasonParts = [];
         var rKeys = Object.keys(ds.reasons);
         for (var ri = 0; ri < rKeys.length; ri++) {
-          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var isUnknown = dk.indexOf('(不明)') === 0;
         driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
@@ -12864,7 +12864,7 @@
           '<td class="px-2 py-1.5 text-xs">' + rec.route + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
           '<td class="px-2 py-1.5 text-xs">' + rec.zip + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.reason + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.reason) + '</td>' +
           '</tr>';
       }
       detailTbody.innerHTML = detailHtml;
@@ -12902,7 +12902,7 @@
         var reasonParts = [];
         var rKeys = Object.keys(ds.reasons);
         for (var ri = 0; ri < rKeys.length; ri++) {
-          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var dateList = Object.keys(ds.dates).sort().join(' / ');
         csvRows.push([dk, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
@@ -12914,7 +12914,7 @@
       csvRows.push(['日付', 'ドライバー名', 'TransportID', 'サイクル', 'ルートコード', 'TrackingID', '郵便番号', '失敗理由']);
       for (var j = 0; j < ftdsResultData.length; j++) {
         var rec = ftdsResultData[j];
-        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, rec.reason]);
+        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, translateReason(rec.reason)]);
       }
 
       var csv = csvRows.map(function(row) {
@@ -13687,11 +13687,53 @@
     var dnrResultData = [];
     var dnrMap = null; // Leaflet map
 
+    // FTDS失敗理由 英→日翻訳マップ
+    var REASON_JA = {
+      'CUSTOMER_UNAVAILABLE': '不在',
+      'ADDRESS_NOT_FOUND': '住所不明',
+      'INACCESSIBLE_DELIVERY_LOCATION': '配達先アクセス不可',
+      'NOT_ATTEMPT': '配達未試行',
+      'BUSINESS_CLOSED': '営業時間外',
+      'OBJECT_MISSING': '荷物紛失',
+      'NO_SECURE_LOCATION': '安全な置場所なし',
+      'REFUSED_DELIVERY': '受取拒否',
+      'UNDELIVERABLE': '配達不能',
+      'PACKAGE_DAMAGED': '荷物破損',
+      'MISSING_PACKAGE': '荷物不明',
+      'WRONG_ADDRESS': '住所間違い',
+      'DELIVERY_ATTEMPTED': '配達試行済',
+      'OTHER': 'その他',
+      'DELIVERED_TO_DELIVERY_BOX': '宅配ボックス投函',
+      'DELIVERED_TO_NEIGHBOR': '隣人渡し',
+      'DELIVERED_TO_RECEPTION_LOBBY': '受付/ロビー渡し',
+      'Missing/Wrong Delivery Box Number or PIN code': '宅配BOX番号/暗証番号間違い',
+      'No Item_delivery box': '宅配BOXに荷物なし',
+      'No Item_reception/front_desk/mail room': '受付/フロント/メールルームに荷物なし',
+      'No Item_neighbor': '隣人渡し先に荷物なし',
+      'No Item_safe place': '安全な場所に荷物なし',
+      'Driver - Controllable': 'ドライバー起因（管理可能）',
+      'Driver - Not Controllable': 'ドライバー起因（管理不可）',
+      'Non-Driver': 'ドライバー以外',
+      'Uncategorized': '未分類'
+    };
+
+    function translateReason(reason) {
+      if (!reason) return '';
+      // 完全一致
+      if (REASON_JA[reason]) return REASON_JA[reason];
+      // 部分一致（英語部分を除去して日本語部分だけ残す）
+      var ja = reason.replace(/\s*[A-Za-z].*$/, '').trim();
+      if (ja && ja !== reason) return ja;
+      // アンダースコア→スペース変換
+      return reason.replace(/_/g, ' ');
+    }
+
     // DNR保持列定義
-    var DNR_KEEP_COLS = ['delivery_date_jst', 'delivery_station_code', 'provider_company_name', 'transporter_id', 'tracking_id', 'shipment_reason', 'state', 'postal_code', 'address', 'scan_gps_latitude', 'scan_gps_longitude', 'conceded_units', 'dnr_cost_jpy'];
+    var DNR_KEEP_COLS = ['delivery_date_jst', 'delivery_station_code', 'provider_company_name', 'transporter_id', 'tracking_id', 'shipment_reason', 'bucket', 'sub_bucket', 'state', 'postal_code', 'address', 'scan_gps_latitude', 'scan_gps_longitude', 'conceded_units', 'dnr_cost_jpy'];
     var DNR_COL_LABELS = {
       'delivery_date_jst': '配達日', 'delivery_station_code': 'DS', 'provider_company_name': 'DSP名',
       'transporter_id': 'TransportID', 'tracking_id': 'TrackingID', 'shipment_reason': 'DNR理由',
+      'bucket': '分類', 'sub_bucket': '詳細分類',
       'state': '都道府県', 'postal_code': '郵便番号', 'address': '住所',
       'scan_gps_latitude': '緯度', 'scan_gps_longitude': '経度',
       'conceded_units': '個数', 'dnr_cost_jpy': '金額(円)'
@@ -13820,7 +13862,7 @@
       for (var i = 0; i < Math.min(reasons.length, 8); i++) {
         var pct = Math.max(5, reasons[i].count / topR * 100);
         rhtml += '<div class="flex items-center gap-2 mb-1">';
-        var displayName = reasons[i].name.replace(/^DELIVERED_TO_/i, '').replace(/_/g, ' ');
+        var displayName = translateReason(reasons[i].name);
         rhtml += '<div class="text-xs w-32 truncate text-ink-lighter" title="' + reasons[i].name + '">' + displayName + '</div>';
         rhtml += '<div class="flex-1 bg-surface-secondary rounded-full h-4"><div class="h-4 rounded-full bg-yellow-600" style="width:' + pct + '%;"></div></div>';
         rhtml += '<span class="text-xs font-bold w-8 text-right">' + reasons[i].count + '</span>';
@@ -13854,7 +13896,7 @@
         tbody += '<td class="px-2 py-1.5 text-xs">' + r.delivery_station_code + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + r.provider_company_name + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs font-mono">' + r.tracking_id + '</td>';
-        tbody += '<td class="px-2 py-1.5 text-xs">' + r.shipment_reason + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + translateReason(r.shipment_reason) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + (r.address || r.state) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-center">' + (r._units || '') + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-right font-bold text-red-400">' + (r._cost ? '¥' + r._cost.toLocaleString() : '') + '</td>';
@@ -14112,7 +14154,9 @@
         var r = dnrResultData[i];
         var row = [r.driverName || '未特定'];
         for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
-          row.push(r[DNR_KEEP_COLS[k]] || '');
+          var val = r[DNR_KEEP_COLS[k]] || '';
+          if (DNR_KEEP_COLS[k] === 'shipment_reason' || DNR_KEEP_COLS[k] === 'sub_bucket' || DNR_KEEP_COLS[k] === 'bucket') val = translateReason(val);
+          row.push(val);
         }
         csvRows.push(row);
       }
