@@ -13073,7 +13073,7 @@
         var reasonParts = [];
         var rKeys = Object.keys(ds.reasons);
         for (var ri = 0; ri < rKeys.length; ri++) {
-          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var isUnknown = dk.indexOf('(不明)') === 0;
         driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
@@ -13099,9 +13099,9 @@
           '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
           '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.reason + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.reason) + '</td>' +
           '<td class="px-2 py-1.5 text-xs">' + rec.method + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.contactType + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.contactType) + '</td>' +
           '<td class="px-2 py-1.5 text-xs text-center">' + rec.duration + '</td>' +
           '</tr>';
       }
@@ -13142,7 +13142,7 @@
         var reasonParts = [];
         var rKeys = Object.keys(ds.reasons);
         for (var ri = 0; ri < rKeys.length; ri++) {
-          reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
+          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var dateList = Object.keys(ds.dates).sort().join(' / ');
         csvRows.push([dk, ds.tid, ds.count, ds.calls, ds.duration, dateList, reasonParts.join(' | ')]);
@@ -13154,7 +13154,7 @@
       csvRows.push(['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']);
       for (var j = 0; j < ccResultData.length; j++) {
         var rec = ccResultData[j];
-        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, rec.reason, rec.method, rec.contactType, rec.duration]);
+        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, translateReason(rec.reason), rec.method, translateReason(rec.contactType), rec.duration]);
       }
 
       var csv = csvRows.map(function(row) {
@@ -13714,6 +13714,15 @@
       'DELIVERED_TO_RECEPTION_LOBBY': '受付/ロビー渡し',
       'DELIVERED_TO_HOUSEHOLD_MEMBER': '同居人渡し',
       'DELIVERED_TO_GAS_METER': 'ガスメーター置き',
+      'DELIVERED_TO_BICYCLE_BASKET': '自転車カゴ置き',
+      'DELIVERED_TO_RECEPTIONIST': '受付人渡し',
+      'DELIVERED_TO_SAFE_LOCATION': '安全な場所に置き配',
+      'Calls to Customer': '顧客への電話',
+      'Text to Customer': '顧客へのSMS',
+      'Attempt within 8AM to 8PM': '8時〜20時内に試行',
+      'CANT_FIND_ADDRESS': '住所が見つからない',
+      'CANT_FIND_SAFE_LOCATION': '安全な置場所が見つからない',
+      'CANT_GET_ACCESS': 'アクセスできない',
       'Missing/Wrong Delivery Box Number or PIN code': '宅配BOX番号/暗証番号間違い',
       'No Item_delivery box': '宅配BOXに荷物なし',
       'No Item_reception/front_desk/mail room': '受付/フロント/メールルームに荷物なし',
