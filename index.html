@@ -3281,7 +3281,12 @@
     }
 
     function aggNormName(name) {
-      return String(name || '').replace(/\s+/g, ' ').trim();
+      // 「• 会社名」「- 会社名」等のサフィックスを除去
+      var s = String(name || '');
+      var sepIdx = s.indexOf('\u2022'); // •
+      if (sepIdx < 0) sepIdx = s.indexOf(' - ');
+      if (sepIdx > 0) s = s.substring(0, sepIdx);
+      return s.replace(/\s+/g, ' ').trim();
     }
 
     function aggFindMatch(name, nameMap) {
@@ -3359,6 +3364,30 @@
 
       // 配送数多い順
       aggResult.sort(function(a, b) { return b.totalPkg - a.totalPkg; });
+
+      // GDS日付範囲で重複チェック（同じデータの二重集積防止）
+      var processedRanges = JSON.parse(localStorage.getItem('aggProcessedRanges') || '[]');
+      var rangeKey = '';
+      if (gdsData) {
+        var allDates = Object.keys(gdsData);
+        var dateVals = [];
+        for (var di = 0; di < allDates.length; di++) {
+          var dd = gdsData[allDates[di]];
+          if (dd && dd.dates) {
+            var dk = Object.keys(dd.dates);
+            for (var dj = 0; dj < dk.length; dj++) dateVals.push(dk[dj]);
+          }
+        }
+        dateVals.sort();
+        if (dateVals.length > 0) {
+          rangeKey = dateVals[0] + '_' + dateVals[dateVals.length - 1];
+        }
+      }
+      if (rangeKey && processedRanges.indexOf(rangeKey) >= 0) {
+        if (!confirm('この期間(' + rangeKey + ')は既に集計済みです。再度集積しますか？')) {
+          return;
+        }
+      }
 
       // driverDBに集積（上書きではなく蓄積）
       var today = new Date().toLocaleDateString('ja-JP');
@@ -3455,6 +3484,11 @@
       document.getElementById('agg-export-btn').disabled = false;
       document.getElementById('agg-summary-text').textContent = aggResult.length + '名のドライバーデータを集計しました';
       document.getElementById('agg-summary-text').className = 'text-xs text-emerald-600 font-medium';
+      // 処理済み範囲を記録
+      if (rangeKey) {
+        processedRanges.push(rangeKey);
+        localStorage.setItem('aggProcessedRanges', JSON.stringify(processedRanges));
+      }
       alert(aggResult.length + '名のドライバーデータを集計・更新しました');
     }
 
