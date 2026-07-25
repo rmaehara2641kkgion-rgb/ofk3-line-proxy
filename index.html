@@ -629,13 +629,48 @@
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-medium">ドライバー能力データベース</h2>
           <div class="flex gap-2">
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">実績データ更新</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">完成データ更新</button>
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="toggleDriverAggPanel()">📊 3ファイル集計</button>
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
             <button onclick="sendBulkLineMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
           </div>
         </div>
         <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
+
+        <!-- 3ファイル集計パネル -->
+        <div id="driver-agg-panel" class="hidden mb-4">
+          <div class="card p-4">
+            <h3 class="text-sm font-medium mb-3">3ファイルからドライバー別データを自動集計</h3>
+            <div class="grid grid-cols-3 gap-3 mb-3">
+              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-gds-input').click()">
+                <div class="text-lg mb-1">📋</div>
+                <div class="text-xs font-medium">GDS Service Details</div>
+                <div class="text-xs text-ink-lighter mt-1" id="agg-gds-status">未選択</div>
+                <input type="file" id="agg-gds-input" accept=".csv" class="hidden" onchange="onAggFileSelect('gds', event)">
+              </div>
+              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-dsp-input').click()">
+                <div class="text-lg mb-1">📦</div>
+                <div class="text-xs font-medium">DSP Concessions</div>
+                <div class="text-xs text-ink-lighter mt-1" id="agg-dsp-status">未選択</div>
+                <input type="file" id="agg-dsp-input" accept=".csv" class="hidden" onchange="onAggFileSelect('dsp', event)">
+              </div>
+              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-cs-input').click()">
+                <div class="text-lg mb-1">⚠</div>
+                <div class="text-xs font-medium">CSファイル</div>
+                <div class="text-xs text-ink-lighter mt-1" id="agg-cs-status">未選択</div>
+                <input type="file" id="agg-cs-input" accept=".xlsx,.xls" class="hidden" onchange="onAggFileSelect('cs', event)">
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-xs text-ink-lighter" id="agg-summary-text">3ファイルを選択してください</div>
+              <div class="flex gap-2">
+                <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportDriverAggCSV()" id="agg-export-btn" disabled>CSVエクスポート</button>
+                <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runDriverAggregation()" id="agg-run-btn" disabled>集計実行</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
@@ -3011,6 +3046,391 @@
     }
 
     // ===== Driver Data Upload =====
+    // ===== 3ファイル集計 =====
+    var aggFiles = { gds: null, dsp: null, cs: null };
+    var aggResult = [];
+
+    function toggleDriverAggPanel() {
+      var panel = document.getElementById('driver-agg-panel');
+      panel.classList.toggle('hidden');
+    }
+
+    function onAggFileSelect(type, event) {
+      if (!event.target.files.length) return;
+      var file = event.target.files[0];
+      aggFiles[type] = file;
+      document.getElementById('agg-' + type + '-status').textContent = file.name;
+      document.getElementById('agg-' + type + '-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
+      var count = (aggFiles.gds ? 1 : 0) + (aggFiles.dsp ? 1 : 0) + (aggFiles.cs ? 1 : 0);
+      document.getElementById('agg-summary-text').textContent = count + '/3 ファイル選択済み';
+      document.getElementById('agg-run-btn').disabled = (count < 2);
+    }
+
+    function readFileAsArray(file, cb) {
+      var reader = new FileReader();
+      reader.onload = function(e) { cb(new Uint8Array(e.target.result)); };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function parseGDSData(data) {
+      var wb = XLSX.read(data, { type: 'array' });
+      var sheet = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(sheet);
+      var drivers = {};
+      var allDateSet = {};
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var name = String(r['配達アソシエート'] || '').trim();
+        if (!name) continue;
+        if (!drivers[name]) {
+          drivers[name] = { dates: {}, allDates: {}, totalHours: 0, totalPkg: 0, allPkg: 0, totalKm: 0 };
+        }
+        var d = drivers[name];
+        var date = String(r['日付'] || '').trim();
+        allDateSet[date] = true;
+        var excluded = String(r['除外？'] || '').trim();
+        var login = r['ログイン'] || '';
+        var logout = r['ログアウト'] || '';
+        var pkgRaw = r['予定されている荷物が配達されました'];
+        var pkg = pkgRaw != null ? parseInt(pkgRaw) || 0 : 0;
+        var kmRaw = r['合計距離手当'];
+        var km = kmRaw != null ? parseFloat(kmRaw) || 0 : 0;
+
+        // 稼働時間計算
+        var hours = 0;
+        if (login && logout) {
+          var loginTime = new Date(login).getTime();
+          var logoutTime = new Date(logout).getTime();
+          if (!isNaN(loginTime) && !isNaN(logoutTime) && logoutTime > loginTime) {
+            hours = (logoutTime - loginTime) / 3600000;
+          }
+        }
+
+        // 全日合計（除外含む）
+        if (!d.allDates[date]) d.allDates[date] = true;
+        d.allPkg += pkg;
+
+        // 集計対象（除外=いいえ）
+        if (excluded !== 'はい') {
+          if (!d.dates[date]) d.dates[date] = true;
+          d.totalPkg += pkg;
+          d.totalKm += km;
+          d.totalHours += hours;
+        }
+      }
+      return { drivers: drivers, dateSet: allDateSet };
+    }
+
+    function parseDSPData(data) {
+      var wb = XLSX.read(data, { type: 'array' });
+      var sheet = wb.Sheets[wb.SheetNames[0]];
+      var rows = XLSX.utils.sheet_to_json(sheet);
+      var drivers = {};
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var name = String(r['DA名'] || '').trim();
+        if (!name) continue;
+        var rtsPercent = r['ステーションに返送された(RTS)荷物 %'];
+        if (rtsPercent == null) {
+          // ヘッダー名の揺れに対応
+          var keys = Object.keys(r);
+          for (var k = 0; k < keys.length; k++) {
+            if (keys[k].replace(/\s+/g, '').indexOf('RTS') >= 0 && keys[k].indexOf('%') >= 0) {
+              rtsPercent = r[keys[k]];
+              break;
+            }
+          }
+        }
+        var rtsVal = 0;
+        if (rtsPercent != null) {
+          var rtsStr = String(rtsPercent).replace('%', '').replace(',', '.');
+          rtsVal = parseFloat(rtsStr) || 0;
+        }
+        var haikanRate = Math.round((100 - rtsVal) * 100) / 100;
+        if (!drivers[name]) {
+          drivers[name] = { haikanRates: [], count: 0 };
+        }
+        drivers[name].haikanRates.push(haikanRate);
+        drivers[name].count++;
+      }
+      // 平均計算
+      var result = {};
+      var names = Object.keys(drivers);
+      for (var j = 0; j < names.length; j++) {
+        var n = names[j];
+        var rates = drivers[n].haikanRates;
+        var sum = 0;
+        for (var k = 0; k < rates.length; k++) sum += rates[k];
+        result[n] = Math.round(sum / rates.length * 100) / 100;
+      }
+      return result;
+    }
+
+    function parseCSData(data, gdsDays) {
+      var wb = XLSX.read(data, { type: 'array' });
+      var drivers = {};
+      for (var si = 0; si < wb.SheetNames.length; si++) {
+        var sheetName = wb.SheetNames[si];
+        // GDS日付範囲でフィルタ: シート名「12日」→ 日付の日部分と照合
+        if (gdsDays && gdsDays.length > 0) {
+          var dayMatch = sheetName.match(/^(\d+)/);
+          if (dayMatch) {
+            var dayNum = parseInt(dayMatch[1]);
+            var found = false;
+            for (var di = 0; di < gdsDays.length; di++) {
+              if (gdsDays[di] === dayNum) { found = true; break; }
+            }
+            if (!found) continue;
+          }
+        }
+        var sheet = wb.Sheets[sheetName];
+        var rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          if (!row || !row[0]) continue;
+          var cellA = String(row[0]).trim();
+          // ヘッダー行 "会社名" を検出 → 次の行がデータ
+          if (cellA === '会社名' && i + 1 < rows.length) {
+            var dataRow = rows[i + 1];
+            if (!dataRow) continue;
+            var driverName = String(dataRow[1] || '').trim();
+            var content = String(dataRow[3] || '').trim();
+            if (!driverName || !content) continue;
+            if (!drivers[driverName]) {
+              drivers[driverName] = { kaishuu: 0, gohai: 0 };
+            }
+            // 分類: 「誤配」を含む → 誤配回収/正配依頼、それ以外の回収/正配 → 回収/正配依頼
+            var contentNorm = content.replace(/／/g, '/');
+            if (contentNorm.indexOf('誤配') >= 0) {
+              drivers[driverName].gohai++;
+            } else if (contentNorm.indexOf('回収') >= 0 || contentNorm.indexOf('正配') >= 0) {
+              drivers[driverName].kaishuu++;
+            }
+          }
+        }
+      }
+      return drivers;
+    }
+
+    function runDriverAggregation() {
+      var pending = 0;
+      var gdsResult = null;
+      var dspData = null;
+      var csRawData = null;
+
+      function tryMerge() {
+        pending--;
+        if (pending > 0) return;
+        // GDS日付から日(day)の配列を生成 → CSフィルタ用
+        var gdsDays = [];
+        if (gdsResult && gdsResult.dateSet) {
+          var dates = Object.keys(gdsResult.dateSet);
+          for (var i = 0; i < dates.length; i++) {
+            var parts = dates[i].split('-');
+            if (parts.length === 3) {
+              gdsDays.push(parseInt(parts[2]));
+            }
+          }
+        }
+        var csData = null;
+        if (csRawData) {
+          csData = parseCSData(csRawData, gdsDays);
+        }
+        mergeDriverAggData(gdsResult ? gdsResult.drivers : null, dspData, csData);
+      }
+
+      if (aggFiles.gds) {
+        pending++;
+        readFileAsArray(aggFiles.gds, function(arr) { gdsResult = parseGDSData(arr); tryMerge(); });
+      }
+      if (aggFiles.dsp) {
+        pending++;
+        readFileAsArray(aggFiles.dsp, function(arr) { dspData = parseDSPData(arr); tryMerge(); });
+      }
+      if (aggFiles.cs) {
+        pending++;
+        readFileAsArray(aggFiles.cs, function(arr) { csRawData = arr; tryMerge(); });
+      }
+      if (pending === 0) {
+        alert('ファイルが選択されていません');
+      }
+    }
+
+    function aggNormName(name) {
+      return String(name || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function aggFindMatch(name, nameMap) {
+      // 完全一致
+      if (nameMap[name]) return name;
+      // 姓名反転一致
+      var parts = name.split(/\s+/);
+      if (parts.length === 2) {
+        var reversed = parts[1] + ' ' + parts[0];
+        if (nameMap[reversed]) return reversed;
+      }
+      // スペースなし一致
+      var nameNoSpace = name.replace(/\s+/g, '');
+      var keys = Object.keys(nameMap);
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i].replace(/\s+/g, '') === nameNoSpace) return keys[i];
+      }
+      return null;
+    }
+
+    function mergeDriverAggData(gdsData, dspData, csData) {
+      // GDSをベースにドライバー一覧を作成
+      var allNames = {};
+      if (gdsData) {
+        var gdsNames = Object.keys(gdsData);
+        for (var i = 0; i < gdsNames.length; i++) allNames[aggNormName(gdsNames[i])] = true;
+      }
+      if (dspData) {
+        var dspNames = Object.keys(dspData);
+        for (var i = 0; i < dspNames.length; i++) allNames[aggNormName(dspNames[i])] = true;
+      }
+
+      aggResult = [];
+      var nameList = Object.keys(allNames);
+      for (var i = 0; i < nameList.length; i++) {
+        var name = nameList[i];
+        var gds = gdsData ? (gdsData[name] || (function() { var m = aggFindMatch(name, gdsData); return m ? gdsData[m] : null; })()) : null;
+        var dspMatch = dspData ? (dspData[name] != null ? dspData[name] : (function() { var m = aggFindMatch(name, dspData); return m ? dspData[m] : null; })()) : null;
+        var csMatch = csData ? (csData[name] || (function() {
+          // CS名は姓のみの場合がある → GDS名の姓部分で検索
+          var parts = name.split(/\s+/);
+          for (var p = 0; p < parts.length; p++) {
+            if (csData[parts[p]]) return csData[parts[p]];
+          }
+          return null;
+        })()) : null;
+
+        var workDays = gds ? Object.keys(gds.dates).length : 0;
+        var totalHours = gds ? Math.round(gds.totalHours * 10) / 10 : 0;
+        var totalPkg = gds ? gds.totalPkg : 0;
+        var perHour = totalHours > 0 ? Math.round(totalPkg / totalHours * 10) / 10 : 0;
+        var allPkg = gds ? gds.allPkg : 0;
+        var totalKm = gds ? Math.round(gds.totalKm * 10) / 10 : 0;
+        var kaishuu = csMatch ? csMatch.kaishuu : 0;
+        var gohai = csMatch ? csMatch.gohai : 0;
+        var seihai = kaishuu + gohai;
+        var gohaiRate = totalPkg > 0 ? Math.round(seihai / totalPkg * 10000) / 100 : 0;
+        var haikanRate = dspMatch != null ? dspMatch : null;
+
+        aggResult.push({
+          name: name,
+          workDays: workDays,
+          totalHours: totalHours,
+          totalPkg: totalPkg,
+          perHour: perHour,
+          allPkg: allPkg,
+          totalKm: totalKm,
+          kaishuu: kaishuu,
+          gohai: gohai,
+          seihai: seihai,
+          gohaiRate: gohaiRate,
+          haikanRate: haikanRate
+        });
+      }
+
+      // 配送数多い順
+      aggResult.sort(function(a, b) { return b.totalPkg - a.totalPkg; });
+
+      // driverDBに集積（上書きではなく蓄積）
+      var today = new Date().toLocaleDateString('ja-JP');
+      for (var j = 0; j < aggResult.length; j++) {
+        var r = aggResult[j];
+        var existing = driverDB[r.name] || {};
+        var prevHistory = existing.history || [];
+        var prevWorkDays = existing.workDays || 0;
+        var prevTotalHours = existing.totalHours || 0;
+        var prevTotalPkg = existing.totalPackages || 0;
+        var prevAllPkg = existing.allPackages || 0;
+        var prevTotalKm = existing.totalKm || 0;
+        var prevIncidents = existing.incidents || 0;
+        var prevKaishuu = existing.kaishuu || 0;
+        var prevGohai = existing.gohai || 0;
+        var prevHaikanRates = existing.haikanRateHistory || [];
+
+        // 累積加算
+        var accWorkDays = prevWorkDays + r.workDays;
+        var accTotalHours = prevTotalHours + r.totalHours;
+        var accTotalPkg = prevTotalPkg + r.totalPkg;
+        var accAllPkg = prevAllPkg + r.allPkg;
+        var accTotalKm = prevTotalKm + r.totalKm;
+        var accKaishuu = prevKaishuu + r.kaishuu;
+        var accGohai = prevGohai + r.gohai;
+        var accSeihai = accKaishuu + accGohai;
+        var accIncidents = prevIncidents + r.seihai;
+
+        // 個/時間 = 累積配送個数 ÷ 累積稼働時間（累積平均）
+        var accPerHour = accTotalHours > 0 ? Math.round(accTotalPkg / accTotalHours * 100) / 100 : 0;
+
+        // 誤配率 = 累積誤配 ÷ 累積配送個数
+        var accGohaiRate = accTotalPkg > 0 ? Math.round(accGohai / accTotalPkg * 10000) / 100 : 0;
+
+        // 配管率は週ごとの値を履歴に追加して平均
+        var newHaikanRates = prevHaikanRates.slice();
+        if (r.haikanRate != null) newHaikanRates.push(r.haikanRate);
+        var avgHaikan = null;
+        if (newHaikanRates.length > 0) {
+          var hSum = 0;
+          for (var h = 0; h < newHaikanRates.length; h++) hSum += newHaikanRates[h];
+          avgHaikan = Math.round(hSum / newHaikanRates.length * 100) / 100;
+        }
+
+        driverDB[r.name] = {
+          driverId: existing.driverId || getNextDriverId(),
+          packagesPerHour: accPerHour,
+          deliveryRate: avgHaikan,
+          misdeliveryRate: accGohaiRate,
+          workDays: accWorkDays,
+          totalHours: accTotalHours,
+          totalPackages: accTotalPkg,
+          allPackages: accAllPkg,
+          totalKm: accTotalKm,
+          kaishuu: accKaishuu,
+          gohai: accGohai,
+          incidents: accSeihai,
+          lastUpdated: today,
+          haikanRateHistory: newHaikanRates,
+          history: prevHistory.concat([{ date: today, pph: r.perHour, days: r.workDays, pkg: r.totalPkg, hours: r.totalHours, km: r.totalKm }])
+        };
+      }
+      localStorage.setItem('driverDB', JSON.stringify(driverDB));
+      renderDriverTable();
+
+      document.getElementById('agg-export-btn').disabled = false;
+      document.getElementById('agg-summary-text').textContent = aggResult.length + '名のドライバーデータを集計しました';
+      document.getElementById('agg-summary-text').className = 'text-xs text-emerald-600 font-medium';
+      alert(aggResult.length + '名のドライバーデータを集計・更新しました');
+    }
+
+    function exportDriverAggCSV() {
+      if (aggResult.length === 0) { alert('集計データがありません'); return; }
+      var csvRows = [['配達アソシエート', '集計対象稼働日数', '総稼働時間(h)', '配送個数合計(集計対象日)', '1時間あたり配送個数', '参考:期間中配送個数(全日合計)', '総走行距離(km)', '回収/正配依頼(件数)', '誤配回収/正配依頼(件数)', '正配依頼合計', '誤配率', '配管率%(平均)']];
+      for (var i = 0; i < aggResult.length; i++) {
+        var r = aggResult[i];
+        csvRows.push([r.name, r.workDays, r.totalHours, r.totalPkg, r.perHour, r.allPkg, r.totalKm, r.kaishuu, r.gohai, r.seihai, r.gohaiRate.toFixed(2) + '%', r.haikanRate != null ? r.haikanRate.toFixed(2) : '']);
+      }
+      var csv = csvRows.map(function(row) {
+        return row.map(function(cell) {
+          var s = String(cell);
+          if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0) {
+            return '"' + s.replace(/"/g, '""') + '"';
+          }
+          return s;
+        }).join(',');
+      }).join('\n');
+      var bom = '\uFEFF';
+      var blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'ドライバー別配送データ_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+    }
+
+    // ===== Single File Upload (existing) =====
     function handleDriverDataUpload(event) {
       if (!event.target.files.length) return;
       const file = event.target.files[0];
