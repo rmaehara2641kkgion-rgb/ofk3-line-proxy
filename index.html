@@ -2643,9 +2643,33 @@
     document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 
     // Load saved driver data from localStorage
-    const savedDrivers = localStorage.getItem('driverDB');
+    var savedDrivers = localStorage.getItem('driverDB');
     if (savedDrivers) {
       driverDB = JSON.parse(savedDrivers);
+      // 旧フォーマット掃除（容量削減）
+      var cleanNeeded = false;
+      for (var cname in driverDB) {
+        var cd = driverDB[cname];
+        // haikanRateHistory配列 → count/sumに変換して削除
+        if (cd.haikanRateHistory) {
+          if (!cd.haikanCount) {
+            cd.haikanCount = cd.haikanRateHistory.length;
+            var hs = 0;
+            for (var hi = 0; hi < cd.haikanRateHistory.length; hi++) hs += cd.haikanRateHistory[hi];
+            cd.haikanSum = hs;
+          }
+          delete cd.haikanRateHistory;
+          cleanNeeded = true;
+        }
+        // history 12件制限
+        if (cd.history && cd.history.length > 12) {
+          cd.history = cd.history.slice(cd.history.length - 12);
+          cleanNeeded = true;
+        }
+      }
+      if (cleanNeeded) {
+        try { localStorage.setItem('driverDB', JSON.stringify(driverDB)); } catch (e) {}
+      }
       renderDriverTable();
     }
 
@@ -2658,9 +2682,9 @@
           driverDB[name].driverId = driverIdCounter;
           changed = true;
         }
-        // historyを最新30件にトリム（容量節約）
-        if (driverDB[name].history && driverDB[name].history.length > 30) {
-          driverDB[name].history = driverDB[name].history.slice(-30);
+        // historyを最新12件にトリム（容量節約）
+        if (driverDB[name].history && driverDB[name].history.length > 12) {
+          driverDB[name].history = driverDB[name].history.slice(-12);
           changed = true;
         }
       }
