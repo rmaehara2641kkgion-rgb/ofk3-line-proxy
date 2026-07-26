@@ -234,11 +234,14 @@
       background: #000;
       display: flex; align-items: center; justify-content: center;
       z-index: 9999;
-      animation: splashFadeOut 0.8s ease-in 4.5s forwards;
+      overflow: hidden;
     }
     #splash-screen.splash-hidden { display: none; }
-    #splash-screen img {
-      width: 160%; height: 160%; object-fit: contain;
+    #splash-screen video {
+      width: 120%; height: 120%; object-fit: contain;
+    }
+    #splash-screen.splash-fadeout {
+      animation: splashFadeOut 0.8s ease-in forwards;
     }
     @keyframes splashFadeOut {
       0%   { opacity: 1; }
@@ -249,13 +252,24 @@
 <body class="min-h-screen text-ink tab-exec">
   <!-- Splash Screen -->
   <div id="splash-screen">
-    <img src="ofk3-splash.gif" alt="OFK3">
+    <video autoplay muted playsinline onended="this.parentElement.classList.add('splash-fadeout')">
+      <source src="ofk3-splash.mp4" type="video/mp4">
+    </video>
   </div>
   <script>
     setTimeout(function() {
       var sp = document.getElementById('splash-screen');
       if (sp) { sp.classList.add('splash-hidden'); }
-    }, 5200);
+    }, 8000);
+    var splashVid = document.querySelector('#splash-screen video');
+    if (splashVid) {
+      splashVid.addEventListener('ended', function() {
+        setTimeout(function() {
+          var sp = document.getElementById('splash-screen');
+          if (sp) { sp.classList.add('splash-hidden'); }
+        }, 900);
+      });
+    }
   </script>
   <div id="app">
     <!-- Header -->
