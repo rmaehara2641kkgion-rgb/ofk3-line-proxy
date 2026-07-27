@@ -4967,42 +4967,49 @@
       var video = document.getElementById('ocr-display-video');
       var canvas = document.getElementById('ocr-canvas');
 
+      // タブレット軽量化: 解像度を縮小して処理（最大480x270）
       var vw = video.videoWidth || 1280;
       var vh = video.videoHeight || 720;
-      canvas.width = vw;
-      canvas.height = vh;
+      var scale = 1;
+      if (vw > 480) { scale = 480 / vw; }
+      var sw = Math.floor(vw * scale);
+      var sh = Math.floor(vh * scale);
+      canvas.width = sw;
+      canvas.height = sh;
       var ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, vw, vh);
+      ctx.drawImage(video, 0, 0, sw, sh);
 
       // 「ルート終了」ボタンの領域（画面中央〜下部）
-      var cropX = Math.floor(vw * 0.1);
-      var cropY = Math.floor(vh * 0.3);
-      var cropW = Math.floor(vw * 0.8);
-      var cropH = Math.floor(vh * 0.4);
+      var cropX = Math.floor(sw * 0.1);
+      var cropY = Math.floor(sh * 0.3);
+      var cropW = Math.floor(sw * 0.8);
+      var cropH = Math.floor(sh * 0.4);
 
       var imgData = ctx.getImageData(cropX, cropY, cropW, cropH);
       var pixels = imgData.data;
 
       // 紫色ピクセルをカウント（Mentorの「ルート終了」ボタンの色）
       var purpleCount = 0;
-      var totalPixels = cropW * cropH;
+      var sampledPixels = 0;
 
-      for (var i = 0; i < pixels.length; i += 4) {
+      // 軽量化: 4ピクセルごとにサンプリング（4倍高速）
+      for (var i = 0; i < pixels.length; i += 16) {
         var r = pixels[i];
         var g = pixels[i + 1];
         var b = pixels[i + 2];
+        sampledPixels++;
 
-        // 紫〜青紫の範囲を広めに取る
-        if (r >= 50 && r <= 200 && g >= 10 && g <= 130 && b >= 90 && b <= 255 && b > r * 0.6 && b > g * 1.2) {
+        // 紫〜青紫の範囲を広めに取る（感度UP）
+        if (r >= 40 && r <= 220 && g >= 5 && g <= 140 && b >= 80 && b <= 255 && b > r * 0.5 && b > g) {
           purpleCount++;
         }
       }
 
-      var purpleRatio = purpleCount / totalPixels;
+      var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.08) {
-        // 紫色が8%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.04) {
+        // 紫色が4%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
@@ -5023,10 +5030,10 @@
         }, 2000);
         return;
       } else {
-        if (purpleRatio >= 0.03) {
+        if (purpleRatio >= 0.02) {
           addScanLog('紫検出' + percentText + '% — もう少し近づけてください', 'info');
         }
-        if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 800);
+        if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
       }
     }
 
