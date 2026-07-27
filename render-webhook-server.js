@@ -33,6 +33,9 @@ console.log('API KEY =', GOOGLE_MAPS_API_KEY);
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
 
+// 点呼同期ストア（メモリ内、当日分のみ）
+var tenkoSyncStore = null;
+
 // 静的ファイル配信（index.html, logo.pngなど）
 app.use(express.static(path.join(__dirname)));
 
@@ -623,6 +626,36 @@ app.post('/tenko-master', async (req, res) => {
       message: e.message
     });
   }
+});
+
+// ===== 点呼データ同期 =====
+app.post('/tenko-sync', function(req, res) {
+  try {
+    log('tenko-sync POST received');
+    var today = new Date().toISOString().slice(0, 10);
+    tenkoSyncStore = {
+      schedule: req.body.schedule || [],
+      date: req.body.date || today,
+      timestamp: Date.now(),
+      source: req.body.source || 'unknown'
+    };
+    log('tenko-sync saved: ' + tenkoSyncStore.schedule.length + ' drivers for ' + tenkoSyncStore.date);
+    res.json({ status: 'ok', count: tenkoSyncStore.schedule.length, timestamp: tenkoSyncStore.timestamp });
+  } catch (e) {
+    log('tenko-sync POST error: ' + e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.get('/tenko-sync', function(req, res) {
+  if (!tenkoSyncStore) {
+    return res.json({ status: 'empty' });
+  }
+  var since = parseInt(req.query.since) || 0;
+  if (since && tenkoSyncStore.timestamp <= since) {
+    return res.json({ status: 'no_update' });
+  }
+  res.json({ status: 'ok', data: tenkoSyncStore });
 });
 
 app.listen(PORT, () => {
