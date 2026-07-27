@@ -8468,17 +8468,111 @@
       alert('住所をコピーしました:\n' + addrSearchCurrentAddress);
     }
 
-    // ===== プレゼン用：inMemoryAddrMasterの全座標を一括地図表示 =====
+    // ===== プレゼン用：サンプルデータ注入＋全座標を一括地図表示 =====
     function showSampleAddressMap() {
-      var container = document.getElementById('addr-search-map-container');
-      container.classList.remove('hidden');
       var btn = document.getElementById('sample-map-btn');
       var status = document.getElementById('sample-map-status');
 
-      // 既存マップ破棄
+      // サンプルDA番号・住所をdaAddressMap/daNumberMapに注入
+      var sampleDAs = {
+        'DCX1': [
+          {da:'TBA100000001',addr:'福岡県福岡市東区香椎駅前1-15-3'},{da:'TBA100000002',addr:'福岡県福岡市東区香椎駅前2-8-21'},
+          {da:'TBA100000003',addr:'福岡県福岡市東区香椎駅前3-12-7'},{da:'TBA100000004',addr:'福岡県福岡市東区香住ケ丘1-10-5'},
+          {da:'TBA100000005',addr:'福岡県福岡市東区香住ケ丘2-3-12'},{da:'TBA100000006',addr:'福岡県福岡市東区香住ケ丘3-7-8'},
+          {da:'TBA100000007',addr:'福岡県福岡市東区香椎浜1-5-16'},{da:'TBA100000008',addr:'福岡県福岡市東区香椎浜2-9-3'},
+          {da:'TBA100000009',addr:'福岡県福岡市東区香椎台1-4-22'},{da:'TBA100000010',addr:'福岡県福岡市東区香椎台2-11-6'}
+        ],
+        'DCX2': [
+          {da:'TBA200000001',addr:'福岡県福岡市東区千早4-12-1'},{da:'TBA200000002',addr:'福岡県福岡市東区千早5-6-18'},
+          {da:'TBA200000003',addr:'福岡県福岡市東区名島1-22-7'},{da:'TBA200000004',addr:'福岡県福岡市東区名島2-14-3'},
+          {da:'TBA200000005',addr:'福岡県福岡市東区松島1-6-22'},{da:'TBA200000006',addr:'福岡県福岡市東区松島2-11-9'},
+          {da:'TBA200000007',addr:'福岡県福岡市東区水谷1-8-4'},{da:'TBA200000008',addr:'福岡県福岡市東区水谷2-15-10'},
+          {da:'TBA200000009',addr:'福岡県福岡市東区若宮3-7-19'},{da:'TBA200000010',addr:'福岡県福岡市東区若宮4-2-13'}
+        ],
+        'DCX3': [
+          {da:'TBA300000001',addr:'福岡県福岡市東区箱崎1-5-10'},{da:'TBA300000002',addr:'福岡県福岡市東区箱崎2-19-4'},
+          {da:'TBA300000003',addr:'福岡県福岡市東区箱崎3-8-15'},{da:'TBA300000004',addr:'福岡県福岡市東区馬出1-3-16'},
+          {da:'TBA300000005',addr:'福岡県福岡市東区馬出2-9-7'},{da:'TBA300000006',addr:'福岡県福岡市東区筥松1-12-5'},
+          {da:'TBA300000007',addr:'福岡県福岡市東区筥松2-6-18'},{da:'TBA300000008',addr:'福岡県福岡市東区原田1-4-9'},
+          {da:'TBA300000009',addr:'福岡県福岡市東区原田2-8-22'},{da:'TBA300000010',addr:'福岡県福岡市東区原田3-15-3'}
+        ],
+        'DCX4': [
+          {da:'TBA400000001',addr:'福岡県福岡市博多区吉塚4-7-2'},{da:'TBA400000002',addr:'福岡県福岡市博多区吉塚5-1-13'},
+          {da:'TBA400000003',addr:'福岡県福岡市博多区吉塚本町8-15'},{da:'TBA400000004',addr:'福岡県福岡市博多区千代1-8-22'},
+          {da:'TBA400000005',addr:'福岡県福岡市博多区千代2-4-16'},{da:'TBA400000006',addr:'福岡県福岡市博多区千代3-11-5'},
+          {da:'TBA400000007',addr:'福岡県福岡市博多区堅粕1-9-11'},{da:'TBA400000008',addr:'福岡県福岡市博多区堅粕2-5-20'},
+          {da:'TBA400000009',addr:'福岡県福岡市博多区堅粕3-14-7'},{da:'TBA400000010',addr:'福岡県福岡市博多区堅粕4-2-18'}
+        ],
+        'DCX5': [
+          {da:'TBA500000001',addr:'福岡県福岡市博多区東比恵2-8-5'},{da:'TBA500000002',addr:'福岡県福岡市博多区東比恵3-14-7'},
+          {da:'TBA500000003',addr:'福岡県福岡市博多区東比恵4-1-12'},{da:'TBA500000004',addr:'福岡県福岡市博多区空港前3-6-9'},
+          {da:'TBA500000005',addr:'福岡県福岡市博多区空港前4-11-2'},{da:'TBA500000006',addr:'福岡県福岡市博多区東光2-7-15'},
+          {da:'TBA500000007',addr:'福岡県福岡市博多区東光3-4-8'},{da:'TBA500000008',addr:'福岡県福岡市博多区東平尾1-9-22'},
+          {da:'TBA500000009',addr:'福岡県福岡市博多区東平尾2-3-16'},{da:'TBA500000010',addr:'福岡県福岡市博多区東平尾3-12-5'}
+        ],
+        'DCX6': [
+          {da:'TBA600000001',addr:'福岡県福岡市博多区博多駅南3-1-8'},{da:'TBA600000002',addr:'福岡県福岡市博多区博多駅南4-12-6'},
+          {da:'TBA600000003',addr:'福岡県福岡市博多区博多駅南5-7-3'},{da:'TBA600000004',addr:'福岡県福岡市博多区美野島1-7-14'},
+          {da:'TBA600000005',addr:'福岡県福岡市博多区美野島2-3-9'},{da:'TBA600000006',addr:'福岡県福岡市博多区住吉3-5-18'},
+          {da:'TBA600000007',addr:'福岡県福岡市博多区住吉4-10-2'},{da:'TBA600000008',addr:'福岡県福岡市博多区春町2-6-11'},
+          {da:'TBA600000009',addr:'福岡県福岡市博多区春町3-9-4'},{da:'TBA600000010',addr:'福岡県福岡市博多区寿町1-8-15'}
+        ],
+        'DCX7': [
+          {da:'TBA700000001',addr:'福岡県福岡市博多区祇園町5-11'},{da:'TBA700000002',addr:'福岡県福岡市博多区祇園町8-3'},
+          {da:'TBA700000003',addr:'福岡県福岡市博多区上川端町4-7'},{da:'TBA700000004',addr:'福岡県福岡市博多区中洲2-6-14'},
+          {da:'TBA700000005',addr:'福岡県福岡市博多区中洲3-9-8'},{da:'TBA700000006',addr:'福岡県福岡市博多区店屋町1-22'},
+          {da:'TBA700000007',addr:'福岡県福岡市博多区店屋町3-5'},{da:'TBA700000008',addr:'福岡県福岡市博多区御供所町2-8'},
+          {da:'TBA700000009',addr:'福岡県福岡市博多区御供所町4-12'},{da:'TBA700000010',addr:'福岡県福岡市博多区冷泉町1-6'}
+        ],
+        'DCX8': [
+          {da:'TBA800000001',addr:'福岡県福岡市中央区天神1-3-7'},{da:'TBA800000002',addr:'福岡県福岡市中央区天神2-6-14'},
+          {da:'TBA800000003',addr:'福岡県福岡市中央区天神3-10-5'},{da:'TBA800000004',addr:'福岡県福岡市中央区大名1-12-5'},
+          {da:'TBA800000005',addr:'福岡県福岡市中央区大名2-8-19'},{da:'TBA800000006',addr:'福岡県福岡市中央区赤坂1-5-11'},
+          {da:'TBA800000007',addr:'福岡県福岡市中央区赤坂2-8-19'},{da:'TBA800000008',addr:'福岡県福岡市中央区警固1-3-8'},
+          {da:'TBA800000009',addr:'福岡県福岡市中央区警固2-7-14'},{da:'TBA800000010',addr:'福岡県福岡市中央区今泉1-9-6'}
+        ],
+        'DCX9': [
+          {da:'TBA900000001',addr:'福岡県福岡市中央区薬院1-5-22'},{da:'TBA900000002',addr:'福岡県福岡市中央区薬院2-3-16'},
+          {da:'TBA900000003',addr:'福岡県福岡市中央区薬院3-4-11'},{da:'TBA900000004',addr:'福岡県福岡市中央区白金1-7-8'},
+          {da:'TBA900000005',addr:'福岡県福岡市中央区白金2-12-3'},{da:'TBA900000006',addr:'福岡県福岡市中央区平尾1-6-15'},
+          {da:'TBA900000007',addr:'福岡県福岡市中央区平尾2-10-4'},{da:'TBA900000008',addr:'福岡県福岡市中央区平尾3-8-19'},
+          {da:'TBA900000009',addr:'福岡県福岡市中央区高砂1-4-12'},{da:'TBA900000010',addr:'福岡県福岡市中央区高砂2-7-9'}
+        ],
+        'DCX10': [
+          {da:'TBA010000001',addr:'福岡県福岡市南区大橋1-8-22'},{da:'TBA010000002',addr:'福岡県福岡市南区大橋2-5-14'},
+          {da:'TBA010000003',addr:'福岡県福岡市南区大橋3-11-7'},{da:'TBA010000004',addr:'福岡県福岡市南区塩原1-6-3'},
+          {da:'TBA010000005',addr:'福岡県福岡市南区塩原2-9-18'},{da:'TBA010000006',addr:'福岡県福岡市南区高宮1-4-16'},
+          {da:'TBA010000007',addr:'福岡県福岡市南区高宮2-7-11'},{da:'TBA010000008',addr:'福岡県福岡市南区高宮3-12-5'},
+          {da:'TBA010000009',addr:'福岡県福岡市南区野間1-8-9'},{da:'TBA010000010',addr:'福岡県福岡市南区野間2-3-22'}
+        ]
+      };
+
+      // daAddressMap / daNumberMap に注入
+      var totalDAs = 0;
+      var routes = Object.keys(sampleDAs);
+      for (var r = 0; r < routes.length; r++) {
+        var route = routes[r];
+        var items = sampleDAs[route];
+        for (var d = 0; d < items.length; d++) {
+          daAddressMap[items[d].da] = items[d].addr;
+          daNumberMap[items[d].da] = route;
+          totalDAs++;
+        }
+      }
+
+      // DA検索UIを表示（ドロップゾーンを隠す）
+      document.getElementById('addr-search-dropzone').style.display = 'none';
+      document.getElementById('addr-search-ready').classList.remove('hidden');
+      var countEl = document.getElementById('addr-search-da-count');
+      if (countEl) countEl.textContent = totalDAs + '件のDA番号読み込み済み';
+      var reloadBtn = document.getElementById('addr-search-reload-btn');
+      if (reloadBtn) reloadBtn.classList.remove('hidden');
+
+      // 地図に全ピン表示
+      var container = document.getElementById('addr-search-map-container');
+      container.classList.remove('hidden');
       if (addrSearchMap) { addrSearchMap.remove(); addrSearchMap = null; }
 
-      // inMemoryAddrMasterから座標がある住所を収集
       var keys = Object.keys(inMemoryAddrMaster);
       var pins = [];
       for (var i = 0; i < keys.length; i++) {
@@ -8489,23 +8583,18 @@
       }
 
       if (pins.length === 0) {
-        alert('座標付き住所が見つかりません');
-        container.classList.add('hidden');
+        if (btn) { btn.textContent = '✅ DA番号読み込み完了（座標なし）'; }
         return;
       }
 
-      // 地図を中心座標で初期化（福岡市）
       addrSearchMap = L.map('addr-search-map').setView([33.59, 130.40], 13);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '\u00a9 OpenStreetMap', maxZoom: 19
       }).addTo(addrSearchMap);
 
-      // エリア別に色分け
       var areaColors = ['#EF4444','#F97316','#EAB308','#22C55E','#06B6D4','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F43F5E'];
       var areaColorMap = {};
       var areaIndex = 0;
-
-      // 全ピンを打つ
       var bounds = [];
       for (var p = 0; p < pins.length; p++) {
         var pin = pins[p];
@@ -8527,15 +8616,13 @@
         bounds.push([pin.lat, pin.lng]);
       }
 
-      // 全ピンが見えるようにフィット
       if (bounds.length > 0) {
         addrSearchMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
       }
-
       setTimeout(function() { addrSearchMap.invalidateSize(); }, 200);
 
-      if (btn) { btn.textContent = '✅ 表示済み（' + pins.length + '件）'; }
-      if (status) { status.textContent = Object.keys(areaColorMap).length + 'エリア'; }
+      if (btn) { btn.textContent = '✅ 読み込み済み（' + pins.length + '件）'; }
+      if (status) { status.textContent = totalDAs + ' DA番号 / ' + Object.keys(areaColorMap).length + 'エリア'; }
     }
 
     async function showAddressMap() {
@@ -8543,25 +8630,39 @@
       var container = document.getElementById('addr-search-map-container');
       container.classList.remove('hidden');
 
-      // ★ ジオコーディング停止中 — 住所マスタから既存座標のみ
-      try {
-        var cached = await lookupAddrFromSheet(addrSearchCurrentAddress);
-        if (cached) {
-          if (addrSearchMap) { addrSearchMap.remove(); }
-          addrSearchMap = L.map('addr-search-map').setView([cached.lat, cached.lng], 17);
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '\u00a9 OpenStreetMap', maxZoom: 19
-          }).addTo(addrSearchMap);
-          L.marker([cached.lat, cached.lng]).addTo(addrSearchMap)
-            .bindPopup('<b>' + addrSearchCurrentAddress + '</b><br>DA: ' + addrSearchCurrentDA)
-            .openPopup();
-          setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
-        } else {
-          alert('座標未登録（8月以降にジオコーディング予定）');
-          container.classList.add('hidden');
+      // まずinMemoryAddrMasterから座標を探す（GAS不要で即座に表示）
+      var normalizedAddr = normalizeAddress(addrSearchCurrentAddress);
+      var localCoord = null;
+      for (var mk in inMemoryAddrMaster) {
+        if (normalizeAddress(mk) === normalizedAddr) {
+          var e = inMemoryAddrMaster[mk];
+          if (e && e.lat && e.lng) { localCoord = { lat: e.lat, lng: e.lng }; break; }
         }
-      } catch (e) {
-        alert('通信エラー: ' + e.message);
+      }
+
+      var cached = localCoord;
+
+      // ローカルにない場合のみGAS問い合わせ
+      if (!cached) {
+        try {
+          cached = await lookupAddrFromSheet(addrSearchCurrentAddress);
+        } catch (ex) {
+          console.warn('GAS lookup failed:', ex);
+        }
+      }
+
+      if (cached) {
+        if (addrSearchMap) { addrSearchMap.remove(); }
+        addrSearchMap = L.map('addr-search-map').setView([cached.lat, cached.lng], 17);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '\u00a9 OpenStreetMap', maxZoom: 19
+        }).addTo(addrSearchMap);
+        L.marker([cached.lat, cached.lng]).addTo(addrSearchMap)
+          .bindPopup('<b>' + addrSearchCurrentAddress + '</b><br>DA: ' + addrSearchCurrentDA)
+          .openPopup();
+        setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
+      } else {
+        alert('座標未登録（8月以降にジオコーディング予定）');
         container.classList.add('hidden');
       }
     }
