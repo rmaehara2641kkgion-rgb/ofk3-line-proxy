@@ -5043,11 +5043,11 @@
       var ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, sw, sh);
 
-      // 「ルート終了」ボタンの領域（画面中央〜下部）
-      var cropX = Math.floor(sw * 0.1);
-      var cropY = Math.floor(sh * 0.3);
-      var cropW = Math.floor(sw * 0.8);
-      var cropH = Math.floor(sh * 0.4);
+      // 「ルート終了」ボタンの領域（画面中央付近）
+      var cropX = Math.floor(sw * 0.05);
+      var cropY = Math.floor(sh * 0.4);
+      var cropW = Math.floor(sw * 0.9);
+      var cropH = Math.floor(sh * 0.25);
 
       var imgData = ctx.getImageData(cropX, cropY, cropW, cropH);
       var pixels = imgData.data;
@@ -5063,9 +5063,10 @@
         var b = pixels[i + 2];
         sampledPixels++;
 
-        // 紫〜青紫の厳格判定（肌色・白・グレー除外）
-        // Mentorアプリ「ルート終了」ボタン: 濃い紫 (R:80-170, G:低い, B:高い)
-        if (r >= 60 && r <= 180 && g <= 100 && b >= 120 && b <= 255 && b > r * 0.8 && b > g * 2 && (r - g) > 20) {
+        // Mentorアプリ「ルート終了」ボタン: マゼンタ/ピンク紫
+        // 実測色: R:150-220, G:20-90, B:100-200 （R高・G低・B中高）
+        // 肌色(R高G中B中)・白(全高)・青ヘッダ(R低)・赤バー(B低) を除外
+        if (r >= 130 && r <= 230 && g <= 100 && b >= 90 && b <= 220 && (r - g) >= 60 && (b - g) >= 40) {
           purpleCount++;
         }
       }
@@ -5073,8 +5074,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.08) {
-        // 紫色が8%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.05) {
+        // マゼンタ色が5%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
