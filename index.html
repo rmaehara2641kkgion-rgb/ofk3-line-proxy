@@ -4843,7 +4843,7 @@
           }
           return html5QrCode.start(
             deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
-            { fps: 5, qrbox: { width: 250, height: 250 }, disableFlip: false },
+            { fps: 10, qrbox: { width: 280, height: 280 }, disableFlip: false },
             onQrCodeScanned,
             function() {}
           );
@@ -5063,8 +5063,9 @@
         var b = pixels[i + 2];
         sampledPixels++;
 
-        // 紫〜青紫の範囲を広めに取る（感度UP）
-        if (r >= 40 && r <= 220 && g >= 5 && g <= 140 && b >= 80 && b <= 255 && b > r * 0.5 && b > g) {
+        // 紫〜青紫の厳格判定（肌色・白・グレー除外）
+        // Mentorアプリ「ルート終了」ボタン: 濃い紫 (R:80-170, G:低い, B:高い)
+        if (r >= 60 && r <= 180 && g <= 100 && b >= 120 && b <= 255 && b > r * 0.8 && b > g * 2 && (r - g) > 20) {
           purpleCount++;
         }
       }
@@ -5072,8 +5073,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.06) {
-        // 紫色が6%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.08) {
+        // 紫色が8%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
@@ -5094,8 +5095,8 @@
         }, 2000);
         return;
       } else {
-        if (purpleRatio >= 0.02) {
-          addScanLog('紫検出' + percentText + '% — もう少し近づけてください', 'info');
+        if (purpleRatio >= 0.03) {
+          addScanLog('紫検出' + percentText + '% — Mentorの「ルート終了」画面をかざしてください', 'info');
         }
         if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
       }
