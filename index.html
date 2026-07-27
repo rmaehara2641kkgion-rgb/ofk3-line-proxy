@@ -5074,8 +5074,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.05) {
-        // マゼンタ色が5%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.04) {
+        // マゼンタ色が4%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
