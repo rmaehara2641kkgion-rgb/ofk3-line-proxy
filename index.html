@@ -528,18 +528,12 @@
         </div>
 
         <!-- ヒーロー画像（データ未読込時表示） -->
-        <div id="dashboard-hero" class="flex flex-col items-center mt-6 mb-4">
+        <div id="dashboard-hero" class="flex justify-center mt-6 mb-4">
           <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
-          <button id="load-sample-hero-btn" class="mt-4 px-6 py-3 rounded-lg font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors text-sm shadow-lg" onclick="loadSampleData()">📊 サンプルデータで体験（10コース・100件）</button>
         </div>
 
         <!-- Dashboard Content (after upload) -->
         <div id="dashboard-content" class="hidden fade-in">
-          <!-- プレゼン用サンプルデータ -->
-          <div class="mb-4 flex items-center gap-2">
-            <button id="load-sample-btn" class="text-xs px-4 py-2 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="loadSampleData()">📊 サンプルデータ（10コース・100件）</button>
-            <span id="sample-status" class="text-xs text-ink-lighter"></span>
-          </div>
           <!-- Summary Stats -->
           <div class="grid grid-cols-4 gap-4 mb-6">
             <div class="card p-4">
@@ -1052,6 +1046,12 @@
             <p class="text-xs text-ink-lighter mt-1">またはクリックしてファイル選択（複数可）</p>
             <p class="text-xs text-ink-lighter mt-1">※ダッシュボードのサイクルデータ読込でもOK</p>
             <input type="file" id="addr-search-file-input2" accept=".xlsx,.xls" multiple onchange="handleScanFileSelect(event)" class="hidden">
+          </div>
+
+          <!-- プレゼン用：ワンクリックで全サンプル住所を地図表示 -->
+          <div class="mb-4 text-center">
+            <button id="sample-map-btn" class="px-5 py-2.5 rounded-lg font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors text-sm shadow" onclick="showSampleAddressMap()">🗺️ サンプル住所100件を地図に表示</button>
+            <span id="sample-map-status" class="text-xs text-ink-lighter ml-2"></span>
           </div>
 
           <div id="addr-search-ready" class="hidden">
@@ -2930,112 +2930,6 @@
       if (h >= 21) return 'risk';
       if (h >= 19) return 'warning';
       return 'ok';
-    }
-
-    // ===== プレゼン用サンプルデータ即時読み込み =====
-    function loadSampleData() {
-      var btn = document.getElementById('load-sample-btn');
-      var status = document.getElementById('sample-status');
-      if (btn) { btn.disabled = true; btn.textContent = '読み込み中...'; }
-
-      // サンプルコースデータ（10コース、各10住所）
-      var sampleCourses = {
-        "DCX1": { area: "東区香椎", driver: "John Smith", type: "バイカー", departure: "09:00", addresses: [
-          "福岡県福岡市東区香椎駅前1-15-3","福岡県福岡市東区香椎駅前2-8-21","福岡県福岡市東区香椎駅前3-12-7",
-          "福岡県福岡市東区香住ケ丘1-10-5","福岡県福岡市東区香住ケ丘2-3-12","福岡県福岡市東区香住ケ丘3-7-8",
-          "福岡県福岡市東区香椎浜1-5-16","福岡県福岡市東区香椎浜2-9-3","福岡県福岡市東区香椎台1-4-22","福岡県福岡市東区香椎台2-11-6"
-        ]},
-        "DCX2": { area: "東区千早", driver: "田中 太郎", type: "バイカー", departure: "09:15", addresses: [
-          "福岡県福岡市東区千早4-12-1","福岡県福岡市東区千早5-6-18","福岡県福岡市東区名島1-22-7",
-          "福岡県福岡市東区名島2-14-3","福岡県福岡市東区松島1-6-22","福岡県福岡市東区松島2-11-9",
-          "福岡県福岡市東区水谷1-8-4","福岡県福岡市東区水谷2-15-10","福岡県福岡市東区若宮3-7-19","福岡県福岡市東区若宮4-2-13"
-        ]},
-        "DCX3": { area: "東区箱崎", driver: "Mike Johnson", type: "バイカー", departure: "09:30", addresses: [
-          "福岡県福岡市東区箱崎1-5-10","福岡県福岡市東区箱崎2-19-4","福岡県福岡市東区箱崎3-8-15",
-          "福岡県福岡市東区馬出1-3-16","福岡県福岡市東区馬出2-9-7","福岡県福岡市東区筥松1-12-5",
-          "福岡県福岡市東区筥松2-6-18","福岡県福岡市東区原田1-4-9","福岡県福岡市東区原田2-8-22","福岡県福岡市東区原田3-15-3"
-        ]},
-        "DCX4": { area: "博多区吉塚", driver: "鈴木 一郎", type: "バイカー", departure: "09:45", addresses: [
-          "福岡県福岡市博多区吉塚4-7-2","福岡県福岡市博多区吉塚5-1-13","福岡県福岡市博多区吉塚本町8-15",
-          "福岡県福岡市博多区千代1-8-22","福岡県福岡市博多区千代2-4-16","福岡県福岡市博多区千代3-11-5",
-          "福岡県福岡市博多区堅粕1-9-11","福岡県福岡市博多区堅粕2-5-20","福岡県福岡市博多区堅粕3-14-7","福岡県福岡市博多区堅粕4-2-18"
-        ]},
-        "DCX5": { area: "博多区東比恵", driver: "Emily Davis", type: "サイクル1", departure: "11:00", addresses: [
-          "福岡県福岡市博多区東比恵2-8-5","福岡県福岡市博多区東比恵3-14-7","福岡県福岡市博多区東比恵4-1-12",
-          "福岡県福岡市博多区空港前3-6-9","福岡県福岡市博多区空港前4-11-2","福岡県福岡市博多区東光2-7-15",
-          "福岡県福岡市博多区東光3-4-8","福岡県福岡市博多区東平尾1-9-22","福岡県福岡市博多区東平尾2-3-16","福岡県福岡市博多区東平尾3-12-5"
-        ]},
-        "DCX6": { area: "博多区博多駅南", driver: "佐藤 健太", type: "サイクル1", departure: "11:15", addresses: [
-          "福岡県福岡市博多区博多駅南3-1-8","福岡県福岡市博多区博多駅南4-12-6","福岡県福岡市博多区博多駅南5-7-3",
-          "福岡県福岡市博多区美野島1-7-14","福岡県福岡市博多区美野島2-3-9","福岡県福岡市博多区住吉3-5-18",
-          "福岡県福岡市博多区住吉4-10-2","福岡県福岡市博多区春町2-6-11","福岡県福岡市博多区春町3-9-4","福岡県福岡市博多区寿町1-8-15"
-        ]},
-        "DCX7": { area: "博多区祇園", driver: "Chris Wilson", type: "サイクル1", departure: "11:30", addresses: [
-          "福岡県福岡市博多区祇園町5-11","福岡県福岡市博多区祇園町8-3","福岡県福岡市博多区上川端町4-7",
-          "福岡県福岡市博多区中洲2-6-14","福岡県福岡市博多区中洲3-9-8","福岡県福岡市博多区店屋町1-22",
-          "福岡県福岡市博多区店屋町3-5","福岡県福岡市博多区御供所町2-8","福岡県福岡市博多区御供所町4-12","福岡県福岡市博多区冷泉町1-6"
-        ]},
-        "DCX8": { area: "中央区天神", driver: "山田 花子", type: "サイクル1", departure: "11:45", addresses: [
-          "福岡県福岡市中央区天神1-3-7","福岡県福岡市中央区天神2-6-14","福岡県福岡市中央区天神3-10-5",
-          "福岡県福岡市中央区大名1-12-5","福岡県福岡市中央区大名2-8-19","福岡県福岡市中央区赤坂1-5-11",
-          "福岡県福岡市中央区赤坂2-8-19","福岡県福岡市中央区警固1-3-8","福岡県福岡市中央区警固2-7-14","福岡県福岡市中央区今泉1-9-6"
-        ]},
-        "DCX9": { area: "中央区薬院", driver: "高橋 誠", type: "サイクル1", departure: "12:00", addresses: [
-          "福岡県福岡市中央区薬院1-5-22","福岡県福岡市中央区薬院2-3-16","福岡県福岡市中央区薬院3-4-11",
-          "福岡県福岡市中央区白金1-7-8","福岡県福岡市中央区白金2-12-3","福岡県福岡市中央区平尾1-6-15",
-          "福岡県福岡市中央区平尾2-10-4","福岡県福岡市中央区平尾3-8-19","福岡県福岡市中央区高砂1-4-12","福岡県福岡市中央区高砂2-7-9"
-        ]},
-        "DCX10": { area: "南区大橋", driver: "渡辺 美咲", type: "サイクル1", departure: "12:15", addresses: [
-          "福岡県福岡市南区大橋1-8-22","福岡県福岡市南区大橋2-5-14","福岡県福岡市南区大橋3-11-7",
-          "福岡県福岡市南区塩原1-6-3","福岡県福岡市南区塩原2-9-18","福岡県福岡市南区高宮1-4-16",
-          "福岡県福岡市南区高宮2-7-11","福岡県福岡市南区高宮3-12-5","福岡県福岡市南区野間1-8-9","福岡県福岡市南区野間2-3-22"
-        ]}
-      };
-
-      // assignmentDataに変換
-      assignmentData = [];
-      var codes = Object.keys(sampleCourses);
-      for (var c = 0; c < codes.length; c++) {
-        var code = codes[c];
-        var info = sampleCourses[code];
-        assignmentData.push({
-          routeCode: code,
-          driverName: info.driver,
-          serviceType: info.type,
-          totalDeliveries: info.addresses.length,
-          allDestinations: info.addresses.length,
-          routeTime: '8:00',
-          departure: info.departure,
-          predictedEnd: '',
-          twSlots: { '05:00': 2, '06:00': 2, '07:00': 1, '08:00': 1, '09:00': 1, '10:00': 1, '11:00': 1, '12:00': 1 }
-        });
-      }
-
-      // cycleDataに変換
-      cycleData = {};
-      for (var c2 = 0; c2 < codes.length; c2++) {
-        var code2 = codes[c2];
-        var info2 = sampleCourses[code2];
-        cycleData[code2] = [];
-        for (var a = 0; a < info2.addresses.length; a++) {
-          var startH = 5 + Math.floor(a / 3);
-          if (startH > 11) startH = 11;
-          var endH = startH + 2;
-          var tw = String(startH).padStart(2, '0') + ':00 - ' + String(endH).padStart(2, '0') + ':00';
-          cycleData[code2].push({
-            address: info2.addresses[a],
-            timeWindow: tw,
-            stopNum: a + 1,
-            trackingId: 'TBA' + String(Math.floor(Math.random() * 1000000000000)).padStart(12, '0')
-          });
-        }
-      }
-
-      // ダッシュボード描画
-      renderDashboard();
-
-      if (btn) { btn.textContent = '✅ サンプルデータ読み込み済み'; }
-      if (status) { status.textContent = '10コース / 100住所 / 10ドライバー'; }
     }
 
     function renderDashboard() {
@@ -8572,6 +8466,76 @@
         document.body.removeChild(tmp);
       }
       alert('住所をコピーしました:\n' + addrSearchCurrentAddress);
+    }
+
+    // ===== プレゼン用：inMemoryAddrMasterの全座標を一括地図表示 =====
+    function showSampleAddressMap() {
+      var container = document.getElementById('addr-search-map-container');
+      container.classList.remove('hidden');
+      var btn = document.getElementById('sample-map-btn');
+      var status = document.getElementById('sample-map-status');
+
+      // 既存マップ破棄
+      if (addrSearchMap) { addrSearchMap.remove(); addrSearchMap = null; }
+
+      // inMemoryAddrMasterから座標がある住所を収集
+      var keys = Object.keys(inMemoryAddrMaster);
+      var pins = [];
+      for (var i = 0; i < keys.length; i++) {
+        var entry = inMemoryAddrMaster[keys[i]];
+        if (entry && entry.lat && entry.lng) {
+          pins.push({ addr: keys[i], lat: entry.lat, lng: entry.lng });
+        }
+      }
+
+      if (pins.length === 0) {
+        alert('座標付き住所が見つかりません');
+        container.classList.add('hidden');
+        return;
+      }
+
+      // 地図を中心座標で初期化（福岡市）
+      addrSearchMap = L.map('addr-search-map').setView([33.59, 130.40], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '\u00a9 OpenStreetMap', maxZoom: 19
+      }).addTo(addrSearchMap);
+
+      // エリア別に色分け
+      var areaColors = ['#EF4444','#F97316','#EAB308','#22C55E','#06B6D4','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F43F5E'];
+      var areaColorMap = {};
+      var areaIndex = 0;
+
+      // 全ピンを打つ
+      var bounds = [];
+      for (var p = 0; p < pins.length; p++) {
+        var pin = pins[p];
+        var area = extractAreaName(pin.addr) || '不明';
+        if (!areaColorMap[area]) {
+          areaColorMap[area] = areaColors[areaIndex % areaColors.length];
+          areaIndex++;
+        }
+        var color = areaColorMap[area];
+        var icon = L.divIcon({
+          className: 'sample-pin',
+          html: '<div style="width:10px;height:10px;background:' + color + ';border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);"></div>',
+          iconSize: [10, 10],
+          iconAnchor: [5, 5]
+        });
+        L.marker([pin.lat, pin.lng], { icon: icon })
+          .addTo(addrSearchMap)
+          .bindPopup('<b>' + pin.addr + '</b>');
+        bounds.push([pin.lat, pin.lng]);
+      }
+
+      // 全ピンが見えるようにフィット
+      if (bounds.length > 0) {
+        addrSearchMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+      }
+
+      setTimeout(function() { addrSearchMap.invalidateSize(); }, 200);
+
+      if (btn) { btn.textContent = '✅ 表示済み（' + pins.length + '件）'; }
+      if (status) { status.textContent = Object.keys(areaColorMap).length + 'エリア'; }
     }
 
     async function showAddressMap() {
