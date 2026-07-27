@@ -13,7 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- tesseract.js は自動認証モード開始時に遅延読み込み -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
@@ -4028,6 +4028,9 @@
 
       // サーバー同期（GASスプレッドシート）
       syncTenkoLogToServer(record);
+
+      // 双方向同期: 認証状態が変わったらサーバーにtenkoScheduleを自動送信
+      autoSyncTenkoSchedule();
     }
 
     // サーバーに点呼ログを送信
@@ -4211,6 +4214,8 @@
         if (!d.attendanceStatus) d.attendanceStatus = '正常';
         saveTenkoLog(d);
         playSound('complete');
+      } else {
+        autoSyncTenkoSchedule();
       }
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
@@ -4221,6 +4226,7 @@
       tenkoSchedule.forEach(d => { d.licenseAuth = false; d.mentorAuth = false; d.attendanceStatus = ''; });
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
+      autoSyncTenkoSchedule();
     }
 
     function updateAttendanceStatus(index, value) {
@@ -4256,6 +4262,7 @@
       tenkoSchedule[index].mentorAuth = false;
       // tenkoScheduleはメモリ保持のみ（localStorage不使用）
       renderTenkoTable();
+      autoSyncTenkoSchedule();
     }
 
     // ===== Camera License Authentication =====
@@ -4617,7 +4624,7 @@
       xhr.send(JSON.stringify({ schedule: tenkoSchedule, date: today, source: 'pc' }));
     }
 
-    // タブレット側: サーバーからデータをポーリング
+    // タブレット/PC共通: サーバーからデータをポーリング
     function pollTenkoSync() {
       var xhr = new XMLHttpRequest();
       var url = '/tenko-sync';
@@ -4629,14 +4636,36 @@
         try { res = JSON.parse(xhr.responseText); } catch(e) { return; }
         if (res.status === 'ok' && res.data && res.data.schedule) {
           tenkoLastSyncTs = res.data.timestamp || Date.now();
-          // 新しいデータを受信 → tenkoScheduleに反映
-          tenkoSchedule = res.data.schedule;
+          var incoming = res.data.schedule;
+
+          if (tenkoSchedule.length === 0) {
+            // ローカルにデータがない場合はそのまま反映
+            tenkoSchedule = incoming;
+          } else {
+            // マージ: 認証完了を優先（どちらか一方でも完了ならtrue）
+            for (var i = 0; i < incoming.length; i++) {
+              var found = false;
+              for (var j = 0; j < tenkoSchedule.length; j++) {
+                if (tenkoSchedule[j].name === incoming[i].name) {
+                  tenkoSchedule[j].licenseAuth = tenkoSchedule[j].licenseAuth || incoming[i].licenseAuth;
+                  tenkoSchedule[j].mentorAuth = tenkoSchedule[j].mentorAuth || incoming[i].mentorAuth;
+                  if (incoming[i].attendanceStatus && !tenkoSchedule[j].attendanceStatus) {
+                    tenkoSchedule[j].attendanceStatus = incoming[i].attendanceStatus;
+                  }
+                  found = true;
+                  break;
+                }
+              }
+              if (!found) { tenkoSchedule.push(incoming[i]); }
+            }
+          }
           renderTenkoTable();
           // 通知バナー表示
           var banner = document.getElementById('tenko-sync-banner');
           var msg = document.getElementById('tenko-sync-msg');
           if (banner && msg) {
-            msg.textContent = '🔔 PCから点呼データを受信しました（' + tenkoSchedule.length + '名）';
+            var srcLabel = res.data.source === 'pc' ? 'PC' : 'タブレット';
+            msg.textContent = '🔔 ' + srcLabel + 'から点呼データを同期しました（' + tenkoSchedule.length + '名）';
             banner.classList.remove('hidden');
           }
           // 通知音
@@ -4700,6 +4729,29 @@
       if (tenkoPollingTimer) { clearInterval(tenkoPollingTimer); tenkoPollingTimer = null; }
       tenkoPollingActive = false;
       console.log('点呼同期ポーリング停止');
+    }
+
+    // 双方向同期: 認証状態変更時に自動でサーバーに送信（デバウンス付き）
+    var _autoSyncTimer = null;
+    function autoSyncTenkoSchedule() {
+      if (tenkoSchedule.length === 0) return;
+      // 連続変更を束ねるため2秒デバウンス
+      if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
+      _autoSyncTimer = setTimeout(function() {
+        var today = new Date().toISOString().slice(0, 10);
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/tenko-sync');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            var res = JSON.parse(xhr.responseText);
+            tenkoLastSyncTs = res.timestamp || Date.now();
+            console.log('双方向同期OK: ' + tenkoSchedule.length + '名');
+          }
+        };
+        xhr.onerror = function() { /* オフライン時は無視 */ };
+        xhr.send(JSON.stringify({ schedule: tenkoSchedule, date: today, source: 'auto' }));
+      }, 2000);
     }
 
     // ===== Auto Scan Mode =====
@@ -4785,13 +4837,13 @@
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         selectBestCamera().then(function(deviceId) {
-          var videoConst = { width: { ideal: 1280 }, height: { ideal: 720 }, aspectRatio: { ideal: 1.333 }, focusMode: 'continuous' };
+          var videoConst = { width: { ideal: 640 }, height: { ideal: 480 }, focusMode: 'continuous' };
           if (deviceId) {
             videoConst.deviceId = { exact: deviceId };
           }
           return html5QrCode.start(
             deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
-            { fps: 15, qrbox: { width: 300, height: 300 }, disableFlip: false },
+            { fps: 5, qrbox: { width: 250, height: 250 }, disableFlip: false },
             onQrCodeScanned,
             function() {}
           );
@@ -4948,6 +5000,18 @@
 
       addScanLog('📱 メンター画面スキャン中...', 'info');
 
+      // Tesseract.js を遅延読み込み（紫検出のみなので実際は不要だが互換性のため残す）
+      if (typeof Tesseract === 'undefined') {
+        addScanLog('OCRライブラリ読み込み中...', 'info');
+        await new Promise(function(resolve, reject) {
+          var s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+          s.onload = resolve;
+          s.onerror = function() { reject(new Error('Tesseract読み込み失敗')); };
+          document.head.appendChild(s);
+        });
+      }
+
       // Initialize Tesseract worker if needed
       if (!tesseractWorker) {
         addScanLog('OCRエンジン初期化中...（初回のみ時間がかかります）', 'info');
@@ -5008,8 +5072,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.04) {
-        // 紫色が4%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.06) {
+        // 紫色が6%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
