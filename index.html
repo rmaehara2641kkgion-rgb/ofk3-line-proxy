@@ -4769,6 +4769,7 @@
     let ocrStream = null;
     let ocrInterval = null;
     let tesseractWorker = null;
+    let colorFailCount = 0; // 色検出失敗回数（OCRフォールバック用）
 
     function addScanLog(message, type) {
       const log = document.getElementById('scan-log-entries');
@@ -5021,7 +5022,7 @@
       // Initialize Tesseract worker if needed
       if (!tesseractWorker) {
         addScanLog('OCRエンジン初期化中...（初回のみ時間がかかります）', 'info');
-        tesseractWorker = await Tesseract.createWorker('jpn', 1, {
+        tesseractWorker = await Tesseract.createWorker('jpn+eng', 1, {
           logger: () => {}
         });
         addScanLog('OCRエンジン準備完了', 'success');
@@ -5082,6 +5083,7 @@
 
       if (purpleRatio >= 0.035) {
         // マゼンタ色が3.5%以上 → 「ルート終了」ボタンが表示されている
+        colorFailCount = 0;
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
@@ -5089,7 +5091,7 @@
         // tenkoScheduleはメモリ保持のみ（localStorage不使用）
         renderTenkoTable();
         playSound('complete');
-        addScanLog('🎉 ' + d.name + ' — メンター認証OK（紫検出' + percentText + '%）→ 点呼完了！', 'success');
+        addScanLog('🎉 ' + d.name + ' — メンター認証OK（色検出' + percentText + '%）→ 点呼完了！', 'success');
 
         stopOcrScan();
         updateScanStatus('complete');
@@ -5102,9 +5104,59 @@
         }, 2000);
         return;
       } else {
+        colorFailCount++;
         if (purpleRatio >= 0.02) {
           addScanLog('紫検出' + percentText + '% — Mentorの「ルート終了」画面をかざしてください', 'info');
         }
+
+        // 色検出が3回連続失敗（約4.5秒）→ OCR文字認証にフォールバック
+        if (colorFailCount >= 3 && tesseractWorker) {
+          addScanLog('文字認証モードで再試行中...', 'info');
+          try {
+            // クロップ領域のcanvasをOCRに渡す
+            var ocrCanvas = document.createElement('canvas');
+            ocrCanvas.width = cropW;
+            ocrCanvas.height = cropH;
+            var ocrCtx = ocrCanvas.getContext('2d');
+            ocrCtx.putImageData(imgData, 0, 0);
+
+            var result = await tesseractWorker.recognize(ocrCanvas);
+            var ocrText = (result && result.data && result.data.text) ? result.data.text : '';
+
+            // 日本語「ルート終了」/ 英語「Route End」の部分一致
+            var hasJp = ocrText.indexOf('ルート') >= 0 || ocrText.indexOf('終了') >= 0;
+            var hasEn = ocrText.toLowerCase().indexOf('route') >= 0 || ocrText.toLowerCase().indexOf('end') >= 0;
+
+            if (hasJp || hasEn) {
+              colorFailCount = 0;
+              ocrScanning = false;
+              var d2 = tenkoSchedule[driverIndex];
+              d2.mentorAuth = true;
+              saveTenkoLog(d2);
+              renderTenkoTable();
+              playSound('complete');
+              var matchType = hasJp ? '日本語' : '英語';
+              addScanLog('🎉 ' + d2.name + ' — メンター認証OK（文字検出: ' + matchType + '）→ 点呼完了！', 'success');
+
+              stopOcrScan();
+              updateScanStatus('complete');
+              setTimeout(function() {
+                if (autoScanActive) {
+                  currentScanPhase = 'qr';
+                  updateScanStatus('qr');
+                  startQrScan();
+                }
+              }, 2000);
+              return;
+            } else {
+              addScanLog('OCR結果: 「ルート終了/Route End」未検出', 'info');
+            }
+          } catch (ocrErr) {
+            addScanLog('OCRエラー: ' + ocrErr.message, 'error');
+          }
+          colorFailCount = 0; // OCR試行後リセット、また色検出3回→OCRのサイクルに
+        }
+
         if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
       }
     }
