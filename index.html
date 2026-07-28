@@ -5070,9 +5070,9 @@
         sampledPixels++;
 
         // Mentorアプリ「ルート終了」ボタン: マゼンタ/ピンク紫
-        // 実測色: R:150-220, G:20-90, B:100-200 （R高・G低・B中高）
-        // 肌色(R高G中B中)・白(全高)・青ヘッダ(R低)・赤バー(B低) を除外
-        if (r >= 130 && r <= 230 && g <= 100 && b >= 90 && b <= 220 && (r - g) >= 60 && (b - g) >= 40) {
+        // 実測色: マゼンタ R高・G低・B中高 ＋ 赤紫（機種差でBが低くなるケース対応）
+        // 肌色(R高G中B中)→G>100で除外、白(全高)→G>100で除外、青ヘッダ(R低)→R<130で除外
+        if (r >= 130 && r <= 240 && g <= 100 && b >= 40 && (r - g) >= 60 && (b - g) >= 10) {
           purpleCount++;
         }
       }
@@ -5080,8 +5080,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.04) {
-        // マゼンタ色が4%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.035) {
+        // マゼンタ色が3.5%以上 → 「ルート終了」ボタンが表示されている
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
         d.mentorAuth = true;
@@ -5102,7 +5102,7 @@
         }, 2000);
         return;
       } else {
-        if (purpleRatio >= 0.03) {
+        if (purpleRatio >= 0.02) {
           addScanLog('紫検出' + percentText + '% — Mentorの「ルート終了」画面をかざしてください', 'info');
         }
         if (ocrScanning) setTimeout(function() { runOcrLoop(driverIndex); }, 1500);
