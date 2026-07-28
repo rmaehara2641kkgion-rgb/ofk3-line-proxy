@@ -5070,10 +5070,9 @@
         var b = pixels[i + 2];
         sampledPixels++;
 
-        // Mentorアプリ「ルート終了」ボタン: マゼンタ/ピンク紫
-        // 実測色: マゼンタ R高・G低・B中高 ＋ 赤紫（機種差でBが低くなるケース対応）
-        // 肌色(R高G中B中)→G>100で除外、白(全高)→G>100で除外、青ヘッダ(R低)→R<130で除外
-        if (r >= 130 && r <= 240 && g <= 100 && b >= 40 && (r - g) >= 60 && (b - g) >= 10) {
+        // Mentorアプリ「ルート終了」ボタン: マゼンタ〜赤紫（機種差を広くカバー）
+        // R高・G低であれば通す。肌色はG>120で除外。
+        if (r >= 120 && g <= 120 && (r - g) >= 50) {
           purpleCount++;
         }
       }
@@ -5081,8 +5080,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.035) {
-        // マゼンタ色が3.5%以上 → 「ルート終了」ボタンが表示されている
+      if (purpleRatio >= 0.02) {
+        // 色検出2%以上 → 認証OK
         colorFailCount = 0;
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
@@ -5105,12 +5104,12 @@
         return;
       } else {
         colorFailCount++;
-        if (purpleRatio >= 0.02) {
-          addScanLog('紫検出' + percentText + '% — Mentorの「ルート終了」画面をかざしてください', 'info');
+        if (purpleRatio >= 0.01) {
+          addScanLog('色検出' + percentText + '% — Mentorの「ルート終了」画面をかざしてください', 'info');
         }
 
-        // 色検出が3回連続失敗（約4.5秒）→ OCR文字認証にフォールバック
-        if (colorFailCount >= 3 && tesseractWorker) {
+        // 色検出が2回連続失敗（約3秒）→ OCR文字認証にフォールバック
+        if (colorFailCount >= 2 && tesseractWorker) {
           addScanLog('文字認証モードで再試行中...', 'info');
           try {
             // クロップ領域のcanvasをOCRに渡す
