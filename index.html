@@ -5645,7 +5645,7 @@
           <td class="px-3 py-2.5">
             <input type="text" value="${jname.replace(/"/g, '&quot;')}" placeholder="氏名を入力してください"
               class="border border-border rounded px-2 py-1 text-xs w-full min-w-[100px] focus:outline-none focus:border-accent"
-              onchange="updateJapaneseName('${name.replace(/'/g, "\\'")}', this.value)">
+              oninput="updateJapaneseName('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-3 py-2.5 font-medium text-ink">
             <div class="flex items-center gap-2">
@@ -5672,11 +5672,11 @@
           <td class="px-3 py-2.5">
             <input type="text" value="${(transportIDs[name] || '').replace(/"/g, '&quot;')}" placeholder="Transport ID"
               class="border border-border rounded px-2 py-1 text-xs w-full min-w-[110px] focus:outline-none focus:border-accent"
-              onchange="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
+              oninput="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-3 py-2.5">
             <select class="border border-border rounded px-2 py-1 text-xs w-full min-w-[100px] focus:outline-none focus:border-accent bg-white"
-              onchange="updateDepartment('${name.replace(/'/g, "\\'")}', this.value)">
+              oninput="updateDepartment('${name.replace(/'/g, "\\'")}', this.value)">
               <option value="">-- 所属 --</option>
               ${optionsHtml}
             </select>
@@ -5691,7 +5691,7 @@
           <td class="px-4 py-2.5">
             <input type="text" value="${note.replace(/"/g, '&quot;')}" placeholder="メモ"
               class="border border-border rounded px-2 py-1 text-xs w-full min-w-[100px] focus:outline-none focus:border-accent"
-              onchange="updateMasterNote('${name.replace(/'/g, "\\'")}', this.value)">
+              oninput="updateMasterNote('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-2 py-2.5 text-center whitespace-nowrap">
             <button class="text-xs text-red-400 hover:text-red-600 transition-colors font-medium" onclick="deleteDriver('${name.replace(/'/g, "\\'")}')">削除</button>
@@ -5729,6 +5729,16 @@
       renderMasterTable();
     }
 
+    // マスタフィールド保存デバウンス（サーバー同期を遅延実行）
+    var masterSyncTimers = {};
+    function debouncedMasterSync(name, field, value) {
+      var key = name + '::' + field;
+      if (masterSyncTimers[key]) clearTimeout(masterSyncTimers[key]);
+      masterSyncTimers[key] = setTimeout(function() {
+        syncMasterFieldToServer(name, field, value);
+      }, 1000);
+    }
+
     function updateLicenseNumber(name, value) {
       value = value.trim();
       if (value) {
@@ -5738,8 +5748,7 @@
       }
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
       localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
-      syncMasterFieldToServer(name, 'transportId', value);
-      renderMasterTable();
+      debouncedMasterSync(name, 'transportId', value);
     }
 
     function updateDepartment(name, value) {
@@ -5750,7 +5759,7 @@
         delete driverDepartments[name];
       }
       localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
-      renderMasterTable();
+      debouncedMasterSync(name, 'company', value);
     }
 
     function updateJapaneseName(name, value) {
@@ -5761,8 +5770,7 @@
         delete driverJapaneseNames[name];
       }
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
-      syncMasterFieldToServer(name, 'japaneseName', value);
-      renderMasterTable();
+      debouncedMasterSync(name, 'japaneseName', value);
     }
 
     // ===== LINE Profile Cache =====
