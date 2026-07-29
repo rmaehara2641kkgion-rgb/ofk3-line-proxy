@@ -5080,8 +5080,8 @@
       var purpleRatio = sampledPixels > 0 ? purpleCount / sampledPixels : 0;
       var percentText = (purpleRatio * 100).toFixed(1);
 
-      if (purpleRatio >= 0.02) {
-        // 色検出2%以上 → 認証OK
+      if (purpleRatio >= 0.03) {
+        // 色検出3%以上 → 認証OK
         colorFailCount = 0;
         ocrScanning = false;
         var d = tenkoSchedule[driverIndex];
