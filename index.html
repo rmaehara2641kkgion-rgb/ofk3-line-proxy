@@ -675,10 +675,11 @@
             <h2 class="text-sm font-medium">マスタ管理</h2>
             <p class="text-xs text-ink-lighter mt-1">ドライバーのLINE ID紐付け・基本情報の管理</p>
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 flex-wrap">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="addNewDriver()">+ ドライバー追加</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportMasterData()">エクスポート</button>
             <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="syncAllMasterToServer()">☁ サーバー同期</button>
+            <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
           </div>
         </div>
 
@@ -6033,6 +6034,129 @@
         delete masterNotes[name];
       }
       localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+    }
+
+    // ===== パスワード付きZIP（汎用ファイル暗号化） =====
+    var encryptZipFile = null;
+
+    function showEncryptZipModal() {
+      encryptZipFile = null;
+      var modal = document.createElement('div');
+      modal.id = 'encrypt-zip-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+      modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);">'
+        + '<h3 style="font-size:16px;font-weight:bold;margin-bottom:16px;">🔒 パスワード付きZIP作成</h3>'
+        + '<div id="encrypt-zip-dropzone" style="border:2px dashed #ccc;border-radius:8px;padding:30px;text-align:center;margin-bottom:16px;cursor:pointer;transition:border-color 0.2s;" onclick="document.getElementById(\'encrypt-zip-input\').click()">'
+        + '<p style="font-size:13px;color:#888;">ファイルをドラッグ＆ドロップ<br>またはクリックして選択</p>'
+        + '<p style="font-size:11px;color:#aaa;margin-top:4px;">Excel / PDF / 画像 など何でもOK</p>'
+        + '<input type="file" id="encrypt-zip-input" style="display:none;" onchange="onEncryptFileSelect(this)" />'
+        + '</div>'
+        + '<div id="encrypt-zip-file-info" style="display:none;margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border-radius:6px;">'
+        + '<p id="encrypt-zip-filename" style="font-size:12px;font-weight:bold;"></p>'
+        + '<p id="encrypt-zip-filesize" style="font-size:11px;color:#888;"></p>'
+        + '</div>'
+        + '<div style="margin-bottom:16px;">'
+        + '<label style="font-size:12px;font-weight:bold;display:block;margin-bottom:4px;">ZIPパスワード（4文字以上）</label>'
+        + '<input type="password" id="encrypt-zip-pw" placeholder="パスワードを入力" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;" />'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+        + '<button onclick="closeEncryptZipModal()" style="padding:8px 16px;border:1px solid #ddd;border-radius:6px;font-size:13px;cursor:pointer;background:white;">キャンセル</button>'
+        + '<button id="encrypt-zip-btn" onclick="doEncryptZip()" style="padding:8px 16px;background:#f59e0b;color:white;border:none;border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;">🔒 ZIP生成</button>'
+        + '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
+
+      // ドラッグ＆ドロップ
+      var dropzone = document.getElementById('encrypt-zip-dropzone');
+      dropzone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#f59e0b';
+        dropzone.style.background = '#fffbeb';
+      });
+      dropzone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#ccc';
+        dropzone.style.background = 'white';
+      });
+      dropzone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#ccc';
+        dropzone.style.background = 'white';
+        if (e.dataTransfer.files.length > 0) {
+          setEncryptFile(e.dataTransfer.files[0]);
+        }
+      });
+    }
+
+    function onEncryptFileSelect(input) {
+      if (input.files.length > 0) {
+        setEncryptFile(input.files[0]);
+      }
+    }
+
+    function setEncryptFile(file) {
+      encryptZipFile = file;
+      document.getElementById('encrypt-zip-dropzone').style.display = 'none';
+      var info = document.getElementById('encrypt-zip-file-info');
+      info.style.display = 'block';
+      document.getElementById('encrypt-zip-filename').textContent = '📎 ' + file.name;
+      var sizeKB = (file.size / 1024).toFixed(1);
+      var sizeText = file.size > 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : sizeKB + ' KB';
+      document.getElementById('encrypt-zip-filesize').textContent = sizeText;
+      document.getElementById('encrypt-zip-pw').focus();
+    }
+
+    function closeEncryptZipModal() {
+      var modal = document.getElementById('encrypt-zip-modal');
+      if (modal) modal.remove();
+      encryptZipFile = null;
+    }
+
+    function doEncryptZip() {
+      if (!encryptZipFile) { alert('ファイルを選択してください'); return; }
+      var pw = document.getElementById('encrypt-zip-pw').value;
+      if (!pw || pw.length < 4) { alert('パスワードは4文字以上で入力してください'); return; }
+
+      var btn = document.getElementById('encrypt-zip-btn');
+      btn.disabled = true;
+      btn.textContent = '暗号化中...';
+
+      var formData = new FormData();
+      formData.append('file', encryptZipFile);
+      formData.append('password', pw);
+      formData.append('filename', encryptZipFile.name);
+
+      var serverUrl = window.location.origin + '/encrypt-zip';
+      if (window.location.protocol === 'file:') {
+        serverUrl = 'https://ofk3-line-proxy-1.onrender.com/encrypt-zip';
+      }
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', serverUrl, true);
+      xhr.responseType = 'blob';
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          var zipBlob = xhr.response;
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(zipBlob);
+          a.download = encryptZipFile.name.replace(/\.[^.]+$/, '') + '.zip';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+          closeEncryptZipModal();
+        } else {
+          alert('ZIP暗号化エラー: ' + xhr.status);
+          btn.disabled = false;
+          btn.textContent = '🔒 ZIP生成';
+        }
+      };
+      xhr.onerror = function() {
+        alert('サーバー通信エラー');
+        btn.disabled = false;
+        btn.textContent = '🔒 ZIP生成';
+      };
+      xhr.send(formData);
     }
 
     function addNewDriver() {
