@@ -658,6 +658,73 @@ app.get('/tenko-sync', function(req, res) {
   res.json({ status: 'ok', data: tenkoSyncStore });
 });
 
+// ===== パスワード付きZIPエンドポイント =====
+var archiverZipEncrypted;
+try {
+  archiverZipEncrypted = require('archiver-zip-encrypted');
+  var archiver = require('archiver');
+  archiver.registerFormat('zip-encrypted', archiverZipEncrypted);
+  log('archiver-zip-encrypted loaded');
+} catch(e) {
+  log('archiver-zip-encrypted not available: ' + e.message);
+}
+
+// multer設定（PDFアップロード用）
+var zipMulter;
+try {
+  var multerLib = require('multer');
+  zipMulter = multerLib({ storage: multerLib.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+} catch(e) {
+  log('multer not available for ZIP endpoint');
+}
+
+app.post('/encrypt-zip', function(req, res, next) {
+  if (!zipMulter) return res.status(500).json({ error: 'multer not available' });
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) return res.status(400).json({ error: err.message });
+
+    var file = req.file;
+    var password = req.body.password;
+    var filename = req.body.filename || 'document.pdf';
+
+    if (!file) return res.status(400).json({ error: 'file required' });
+    if (!password || password.length < 4) return res.status(400).json({ error: 'password required (4+ chars)' });
+
+    try {
+      var archiver = require('archiver');
+      var archive = archiver.create('zip-encrypted', {
+        zlib: { level: 9 },
+        encryptionMethod: 'aes256',
+        password: password
+      });
+
+      var chunks = [];
+      archive.on('data', function(chunk) { chunks.push(chunk); });
+      archive.on('end', function() {
+        var zipBuffer = Buffer.concat(chunks);
+        var zipName = filename.replace(/\.[^.]+$/, '') + '.zip';
+        res.set({
+          'Content-Type': 'application/zip',
+          'Content-Disposition': 'attachment; filename="' + zipName + '"',
+          'Content-Length': zipBuffer.length
+        });
+        res.send(zipBuffer);
+        log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
+      });
+      archive.on('error', function(e) {
+        log('ZIP error: ' + e.message);
+        res.status(500).json({ error: e.message });
+      });
+
+      archive.append(file.buffer, { name: filename });
+      archive.finalize();
+    } catch(e) {
+      log('ZIP creation error: ' + e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+});
+
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
 });
