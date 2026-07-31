@@ -2663,6 +2663,32 @@
       renderDriverTable();
     }
 
+    // driverDBが空なら他のマスタデータから復元
+    if (Object.keys(driverDB).length === 0) {
+      var namesToRestore = new Set();
+      Object.keys(driverJapaneseNames).forEach(function(n) { namesToRestore.add(n); });
+      Object.keys(transportIDs).forEach(function(n) { namesToRestore.add(n); });
+      Object.keys(driverDepartments).forEach(function(n) { namesToRestore.add(n); });
+      Object.keys(lineMapping).forEach(function(n) { namesToRestore.add(n); });
+      Object.keys(phoneMapping).forEach(function(n) { namesToRestore.add(n); });
+      Object.keys(masterNotes).forEach(function(n) { namesToRestore.add(n); });
+
+      namesToRestore.forEach(function(name) {
+        driverDB[name] = {
+          driverId: ++driverIdCounter,
+          history: [],
+          haikanCount: 0,
+          haikanSum: 0
+        };
+      });
+
+      if (namesToRestore.size > 0) {
+        localStorage.setItem('driverDB', JSON.stringify(driverDB));
+        localStorage.setItem('driverIdCounter', String(driverIdCounter));
+        console.log('driverDBをマスタデータから ' + namesToRestore.size + '名復元しました');
+      }
+    }
+
     // driverId未付与のドライバーに自動付与
     (function assignDriverIds() {
       var changed = false;
@@ -4155,16 +4181,25 @@
         if (xhr.status === 200) {
           try {
             var res = JSON.parse(xhr.responseText);
-            if (res.status === 'ok' && res.drivers) {
+            if (res.status === 'ok' && res.drivers && res.drivers.length > 0) {
               var updated = false;
               for (var i = 0; i < res.drivers.length; i++) {
                 var d = res.drivers[i];
-                if (d.englishName && d.japaneseName && !driverJapaneseNames[d.englishName]) {
+                if (!d.englishName) continue;
+                if (d.japaneseName && !driverJapaneseNames[d.englishName]) {
                   driverJapaneseNames[d.englishName] = d.japaneseName;
                   updated = true;
                 }
-                if (d.englishName && d.transportId && !transportIDs[d.englishName]) {
+                if (d.transportId && !transportIDs[d.englishName]) {
                   transportIDs[d.englishName] = d.transportId;
+                  updated = true;
+                }
+                if (d.company && !driverDepartments[d.englishName]) {
+                  driverDepartments[d.englishName] = d.company;
+                  updated = true;
+                }
+                if (d.lineId && !lineMapping[d.englishName]) {
+                  lineMapping[d.englishName] = d.lineId;
                   updated = true;
                 }
               }
@@ -4172,8 +4207,12 @@
                 localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
                 localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
                 localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
+                localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+                localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
                 console.log('サーバーからマスタデータ復元完了');
               }
+            } else {
+              console.log('サーバーにマスタデータが空です');
             }
           } catch (e) {
             console.warn('マスタ読み込みパースエラー:', e.message);
