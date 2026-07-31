@@ -709,35 +709,58 @@ app.post('/encrypt-zip', function(req, res) {
 
       var chunks = [];
       var errorSent = false;
+      var finalized = false;
 
       archive.on('data', function(chunk) {
-        chunks.push(chunk);
+        if (!errorSent) chunks.push(chunk);
       });
 
       archive.on('end', function() {
         if (errorSent) return;
-        var zipBuffer = Buffer.concat(chunks);
-        res.set({
-          'Content-Type': 'application/zip',
-          'Content-Disposition': 'attachment; filename="' + zipName + '"',
-          'Content-Length': zipBuffer.length
-        });
-        res.send(zipBuffer);
-        log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
+        try {
+          var zipBuffer = Buffer.concat(chunks);
+          res.set({
+            'Content-Type': 'application/zip',
+            'Content-Disposition': 'attachment; filename="' + zipName + '"',
+            'Content-Length': zipBuffer.length
+          });
+          res.send(zipBuffer);
+          log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
+        } catch(e) {
+          log('ZIP send error: ' + e.message);
+          if (!res.headersSent) res.status(500).json({ error: e.message });
+        }
       });
 
       archive.on('warning', function(warn) {
-        log('ZIP warning: ' + warn.message);
+        log('ZIP warning: ' + (warn.message || warn));
       });
 
       archive.on('error', function(err) {
+        if (errorSent) return;
         errorSent = true;
-        log('ZIP archive error: ' + err.message);
-        res.status(500).json({ error: err.message });
+        log('ZIP archive error: ' + (err.message || err));
+        if (!res.headersSent) res.status(500).json({ error: err.message || 'archive error' });
+        try { archive.unpipe(); } catch(e) {}
       });
 
-      archive.append(file.buffer, { name: filename });
-      archive.finalize();
+      try {
+        archive.append(file.buffer, { name: filename });
+        archive.finalize();
+        finalized = true;
+      } catch(e) {
+        log('ZIP finalize error: ' + e.message);
+        if (!res.headersSent) res.status(500).json({ error: e.message });
+      }
+
+      // finalize後1秒以内にendイベントが来なければタイムアウト
+      setTimeout(function() {
+        if (!finalized || errorSent) return;
+        if (chunks.length === 0) {
+          log('ZIP generation timeout');
+          if (!res.headersSent) res.status(500).json({ error: 'zip generation timeout' });
+        }
+      }, 10000);
     } catch(e) {
       log('ZIP endpoint error: ' + e.message + ' | ' + e.stack);
       res.status(500).json({ error: e.message });
