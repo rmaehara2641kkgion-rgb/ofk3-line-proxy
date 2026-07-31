@@ -676,28 +676,40 @@ app.get('/tenko-sync', function(req, res) {
 });
 
 // ===== パスワード付きZIPエンドポイント =====
-var encryptedArchiver = null;
-var zipArchiverLib = null;
-var zipMulter = null;
+// 起動時に重いライブラリで落ちないよう、エンドポイント呼び出し時に遅延ロード
+var zipModuleCache = null;
+var zipMulterCache = null;
 
-try {
-  zipArchiverLib = require('archiver');
-  var EncryptedFormat = require('archiver-zip-encrypted');
-  zipArchiverLib.registerFormat('zip-encrypted', EncryptedFormat);
-  encryptedArchiver = zipArchiverLib;
-  log('archiver-zip-encrypted registered');
-} catch(e) {
-  log('archiver-zip-encrypted init failed: ' + e.message);
+function getZipModules() {
+  if (zipModuleCache) return zipModuleCache;
+  try {
+    var archiver = require('archiver');
+    var EncryptedFormat = require('archiver-zip-encrypted');
+    archiver.registerFormat('zip-encrypted', EncryptedFormat);
+    zipModuleCache = archiver;
+    log('archiver-zip-encrypted registered lazily');
+  } catch (e) {
+    log('archiver-zip-encrypted lazy init failed: ' + e.message);
+    zipModuleCache = null;
+  }
+  return zipModuleCache;
 }
 
-try {
-  var multerLib = require('multer');
-  zipMulter = multerLib({ storage: multerLib.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-} catch(e) {
-  log('multer init failed: ' + e.message);
+function getZipMulter() {
+  if (zipMulterCache) return zipMulterCache;
+  try {
+    var multerLib = require('multer');
+    zipMulterCache = multerLib({ storage: multerLib.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+  } catch (e) {
+    log('multer lazy init failed: ' + e.message);
+    zipMulterCache = null;
+  }
+  return zipMulterCache;
 }
 
 app.post('/encrypt-zip', function(req, res) {
+  var encryptedArchiver = getZipModules();
+  var zipMulter = getZipMulter();
   if (!encryptedArchiver || !zipMulter) {
     return res.status(500).json({ error: 'server modules not ready' });
   }
