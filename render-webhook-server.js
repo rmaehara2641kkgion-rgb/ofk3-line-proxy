@@ -738,30 +738,7 @@ app.post('/encrypt-zip', function(req, res) {
         password: password
       });
 
-      var chunks = [];
       var errorSent = false;
-      var finalized = false;
-
-      archive.on('data', function(chunk) {
-        if (!errorSent) chunks.push(chunk);
-      });
-
-      archive.on('end', function() {
-        if (errorSent) return;
-        try {
-          var zipBuffer = Buffer.concat(chunks);
-          res.set({
-            'Content-Type': 'application/zip',
-            'Content-Disposition': "attachment; filename*=UTF-8''" + encodedZipName,
-            'Content-Length': zipBuffer.length
-          });
-          res.send(zipBuffer);
-          log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
-        } catch(e) {
-          log('ZIP send error: ' + e.message);
-          if (!res.headersSent) res.status(500).json({ error: e.message });
-        }
-      });
 
       archive.on('warning', function(warn) {
         log('ZIP warning: ' + (warn.message || warn));
@@ -772,26 +749,25 @@ app.post('/encrypt-zip', function(req, res) {
         errorSent = true;
         log('ZIP archive error: ' + (err.message || err));
         if (!res.headersSent) res.status(500).json({ error: err.message || 'archive error' });
-        try { archive.unpipe(); } catch(e) {}
+        try { archive.unpipe(res); } catch(e) {}
+      });
+
+      archive.on('end', function() {
+        log('ZIP finalized: ' + zipName);
       });
 
       try {
-        archive.append(file.buffer, { name: filename });
+        res.set({
+          'Content-Type': 'application/zip',
+          'Content-Disposition': "attachment; filename*=UTF-8''" + encodedZipName
+        });
+        archive.pipe(res);
+        archive.append(Buffer.from(file.buffer), { name: filename });
         archive.finalize();
-        finalized = true;
       } catch(e) {
         log('ZIP finalize error: ' + e.message);
         if (!res.headersSent) res.status(500).json({ error: e.message });
       }
-
-      // finalize後1秒以内にendイベントが来なければタイムアウト
-      setTimeout(function() {
-        if (!finalized || errorSent) return;
-        if (chunks.length === 0) {
-          log('ZIP generation timeout');
-          if (!res.headersSent) res.status(500).json({ error: 'zip generation timeout' });
-        }
-      }, 10000);
     } catch(e) {
       log('ZIP endpoint error: ' + e.message + '\\n' + e.stack);
       if (!res.headersSent) {
