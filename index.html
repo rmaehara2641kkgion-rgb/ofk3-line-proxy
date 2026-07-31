@@ -5710,7 +5710,7 @@
               onchange="updatePhone('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
           <td class="px-3 py-2.5">
-            <input type="text" value="${(transportIDs[name] || '').replace(/"/g, '&quot;')}" placeholder="Transport ID"
+            <input type="text" value="${String(transportIDs[name] || '').replace(/"/g, '&quot;')}" placeholder="Transport ID"
               class="border border-border rounded px-2 py-1 text-xs w-full min-w-[110px] focus:outline-none focus:border-accent"
               oninput="updateLicenseNumber('${name.replace(/'/g, "\\'")}', this.value)">
           </td>
@@ -5820,7 +5820,34 @@
     }
 
     function saveProfileCache() {
-      localStorage.setItem('lineProfileCache', JSON.stringify(lineProfileCache));
+      // 容量超過対策：pictureUrlが大きい場合は省略
+      var compact = {};
+      for (var uid in lineProfileCache) {
+        var p = lineProfileCache[uid];
+        compact[uid] = {
+          userId: p.userId,
+          displayName: p.displayName || '',
+          statusMessage: p.statusMessage || '',
+          fetchedAt: p.fetchedAt,
+          pictureUrl: p.pictureUrl || ''
+        };
+      }
+      try {
+        localStorage.setItem('lineProfileCache', JSON.stringify(compact));
+      } catch(e) {
+        console.warn('lineProfileCache保存失敗（容量超過）:', e.message);
+        // 古いエントリから半分削除
+        var entries = Object.entries(lineProfileCache).sort(function(a, b) { return (a[1].fetchedAt || 0) - (b[1].fetchedAt || 0); });
+        var half = Math.floor(entries.length / 2);
+        for (var i = 0; i < half; i++) {
+          delete lineProfileCache[entries[i][0]];
+        }
+        try {
+          localStorage.setItem('lineProfileCache', JSON.stringify(lineProfileCache));
+        } catch(e2) {
+          console.warn('lineProfileCache保存再試行も失敗:', e2.message);
+        }
+      }
     }
 
     async function fetchLineProfile(userId) {
