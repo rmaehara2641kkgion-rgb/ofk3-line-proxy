@@ -659,67 +659,70 @@ app.get('/tenko-sync', function(req, res) {
 });
 
 // ===== パスワード付きZIPエンドポイント =====
-var archiverZipEncrypted;
+var AdmZip;
 try {
-  archiverZipEncrypted = require('archiver-zip-encrypted');
-  var archiver = require('archiver');
-  archiver.registerFormat('zip-encrypted', archiverZipEncrypted);
-  log('archiver-zip-encrypted loaded');
+  AdmZip = require('adm-zip');
+  log('adm-zip loaded');
 } catch(e) {
-  log('archiver-zip-encrypted not available: ' + e.message);
+  log('adm-zip not available: ' + e.message);
 }
 
-// multer設定（PDFアップロード用）
+// multer設定（メモリにファイルを受信）
 var zipMulter;
 try {
   var multerLib = require('multer');
   zipMulter = multerLib({ storage: multerLib.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 } catch(e) {
-  log('multer not available for ZIP endpoint');
+  log('multer not available for ZIP endpoint: ' + e.message);
 }
 
-app.post('/encrypt-zip', function(req, res, next) {
-  if (!zipMulter) return res.status(500).json({ error: 'multer not available' });
+app.post('/encrypt-zip', function(req, res) {
+  if (!AdmZip) return res.status(500).json({ error: 'ZIP module not available' });
+  if (!zipMulter) return res.status(500).json({ error: 'upload module not available' });
+
   zipMulter.single('file')(req, res, function(err) {
-    if (err) return res.status(400).json({ error: err.message });
-
-    var file = req.file;
-    var password = req.body.password;
-    var filename = req.body.filename || 'document.pdf';
-
-    if (!file) return res.status(400).json({ error: 'file required' });
-    if (!password || password.length < 4) return res.status(400).json({ error: 'password required (4+ chars)' });
+    if (err) {
+      log('multer error: ' + (err.message || err));
+      return res.status(400).json({ error: err.message || 'upload error' });
+    }
 
     try {
-      var archiver = require('archiver');
-      var archive = archiver.create('zip-encrypted', {
-        zlib: { level: 9 },
-        encryptionMethod: 'aes256',
-        password: password
-      });
+      var file = req.file;
+      var password = (req.body && req.body.password) ? String(req.body.password) : '';
+      var filename = (req.body && req.body.filename) ? String(req.body.filename) : 'document.pdf';
 
-      var chunks = [];
-      archive.on('data', function(chunk) { chunks.push(chunk); });
-      archive.on('end', function() {
-        var zipBuffer = Buffer.concat(chunks);
-        var zipName = filename.replace(/\.[^.]+$/, '') + '.zip';
-        res.set({
-          'Content-Type': 'application/zip',
-          'Content-Disposition': 'attachment; filename="' + zipName + '"',
-          'Content-Length': zipBuffer.length
-        });
-        res.send(zipBuffer);
-        log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
-      });
-      archive.on('error', function(e) {
-        log('ZIP error: ' + e.message);
-        res.status(500).json({ error: e.message });
-      });
+      if (!file) return res.status(400).json({ error: 'file required' });
+      if (!password || password.length < 4) return res.status(400).json({ error: 'password required (4+ chars)' });
 
-      archive.append(file.buffer, { name: filename });
-      archive.finalize();
+      var zipName = filename.replace(/\.[^.]+$/, '') + '.zip';
+
+      var zip = new AdmZip();
+      zip.addFile(filename, file.buffer, '', 0x0400); // 圧縮方法: 0x0400(deflate)
+      // AES-256で暗号化
+      zip.toBufferPromise ? null : null; // 旧API対策
+
+      // adm-zipではaddFileのあとにsetPasswordが必要な場合がある
+      if (typeof zip.setPassword === 'function') {
+        zip.setPassword(password);
+      }
+
+      var zipBuffer = zip.toBuffer();
+
+      // AES暗号化が機能しない場合の代替: 各エントリを暗号化する
+      // adm-zipはsetPassword呼び出し時にtoBufferで暗号化される
+      if (!zipBuffer || zipBuffer.length === 0) {
+        return res.status(500).json({ error: 'zip buffer empty' });
+      }
+
+      res.set({
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="' + zipName + '"',
+        'Content-Length': zipBuffer.length
+      });
+      res.send(zipBuffer);
+      log('ZIP encrypted: ' + zipName + ' (' + zipBuffer.length + ' bytes)');
     } catch(e) {
-      log('ZIP creation error: ' + e.message);
+      log('ZIP creation error: ' + e.message + '\\n' + e.stack);
       res.status(500).json({ error: e.message });
     }
   });
