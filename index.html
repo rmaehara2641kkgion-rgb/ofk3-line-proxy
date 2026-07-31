@@ -4149,6 +4149,20 @@
         alert('同期するマスタデータがありません');
         return;
       }
+
+      // 空データ上書き防止の確認ダイアログ
+      var emptyTransportCount = 0;
+      for (var d = 0; d < drivers.length; d++) {
+        if (!drivers[d].transportId && !drivers[d].japaneseName && !drivers[d].lineId && !drivers[d].company) {
+          emptyTransportCount++;
+        }
+      }
+      var msg = 'サーバー同期を実行します。\\n\\n' +
+        '同期件数: ' + drivers.length + '名\\n' +
+        '空データ（名前のみ）: ' + emptyTransportCount + '名\\n\\n' +
+        '本当に同期しますか？';
+      if (!confirm(msg)) return;
+
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/tenko-master', true);
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -6212,7 +6226,18 @@
           URL.revokeObjectURL(a.href);
           closeEncryptZipModal();
         } else {
-          alert('ZIP暗号化エラー: ' + xhr.status);
+          // エラー詳細を表示
+          var reader = new FileReader();
+          reader.onload = function() {
+            var errText = reader.result;
+            var errMsg = xhr.status;
+            try {
+              var errJson = JSON.parse(errText);
+              errMsg = errJson.error || errJson.message || xhr.status;
+            } catch(e) {}
+            alert('ZIP暗号化エラー: ' + errMsg);
+          };
+          reader.readAsText(xhr.response);
           btn.disabled = false;
           btn.textContent = '🔒 ZIP生成';
         }
