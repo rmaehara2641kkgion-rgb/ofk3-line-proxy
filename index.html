@@ -2145,7 +2145,7 @@
         </div>
 
         <!-- 統計カード -->
-        <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="grid grid-cols-5 gap-3 mb-4">
           <div class="card p-3 text-center">
             <div class="text-2xl font-bold text-blue-600" id="addrmaster-total">0</div>
             <div class="text-xs text-ink-lighter">登録住所数</div>
@@ -2157,6 +2157,14 @@
           <div class="card p-3 text-center">
             <div class="text-2xl font-bold text-orange-500" id="addrmaster-pending">0</div>
             <div class="text-xs text-ink-lighter">未取得</div>
+          </div>
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold text-purple-600" id="addrmaster-daily">0</div>
+            <div class="text-xs text-ink-lighter">本日ジオコード</div>
+          </div>
+          <div class="card p-3 text-center">
+            <div class="text-2xl font-bold text-indigo-600" id="addrmaster-monthly">0</div>
+            <div class="text-xs text-ink-lighter">今月ジオコード</div>
           </div>
         </div>
 
@@ -2171,7 +2179,7 @@
             <input type="file" accept=".json" onchange="handleAddrMasterImport(event)" class="hidden">
           </label>
           <button onclick="downloadAddrMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">💾 住所マスターDL</button>
-          <button disabled class="bg-gray-400 text-white px-3 py-1.5 rounded text-xs font-bold cursor-not-allowed" id="btn-batch-geocode" title="8月まで停止中（課金防止）">🌍 ジオコーディング停止中（8月〜再開）</button>
+          <button disabled class="bg-gray-400 text-white px-3 py-1.5 rounded text-xs font-bold cursor-not-allowed" id="btn-batch-geocode" title="一括ジオコーディングは中止。ダッシュボード取り込み時に本日コースのみ日次100件で自動取得します">🌍 一括ジオコーディング中止中</button>
           <button onclick="startDedup()" class="bg-yellow-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-yellow-600 cursor-pointer" id="btn-dedup">🧹 重複住所を統合</button>
         </div>
 
@@ -9805,6 +9813,29 @@
       var info = getGeocodeDailyInfo();
       info.count++;
       localStorage.setItem('geocodeDaily', JSON.stringify(info));
+      incrementGeocodeMonthly();
+      return info.count;
+    }
+
+    // 月次ジオコーディング件数管理
+    function getGeocodeMonthlyInfo() {
+      var now = new Date();
+      var m = now.getMonth() + 1;
+      var month = now.getFullYear() + '-' + (m < 10 ? '0' + m : m);
+      var saved = localStorage.getItem('geocodeMonthly');
+      if (saved) {
+        try {
+          var info = JSON.parse(saved);
+          if (info.month === month) return info;
+        } catch (e) {}
+      }
+      return { month: month, count: 0 };
+    }
+
+    function incrementGeocodeMonthly() {
+      var info = getGeocodeMonthlyInfo();
+      info.count++;
+      localStorage.setItem('geocodeMonthly', JSON.stringify(info));
       return info.count;
     }
 
@@ -9979,9 +10010,13 @@
           var elTotal = document.getElementById('addrmaster-total');
           var elGeocoded = document.getElementById('addrmaster-geocoded');
           var elPending = document.getElementById('addrmaster-pending');
+          var elDaily = document.getElementById('addrmaster-daily');
+          var elMonthly = document.getElementById('addrmaster-monthly');
           if (elTotal) elTotal.textContent = data.total || 0;
           if (elGeocoded) elGeocoded.textContent = data.geocoded || 0;
           if (elPending) elPending.textContent = data.pending || 0;
+          if (elDaily) elDaily.textContent = getGeocodeDailyInfo().count;
+          if (elMonthly) elMonthly.textContent = getGeocodeMonthlyInfo().count;
         }
       } catch (e) {
         console.error('wh60LoadAddrStats error:', e);
@@ -10009,9 +10044,13 @@
       var elTotal = document.getElementById('addrmaster-total');
       var elGeocoded = document.getElementById('addrmaster-geocoded');
       var elPending = document.getElementById('addrmaster-pending');
+      var elDaily = document.getElementById('addrmaster-daily');
+      var elMonthly = document.getElementById('addrmaster-monthly');
       if (elTotal) elTotal.textContent = total;
       if (elGeocoded) elGeocoded.textContent = geocoded;
       if (elPending) elPending.textContent = pending;
+      if (elDaily) elDaily.textContent = getGeocodeDailyInfo().count;
+      if (elMonthly) elMonthly.textContent = getGeocodeMonthlyInfo().count;
     }
 
     function renderAddrMasterTable() {
@@ -10250,7 +10289,7 @@
     }
 
     async function startBatchGeocode() {
-      alert('一括ジオコーディングは停止中です。\nダッシュボードに取り込まれた本日コースの未ジオコード住所のみ、日次上限100件で自動取得します。');
+      alert('一括ジオコーディングは中止しました。\n\n今後のジオコーディングは以下の運用です：\n・ダッシュボードに取り込まれた本日コースの未ジオコード住所のみ自動取得\n・日次上限100件\n・過去取得済み座標はGASマスタからオフラインでも表示');
       return;
     }
 
@@ -10671,9 +10710,13 @@
       var elTotal = document.getElementById('addrmaster-total');
       var elGeocoded = document.getElementById('addrmaster-geocoded');
       var elPending = document.getElementById('addrmaster-pending');
+      var elDaily = document.getElementById('addrmaster-daily');
+      var elMonthly = document.getElementById('addrmaster-monthly');
       if (elTotal) elTotal.textContent = total;
       if (elGeocoded) elGeocoded.textContent = geocoded;
       if (elPending) elPending.textContent = pending;
+      if (elDaily) elDaily.textContent = getGeocodeDailyInfo().count;
+      if (elMonthly) elMonthly.textContent = getGeocodeMonthlyInfo().count;
     }
 
     function renderAddrMasterTable() {
@@ -12430,7 +12473,8 @@
       var needGeocode = [];
       for (var i = 0; i < items.length; i++) {
         var addr = items[i].address;
-        var geo = inMemoryAddrMaster[addr];
+        var norm = normalizeAddress(addr);
+        var geo = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
         if (geo && geo.lat && geo.lng) {
           pins.push({
             lat: geo.lat, lng: geo.lng,
