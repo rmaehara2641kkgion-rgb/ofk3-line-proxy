@@ -11,8 +11,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
-    "archiver-zip-encrypted": "^2.0.0",
+    "adm-zip": "^0.5.16",
     "axios": "^1.7.2",
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1"
