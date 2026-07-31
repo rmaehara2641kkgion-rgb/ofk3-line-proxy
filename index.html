@@ -3891,7 +3891,7 @@
     // 起動時に古いログをクリーンアップ
     (function() {
       var before = tenkoLog.length;
-      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      var limit = Date.now() - 40 * 24 * 60 * 60 * 1000;
       tenkoLog = tenkoLog.filter(function(item) {
         var t = item.time || item.date;
         if (!t) return false;
@@ -3904,7 +3904,7 @@
       }
     })();
 
-    // tenkoLog保存（30日制限 + 容量チェック）
+    // tenkoLog保存（40日制限 + 容量チェック）
     function saveTenkoLog() {
       persistTenkoLog();
     }
@@ -4350,9 +4350,9 @@
       xhr.send();
     }
 
-    // tenkoLog永続化（30日制限 + 容量チェック）
+    // tenkoLog永続化（40日制限 + 容量チェック）
     function persistTenkoLog() {
-      var limit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      var limit = Date.now() - 40 * 24 * 60 * 60 * 1000;
       tenkoLog = tenkoLog.filter(function(item) {
         var t = item.time || item.date;
         if (!t) return false;
@@ -5945,7 +5945,7 @@
     }
 
     function saveProfileCache() {
-      // 容量超過対策：pictureUrlが大きい場合は省略
+      // 容量超過対策：pictureUrlは保存しない（URLは動的に取得可能）
       var compact = {};
       for (var uid in lineProfileCache) {
         var p = lineProfileCache[uid];
@@ -5953,8 +5953,7 @@
           userId: p.userId,
           displayName: p.displayName || '',
           statusMessage: p.statusMessage || '',
-          fetchedAt: p.fetchedAt,
-          pictureUrl: p.pictureUrl || ''
+          fetchedAt: p.fetchedAt
         };
       }
       try {
@@ -7477,7 +7476,7 @@
         message: message
       };
       tenkoNotifyLogs.push(entry);
-      if (tenkoNotifyLogs.length > 50) tenkoNotifyLogs = tenkoNotifyLogs.slice(-50);
+      if (tenkoNotifyLogs.length > 30) tenkoNotifyLogs = tenkoNotifyLogs.slice(-30);
       localStorage.setItem('tenkoNotifyLogs', JSON.stringify(tenkoNotifyLogs));
 
       var scanLog = document.getElementById('scan-log-entries');
@@ -9759,12 +9758,24 @@
 
     function normalizeAddress(addr) {
       if (!addr) return '';
-      return String(addr)
+      var s = String(addr)
         .replace(/[０-９]/g, function(ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
         .replace(/[Ａ-Ｚａ-ｚ]/g, function(ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
         .replace(/[\uff0d\u2010\u2015\u2014\u2212]/g, '-')
+        .replace(/,/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+
+      // 都道府県が末尾にある場合は先頭に移動
+      var prefMatch = s.match(/(.+)(東京都|北海道|(?:京都|大阪)府|.{2,3}県)$/);
+      if (prefMatch) {
+        s = prefMatch[2] + prefMatch[1];
+      }
+
+      // ビル名・部屋番号前のスペースを維持しつつ、連続スペースを整理
+      s = s.replace(/\s+/g, ' ').trim();
+
+      return s;
     }
 
     async function getLatLng(addr) {
@@ -9869,28 +9880,61 @@
     async function lookupAddrFromSheet(addr) {
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return null;
-      try {
-        var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(addr), { redirect: 'follow' });
-        var data = await res.json();
-        if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
-          return { lat: data.lat, lng: data.lng };
+
+      // 複数パターンで検索（県名先頭/末尾、スペースあり/なし）
+      var patterns = generateAddressLookupPatterns(addr);
+
+      for (var i = 0; i < patterns.length; i++) {
+        try {
+          var res = await fetch(gasUrl + '?action=lookup&address=' + encodeURIComponent(patterns[i]), { redirect: 'follow' });
+          var data = await res.json();
+          if (data && data.status === 'ok' && typeof data.lat === 'number' && typeof data.lng === 'number') {
+            return { lat: data.lat, lng: data.lng };
+          }
+        } catch (e) {
+          console.warn('lookupAddrFromSheet failed for pattern ' + i + ':', e);
         }
-      } catch (e) {
-        console.warn('lookupAddrFromSheet failed:', e);
       }
       return null;
+    }
+
+    function generateAddressLookupPatterns(addr) {
+      var norm = normalizeAddress(addr);
+      if (!norm) return [];
+      var noSpace = norm.replace(/\s+/g, '');
+
+      // 県名末尾版
+      var trailingPref = movePrefectureToEnd(norm);
+      var trailingPrefNoSpace = trailingPref.replace(/\s+/g, '');
+
+      var patterns = [norm, noSpace];
+      if (trailingPref && trailingPref !== norm) patterns.push(trailingPref);
+      if (trailingPrefNoSpace && trailingPrefNoSpace !== noSpace) patterns.push(trailingPrefNoSpace);
+
+      return patterns;
+    }
+
+    function movePrefectureToEnd(s) {
+      var m = s.match(/^(東京都|北海道|(?:京都|大阪)府|.{2,3}県)(.+)$/);
+      if (m) {
+        return m[2].replace(/\s+$/, '') + ' ' + m[1];
+      }
+      return s;
     }
 
     async function saveAddrToSheet(addr, lat, lng) {
       var gasUrl = getAddrMasterGasUrl();
       if (!gasUrl) return;
       try {
+        var norm = normalizeAddress(addr);
         await fetch(gasUrl + '?action=save', {
           method: 'POST',
           redirect: 'follow',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address: addr, lat: lat, lng: lng })
+          body: JSON.stringify({ address: norm, lat: lat, lng: lng })
         });
+        inMemoryAddrMaster[addr] = { lat: lat, lng: lng };
+        inMemoryAddrMaster[norm] = { lat: lat, lng: lng };
       } catch (e) {
         console.warn('saveAddrToSheet failed:', e);
       }
@@ -9906,7 +9950,11 @@
       for (var i = 0; i < keys.length; i += chunkSize) {
         var chunk = {};
         for (var j = i; j < Math.min(i + chunkSize, keys.length); j++) {
-          chunk[keys[j]] = entries[keys[j]];
+          var k = keys[j];
+          var norm = normalizeAddress(k);
+          chunk[norm] = entries[k];
+          inMemoryAddrMaster[k] = entries[k];
+          inMemoryAddrMaster[norm] = entries[k];
         }
         try {
           var res = await fetch(gasUrl + '?action=batchSave', {
@@ -9934,7 +9982,11 @@
       for (var i = 0; i < keys.length; i += chunkSize) {
         var chunk = {};
         for (var j = i; j < Math.min(i + chunkSize, keys.length); j++) {
-          chunk[keys[j]] = entries[keys[j]];
+          var k = keys[j];
+          var norm = normalizeAddress(k);
+          chunk[norm] = entries[k];
+          inMemoryAddrMaster[k] = entries[k];
+          inMemoryAddrMaster[norm] = entries[k];
         }
         try {
           var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
