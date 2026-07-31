@@ -1,7 +1,9 @@
 const express = require('express');
 const axios = require('axios');
-const app = express();
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const app = express();
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -594,6 +596,21 @@ app.post('/tenko-master', async (req, res) => {
     if (!TENKO_MASTER_GAS_URL) {
       return res.status(500).json({ status: 'error', message: 'TENKO_MASTER_GAS_URL not configured' });
     }
+
+    // saveMasterアクションの場合、ローカルにバックアップを保存
+    if (req.body && req.body.action === 'saveMaster' && Array.isArray(req.body.drivers)) {
+      try {
+        var now = new Date();
+        var pad2 = function(n) { return String(n).padStart(2, '0'); };
+        var backupName = 'master_' + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) + '_' + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds()) + '.json';
+        var backupPath = path.join(os.tmpdir(), backupName);
+        fs.writeFileSync(backupPath, JSON.stringify(req.body.drivers, null, 2), 'utf8');
+        log('Master backup saved: ' + backupPath + ' (' + req.body.drivers.length + ' drivers)');
+      } catch (backupErr) {
+        log('Master backup error: ' + backupErr.message);
+      }
+    }
+
     var url = TENKO_MASTER_GAS_URL;
     console.log('tenko-master POST:', JSON.stringify(req.body).substring(0, 200));
 
@@ -762,8 +779,10 @@ app.post('/encrypt-zip', function(req, res) {
         }
       }, 10000);
     } catch(e) {
-      log('ZIP endpoint error: ' + e.message + ' | ' + e.stack);
-      res.status(500).json({ error: e.message });
+      log('ZIP endpoint error: ' + e.message + '\\n' + e.stack);
+      if (!res.headersSent) {
+        res.status(500).json({ error: e.message, stack: e.stack });
+      }
     }
   });
 });
