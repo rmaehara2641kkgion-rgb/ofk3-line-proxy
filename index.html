@@ -9840,8 +9840,8 @@
     }
 
     function canGeocodeToday() {
-      var info = getGeocodeDailyInfo();
-      return info.count < 100;
+      // 2026-07: ユーザー確認により日次上限を解除（今月4万件以内なら問題ない）
+      return true;
     }
 
     async function geocodeWithProxy(addr) {
@@ -10002,25 +10002,19 @@
     // タブ切替時にGASからstatsだけ軽量取得（全件listを呼ばない）
     async function wh60LoadAddrStats() {
       var gasUrl = getAddrMasterGasUrl();
-      if (!gasUrl) return;
-      try {
-        var res = await fetch(gasUrl + '?action=stats', { redirect: 'follow' });
-        var data = await res.json();
-        if (data && data.status === 'ok') {
-          var elTotal = document.getElementById('addrmaster-total');
-          var elGeocoded = document.getElementById('addrmaster-geocoded');
-          var elPending = document.getElementById('addrmaster-pending');
-          var elDaily = document.getElementById('addrmaster-daily');
-          var elMonthly = document.getElementById('addrmaster-monthly');
-          if (elTotal) elTotal.textContent = data.total || 0;
-          if (elGeocoded) elGeocoded.textContent = data.geocoded || 0;
-          if (elPending) elPending.textContent = data.pending || 0;
-          if (elDaily) elDaily.textContent = getGeocodeDailyInfo().count;
-          if (elMonthly) elMonthly.textContent = getGeocodeMonthlyInfo().count;
+      if (gasUrl) {
+        try {
+          var res = await fetch(gasUrl + '?action=stats', { redirect: 'follow' });
+          var data = await res.json();
+          if (data && data.status === 'ok') {
+            // GAS全体統計はログのみ、表示は本日コース内で計算
+            console.log('GAS stats:', data.total, data.geocoded, data.pending);
+          }
+        } catch (e) {
+          console.error('wh60LoadAddrStats error:', e);
         }
-      } catch (e) {
-        console.error('wh60LoadAddrStats error:', e);
       }
+      updateAddrMasterStats();
     }
 
     async function refreshAddrMaster() {
@@ -10030,12 +10024,24 @@
     }
 
     function updateAddrMasterStats() {
-      var keys = Object.keys(inMemoryAddrMaster);
-      var total = keys.length;
+      // 本日コース内の住所のみを対象に統計表示
+      var courseAddresses = [];
+      var routes = Object.keys(cycleData);
+      for (var ri = 0; ri < routes.length; ri++) {
+        var stops = cycleData[routes[ri]] || [];
+        for (var si = 0; si < stops.length; si++) {
+          var a = stops[si] || stops[si].address || '';
+          if (a && courseAddresses.indexOf(a) < 0) courseAddresses.push(a);
+        }
+      }
+      var total = courseAddresses.length;
       var geocoded = 0;
       var pending = 0;
-      for (var i = 0; i < keys.length; i++) {
-        if (inMemoryAddrMaster[keys[i]].lat && inMemoryAddrMaster[keys[i]].lng) {
+      for (var i = 0; i < courseAddresses.length; i++) {
+        var addr = courseAddresses[i];
+        var norm = normalizeAddress(addr);
+        var entry = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
+        if (entry && entry.lat && entry.lng) {
           geocoded++;
         } else {
           pending++;
@@ -10056,21 +10062,41 @@
     function renderAddrMasterTable() {
       var tbody = document.getElementById('addrmaster-table-body');
       if (!tbody) return;
-      var keys = Object.keys(inMemoryAddrMaster);
-      if (keys.length === 0) {
+      // 本日コース内の住所のみ表示
+      var courseAddresses = [];
+      var routes = Object.keys(cycleData);
+      for (var ri = 0; ri < routes.length; ri++) {
+        var stops = cycleData[routes[ri]] || [];
+        for (var si = 0; si < stops.length; si++) {
+          var a = stops[si];
+          if (a && courseAddresses.indexOf(a) < 0) courseAddresses.push(a);
+        }
+      }
+      if (courseAddresses.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、リフレッシュボタンを押してください</td></tr>';
         return;
       }
-      keys.sort(function(a, b) {
-        var da = inMemoryAddrMaster[a].registeredAt || '';
-        var db = inMemoryAddrMaster[b].registeredAt || '';
+      var displayEntries = [];
+      for (var i = 0; i < courseAddresses.length; i++) {
+        var addr = courseAddresses[i];
+        var norm = normalizeAddress(addr);
+        var entry = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
+        if (entry) {
+          displayEntries.push({ key: addr, entry: entry });
+        } else {
+          displayEntries.push({ key: addr, entry: {} });
+        }
+      }
+      displayEntries.sort(function(a, b) {
+        var da = a.entry.registeredAt || '';
+        var db = b.entry.registeredAt || '';
         return db > da ? 1 : (db < da ? -1 : 0);
       });
-      var displayKeys = keys.slice(0, 200);
+      var displayKeys = displayEntries.slice(0, 200);
       var html = '';
       for (var i = 0; i < displayKeys.length; i++) {
-        var k = displayKeys[i];
-        var entry = inMemoryAddrMaster[k];
+        var k = displayKeys[i].key;
+        var entry = displayKeys[i].entry;
         var hasCoord = entry.lat && entry.lng;
         var statusBadge = hasCoord
           ? '<span class="text-green-600 text-xs font-bold">取得済</span>'
@@ -10086,8 +10112,8 @@
           + '<td class="px-3 py-2 text-xs text-right">' + dateStr + '</td>'
           + '</tr>';
       }
-      if (keys.length > 200) {
-        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (keys.length - 200) + ' 件</td></tr>';
+      if (displayEntries.length > 200) {
+        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (displayEntries.length - 200) + ' 件</td></tr>';
       }
       tbody.innerHTML = html;
     }
@@ -10373,26 +10399,26 @@
         }
       }
 
-      // 未取得の住所をNominatimでジオコーディング
+      // 未取得の住所をジオコーディング（マスタ優先・Google並列）
       if (pendingAddresses.length > 0) {
         var loadingEl = document.getElementById('map-loading');
         var countEl = document.getElementById('map-loading-count');
         loadingEl.classList.remove('hidden');
         countEl.textContent = '0/' + pendingAddresses.length;
+        var completed = 0;
 
-        for (var p = 0; p < pendingAddresses.length; p++) {
-          if (myToken !== mapRenderToken) return;
-          var item = pendingAddresses[p];
-          var gc = await getLatLng(item.addr);
-          if (myToken !== mapRenderToken) return;
-          if (gc) {
-            drawPin(gc.lat, gc.lng, item.color);
-            allLatLngs.push([gc.lat, gc.lng]);
-          }
-          countEl.textContent = (p + 1) + '/' + pendingAddresses.length;
-          // Nominatim利用規約対策＋429回避
-          await new Promise(function(r) { setTimeout(r, 1200); });
-        }
+        var pendingPromises = pendingAddresses.map(function(item) {
+          return getLatLng(item.addr).then(function(gc) {
+            if (myToken !== mapRenderToken) return;
+            if (gc) {
+              drawPin(gc.lat, gc.lng, item.color);
+              allLatLngs.push([gc.lat, gc.lng]);
+            }
+            completed++;
+            countEl.textContent = completed + '/' + pendingAddresses.length;
+          });
+        });
+        await Promise.all(pendingPromises);
         loadingEl.classList.add('hidden');
       }
 
@@ -10696,12 +10722,24 @@
     }
 
     function updateAddrMasterStats() {
-      var keys = Object.keys(inMemoryAddrMaster);
-      var total = keys.length;
+      // 本日コース内の住所のみを対象に統計表示
+      var courseAddresses = [];
+      var routes = Object.keys(cycleData);
+      for (var ri = 0; ri < routes.length; ri++) {
+        var stops = cycleData[routes[ri]] || [];
+        for (var si = 0; si < stops.length; si++) {
+          var a = stops[si] || stops[si].address || '';
+          if (a && courseAddresses.indexOf(a) < 0) courseAddresses.push(a);
+        }
+      }
+      var total = courseAddresses.length;
       var geocoded = 0;
       var pending = 0;
-      for (var i = 0; i < keys.length; i++) {
-        if (inMemoryAddrMaster[keys[i]].lat && inMemoryAddrMaster[keys[i]].lng) {
+      for (var i = 0; i < courseAddresses.length; i++) {
+        var addr = courseAddresses[i];
+        var norm = normalizeAddress(addr);
+        var entry = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
+        if (entry && entry.lat && entry.lng) {
           geocoded++;
         } else {
           pending++;
@@ -10722,21 +10760,41 @@
     function renderAddrMasterTable() {
       var tbody = document.getElementById('addrmaster-table-body');
       if (!tbody) return;
-      var keys = Object.keys(inMemoryAddrMaster);
-      if (keys.length === 0) {
+      // 本日コース内の住所のみ表示
+      var courseAddresses = [];
+      var routes = Object.keys(cycleData);
+      for (var ri = 0; ri < routes.length; ri++) {
+        var stops = cycleData[routes[ri]] || [];
+        for (var si = 0; si < stops.length; si++) {
+          var a = stops[si];
+          if (a && courseAddresses.indexOf(a) < 0) courseAddresses.push(a);
+        }
+      }
+      if (courseAddresses.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-ink-lighter text-sm">CYCLEファイルを取り込むか、リフレッシュボタンを押してください</td></tr>';
         return;
       }
-      keys.sort(function(a, b) {
-        var da = inMemoryAddrMaster[a].registeredAt || '';
-        var db = inMemoryAddrMaster[b].registeredAt || '';
+      var displayEntries = [];
+      for (var i = 0; i < courseAddresses.length; i++) {
+        var addr = courseAddresses[i];
+        var norm = normalizeAddress(addr);
+        var entry = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
+        if (entry) {
+          displayEntries.push({ key: addr, entry: entry });
+        } else {
+          displayEntries.push({ key: addr, entry: {} });
+        }
+      }
+      displayEntries.sort(function(a, b) {
+        var da = a.entry.registeredAt || '';
+        var db = b.entry.registeredAt || '';
         return db > da ? 1 : (db < da ? -1 : 0);
       });
-      var displayKeys = keys.slice(0, 200);
+      var displayKeys = displayEntries.slice(0, 200);
       var html = '';
       for (var i = 0; i < displayKeys.length; i++) {
-        var k = displayKeys[i];
-        var entry = inMemoryAddrMaster[k];
+        var k = displayKeys[i].key;
+        var entry = displayKeys[i].entry;
         var hasCoord = entry.lat && entry.lng;
         var statusBadge = hasCoord
           ? '<span class="text-green-600 text-xs font-bold">取得済</span>'
@@ -10752,8 +10810,8 @@
           + '<td class="px-3 py-2 text-xs text-right">' + dateStr + '</td>'
           + '</tr>';
       }
-      if (keys.length > 200) {
-        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (keys.length - 200) + ' 件</td></tr>';
+      if (displayEntries.length > 200) {
+        html = html + '<tr><td colspan="5" class="text-center py-2 text-xs text-ink-lighter">...他 ' + (displayEntries.length - 200) + ' 件</td></tr>';
       }
       tbody.innerHTML = html;
     }
@@ -12527,9 +12585,26 @@
       for (var p = 0; p < pins.length; p++) { addPin(pins[p]); }
       if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
 
-      // ★ ジオコーディング停止中（8月まで）— 未取得分はスキップ
+      // 未取得住所をジオコーディングして追加
       if (needGeocode.length > 0) {
-        console.log('[GEOCODE停止中] 未取得住所 ' + needGeocode.length + '件をスキップ');
+        (async function() {
+          for (var g = 0; g < needGeocode.length; g++) {
+            var item = needGeocode[g];
+            var coord = await getLatLng(item.address);
+            if (coord && coord.lat && coord.lng) {
+              addPin({
+                lat: coord.lat, lng: coord.lng,
+                label: item.routeCode + ' #' + item.stop,
+                timeWindow: item.timeWindow,
+                address: item.address,
+                trackingId: item.trackingId,
+                driver: item.driverName || '',
+                seqNo: item.seqNo || ''
+              });
+            }
+          }
+          if (fitAll && bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
+        })();
       }
       return map;
     }
