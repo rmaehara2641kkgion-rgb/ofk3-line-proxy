@@ -2179,7 +2179,7 @@
             <input type="file" accept=".json" onchange="handleAddrMasterImport(event)" class="hidden">
           </label>
           <button onclick="downloadAddrMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">💾 住所マスターDL</button>
-          <button disabled class="bg-gray-400 text-white px-3 py-1.5 rounded text-xs font-bold cursor-not-allowed" id="btn-batch-geocode" title="一括ジオコーディングは中止。ダッシュボード取り込み時に本日コースのみ日次100件で自動取得します">🌍 一括ジオコーディング中止中</button>
+          <button class="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-700 cursor-pointer" id="btn-batch-geocode" title="本日ダッシュボードにアサインされたコースの未取得住所を一括ジオコード" onclick="startBatchGeocode()">🌍 本日コース一括ジオコード</button>
           <button onclick="startDedup()" class="bg-yellow-500 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-yellow-600 cursor-pointer" id="btn-dedup">🧹 重複住所を統合</button>
         </div>
 
@@ -10315,8 +10315,107 @@
     }
 
     async function startBatchGeocode() {
-      alert('一括ジオコーディングは中止しました。\n\n今後のジオコーディングは以下の運用です：\n・ダッシュボードに取り込まれた本日コースの未ジオコード住所のみ自動取得\n・日次上限100件\n・過去取得済み座標はGASマスタからオフラインでも表示');
-      return;
+      if (batchGeocodeRunning) {
+        alert('ジオコーディング実行中です');
+        return;
+      }
+
+      // 本日ダッシュボードにアサインされたコースの住所を収集
+      var addresses = [];
+      if (assignmentData && assignmentData.length > 0) {
+        for (var i = 0; i < assignmentData.length; i++) {
+          var routeCode = assignmentData[i].routeCode;
+          var stops = cycleData[routeCode] || [];
+          for (var j = 0; j < stops.length; j++) {
+            var addr = stops[j];
+            if (addr && addresses.indexOf(addr) < 0) addresses.push(addr);
+          }
+        }
+      }
+      if (addresses.length === 0) {
+        alert('本日ダッシュボードにアサインされたコースの住所がありません');
+        return;
+      }
+
+      // マスタ未登録の住所を抽出
+      var needGeocode = [];
+      for (var a = 0; a < addresses.length; a++) {
+        var addr = addresses[a];
+        var norm = normalizeAddress(addr);
+        var entry = inMemoryAddrMaster[addr] || inMemoryAddrMaster[norm];
+        if (!entry || !entry.lat || !entry.lng) {
+          needGeocode.push(addr);
+        }
+      }
+
+      if (needGeocode.length === 0) {
+        alert('本日コースの全住所が座標取得済みです');
+        return;
+      }
+
+      if (!confirm('本日ダッシュボードにアサインされた ' + addresses.length + '件のうち、\n未取得 ' + needGeocode.length + '件をジオコーディングします。\n実行しますか？')) {
+        return;
+      }
+
+      batchGeocodeAbort = false;
+      batchGeocodeRunning = true;
+      var progressDiv = document.getElementById('geocode-progress');
+      var progressBar = document.getElementById('geocode-progress-bar');
+      var progressText = document.getElementById('geocode-progress-text');
+      if (progressDiv) progressDiv.classList.remove('hidden');
+      var btn = document.getElementById('btn-batch-geocode');
+      if (btn) btn.disabled = true;
+
+      var total = needGeocode.length;
+      var done = 0;
+      var success = 0;
+      var fail = 0;
+      var updatedCoords = {};
+      var BATCH_SIZE = 50;
+      var lastFailReason = '';
+
+      for (var idx = 0; idx < total; idx++) {
+        if (batchGeocodeAbort) break;
+        var addr = needGeocode[idx];
+        if (progressText) progressText.textContent = (idx + 1) + ' / ' + total + ' (成功:' + success + ' 失敗:' + fail + ')' + (lastFailReason ? ' [' + lastFailReason + ']' : '');
+        if (progressBar) progressBar.style.width = Math.round((idx + 1) / total * 100) + '%';
+
+        var coord = await geocodeWithProxy(addr);
+        if (coord && !coord.failed) {
+          updatedCoords[addr] = coord;
+          inMemoryAddrMaster[addr] = coord;
+          inMemoryAddrMaster[normalizeAddress(addr)] = coord;
+          success++;
+        } else {
+          fail++;
+          if (coord && coord.reason) lastFailReason = coord.reason;
+          if (fail === 5 && success === 0 && lastFailReason) {
+            alert('ジオコーディング連続失敗中\nGoogle API応答: ' + lastFailReason + '\n\nAPIキーの課金上限・有効期限を確認してください。');
+          }
+        }
+        done++;
+
+        if (Object.keys(updatedCoords).length >= BATCH_SIZE) {
+          var batch = updatedCoords;
+          updatedCoords = {};
+          await batchUpdateCoordsToSheet(batch);
+        }
+      }
+
+      // 残りを保存
+      var remaining = Object.keys(updatedCoords);
+      if (remaining.length > 0) {
+        await batchUpdateCoordsToSheet(updatedCoords);
+        updatedCoords = {};
+      }
+
+      batchGeocodeRunning = false;
+      batchGeocodeAbort = false;
+      refreshAddrMaster();
+      if (btn) btn.disabled = false;
+      if (progressText) progressText.textContent = '完了: 成功 ' + success + '件 / 失敗 ' + fail + '件';
+      var stopBtn = document.getElementById('btn-stop-geocode');
+      if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = '⏹ 中断'; }
     }
 
     // MAP管理タブ表示時にリフレッシュ
