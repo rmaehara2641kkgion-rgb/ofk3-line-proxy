@@ -678,7 +678,8 @@
           <div class="flex gap-2 flex-wrap">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="addNewDriver()">+ ドライバー追加</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportMasterData()">エクスポート</button>
-            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="syncAllMasterToServer()">☁ サーバー同期</button>
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="syncAllMasterToServer()">☁ サーバー同期（PC→サーバー）</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="loadMasterFromServer(true)">⬇ サーバー取得（上書き）</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
           </div>
         </div>
@@ -2748,6 +2749,8 @@
         if (tabBtn) tabBtn.className = t === tab ? 'tab-active pb-3 text-sm whitespace-nowrap' : 'tab-inactive pb-3 text-sm whitespace-nowrap';
       }
       if (tab === 'master') {
+        // マスタタブを開くたびにサーバーから最新を取得（マージ）
+        loadMasterFromServer();
         renderMasterTable();
         refreshAllLineProfiles();
       }
@@ -4187,8 +4190,8 @@
       }));
     }
 
-    // サーバーからマスタデータを読み込み（起動時）
-    function loadMasterFromServer() {
+    // サーバーからマスタデータを読み込み（起動時・マスタタブ表示時）
+    function loadMasterFromServer(forceOverwrite) {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', '/tenko-master?action=getMaster', true);
       xhr.onload = function() {
@@ -4196,36 +4199,64 @@
           try {
             var res = JSON.parse(xhr.responseText);
             if (res.status === 'ok' && res.drivers && res.drivers.length > 0) {
+              var serverDrivers = res.drivers;
               var updated = false;
-              for (var i = 0; i < res.drivers.length; i++) {
-                var d = res.drivers[i];
+              var serverNames = {};
+
+              for (var i = 0; i < serverDrivers.length; i++) {
+                var d = serverDrivers[i];
                 if (!d.englishName) continue;
-                if (d.japaneseName && !driverJapaneseNames[d.englishName]) {
-                  driverJapaneseNames[d.englishName] = d.japaneseName;
-                  updated = true;
+                serverNames[d.englishName] = true;
+
+                if (forceOverwrite || !driverDB[d.englishName]) {
+                  if (!driverDB[d.englishName]) {
+                    driverDB[d.englishName] = {
+                      driverId: ++driverIdCounter,
+                      history: [],
+                      haikanCount: 0,
+                      haikanSum: 0
+                    };
+                    updated = true;
+                  }
                 }
-                if (d.transportId && !transportIDs[d.englishName]) {
-                  transportIDs[d.englishName] = d.transportId;
-                  updated = true;
-                }
-                if (d.company && !driverDepartments[d.englishName]) {
-                  driverDepartments[d.englishName] = d.company;
-                  updated = true;
-                }
-                if (d.lineId && !lineMapping[d.englishName]) {
-                  lineMapping[d.englishName] = d.lineId;
-                  updated = true;
+
+                if (d.japaneseName) { driverJapaneseNames[d.englishName] = d.japaneseName; updated = true; }
+                if (d.transportId) { transportIDs[d.englishName] = d.transportId; updated = true; }
+                if (d.company) { driverDepartments[d.englishName] = d.company; updated = true; }
+                if (d.lineId) { lineMapping[d.englishName] = d.lineId; updated = true; }
+                if (d.phone) { phoneMapping[d.englishName] = d.phone; updated = true; }
+              }
+
+              // 強制上書きモード: サーバーに存在しないローカルデータを削除
+              if (forceOverwrite) {
+                for (var localName in driverDB) {
+                  if (!serverNames[localName]) {
+                    delete driverDB[localName];
+                    delete driverJapaneseNames[localName];
+                    delete transportIDs[localName];
+                    delete driverDepartments[localName];
+                    delete lineMapping[localName];
+                    delete phoneMapping[localName];
+                    delete masterNotes[localName];
+                    updated = true;
+                  }
                 }
               }
+
               if (updated) {
+                localStorage.setItem('driverDB', JSON.stringify(driverDB));
+                localStorage.setItem('driverIdCounter', String(driverIdCounter));
                 localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
                 localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
                 localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
                 localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
                 localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
-                console.log('サーバーからマスタデータ復元完了');
+                localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+                localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+                console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
+                renderMasterTable();
               }
-            } else {
+            } else if (forceOverwrite) {
               console.log('サーバーにマスタデータが空です');
             }
           } catch (e) {
