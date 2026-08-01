@@ -10,6 +10,9 @@ app.use(express.json({ limit: '10mb' }));
 // PDF一時保存用
 var pdfStore = {};
 
+// メンター通知済みドライバー管理（日次リセット）
+var mentorNotified = { date: '', drivers: [] };
+
 // body-parserでrawも受け取れるようにする
 var multer;
 try { multer = require('multer'); } catch(e) { multer = null; }
@@ -372,6 +375,30 @@ app.get('/pdf/:id', function(req, res) {
 });
 
 // LINE proxy（フロントエンドからの送信）
+
+// メンター通知済みドライバー取得・登録
+app.get('/mentor-notified', (req, res) => {
+  var today = new Date().toISOString().slice(0, 10);
+  if (mentorNotified.date !== today) {
+    mentorNotified = { date: today, drivers: [] };
+  }
+  res.json({ date: today, drivers: mentorNotified.drivers });
+});
+
+app.post('/mentor-notified', (req, res) => {
+  var today = new Date().toISOString().slice(0, 10);
+  if (mentorNotified.date !== today) {
+    mentorNotified = { date: today, drivers: [] };
+  }
+  var newDrivers = req.body.drivers || [];
+  for (var i = 0; i < newDrivers.length; i++) {
+    if (mentorNotified.drivers.indexOf(newDrivers[i]) === -1) {
+      mentorNotified.drivers.push(newDrivers[i]);
+    }
+  }
+  res.json({ date: today, drivers: mentorNotified.drivers });
+});
+
 app.post('/proxy', async (req, res) => {
   try {
     const { to, messages } = req.body;
