@@ -377,7 +377,7 @@ app.get('/pdf/:id', function(req, res) {
 
 // LINE proxy（フロントエンドからの送信）
 
-// メンターアラート一括処理（GASスプレッドシートで永続的に重複チェック）
+// メンターアラート一括処理（GASスプレッドシートで永続的に重複チェック・全GETリクエスト）
 app.post('/mentor-alert', async (req, res) => {
   try {
     var now = new Date();
@@ -391,14 +391,12 @@ app.post('/mentor-alert', async (req, res) => {
       return res.json({ status: 'ok', sent: 0, message: 'No drivers' });
     }
 
-    // GASに一括チェック（通知済みドライバーを取得）
+    // GASに一括チェック（GETリクエストでリダイレクト問題を回避）
     var notifiedIds = [];
     if (GAS_URL) {
       try {
-        var checkRes = await axios.post(GAS_URL + '?action=batchCheckNotified', {
-          date: today,
-          driverIds: driverIds
-        }, { timeout: 10000 });
+        var checkUrl = GAS_URL + '?action=batchCheck&date=' + encodeURIComponent(today) + '&ids=' + encodeURIComponent(driverIds.join(','));
+        var checkRes = await axios.get(checkUrl, { timeout: 15000, maxRedirects: 5 });
         notifiedIds = (checkRes.data && checkRes.data.notifiedIds) || [];
         console.log('[mentor-alert] Already notified:', notifiedIds);
       } catch (e) {
@@ -422,13 +420,11 @@ app.post('/mentor-alert', async (req, res) => {
       return res.json({ status: 'ok', sent: 0, skipped: driverIds.length });
     }
 
-    // GASに記録（送信前に記録して二重送信防止）
+    // GASに記録（GETリクエスト、送信前に記録して二重送信防止）
     if (GAS_URL) {
       try {
-        await axios.post(GAS_URL + '?action=markNotified', {
-          date: today,
-          driverIds: newIds
-        }, { timeout: 10000 });
+        var markUrl = GAS_URL + '?action=mark&date=' + encodeURIComponent(today) + '&ids=' + encodeURIComponent(newIds.join(','));
+        await axios.get(markUrl, { timeout: 15000, maxRedirects: 5 });
         console.log('[mentor-alert] Marked as notified:', newIds);
       } catch (e) {
         console.log('[mentor-alert] GAS mark failed:', e.message);
