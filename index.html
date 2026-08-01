@@ -5963,13 +5963,13 @@
     }
 
     function saveProfileCache() {
-      // 容量超過対策：pictureUrlは保存しない（URLは動的に取得可能）
       var compact = {};
       for (var uid in lineProfileCache) {
         var p = lineProfileCache[uid];
         compact[uid] = {
           userId: p.userId,
           displayName: p.displayName || '',
+          pictureUrl: p.pictureUrl || '',
           statusMessage: p.statusMessage || '',
           fetchedAt: p.fetchedAt
         };
