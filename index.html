@@ -607,10 +607,28 @@
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
             <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="toggleDriverAggPanel()">📊 3ファイル集計</button>
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
-            <button onclick="sendBulkLineMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
+            <button onclick="toggleBulkLinePanel()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
           </div>
         </div>
         <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
+
+        <!-- 一斉LINE送信パネル -->
+        <div id="bulk-line-panel" class="hidden mb-4">
+          <div class="card p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium">一斉LINE送信</h3>
+              <button onclick="toggleBulkLinePanel()" class="text-ink-lighter hover:text-ink text-sm cursor-pointer">✕ 閉じる</button>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs font-medium text-ink-light block mb-1">送信メッセージ</label>
+              <textarea id="bulk-line-message" rows="5" class="w-full border border-border rounded p-2 text-sm" placeholder="送信するメッセージを入力してください..."></textarea>
+            </div>
+            <div class="flex items-center justify-between">
+              <p class="text-xs text-ink-lighter" id="bulk-line-target-info"></p>
+              <button onclick="sendBulkLineFromPanel()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 送信</button>
+            </div>
+          </div>
+        </div>
 
         <!-- 3ファイル集計パネル -->
         <div id="driver-agg-panel" class="hidden mb-4">
@@ -8454,8 +8472,29 @@
     }
 
     // ===== 一斉LINE送信機能 =====
-    function sendBulkLineMessage() {
-      // LINE連携済みドライバー一覧を取得
+    function toggleBulkLinePanel() {
+      var panel = document.getElementById('bulk-line-panel');
+      if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        var linkedDrivers = [];
+        for (var name in lineMapping) {
+          if (lineMapping[name] && lineMapping[name].indexOf('U') === 0) {
+            linkedDrivers.push(name);
+          }
+        }
+        linkedDrivers.sort();
+        var info = document.getElementById('bulk-line-target-info');
+        if (linkedDrivers.length === 0) {
+          info.textContent = 'LINE連携済みのドライバーがいません';
+        } else {
+          info.textContent = 'LINE連携済み ' + linkedDrivers.length + '名に送信: ' + linkedDrivers.join(', ');
+        }
+      } else {
+        panel.classList.add('hidden');
+      }
+    }
+
+    function sendBulkLineFromPanel() {
       var linkedDrivers = [];
       for (var name in lineMapping) {
         if (lineMapping[name] && lineMapping[name].indexOf('U') === 0) {
@@ -8467,10 +8506,17 @@
         return;
       }
       linkedDrivers.sort();
-      var msg = prompt('一斉送信メッセージを入力してください\n（LINE連携済み ' + linkedDrivers.length + '名に送信）\n\n対象: ' + linkedDrivers.join(', '));
-      if (!msg || !msg.trim()) return;
-      if (!confirm(linkedDrivers.length + '名に以下のメッセージを送信します:\n\n' + msg + '\n\nよろしいですか？')) return;
+      var msg = document.getElementById('bulk-line-message').value;
+      if (!msg || !msg.trim()) {
+        alert('メッセージを入力してください。');
+        return;
+      }
+      if (!confirm(linkedDrivers.length + '名に以下のメッセージを送信します:\n\n' + msg.trim() + '\n\nよろしいですか？')) return;
       doBulkLineSend(linkedDrivers, msg.trim());
+    }
+
+    function sendBulkLineMessage() {
+      toggleBulkLinePanel();
     }
 
     async function doBulkLineSend(drivers, message) {
