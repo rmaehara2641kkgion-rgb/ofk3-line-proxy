@@ -376,7 +376,69 @@ app.get('/pdf/:id', function(req, res) {
 
 // LINE proxy（フロントエンドからの送信）
 
-// メンター通知済みドライバー取得・登録
+// メンターアラート一括処理（重複チェック＋LINE送信をサーバー側で完結）
+app.post('/mentor-alert', async (req, res) => {
+  try {
+    var today = new Date().toISOString().slice(0, 10);
+    if (mentorNotified.date !== today) {
+      mentorNotified = { date: today, drivers: [] };
+    }
+
+    var driverIds = req.body.driverIds || [];
+    var message = req.body.message || '';
+    var adminIds = req.body.adminIds || [];
+
+    // 通知済みドライバーを除外
+    var newIds = [];
+    var msgLines = message.split('\n');
+    var newLines = [];
+    for (var i = 0; i < driverIds.length; i++) {
+      if (mentorNotified.drivers.indexOf(driverIds[i]) === -1) {
+        newIds.push(driverIds[i]);
+        if (msgLines[i]) newLines.push(msgLines[i]);
+      }
+    }
+
+    if (newIds.length === 0) {
+      console.log('[mentor-alert] All drivers already notified today, skipping. ids:', driverIds);
+      return res.json({ status: 'ok', sent: 0, skipped: driverIds.length });
+    }
+
+    // 送信前に記録（重複防止）
+    for (var i = 0; i < newIds.length; i++) {
+      mentorNotified.drivers.push(newIds[i]);
+    }
+
+    var alertText = '\u26a0\ufe0f メンター早期停止検知\n' + newLines.join('\n');
+
+    // 全管理者にLINE送信
+    var sent = 0;
+    for (var i = 0; i < adminIds.length; i++) {
+      try {
+        await axios.post('https://api.line.me/v2/bot/message/push', {
+          to: adminIds[i],
+          messages: [{ type: 'text', text: alertText }]
+        }, {
+          headers: {
+            'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
+            'Content-Type': 'application/json'
+          }
+        });
+        sent++;
+      } catch (e) {
+        console.log('[mentor-alert] LINE error for ' + adminIds[i] + ':', e.response ? e.response.status : e.message);
+      }
+    }
+
+    console.log('[mentor-alert] Sent to ' + sent + '/' + adminIds.length + ' admins. New drivers: ' + newIds.join(', '));
+    res.json({ status: 'ok', sent: sent, newDrivers: newIds });
+  } catch (e) {
+    console.error('[mentor-alert] Error:', e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// メンター通知済みドライバー取得・登録（レガシー）
 app.get('/mentor-notified', (req, res) => {
   var today = new Date().toISOString().slice(0, 10);
   if (mentorNotified.date !== today) {
