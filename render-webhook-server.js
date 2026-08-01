@@ -33,6 +33,7 @@ const PORT = process.env.PORT || 3000;
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+const GAS_URL = process.env.GAS_URL || '';
 console.log('API KEY =', GOOGLE_MAPS_API_KEY);
 
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
@@ -376,37 +377,62 @@ app.get('/pdf/:id', function(req, res) {
 
 // LINE proxy（フロントエンドからの送信）
 
-// メンターアラート一括処理（重複チェック＋LINE送信をサーバー側で完結）
+// メンターアラート一括処理（GASスプレッドシートで永続的に重複チェック）
 app.post('/mentor-alert', async (req, res) => {
   try {
-    var today = new Date().toISOString().slice(0, 10);
-    if (mentorNotified.date !== today) {
-      mentorNotified = { date: today, drivers: [] };
-    }
-
+    var now = new Date();
+    var jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    var today = jstNow.toISOString().slice(0, 10);
     var driverIds = req.body.driverIds || [];
     var message = req.body.message || '';
     var adminIds = req.body.adminIds || [];
 
-    // 通知済みドライバーを除外
-    var newIds = [];
+    if (driverIds.length === 0) {
+      return res.json({ status: 'ok', sent: 0, message: 'No drivers' });
+    }
+
+    // GASに一括チェック（通知済みドライバーを取得）
+    var notifiedIds = [];
+    if (GAS_URL) {
+      try {
+        var checkRes = await axios.post(GAS_URL + '?action=batchCheckNotified', {
+          date: today,
+          driverIds: driverIds
+        }, { timeout: 10000 });
+        notifiedIds = (checkRes.data && checkRes.data.notifiedIds) || [];
+        console.log('[mentor-alert] Already notified:', notifiedIds);
+      } catch (e) {
+        console.log('[mentor-alert] GAS check failed, proceeding anyway:', e.message);
+      }
+    }
+
+    // 通知済みを除外
     var msgLines = message.split('\n');
+    var newIds = [];
     var newLines = [];
     for (var i = 0; i < driverIds.length; i++) {
-      if (mentorNotified.drivers.indexOf(driverIds[i]) === -1) {
+      if (notifiedIds.indexOf(driverIds[i]) === -1) {
         newIds.push(driverIds[i]);
         if (msgLines[i]) newLines.push(msgLines[i]);
       }
     }
 
     if (newIds.length === 0) {
-      console.log('[mentor-alert] All drivers already notified today, skipping. ids:', driverIds);
+      console.log('[mentor-alert] All drivers already notified today, skipping.');
       return res.json({ status: 'ok', sent: 0, skipped: driverIds.length });
     }
 
-    // 送信前に記録（重複防止）
-    for (var i = 0; i < newIds.length; i++) {
-      mentorNotified.drivers.push(newIds[i]);
+    // GASに記録（送信前に記録して二重送信防止）
+    if (GAS_URL) {
+      try {
+        await axios.post(GAS_URL + '?action=markNotified', {
+          date: today,
+          driverIds: newIds
+        }, { timeout: 10000 });
+        console.log('[mentor-alert] Marked as notified:', newIds);
+      } catch (e) {
+        console.log('[mentor-alert] GAS mark failed:', e.message);
+      }
     }
 
     var alertText = '\u26a0\ufe0f メンター早期停止検知\n' + newLines.join('\n');
