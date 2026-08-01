@@ -5959,6 +5959,7 @@
     // ===== LINE Profile Cache =====
     function isProfileCacheExpired(profile) {
       if (!profile || !profile.fetchedAt) return true;
+      if (typeof profile.pictureUrl === 'undefined') return true;
       return (Date.now() - profile.fetchedAt) > PROFILE_CACHE_TTL;
     }
 
