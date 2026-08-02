@@ -377,21 +377,38 @@ app.get('/pdf/:id', function(req, res) {
 
 // LINE proxy（フロントエンドからの送信）
 
-// メンターアラート一括処理（GASスプレッドシートで永続的に重複チェック・全GETリクエスト）
+// メンターアラート — 方式B（前回Activeから消えたドライバー検知）
+// Body: { disappeared: [{ driverId, name, shiftStartTime, elapsedMinutes }] }
+var MENTOR_ADMIN_IDS = [
+  'U48be7d67e979988a2298c2b9b8cb8035'
+];
+// ↑ テスト確認後に7人に戻す:
+// 'U48be7d67e979988a2298c2b9b8cb8035',
+// 'U9a1ce9f6f0c47b2a0e6d1f3c5a8b7d4e',
+// 'U82d1a3b5c7e9f0d2a4b6c8e0f1a3b5d7',
+// 'U6507d8e9f0a1b2c3d4e5f6a7b8c9d0e1',
+// 'U2391a4b5c6d7e8f9a0b1c2d3e4f5a6b7',
+// 'Uecc8d9e0f1a2b3c4d5e6f7a8b9c0d1e2',
+// 'U45dfa1b2c3d4e5f6a7b8c9d0e1f2a3b4'
+
 app.post('/mentor-alert', async (req, res) => {
   try {
     var now = new Date();
     var jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
     var today = jstNow.toISOString().slice(0, 10);
-    var driverIds = req.body.driverIds || [];
-    var message = req.body.message || '';
-    var adminIds = req.body.adminIds || [];
+    var disappeared = req.body.disappeared || [];
 
-    if (driverIds.length === 0) {
-      return res.json({ status: 'ok', sent: 0, message: 'No drivers' });
+    if (disappeared.length === 0) {
+      return res.json({ status: 'ok', sent: 0, message: 'No disappeared drivers' });
     }
 
-    // GASに一括チェック（GETリクエストでリダイレクト問題を回避）
+    // driverIdリストを作成
+    var driverIds = [];
+    for (var i = 0; i < disappeared.length; i++) {
+      driverIds.push(disappeared[i].driverId);
+    }
+
+    // GASに一括チェック（当日既に通知済みか）
     var notifiedIds = [];
     if (GAS_URL) {
       try {
@@ -405,22 +422,23 @@ app.post('/mentor-alert', async (req, res) => {
     }
 
     // 通知済みを除外
-    var msgLines = message.split('\n');
-    var newIds = [];
-    var newLines = [];
-    for (var i = 0; i < driverIds.length; i++) {
-      if (notifiedIds.indexOf(driverIds[i]) === -1) {
-        newIds.push(driverIds[i]);
-        if (msgLines[i]) newLines.push(msgLines[i]);
+    var newDrivers = [];
+    for (var i = 0; i < disappeared.length; i++) {
+      if (notifiedIds.indexOf(disappeared[i].driverId) === -1) {
+        newDrivers.push(disappeared[i]);
       }
     }
 
-    if (newIds.length === 0) {
+    if (newDrivers.length === 0) {
       console.log('[mentor-alert] All drivers already notified today, skipping.');
       return res.json({ status: 'ok', sent: 0, skipped: driverIds.length });
     }
 
-    // GASに記録（GETリクエスト、送信前に記録して二重送信防止）
+    // GASに記録（送信前に記録して二重送信防止）
+    var newIds = [];
+    for (var i = 0; i < newDrivers.length; i++) {
+      newIds.push(newDrivers[i].driverId);
+    }
     if (GAS_URL) {
       try {
         var markUrl = GAS_URL + '?action=mark&date=' + encodeURIComponent(today) + '&ids=' + encodeURIComponent(newIds.join(','));
@@ -431,14 +449,22 @@ app.post('/mentor-alert', async (req, res) => {
       }
     }
 
-    var alertText = '\u26a0\ufe0f メンター早期停止検知\n' + newLines.join('\n');
+    // 通知メッセージ生成
+    var alertText = '\u26a0\ufe0f メンター早期停止検知\n\n';
+    for (var i = 0; i < newDrivers.length; i++) {
+      var d = newDrivers[i];
+      var h = Math.floor(d.elapsedMinutes / 60);
+      var m = d.elapsedMinutes % 60;
+      alertText += d.name + '\n';
+      alertText += '  稼働時間: ' + h + '時間' + m + '分（4時間未満で停止）\n';
+    }
 
     // 全管理者にLINE送信
     var sent = 0;
-    for (var i = 0; i < adminIds.length; i++) {
+    for (var i = 0; i < MENTOR_ADMIN_IDS.length; i++) {
       try {
         await axios.post('https://api.line.me/v2/bot/message/push', {
-          to: adminIds[i],
+          to: MENTOR_ADMIN_IDS[i],
           messages: [{ type: 'text', text: alertText }]
         }, {
           headers: {
@@ -448,11 +474,11 @@ app.post('/mentor-alert', async (req, res) => {
         });
         sent++;
       } catch (e) {
-        console.log('[mentor-alert] LINE error for ' + adminIds[i] + ':', e.response ? e.response.status : e.message);
+        console.log('[mentor-alert] LINE error for ' + MENTOR_ADMIN_IDS[i] + ':', e.response ? e.response.status : e.message);
       }
     }
 
-    console.log('[mentor-alert] Sent to ' + sent + '/' + adminIds.length + ' admins. New drivers: ' + newIds.join(', '));
+    console.log('[mentor-alert] Sent to ' + sent + '/' + MENTOR_ADMIN_IDS.length + ' admins. Drivers: ' + newIds.join(', '));
     res.json({ status: 'ok', sent: sent, newDrivers: newIds });
   } catch (e) {
     console.error('[mentor-alert] Error:', e);
