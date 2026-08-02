@@ -626,8 +626,12 @@
             </div>
             <div class="flex items-center justify-between">
               <p class="text-xs text-ink-lighter" id="bulk-line-target-info"></p>
-              <button onclick="sendBulkLineFromPanel()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 送信</button>
+              <div class="flex gap-2">
+                <button onclick="testBulkLineSend('bulk-line-message')" class="bg-blue-500 text-white px-3 py-2 rounded text-xs font-bold hover:bg-blue-600 cursor-pointer">🧪 自分にテスト送信</button>
+                <button onclick="sendBulkLineFromPanel()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 全員に送信</button>
+              </div>
             </div>
+            <div id="bulk-line-test-result" class="hidden mt-2 text-xs p-2 rounded bg-blue-50 text-blue-700"></div>
           </div>
         </div>
 
@@ -718,8 +722,12 @@
             </div>
             <div class="flex items-center justify-between">
               <p class="text-xs text-ink-lighter" id="bulk-line-target-info-master"></p>
-              <button onclick="sendBulkLineFromPanelMaster()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 送信</button>
+              <div class="flex gap-2">
+                <button onclick="testBulkLineSend('bulk-line-message-master')" class="bg-blue-500 text-white px-3 py-2 rounded text-xs font-bold hover:bg-blue-600 cursor-pointer">🧪 自分にテスト送信</button>
+                <button onclick="sendBulkLineFromPanelMaster()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 全員に送信</button>
+              </div>
             </div>
+            <div id="bulk-line-test-result-master" class="hidden mt-2 text-xs p-2 rounded bg-blue-50 text-blue-700"></div>
           </div>
         </div>
 
@@ -8584,9 +8592,48 @@
       toggleBulkLinePanel();
     }
 
+    async function testBulkLineSend(textareaId) {
+      var adminId = (lineSettings.lineAdminId || '').split(',')[0].trim();
+      if (!adminId || adminId.indexOf('U') !== 0) {
+        alert('管理者LINE IDが設定されていません。\n設定画面で管理者LINE IDを入力してください。');
+        return;
+      }
+      var msg = document.getElementById(textareaId).value;
+      if (!msg || !msg.trim()) {
+        alert('メッセージを入力してください。');
+        return;
+      }
+      var proxyUrl = (typeof lineSettings !== 'undefined' && lineSettings.gasProxyUrl) ? lineSettings.gasProxyUrl.trim() : '/proxy';
+      if (!proxyUrl) proxyUrl = '/proxy';
+      var resultElId = textareaId === 'bulk-line-message-master' ? 'bulk-line-test-result-master' : 'bulk-line-test-result';
+      var resultEl = document.getElementById(resultElId);
+      resultEl.classList.remove('hidden');
+      resultEl.textContent = '送信中...';
+      try {
+        var res = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: '[テスト送信]\n' + msg.trim() }] })
+        });
+        if (res.ok) {
+          resultEl.textContent = '✅ テスト送信成功 — LINEを確認してください（管理者1名のみ・消費1通）';
+          resultEl.className = 'mt-2 text-xs p-2 rounded bg-green-50 text-green-700';
+        } else {
+          resultEl.textContent = '❌ テスト送信失敗: HTTP ' + res.status;
+          resultEl.className = 'mt-2 text-xs p-2 rounded bg-red-50 text-red-700';
+        }
+      } catch (e) {
+        resultEl.textContent = '❌ テスト送信失敗: ' + e.message;
+        resultEl.className = 'mt-2 text-xs p-2 rounded bg-red-50 text-red-700';
+      }
+    }
+
     async function doBulkLineSend(drivers, message) {
       var proxyUrl = (typeof lineSettings !== 'undefined' && lineSettings.gasProxyUrl) ? lineSettings.gasProxyUrl.trim() : '/proxy';
       if (!proxyUrl) proxyUrl = '/proxy';
+
+      // 2段階確認
+      if (!confirm('⚠ 本当に ' + drivers.length + '名全員にLINE送信しますか？\n\n消費メッセージ数: ' + drivers.length + '通\n\n※ 先に「テスト送信」で内容を確認しましたか？')) return;
       var sentCount = 0;
       var failCount = 0;
       var failNames = [];
