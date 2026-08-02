@@ -4591,10 +4591,6 @@
         resultEl.className = 'text-sm mt-2 text-yellow-600';
       }
 
-      // attempt 0: deviceId指定 + 高解像度
-      // attempt 1: deviceId指定 + 低解像度
-      // attempt 2: デバイス指定なし（ブラウザに任せる）
-      // attempt 3: 最小制約
       var tryCamera;
       if (attempt <= 1) {
         tryCamera = selectBestCamera().then(function(deviceId) {
@@ -4626,11 +4622,12 @@
           resultEl.className = 'text-sm mt-2 text-green-600';
         }
       }).catch(function(err) {
-        console.warn('カメラ起動失敗 attempt=' + attempt + ':', err.message);
+        var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
+        console.warn('カメラ起動失敗 attempt=' + attempt + ':', errMsg);
         if (attempt < 3) {
           setTimeout(function() { startCameraWithRetry(video, attempt + 1); }, 500);
         } else {
-          resultEl.textContent = 'カメラの起動に失敗しました: ' + err.message + '\n→ ブラウザのカメラ許可を確認するか、アプリを再起動してください';
+          resultEl.textContent = 'カメラの起動に失敗しました: ' + errMsg + '\n→ ブラウザのカメラ許可を確認するか、アプリを再起動してください';
           resultEl.className = 'text-sm mt-2 text-red-500';
         }
       });
@@ -5116,12 +5113,13 @@
           );
         }
         doStart.catch(function(err) {
+          var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
           if (attempt < 3) {
             addScanLog('カメラ起動リトライ中... (' + (attempt + 1) + '/3)', 'warn');
             if (html5QrCode) { try { html5QrCode.clear(); } catch(e) {} html5QrCode = null; }
             setTimeout(function() { startQrScanWithRetry(attempt + 1); }, 500);
           } else {
-            addScanLog('カメラ起動失敗: ' + err.message + ' → ブラウザを再起動してください', 'error');
+            addScanLog('カメラ起動失敗: ' + errMsg + ' → ブラウザを再起動してください', 'error');
           }
         });
       } catch (e) {
