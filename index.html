@@ -5107,11 +5107,16 @@
     function startQrScanWithRetry(attempt) {
       // 前のインスタンスを確実に解放
       if (html5QrCode) {
-        try { html5QrCode.stop().catch(function(){}); } catch(e) {}
-        try { html5QrCode.clear(); } catch(e) {}
-        html5QrCode = null;
+        safeStopQrScanner().then(function() {
+          if (html5QrCode) { try { html5QrCode.clear(); } catch(e) {} html5QrCode = null; }
+          doStartQrScan(attempt);
+        });
+      } else {
+        doStartQrScan(attempt);
       }
+    }
 
+    function doStartQrScan(attempt) {
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
         var doStart;
@@ -5136,9 +5141,11 @@
           var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
           if (attempt < 3) {
             addScanLog('カメラ起動リトライ中... (' + (attempt + 1) + '/3)', 'warn');
-            if (html5QrCode) { try { html5QrCode.stop().catch(function(){}); } catch(e) {} try { html5QrCode.clear(); } catch(e) {} html5QrCode = null; }
-            var delay = (err && err.name === 'NotReadableError') ? 1500 : 500;
-            setTimeout(function() { startQrScanWithRetry(attempt + 1); }, delay);
+            safeStopQrScanner().then(function() {
+              if (html5QrCode) { try { html5QrCode.clear(); } catch(e) {} html5QrCode = null; }
+              var delay = (err && err.name === 'NotReadableError') ? 1500 : 500;
+              setTimeout(function() { startQrScanWithRetry(attempt + 1); }, delay);
+            });
           } else {
             addScanLog('カメラ起動失敗: ' + errMsg + ' → ページを再読み込みしてください', 'error');
           }
@@ -5148,20 +5155,31 @@
           addScanLog('QRスキャナーリトライ中... (' + (attempt + 1) + '/3)', 'warn');
           setTimeout(function() { startQrScanWithRetry(attempt + 1); }, 500);
         } else {
-          addScanLog('QRスキャナー初期化失敗: ' + e.message, 'error');
+          addScanLog('QRスキャナー初期化失敗: ' + ((e && e.message) || e), 'error');
         }
       }
     }
 
+    // 安全にスキャナーを停止（未起動・停止済みでもエラーにならない）
+    function safeStopQrScanner() {
+      if (!html5QrCode) return Promise.resolve();
+      var state = html5QrCode.getState ? html5QrCode.getState() : null;
+      // state: 0=NOT_STARTED, 1=SCANNING, 2=PAUSED, 3=UNKNOWN
+      if (state === 1 || state === 2) {
+        return html5QrCode.stop().catch(function(e) {
+          console.warn('scanner stop error (ignored):', (e && e.message) || e);
+        });
+      }
+      return Promise.resolve();
+    }
+
     function stopQrScan() {
       if (html5QrCode) {
-        html5QrCode.stop().then(function() {
+        safeStopQrScanner().then(function() {
           if (html5QrCode) {
-            html5QrCode.clear();
+            try { html5QrCode.clear(); } catch(e) {}
             html5QrCode = null;
           }
-        }).catch(function() {
-          html5QrCode = null;
         });
       }
     }
@@ -10108,7 +10126,21 @@
         return { lat: cached.lat, lng: cached.lng };
       }
 
-      // 1. スプレッドシート（GAS）を優先参照
+      // 1. inMemoryAddrMasterが既にロード済みなら個別GAS通信をスキップ
+      //    （ロード済みなのに見つからない = マスタに無い住所）
+      if (Object.keys(inMemoryAddrMaster).length > 0) {
+        // マスタにないのでジオコーディングへ直行
+        var coord = await geocodeWithProxy(addr);
+        if (coord && !coord.failed) {
+          inMemoryAddrMaster[key] = coord;
+          inMemoryAddrMaster[addr] = coord;
+          await saveAddrToSheet(addr, coord.lat, coord.lng);
+          return coord;
+        }
+        return null;
+      }
+
+      // 2. マスタ未ロード時のみGAS個別問い合わせ
       var sheetCoord = await lookupAddrFromSheet(addr);
       if (sheetCoord) {
         inMemoryAddrMaster[key] = sheetCoord;
@@ -10116,13 +10148,13 @@
         return sheetCoord;
       }
 
-      // 2. Geocoding APIで取得
-      var coord = await geocodeWithProxy(addr);
-      if (coord && !coord.failed) {
-        inMemoryAddrMaster[key] = coord;
-        inMemoryAddrMaster[addr] = coord;
-        await saveAddrToSheet(addr, coord.lat, coord.lng);
-        return coord;
+      // 3. Geocoding APIで取得
+      var coord2 = await geocodeWithProxy(addr);
+      if (coord2 && !coord2.failed) {
+        inMemoryAddrMaster[key] = coord2;
+        inMemoryAddrMaster[addr] = coord2;
+        await saveAddrToSheet(addr, coord2.lat, coord2.lng);
+        return coord2;
       }
       return null;
     }
