@@ -12985,10 +12985,14 @@
       URL.revokeObjectURL(url);
     }
 
-    function twShowMap() {
+    async function twShowMap() {
       if (twExtractedData.length === 0) {
         alert('先に抽出を実行してください');
         return;
+      }
+      // inMemoryAddrMasterが空なら一括ロード
+      if (Object.keys(inMemoryAddrMaster).length === 0) {
+        await loadAddrMasterFromSheet();
       }
       var container = document.getElementById('tw-map-container');
       container.classList.remove('hidden');
