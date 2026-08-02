@@ -603,9 +603,8 @@
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-medium">ドライバー能力データベース</h2>
           <div class="flex gap-2">
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">完成データ更新</button>
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">📂 データアップロード</button>
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
-            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="toggleDriverAggPanel()">📊 3ファイル集計</button>
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
             <button onclick="toggleBulkLinePanel()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
           </div>
@@ -631,40 +630,6 @@
               </div>
             </div>
             <div id="bulk-line-test-result" class="hidden mt-2 text-xs p-2 rounded bg-blue-50 text-blue-700"></div>
-          </div>
-        </div>
-
-        <!-- 3ファイル集計パネル -->
-        <div id="driver-agg-panel" class="hidden mb-4">
-          <div class="card p-4">
-            <h3 class="text-sm font-medium mb-3">3ファイルからドライバー別データを自動集計</h3>
-            <div class="grid grid-cols-3 gap-3 mb-3">
-              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-gds-input').click()">
-                <div class="text-lg mb-1">📋</div>
-                <div class="text-xs font-medium">GDS Service Details</div>
-                <div class="text-xs text-ink-lighter mt-1" id="agg-gds-status">未選択</div>
-                <input type="file" id="agg-gds-input" accept=".csv" class="hidden" onchange="onAggFileSelect('gds', event)">
-              </div>
-              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-dsp-input').click()">
-                <div class="text-lg mb-1">📦</div>
-                <div class="text-xs font-medium">DSP Concessions</div>
-                <div class="text-xs text-ink-lighter mt-1" id="agg-dsp-status">未選択</div>
-                <input type="file" id="agg-dsp-input" accept=".csv" class="hidden" onchange="onAggFileSelect('dsp', event)">
-              </div>
-              <div class="border border-dashed border-border rounded p-3 text-center cursor-pointer hover:border-accent transition-colors" onclick="document.getElementById('agg-cs-input').click()">
-                <div class="text-lg mb-1">⚠</div>
-                <div class="text-xs font-medium">CSファイル</div>
-                <div class="text-xs text-ink-lighter mt-1" id="agg-cs-status">未選択</div>
-                <input type="file" id="agg-cs-input" accept=".xlsx,.xls" class="hidden" onchange="onAggFileSelect('cs', event)">
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <div class="text-xs text-ink-lighter" id="agg-summary-text">3ファイルを選択してください</div>
-              <div class="flex gap-2">
-                <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportDriverAggCSV()" id="agg-export-btn" disabled>CSVエクスポート</button>
-                <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runDriverAggregation()" id="agg-run-btn" disabled>集計実行</button>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -1738,9 +1703,8 @@
           <button class="mt-3 text-xs px-3 py-1.5 bg-accent text-white rounded" onclick="addFleetMasterRow()">＋ 行追加</button>
         </div>
 
-        <!-- 2つのドロップゾーン横並び -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          <!-- InputFile Drop zone -->
+        <!-- InputFile ドロップゾーン -->
+        <div class="mb-4">
           <div>
             <div id="fleet-input-drop" class="border-2 border-dashed border-orange-300 rounded-lg p-6 text-center cursor-pointer hover:border-orange-500 hover:bg-orange-50 transition"
                  ondragover="event.preventDefault();this.classList.add('border-orange-500','bg-orange-50')"
@@ -1752,19 +1716,6 @@
               <input type="file" id="fleet-input-file" accept=".xlsm,.xlsx,.xls" class="hidden" onchange="handleInputFileUpload(this.files[0])">
             </div>
             <div id="fleet-input-result" class="hidden mt-3"></div>
-          </div>
-          <!-- Service Details Report Drop zone -->
-          <div>
-            <div id="fleet-sdr-drop" class="border-2 border-dashed border-blue-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition"
-                 ondragover="event.preventDefault();this.classList.add('border-blue-500','bg-blue-50')"
-                 ondragleave="this.classList.remove('border-blue-500','bg-blue-50')"
-                 ondrop="event.preventDefault();this.classList.remove('border-blue-500','bg-blue-50');handleSdrDrop(event)"
-                 onclick="document.getElementById('fleet-sdr-file').click()">
-              <p class="text-sm font-medium" style="color:#2563eb">📊 GDS Service Details Report（CSV / ZIP）</p>
-              <p class="text-xs text-ink-lighter mt-1">ルート数をカウントしてマスタと照合</p>
-              <input type="file" id="fleet-sdr-file" accept=".csv,.zip" class="hidden" onchange="handleSdrFileUpload(this.files[0])">
-            </div>
-            <div id="fleet-sdr-result" class="hidden mt-3"></div>
           </div>
         </div>
 
