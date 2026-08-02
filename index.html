@@ -4579,71 +4579,24 @@
       }
 
       var video = document.getElementById('camera-video');
-      // カメラ起動（リトライ付き）
-      startCameraWithRetry(video, 0);
-    }
-
-    // カメラ起動（最大3回リトライ、段階的に制約を緩和）
-    function startCameraWithRetry(video, attempt) {
-      var resultEl = document.getElementById('camera-result');
-
-      // 前のストリームを確実に解放
-      if (cameraStream) {
-        try { cameraStream.getTracks().forEach(function(t) { t.stop(); }); } catch(e) {}
-        cameraStream = null;
-      }
-      if (video.srcObject) {
-        try { video.srcObject.getTracks().forEach(function(t) { t.stop(); }); } catch(e) {}
-        video.srcObject = null;
-      }
-
-      if (attempt > 0) {
-        resultEl.textContent = 'カメラ起動リトライ中... (' + attempt + '/3)';
-        resultEl.className = 'text-sm mt-2 text-yellow-600';
-      }
-
-      var tryCamera;
-      if (attempt <= 1) {
-        tryCamera = selectBestCamera().then(function(deviceId) {
-          var constraints = { video: {} };
-          if (attempt === 0) {
-            constraints.video.width = { ideal: 1280 };
-            constraints.video.height = { ideal: 720 };
-          } else {
-            constraints.video.width = { ideal: 640 };
-            constraints.video.height = { ideal: 480 };
-          }
-          if (deviceId) {
-            constraints.video.deviceId = { exact: deviceId };
-          }
-          return navigator.mediaDevices.getUserMedia(constraints);
+      // USBカメラ優先: USB → 内蔵 → その他
+      selectBestCamera().then(function(deviceId) {
+        var constraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 } } };
+        if (deviceId) {
+          constraints.video.deviceId = { exact: deviceId };
+        }
+        return navigator.mediaDevices.getUserMedia(constraints);
+      })
+        .then(function(stream) {
+          cameraStream = stream;
+          video.srcObject = stream;
+          video.play();
+        })
+        .catch(function(err) {
+          var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
+          document.getElementById('camera-result').textContent = 'カメラの起動に失敗しました: ' + errMsg;
+          document.getElementById('camera-result').className = 'text-sm mt-2 text-red-500';
         });
-      } else if (attempt === 2) {
-        tryCamera = navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      } else {
-        tryCamera = navigator.mediaDevices.getUserMedia({ video: true });
-      }
-
-      tryCamera.then(function(stream) {
-        cameraStream = stream;
-        video.srcObject = stream;
-        video.play();
-        if (attempt > 0) {
-          resultEl.textContent = '✅ カメラ起動成功（リトライ' + attempt + '回目）';
-          resultEl.className = 'text-sm mt-2 text-green-600';
-        }
-      }).catch(function(err) {
-        var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
-        console.warn('カメラ起動失敗 attempt=' + attempt + ':', errMsg);
-        if (attempt < 3) {
-          // NotReadableErrorはカメラ解放待ちが必要なので長めに待つ
-          var delay = (err && err.name === 'NotReadableError') ? 1500 : 500;
-          setTimeout(function() { startCameraWithRetry(video, attempt + 1); }, delay);
-        } else {
-          resultEl.textContent = 'カメラの起動に失敗しました: ' + errMsg + '\n→ 他のタブやアプリがカメラを使っていないか確認し、ページを再読み込みしてください';
-          resultEl.className = 'text-sm mt-2 text-red-500';
-        }
-      });
     }
 
     // USBカメラ優先選択: USB → 内蔵 → その他デバイス
@@ -5101,62 +5054,21 @@
       stopOcrScan();
       document.getElementById('qr-reader').classList.remove('hidden');
       document.getElementById('ocr-preview').classList.add('hidden');
-      startQrScanWithRetry(0);
-    }
-
-    function startQrScanWithRetry(attempt) {
-      // 前のインスタンスを確実に解放
-      if (html5QrCode) {
-        safeStopQrScanner().catch(function() {}).then(function() {
-          if (html5QrCode) { try { html5QrCode.clear(); } catch(e) {} html5QrCode = null; }
-          doStartQrScan(attempt);
-        });
-      } else {
-        doStartQrScan(attempt);
-      }
-    }
-
-    function doStartQrScan(attempt) {
       try {
         html5QrCode = new Html5Qrcode('qr-reader');
-        var doStart;
-        if (attempt <= 1) {
-          doStart = selectBestCamera().then(function(deviceId) {
-            return html5QrCode.start(
-              deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
-              { fps: 10, qrbox: { width: 280, height: 280 }, disableFlip: false },
-              onQrCodeScanned,
-              function() {}
-            );
-          });
-        } else {
-          doStart = html5QrCode.start(
-            { facingMode: 'environment' },
+        selectBestCamera().then(function(deviceId) {
+          return html5QrCode.start(
+            deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
             { fps: 10, qrbox: { width: 280, height: 280 }, disableFlip: false },
             onQrCodeScanned,
             function() {}
           );
-        }
-        doStart.catch(function(err) {
+        }).catch(function(err) {
           var errMsg = (err && err.message) ? err.message : String(err || '不明なエラー');
-          if (attempt < 3) {
-            addScanLog('カメラ起動リトライ中... (' + (attempt + 1) + '/3)', 'warn');
-            safeStopQrScanner().catch(function() {}).then(function() {
-              if (html5QrCode) { try { html5QrCode.clear(); } catch(e2) {} html5QrCode = null; }
-              var delay = (err && err.name === 'NotReadableError') ? 1500 : 500;
-              setTimeout(function() { startQrScanWithRetry(attempt + 1); }, delay);
-            });
-          } else {
-            addScanLog('カメラ起動失敗: ' + errMsg + ' → ページを再読み込みしてください', 'error');
-          }
+          addScanLog('カメラ起動失敗: ' + errMsg, 'error');
         });
       } catch (e) {
-        if (attempt < 3) {
-          addScanLog('QRスキャナーリトライ中... (' + (attempt + 1) + '/3)', 'warn');
-          setTimeout(function() { startQrScanWithRetry(attempt + 1); }, 500);
-        } else {
-          addScanLog('QRスキャナー初期化失敗: ' + ((e && e.message) || e), 'error');
-        }
+        addScanLog('QRスキャナー初期化失敗: ' + ((e && e.message) || e), 'error');
       }
     }
 
@@ -9331,15 +9243,6 @@
       try {
         container.classList.remove('hidden');
 
-        // inMemoryAddrMasterが空なら一括ロード
-        if (Object.keys(inMemoryAddrMaster).length === 0) {
-          var mapDiv0 = document.getElementById('addr-search-map');
-          if (mapDiv0) mapDiv0.innerHTML = '<p class="text-center text-sm text-ink-lighter py-8">住所マスタ読み込み中...</p>';
-          console.time('loadAddrMaster-addrSearch');
-          await loadAddrMasterFromSheet();
-          console.timeEnd('loadAddrMaster-addrSearch');
-        }
-
         // まずinMemoryAddrMasterから座標を探す（GAS不要で即座に表示）
         var normalizedAddr = normalizeAddress(addrSearchCurrentAddress);
         var localCoord = null;
@@ -13038,16 +12941,6 @@
         if (twExtractedData.length === 0) {
           alert('先に抽出を実行してください');
           return;
-        }
-        // inMemoryAddrMasterが空なら一括ロード（ローディング表示付き）
-        if (Object.keys(inMemoryAddrMaster).length === 0) {
-          var container0 = document.getElementById('tw-map-container');
-          container0.classList.remove('hidden');
-          var mapDiv0 = document.getElementById('tw-map');
-          if (mapDiv0) mapDiv0.innerHTML = '<p class="text-center text-sm text-ink-lighter py-8">住所マスタ読み込み中...</p>';
-          console.time('loadAddrMaster');
-          await loadAddrMasterFromSheet();
-          console.timeEnd('loadAddrMaster');
         }
         var container = document.getElementById('tw-map-container');
         container.classList.remove('hidden');
