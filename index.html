@@ -8594,7 +8594,7 @@
 
     function getQRImageUrl(name) {
       var qrData = getQRData(name);
-      return 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(qrData);
+      return 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=30&data=' + encodeURIComponent(qrData);
     }
 
     async function testBulkLineSend(textareaId) {
