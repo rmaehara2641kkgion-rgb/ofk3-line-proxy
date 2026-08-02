@@ -8592,6 +8592,11 @@
       toggleBulkLinePanel();
     }
 
+    function getQRImageUrl(name) {
+      var qrData = getQRData(name);
+      return 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(qrData);
+    }
+
     async function testBulkLineSend(textareaId) {
       // 管理者LINE IDを取得（U...形式を優先、なければlineMappingから探す）
       var adminIdRaw = (lineSettings.adminLineId || '').split(',')[0].trim();
@@ -8599,18 +8604,15 @@
       if (adminIdRaw.indexOf('U') === 0 && adminIdRaw.length > 20) {
         adminId = adminIdRaw;
       } else {
-        // adminLineIdが表示名の場合、lineMappingからU...形式を探す
         for (var name in lineMapping) {
           var lid = lineMapping[name];
           if (lid && lid.indexOf('U') === 0 && lid.length > 20) {
-            // masterNotesに「管理者」が含まれるドライバーを優先
             if (masterNotes[name] && masterNotes[name].indexOf('管理者') >= 0) {
               adminId = lid;
               break;
             }
           }
         }
-        // 見つからなければハードコードのフォールバック
         if (!adminId) adminId = 'U48be7d67e979988a2298c2b9b8cb8035';
       }
       if (!adminId || adminId.indexOf('U') !== 0) {
@@ -8628,14 +8630,26 @@
       var resultEl = document.getElementById(resultElId);
       resultEl.classList.remove('hidden');
       resultEl.textContent = '送信中...';
+
+      // 管理者自身のQRコード画像URLを生成（テスト用）
+      var adminName = '';
+      for (var n in lineMapping) {
+        if (lineMapping[n] === adminId) { adminName = n; break; }
+      }
+      var messages = [{ type: 'text', text: '[テスト送信]\n' + msg.trim() }];
+      if (adminName) {
+        var qrUrl = getQRImageUrl(adminName);
+        messages.push({ type: 'image', originalContentUrl: qrUrl, previewImageUrl: qrUrl });
+      }
+
       try {
         var res = await fetch(proxyUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: '[テスト送信]\n' + msg.trim() }] })
+          body: JSON.stringify({ to: adminId, messages: messages })
         });
         if (res.ok) {
-          resultEl.textContent = '✅ テスト送信成功 — LINEを確認してください（管理者1名のみ・消費1通）';
+          resultEl.textContent = '✅ テスト送信成功 — LINEを確認してください（管理者1名のみ・QR付き）';
           resultEl.className = 'mt-2 text-xs p-2 rounded bg-green-50 text-green-700';
         } else {
           resultEl.textContent = '❌ テスト送信失敗: HTTP ' + res.status;
@@ -8652,7 +8666,7 @@
       if (!proxyUrl) proxyUrl = '/proxy';
 
       // 2段階確認
-      if (!confirm('⚠ 本当に ' + drivers.length + '名全員にLINE送信しますか？\n\n消費メッセージ数: ' + drivers.length + '通\n\n※ 先に「テスト送信」で内容を確認しましたか？')) return;
+      if (!confirm('⚠ 本当に ' + drivers.length + '名全員にLINE送信しますか？\n\nメッセージ + QRコード画像を送信します\n消費メッセージ数: ' + drivers.length + '通\n\n※ 先に「テスト送信」で内容を確認しましたか？')) return;
       var sentCount = 0;
       var failCount = 0;
       var failNames = [];
@@ -8660,11 +8674,16 @@
         var name = drivers[i];
         var lineId = lineMapping[name];
         if (!lineId) continue;
+        var qrUrl = getQRImageUrl(name);
+        var messages = [
+          { type: 'text', text: message },
+          { type: 'image', originalContentUrl: qrUrl, previewImageUrl: qrUrl }
+        ];
         try {
           var res = await fetch(proxyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ to: lineId, messages: [{ type: 'text', text: message }] })
+            body: JSON.stringify({ to: lineId, messages: messages })
           });
           if (res.ok) {
             sentCount++;
@@ -8677,7 +8696,7 @@
           failNames.push(name);
         }
       }
-      var result = '一斉LINE送信完了: ' + sentCount + '/' + drivers.length + '名に送信';
+      var result = '一斉LINE送信完了: ' + sentCount + '/' + drivers.length + '名に送信（QR付き）';
       if (failCount > 0) {
         result += '\n失敗(' + failCount + '名): ' + failNames.join(', ');
       }
