@@ -9306,6 +9306,11 @@
       var container = document.getElementById('addr-search-map-container');
       container.classList.remove('hidden');
 
+      // inMemoryAddrMasterが空なら一括ロード
+      if (Object.keys(inMemoryAddrMaster).length === 0) {
+        await loadAddrMasterFromSheet();
+      }
+
       // まずinMemoryAddrMasterから座標を探す（GAS不要で即座に表示）
       var normalizedAddr = normalizeAddress(addrSearchCurrentAddress);
       var localCoord = null;
@@ -9317,15 +9322,6 @@
       }
 
       var cached = localCoord;
-
-      // ローカルにない場合のみGAS問い合わせ
-      if (!cached) {
-        try {
-          cached = await lookupAddrFromSheet(addrSearchCurrentAddress);
-        } catch (ex) {
-          console.warn('GAS lookup failed:', ex);
-        }
-      }
 
       if (cached) {
         if (addrSearchMap) { addrSearchMap.remove(); }
