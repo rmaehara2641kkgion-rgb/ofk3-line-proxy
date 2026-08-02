@@ -8473,7 +8473,7 @@
         return;
       }
 
-      // ★ ジオコーディング一時停止中（8月まで）— 住所マスタから既存座標のみ検索
+      // 住所マスタから既存座標を検索 → なければGoogle Maps APIで取得
       statusEl.innerHTML = '<span class="text-blue-500">座標検索中...</span>';
       var cached = await lookupAddrFromSheet(address);
       if (cached) {
@@ -8491,7 +8491,24 @@
         setTimeout(function() { map.invalidateSize(); }, 200);
         return;
       }
-      statusEl.innerHTML = '<span class="text-orange-500">座標未登録（8月以降にジオコーディング予定）</span>';
+      // マスタになければジオコーディングで取得
+      var geo = await geocodeWithProxy(address);
+      if (geo && !geo.failed) {
+        dmGeoCache[type] = { lat: geo.lat, lng: geo.lng, address: address };
+        statusEl.innerHTML = '<span class="text-green-600">\u2713 座標取得OK（' + geo.lat.toFixed(6) + ', ' + geo.lng.toFixed(6) + '）</span>';
+        previewEl.classList.remove('hidden');
+        if (dmLeafletMaps[type]) { dmLeafletMaps[type].remove(); }
+        var map2 = L.map(mapDiv).setView([geo.lat, geo.lng], 17);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '\u00a9 OpenStreetMap', maxZoom: 19 }).addTo(map2);
+        var markerColor2 = type === 'gohai' ? 'red' : 'green';
+        var iconHtml2 = '<div style="background:' + markerColor2 + ';width:12px;height:12px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>';
+        var icon2 = L.divIcon({ html: iconHtml2, className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+        L.marker([geo.lat, geo.lng], { icon: icon2 }).addTo(map2);
+        dmLeafletMaps[type] = map2;
+        setTimeout(function() { map2.invalidateSize(); }, 200);
+        return;
+      }
+      statusEl.innerHTML = '<span class="text-orange-500">座標が見つかりませんでした（本日上限: ' + getGeocodeDailyInfo().count + '/100件）</span>';
       return;
     }
 
@@ -9321,8 +9338,23 @@
           .openPopup();
         setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
       } else {
-        alert('座標未登録（8月以降にジオコーディング予定）');
-        container.classList.add('hidden');
+        // マスタになければジオコーディングで取得
+        var geo = await geocodeWithProxy(addrSearchCurrentAddress);
+        if (geo && !geo.failed) {
+          container.classList.remove('hidden');
+          if (addrSearchMap) addrSearchMap.remove();
+          addrSearchMap = L.map('addr-search-map').setView([geo.lat, geo.lng], 17);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '\u00a9 OpenStreetMap', maxZoom: 19
+          }).addTo(addrSearchMap);
+          L.marker([geo.lat, geo.lng]).addTo(addrSearchMap)
+            .bindPopup('<b>' + addrSearchCurrentAddress + '</b><br>DA: ' + addrSearchCurrentDA)
+            .openPopup();
+          setTimeout(function() { addrSearchMap.invalidateSize(); }, 100);
+        } else {
+          alert('座標が見つかりませんでした（本日上限: ' + getGeocodeDailyInfo().count + '/100件）');
+          container.classList.add('hidden');
+        }
       }
     }
 
@@ -9381,7 +9413,7 @@
       var mapContainer = document.getElementById('addr-free-map-container');
       statusEl.innerHTML = '<span class="text-blue-500">座標検索中...</span>';
 
-      // ★ ジオコーディング停止中 — 住所マスタから既存座標のみ
+      // 住所マスタ優先 → なければジオコーディング
       try {
         var cached = await lookupAddrFromSheet(address);
         if (cached) {
@@ -9398,11 +9430,28 @@
             .bindPopup('<b>' + address + '</b>').openPopup();
           setTimeout(function() { addrFreeMap.invalidateSize(); }, 150);
         } else {
-          statusEl.innerHTML = '<span class="text-orange-500">座標未登録（8月以降にジオコーディング予定）</span>';
-          mapContainer.classList.add('hidden');
+          // マスタになければジオコーディングで取得
+          var geo = await geocodeWithProxy(address);
+          if (geo && !geo.failed) {
+            addrFreeCurrentAddress = address;
+            addrFreeCurrentGeo = { lat: geo.lat, lng: geo.lng };
+            statusEl.innerHTML = '<span class="text-green-600">\u2713 ' + geo.lat.toFixed(6) + ', ' + geo.lng.toFixed(6) + '</span>';
+            mapContainer.classList.remove('hidden');
+            if (addrFreeMap) addrFreeMap.remove();
+            addrFreeMap = L.map('addr-free-map').setView([geo.lat, geo.lng], 17);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '\u00a9 OpenStreetMap', maxZoom: 19
+            }).addTo(addrFreeMap);
+            L.marker([geo.lat, geo.lng]).addTo(addrFreeMap)
+              .bindPopup('<b>' + address + '</b>').openPopup();
+            setTimeout(function() { addrFreeMap.invalidateSize(); }, 150);
+          } else {
+            statusEl.innerHTML = '<span class="text-orange-500">座標が見つかりませんでした（本日上限: ' + getGeocodeDailyInfo().count + '/100件）</span>';
+            mapContainer.classList.add('hidden');
+          }
         }
       } catch (e) {
-        statusEl.innerHTML = '<span class="text-red-500">通信エラー: ' + e.message + '</span>';
+        statusEl.innerHTML = '<span class="text-red-500">通信エラー: ' + ((e && e.message) || '不明') + '</span>';
         mapContainer.classList.add('hidden');
       }
     }
