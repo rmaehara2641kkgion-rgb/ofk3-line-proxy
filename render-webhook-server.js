@@ -871,7 +871,7 @@ app.post('/encrypt-zip', function(req, res) {
 
       var archive = encryptedArchiver.create('zip-encrypted', {
         zlib: { level: 8 },
-        encryptionMethod: 'aes256',
+        encryptionMethod: 'zip20',
         password: password
       });
 
