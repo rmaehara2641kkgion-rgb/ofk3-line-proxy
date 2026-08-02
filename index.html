@@ -25,7 +25,8 @@
           colors: {
             surface: '#FAFAF8',
             ink: '#2D2D2D',
-            'ink-light': '#6B6B6B',
+            'ink-lighお疲れ様です。
+            ': '#6B6B6B',
             'ink-lighter': '#9A9A9A',
             accent: '#D94032',
             'accent-light': '#FDF2F1',
@@ -698,7 +699,27 @@
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportMasterData()">エクスポート</button>
             <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="syncAllMasterToServer()">☁ サーバー同期（PC→サーバー）</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="loadMasterFromServer(true)">⬇ サーバー取得（上書き）</button>
+            <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
+            <button onclick="toggleBulkLinePanelMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
+          </div>
+        </div>
+
+        <!-- 一斉LINE送信パネル（マスタ管理用） -->
+        <div id="bulk-line-panel-master" class="hidden mb-4">
+          <div class="card p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium">一斉LINE送信</h3>
+              <button onclick="toggleBulkLinePanelMaster()" class="text-ink-lighter hover:text-ink text-sm cursor-pointer">✕ 閉じる</button>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs font-medium text-ink-light block mb-1">送信メッセージ</label>
+              <textarea id="bulk-line-message-master" rows="5" class="w-full border border-border rounded p-2 text-sm" placeholder="送信するメッセージを入力してください..."></textarea>
+            </div>
+            <div class="flex items-center justify-between">
+              <p class="text-xs text-ink-lighter" id="bulk-line-target-info-master"></p>
+              <button onclick="sendBulkLineFromPanelMaster()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 送信</button>
+            </div>
           </div>
         </div>
 
@@ -8508,6 +8529,49 @@
       }
       linkedDrivers.sort();
       var msg = document.getElementById('bulk-line-message').value;
+      if (!msg || !msg.trim()) {
+        alert('メッセージを入力してください。');
+        return;
+      }
+      if (!confirm(linkedDrivers.length + '名に以下のメッセージを送信します:\n\n' + msg.trim() + '\n\nよろしいですか？')) return;
+      doBulkLineSend(linkedDrivers, msg.trim());
+    }
+
+    function toggleBulkLinePanelMaster() {
+      var panel = document.getElementById('bulk-line-panel-master');
+      if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        var linkedDrivers = [];
+        for (var name in lineMapping) {
+          if (lineMapping[name] && lineMapping[name].indexOf('U') === 0) {
+            linkedDrivers.push(name);
+          }
+        }
+        linkedDrivers.sort();
+        var info = document.getElementById('bulk-line-target-info-master');
+        if (linkedDrivers.length === 0) {
+          info.textContent = 'LINE連携済みのドライバーがいません';
+        } else {
+          info.textContent = 'LINE連携済み ' + linkedDrivers.length + '名に送信: ' + linkedDrivers.join(', ');
+        }
+      } else {
+        panel.classList.add('hidden');
+      }
+    }
+
+    function sendBulkLineFromPanelMaster() {
+      var linkedDrivers = [];
+      for (var name in lineMapping) {
+        if (lineMapping[name] && lineMapping[name].indexOf('U') === 0) {
+          linkedDrivers.push(name);
+        }
+      }
+      if (linkedDrivers.length === 0) {
+        alert('LINE連携済みのドライバーがいません。\nマスタ管理でLINE IDを設定してください。');
+        return;
+      }
+      linkedDrivers.sort();
+      var msg = document.getElementById('bulk-line-message-master').value;
       if (!msg || !msg.trim()) {
         alert('メッセージを入力してください。');
         return;
