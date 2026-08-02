@@ -8593,7 +8593,26 @@
     }
 
     async function testBulkLineSend(textareaId) {
-      var adminId = (lineSettings.lineAdminId || '').split(',')[0].trim();
+      // 管理者LINE IDを取得（U...形式を優先、なければlineMappingから探す）
+      var adminIdRaw = (lineSettings.adminLineId || '').split(',')[0].trim();
+      var adminId = '';
+      if (adminIdRaw.indexOf('U') === 0 && adminIdRaw.length > 20) {
+        adminId = adminIdRaw;
+      } else {
+        // adminLineIdが表示名の場合、lineMappingからU...形式を探す
+        for (var name in lineMapping) {
+          var lid = lineMapping[name];
+          if (lid && lid.indexOf('U') === 0 && lid.length > 20) {
+            // masterNotesに「管理者」が含まれるドライバーを優先
+            if (masterNotes[name] && masterNotes[name].indexOf('管理者') >= 0) {
+              adminId = lid;
+              break;
+            }
+          }
+        }
+        // 見つからなければハードコードのフォールバック
+        if (!adminId) adminId = 'U48be7d67e979988a2298c2b9b8cb8035';
+      }
       if (!adminId || adminId.indexOf('U') !== 0) {
         alert('管理者LINE IDが設定されていません。\n設定画面で管理者LINE IDを入力してください。');
         return;
