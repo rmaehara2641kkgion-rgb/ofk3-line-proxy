@@ -3266,11 +3266,17 @@
         var kmRaw = r['合計距離手当'];
         var km = kmRaw != null ? parseFloat(kmRaw) || 0 : 0;
 
-        // 稼働時間計算
+        // 稼働時間計算（Excelシリアル値・Date・ISO文字列に対応）
+        function toTimestamp(v) {
+          if (!v) return NaN;
+          if (v instanceof Date) return v.getTime();
+          if (typeof v === 'number') return (v - 25569) * 86400000;
+          return new Date(v).getTime();
+        }
         var hours = 0;
         if (login && logout) {
-          var loginTime = new Date(login).getTime();
-          var logoutTime = new Date(logout).getTime();
+          var loginTime = toTimestamp(login);
+          var logoutTime = toTimestamp(logout);
           if (!isNaN(loginTime) && !isNaN(logoutTime) && logoutTime > loginTime) {
             hours = (logoutTime - loginTime) / 3600000;
           }
