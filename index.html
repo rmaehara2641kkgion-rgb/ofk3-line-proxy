@@ -5072,32 +5072,15 @@
       }
     }
 
-    // 安全にスキャナーを停止（絶対にrejectしない）
-    function safeStopQrScanner() {
-      if (!html5QrCode) return Promise.resolve();
-      try {
-        var state = html5QrCode.getState ? html5QrCode.getState() : null;
-        if (state === 1 || state === 2) {
-          return html5QrCode.stop().then(function() {
-            return Promise.resolve();
-          }).catch(function(e) {
-            console.warn('scanner stop error (ignored):', (e && e.message) || e);
-            return Promise.resolve();
-          });
-        }
-      } catch (e) {
-        console.warn('safeStopQrScanner error (ignored):', (e && e.message) || e);
-      }
-      return Promise.resolve();
-    }
-
     function stopQrScan() {
       if (html5QrCode) {
-        safeStopQrScanner().then(function() {
+        html5QrCode.stop().then(function() {
           if (html5QrCode) {
-            try { html5QrCode.clear(); } catch(e) {}
+            html5QrCode.clear();
             html5QrCode = null;
           }
+        }).catch(function() {
+          html5QrCode = null;
         });
       }
     }
