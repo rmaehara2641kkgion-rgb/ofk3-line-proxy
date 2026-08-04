@@ -12891,7 +12891,12 @@ var driverDB = {
         }
         var container = document.getElementById('tw-map-container');
         container.classList.remove('hidden');
-        twRenderMapAsync('tw-map', twExtractedData, true);
+        // hidden解除後にブラウザのレイアウト再計算を待ってからLeaflet初期化
+        requestAnimationFrame(function() {
+          requestAnimationFrame(function() {
+            twRenderMapAsync('tw-map', twExtractedData, true);
+          });
+        });
       } catch (e) {
         console.error('twShowMap error:', e);
         alert('MAP表示エラー: ' + ((e && e.message) || e));
@@ -12931,7 +12936,8 @@ var driverDB = {
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
-      setTimeout(function() { map.invalidateSize(); }, 200);
+      setTimeout(function() { map.invalidateSize(); }, 100);
+      setTimeout(function() { map.invalidateSize(); }, 500);
 
       var bounds = [];
       var routeColors = {};
