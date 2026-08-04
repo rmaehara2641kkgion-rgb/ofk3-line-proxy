@@ -6011,7 +6011,7 @@ var driverDB = {
     async function refreshLineProfile(userId) {
       if (!userId || userId.indexOf('U') !== 0) return;
       var cached = lineProfileCache[userId];
-      if (cached && !isProfileCacheExpired(cached)) return;
+      if (cached && !isProfileCacheExpired(cached) && cached.pictureUrl) return;
 
       var profile = await fetchLineProfile(userId);
       if (profile) {
