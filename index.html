@@ -5115,12 +5115,13 @@ var driverDB = {
         return { name: decodedText.replace('OFK3_DRIVER:', '').trim(), transportId: null };
       }
 
-      // OFK3_D0001 形式（自動生成ID）
-      if (decodedText.indexOf('OFK3_D') === 0 && decodedText.length <= 12) {
-        var keys = Object.keys(driverDB).sort();
-        var idx = parseInt(decodedText.replace('OFK3_D', ''), 10);
-        if (idx > 0 && idx <= keys.length) {
-          return { name: keys[idx - 1], transportId: transportIDs[keys[idx - 1]] || null };
+      // OFK3_D形式（driverIdベース）
+      if (decodedText.indexOf('OFK3_D') === 0) {
+        var driverIdStr = decodedText.replace('OFK3_D', '');
+        for (var dname in driverDB) {
+          if (String(driverDB[dname].driverId) === driverIdStr) {
+            return { name: dname, transportId: transportIDs[dname] || null };
+          }
         }
       }
 
@@ -12891,12 +12892,7 @@ var driverDB = {
         }
         var container = document.getElementById('tw-map-container');
         container.classList.remove('hidden');
-        // hidden解除後にブラウザのレイアウト再計算を待ってからLeaflet初期化
-        requestAnimationFrame(function() {
-          requestAnimationFrame(function() {
-            twRenderMapAsync('tw-map', twExtractedData, true);
-          });
-        });
+        twRenderMapAsync('tw-map', twExtractedData, true);
       } catch (e) {
         console.error('twShowMap error:', e);
         alert('MAP表示エラー: ' + ((e && e.message) || e));
@@ -12936,8 +12932,7 @@ var driverDB = {
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
-      setTimeout(function() { map.invalidateSize(); }, 100);
-      setTimeout(function() { map.invalidateSize(); }, 500);
+      setTimeout(function() { map.invalidateSize(); }, 200);
 
       var bounds = [];
       var routeColors = {};
