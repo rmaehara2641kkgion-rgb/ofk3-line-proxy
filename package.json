@@ -11,10 +11,11 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
+    "archiver": "^6.0.2",
     "archiver-zip-encrypted": "^2.0.0",
     "axios": "^1.7.2",
     "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "unzipper": "^0.12.3"
   }
 }
