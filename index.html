@@ -670,6 +670,7 @@
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
             <button onclick="toggleBulkLinePanelMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
+            <button class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="showDuplicateMergePanel()">🔗 同一人物候補</button>
           </div>
         </div>
 
@@ -2734,6 +2735,181 @@ var driverDB = {
       // g) 解決できなければ元の name
       return name;
     }
+
+    // 別名キーの物理マージ: aliasKey側のデータをcanonicalKey側に統合して削除
+    function mergeDriverKeys(aliasKey, canonicalKey) {
+      if (!aliasKey || !canonicalKey || aliasKey === canonicalKey) return { merged: false };
+      // 各マップをcanonical側に移行（canonical側が空のときだけ上書き）
+      var maps = [
+        { obj: lineMapping, key: 'lineMapping' },
+        { obj: phoneMapping, key: 'phoneMapping' },
+        { obj: transportIDs, key: 'transportIDs' },
+        { obj: driverDepartments, key: 'driverDepartments' },
+        { obj: driverJapaneseNames, key: 'driverJapaneseNames' },
+        { obj: masterNotes, key: 'masterNotes' }
+      ];
+      for (var m = 0; m < maps.length; m++) {
+        var obj = maps[m].obj;
+        if (obj[aliasKey] && !obj[canonicalKey]) {
+          obj[canonicalKey] = obj[aliasKey];
+        }
+      }
+      // driverDB 移行
+      if (driverDB[aliasKey]) {
+        if (!driverDB[canonicalKey]) {
+          driverDB[canonicalKey] = driverDB[aliasKey];
+        }
+        delete driverDB[aliasKey];
+      }
+      // 別名登録
+      registerDriverAlias(aliasKey, canonicalKey);
+      // aliasKey側の全マップエントリを削除
+      for (var m2 = 0; m2 < maps.length; m2++) {
+        delete maps[m2].obj[aliasKey];
+      }
+      // localStorage 保存
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+      localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
+      localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+      localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
+      localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+      localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+      return { merged: true, canonical: canonicalKey, alias: aliasKey };
+    }
+
+    // 重複候補検出
+    function detectDuplicateCandidates() {
+      var candidates = [];
+      var seen = {};
+      var allKeys = new Set([].concat(
+        Object.keys(driverDB),
+        Object.keys(lineMapping),
+        Object.keys(phoneMapping),
+        Object.keys(transportIDs),
+        Object.keys(driverJapaneseNames)
+      ));
+      var keyArr = [];
+      allKeys.forEach(function(k) { keyArr.push(k); });
+
+      // canonical優先順: driverDB実績あり > driverDB存在 > シフト名側（サフィックスなし）
+      function pickCanonical(a, b) {
+        var aDB = driverDB[a], bDB = driverDB[b];
+        if (aDB && !bDB) return a;
+        if (bDB && !aDB) return b;
+        if (aDB && bDB) {
+          if ((aDB.packagesPerHour || 0) >= (bDB.packagesPerHour || 0)) return a;
+          return b;
+        }
+        // どちらもdriverDBなし → サフィックスなし側
+        if (a.indexOf('\u2022') < 0 && b.indexOf('\u2022') >= 0) return a;
+        if (b.indexOf('\u2022') < 0 && a.indexOf('\u2022') >= 0) return b;
+        return a.length <= b.length ? a : b;
+      }
+      function addPair(alias, canonical, reason, confidence) {
+        var pairKey = [alias, canonical].sort().join('|||');
+        if (seen[pairKey]) return;
+        seen[pairKey] = true;
+        candidates.push({ alias: alias, canonical: canonical, reason: reason, confidence: confidence });
+      }
+
+      // tid_match: transportIDが同一
+      var tidMap = {};
+      for (var tKey in transportIDs) {
+        var tid = transportIDs[tKey];
+        if (!tid) continue;
+        if (!tidMap[tid]) { tidMap[tid] = []; }
+        tidMap[tid].push(tKey);
+      }
+      for (var tid2 in tidMap) {
+        var group = tidMap[tid2];
+        if (group.length < 2) continue;
+        for (var g1 = 0; g1 < group.length; g1++) {
+          for (var g2 = g1 + 1; g2 < group.length; g2++) {
+            var can = pickCanonical(group[g1], group[g2]);
+            var ali = can === group[g1] ? group[g2] : group[g1];
+            addPair(ali, can, 'TID一致', 'high');
+          }
+        }
+      }
+
+      // suffix_match: resolveDriverKeyで別名解決済み
+      for (var s = 0; s < keyArr.length; s++) {
+        var resolved = resolveDriverKey(keyArr[s]);
+        if (resolved !== keyArr[s]) {
+          addPair(keyArr[s], resolved, 'サフィックス除去', 'high');
+        }
+      }
+
+      // norm_match: aggNormNameが同一で別キー
+      var normMap = {};
+      for (var n = 0; n < keyArr.length; n++) {
+        var normVal = aggNormName(keyArr[n]);
+        if (!normMap[normVal]) { normMap[normVal] = []; }
+        normMap[normVal].push(keyArr[n]);
+      }
+      for (var nk in normMap) {
+        var nGroup = normMap[nk];
+        if (nGroup.length < 2) continue;
+        for (var n1 = 0; n1 < nGroup.length; n1++) {
+          for (var n2 = n1 + 1; n2 < nGroup.length; n2++) {
+            var nCan = pickCanonical(nGroup[n1], nGroup[n2]);
+            var nAli = nCan === nGroup[n1] ? nGroup[n2] : nGroup[n1];
+            addPair(nAli, nCan, '正規化一致', 'medium');
+          }
+        }
+      }
+
+      // fuzzy_match: 空白除去 or 姓名反転
+      var noSpaceMap = {};
+      for (var f = 0; f < keyArr.length; f++) {
+        var ns = keyArr[f].replace(/[\s\u3000]/g, '');
+        if (!noSpaceMap[ns]) { noSpaceMap[ns] = []; }
+        noSpaceMap[ns].push(keyArr[f]);
+      }
+      for (var fk in noSpaceMap) {
+        var fGroup = noSpaceMap[fk];
+        if (fGroup.length < 2) continue;
+        for (var f1 = 0; f1 < fGroup.length; f1++) {
+          for (var f2 = f1 + 1; f2 < fGroup.length; f2++) {
+            var fCan = pickCanonical(fGroup[f1], fGroup[f2]);
+            var fAli = fCan === fGroup[f1] ? fGroup[f2] : fGroup[f1];
+            addPair(fAli, fCan, '空白差異', 'low');
+          }
+        }
+      }
+      // 姓名反転
+      for (var r = 0; r < keyArr.length; r++) {
+        var rParts = keyArr[r].split(/\s+/);
+        if (rParts.length !== 2) continue;
+        var rev = rParts[1] + ' ' + rParts[0];
+        if (rev !== keyArr[r] && (driverDB[rev] || lineMapping[rev] || transportIDs[rev])) {
+          var rCan = pickCanonical(keyArr[r], rev);
+          var rAli = rCan === keyArr[r] ? rev : keyArr[r];
+          addPair(rAli, rCan, '姓名反転', 'low');
+        }
+      }
+
+      return candidates;
+    }
+
+    // JST日付ヘルパー
+    function getTodayJst() {
+      var now = new Date();
+      var jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      var y = jst.getUTCFullYear();
+      var m = String(jst.getUTCMonth() + 1).padStart(2, '0');
+      var d = String(jst.getUTCDate()).padStart(2, '0');
+      return y + '-' + m + '-' + d;
+    }
+
+    function escapeHtml(str) {
+      var div = document.createElement('div');
+      div.appendChild(document.createTextNode(str || ''));
+      return div.innerHTML;
+    }
+
     var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
 
     // LINE profile cache
@@ -3684,7 +3860,7 @@ var driverDB = {
       var blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8' });
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'ドライバー別配送データ_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = 'ドライバー別配送データ_' + getTodayJst() + '.csv';
       a.click();
     }
 
@@ -4133,7 +4309,7 @@ var driverDB = {
       tenkoSchedule.sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
 
       // メモリ保持のみ（localStorageには保存しない — 容量節約）
-      const todayStr = today.toISOString().slice(0, 10);
+      const todayStr = getTodayJst();
       localStorage.setItem('tenkoDate', todayStr);
       // 古いtenkoScheduleがlocalStorageに残っていたら削除
       localStorage.removeItem('tenkoSchedule');
@@ -4185,7 +4361,7 @@ var driverDB = {
     // 点呼ログ保存（点呼完了時に呼び出す）
     function saveTenkoLog(d) {
       var now = new Date();
-      var todayStr = now.toISOString().slice(0, 10);
+      var todayStr = getTodayJst();
       var timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
 
       var record = {
@@ -4279,28 +4455,24 @@ var driverDB = {
 
     // 全マスタデータをサーバーに一括同期
     function syncAllMasterToServer() {
+      var added = {};
       var drivers = [];
-      for (var name in driverJapaneseNames) {
+      function addDriver(name) {
+        var resolved = resolveDriverKey(name);
+        if (!resolved || added[resolved]) return;
+        added[resolved] = true;
         drivers.push({
-          englishName: name,
-          japaneseName: driverJapaneseNames[name] || '',
-          transportId: transportIDs[name] || '',
-          lineId: lineMapping[name] || '',
-          company: driverDepartments[name] || ''
+          englishName: resolved,
+          japaneseName: driverJapaneseNames[resolved] || driverJapaneseNames[name] || '',
+          transportId: transportIDs[resolved] || transportIDs[name] || '',
+          lineId: lineMapping[resolved] || lineMapping[name] || '',
+          company: driverDepartments[resolved] || driverDepartments[name] || ''
         });
       }
-      // driverJapaneseNamesにないがtransportIDsにある名前も追加
-      for (var name2 in transportIDs) {
-        if (!driverJapaneseNames[name2]) {
-          drivers.push({
-            englishName: name2,
-            japaneseName: '',
-            transportId: transportIDs[name2] || '',
-            lineId: lineMapping[name2] || '',
-            company: driverDepartments[name2] || ''
-          });
-        }
-      }
+      for (var name in driverJapaneseNames) { addDriver(name); }
+      for (var name2 in transportIDs) { addDriver(name2); }
+      for (var name3 in lineMapping) { addDriver(name3); }
+      for (var name4 in driverDB) { addDriver(name4); }
       if (drivers.length === 0) {
         alert('同期するマスタデータがありません');
         return;
@@ -4413,6 +4585,15 @@ var driverDB = {
                 localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
                 localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
                 console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
+                // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ
+                if (!forceOverwrite) {
+                  for (var aliasK in driverNameAliases) {
+                    var canonK = driverNameAliases[aliasK];
+                    if (lineMapping[aliasK] || transportIDs[aliasK]) {
+                      mergeDriverKeys(aliasK, canonK);
+                    }
+                  }
+                }
                 renderMasterTable();
               }
             } else if (forceOverwrite) {
@@ -4829,7 +5010,7 @@ var driverDB = {
 
     // Load saved tenko data on startup
     function loadTenkoData() {
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = getTodayJst();
       // tenkoScheduleはメモリ保持のみ。ページ再読み込み時はExcelを再読込してください
       localStorage.removeItem('tenkoSchedule'); // 古いデータがあれば削除して容量確保
     }
@@ -4853,7 +5034,7 @@ var driverDB = {
       var btn = document.getElementById('tenko-sync-btn');
       if (btn) { btn.textContent = '📤 送信中...'; btn.disabled = true; }
 
-      var today = new Date().toISOString().slice(0, 10);
+      var today = getTodayJst();
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/tenko-sync');
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -4989,7 +5170,7 @@ var driverDB = {
       // 連続変更を束ねるため2秒デバウンス
       if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
       _autoSyncTimer = setTimeout(function() {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = getTodayJst();
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/tenko-sync');
         xhr.setRequestHeader('Content-Type', 'application/json');
@@ -6322,6 +6503,86 @@ var driverDB = {
     }
 
     // ===== パスワード付きZIP（汎用ファイル暗号化） =====
+    // === 同一人物候補 モーダル ===
+    function showDuplicateMergePanel() {
+      var candidates = detectDuplicateCandidates();
+      if (candidates.length === 0) {
+        alert('同一人物候補は見つかりませんでした');
+        return;
+      }
+      // モーダル作成
+      var existing = document.getElementById('duplicate-merge-modal');
+      if (existing) existing.remove();
+      var modal = document.createElement('div');
+      modal.id = 'duplicate-merge-modal';
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+      modal.style.cssText = 'overflow:auto';
+
+      var html = '<div class="bg-surface rounded-lg shadow-xl max-w-2xl w-full mx-4 my-8 max-h-[90vh] overflow-auto">';
+      html += '<div class="p-4 border-b border-border flex items-center justify-between">';
+      html += '<h3 class="font-bold text-ink">同一人物候補（' + candidates.length + '件）</h3>';
+      html += '<button onclick="document.getElementById(\'duplicate-merge-modal\').remove()" class="text-ink-lighter hover:text-ink text-lg cursor-pointer">✕</button>';
+      html += '</div>';
+      html += '<div class="p-4">';
+
+      // TID一致のみ一括統合ボタン
+      var tidCount = 0;
+      for (var t = 0; t < candidates.length; t++) {
+        if (candidates[t].confidence === 'high' && candidates[t].reason === 'TID一致') tidCount++;
+      }
+      if (tidCount > 0) {
+        html += '<div class="mb-4"><button onclick="mergeTidMatchAll()" class="px-3 py-1.5 text-xs rounded font-bold bg-red-500 text-white hover:bg-red-600 transition-colors">TID一致のみ一括統合（' + tidCount + '件）</button></div>';
+      }
+
+      html += '<table class="w-full text-xs">';
+      html += '<thead><tr class="border-b border-border"><th class="text-left p-2">別名</th><th class="text-left p-2">→</th><th class="text-left p-2">正キー</th><th class="text-left p-2">理由</th><th class="p-2"></th></tr></thead>';
+      html += '<tbody>';
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        var rowClass = c.confidence === 'low' ? 'bg-amber-50' : '';
+        var badge = c.reason;
+        if (c.confidence === 'low') badge += ' <span class="text-amber-600 font-bold">要確認</span>';
+        html += '<tr class="border-b border-border ' + rowClass + '" id="dup-row-' + i + '">';
+        html += '<td class="p-2 font-mono">' + escapeHtml(c.alias) + '</td>';
+        html += '<td class="p-2">→</td>';
+        html += '<td class="p-2 font-mono font-bold">' + escapeHtml(c.canonical) + '</td>';
+        html += '<td class="p-2">' + badge + '</td>';
+        html += '<td class="p-2"><button onclick="mergeSingleDuplicate(' + i + ')" class="px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 text-xs cursor-pointer">統合</button></td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div></div>';
+      modal.innerHTML = html;
+      document.body.appendChild(modal);
+      // データをグローバルに保持
+      window._dupCandidates = candidates;
+    }
+
+    function mergeSingleDuplicate(idx) {
+      var c = window._dupCandidates[idx];
+      if (!c) return;
+      if (!confirm(escapeHtml(c.alias) + ' を ' + escapeHtml(c.canonical) + ' に統合しますか？')) return;
+      mergeDriverKeys(c.alias, c.canonical);
+      renderMasterTable();
+      showDuplicateMergePanel();
+    }
+
+    function mergeTidMatchAll() {
+      var candidates = window._dupCandidates || [];
+      var tidPairs = [];
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].confidence === 'high' && candidates[i].reason === 'TID一致') {
+          tidPairs.push(candidates[i]);
+        }
+      }
+      if (tidPairs.length === 0) return;
+      if (!confirm('TID一致の ' + tidPairs.length + ' 件を一括統合しますか？')) return;
+      for (var j = 0; j < tidPairs.length; j++) {
+        mergeDriverKeys(tidPairs[j].alias, tidPairs[j].canonical);
+      }
+      renderMasterTable();
+      showDuplicateMergePanel();
+    }
+
     var encryptZipFile = null;
 
     function showEncryptZipModal() {
@@ -7751,7 +8012,7 @@ var driverDB = {
       var tbody = document.getElementById('match-table-body');
       if (!tbody) return;
 
-      var todayStr = new Date().toISOString().slice(0, 10);
+      var todayStr = getTodayJst();
 
       // tenkoSchedule（Amazon配送データから生成）のTransportID→データマップと名前→データマップ
       var tenkoMap = {};
@@ -8272,7 +8533,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'tenko_log_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = 'tenko_log_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -10114,7 +10375,7 @@ var driverDB = {
 
     // 日次ジオコーディング件数管理
     function getGeocodeDailyInfo() {
-      var today = new Date().toISOString().slice(0, 10);
+      var today = getTodayJst();
       var saved = localStorage.getItem('geocodeDaily');
       if (saved) {
         try {
@@ -12965,7 +13226,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = '時間指定抽出_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = '時間指定抽出_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
