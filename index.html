@@ -601,7 +601,7 @@
       <!-- Drivers Tab -->
       <div id="panel-drivers" class="hidden">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-medium">ドライバー能力データベース</h2>
+          <h2 class="text-sm font-medium">ドライバー能力データベース <span id="driver-unlinked-count" class="text-xs font-normal text-ink-lighter ml-2"></span></h2>
           <div class="flex gap-2">
             <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('driver-file-input').click()">📂 データアップロード</button>
             <input type="file" id="driver-file-input" accept=".xlsx,.xls,.csv" onchange="handleDriverDataUpload(event)">
@@ -2768,7 +2768,19 @@ var driverDB = {
           }
         }
       }
-      // g) 解決できなければ元の name
+      // g) 解決できなければ日本語名逆引きを試す
+      // h) driverJapaneseNames 値 → マスタ正キー逆引き
+      var nameClean = (norm || name).replace(/[\s\u3000]/g, '');
+      for (var jpKey in driverJapaneseNames) {
+        var jpVal = (driverJapaneseNames[jpKey] || '').replace(/[\s\u3000]/g, '');
+        if (jpVal && (jpVal === nameClean || driverJapaneseNames[jpKey] === name)) {
+          if (lineMapping[jpKey] || transportIDs[jpKey] || driverDB[jpKey]) {
+            registerDriverAlias(name, jpKey);
+            return jpKey;
+          }
+        }
+      }
+      // i) 元の name
       return name;
     }
 
@@ -2827,6 +2839,10 @@ var driverDB = {
         Object.keys(transportIDs),
         Object.keys(driverJapaneseNames)
       ));
+      // driverJapaneseNames の値（日本語名）も候補に追加
+      for (var _jnk in driverJapaneseNames) {
+        if (driverJapaneseNames[_jnk]) allKeys.add(driverJapaneseNames[_jnk]);
+      }
       var keyArr = [];
       allKeys.forEach(function(k) { keyArr.push(k); });
 
@@ -3003,27 +3019,19 @@ var driverDB = {
     // ドライバーアイコン共通関数
     function getDriverIcon(name, sizeClass) {
       sizeClass = sizeClass || 'w-8 h-8';
-      name = resolveDriverKey(name);
-      // 日本語名→元名の逆引きも試す
-      var lid = lineMapping[name] || '';
-      if (!lid) {
-        for (var origName in driverJapaneseNames) {
-          if (driverJapaneseNames[origName] === name && lineMapping[origName]) {
-            lid = lineMapping[origName]; break;
-          }
-        }
-      }
+      var lookupName = resolveDriverKey(name);
+      var lid = findLineUserId(lookupName, lookupName) || findLineUserId(name, name) || '';
       var profile = lid && lineProfileCache[lid] ? lineProfileCache[lid] : null;
       var pUrl = profile && profile.pictureUrl ? profile.pictureUrl : '';
       if (pUrl) {
-        return '<img src="' + pUrl.replace(/"/g, '&quot;') + '" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINEアイコン" onerror="this.outerHTML=getDriverIconFallback(\'' + name.replace(/'/g, "\\'") + '\',\'' + sizeClass + '\')">';
+        return '<img src="' + pUrl.replace(/"/g, '&quot;') + '" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINEアイコン" onerror="this.outerHTML=getDriverIconFallback(\'' + lookupName.replace(/'/g, "\\'") + '\',\'' + sizeClass + '\')">';
       }
-      return getDriverIconFallback(name, sizeClass);
+      return getDriverIconFallback(lookupName, sizeClass);
     }
 
     function getDriverIconFallback(name, sizeClass) {
       name = resolveDriverKey(name);
-      var lid = lineMapping[name] || '';
+      var lid = findLineUserId(name, name) || '';
       if (lid) {
         // LINE連携済みだがアイコン画像なし → シルエット人型アイコン（グレー背景に緑ボーダー）
         return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center" style="background:#E2E8F0;border:2px solid #06C755">'
@@ -4194,6 +4202,20 @@ var driverDB = {
           ドライバー実績データをアップロードしてください<br>
           <span class="text-xs">（ドライバー別配送データ.xlsx 形式）</span>
         </td></tr>`;
+      }
+
+      // 未連携カウント表示
+      var unlinkedCount = 0;
+      for (var ui = 0; ui < sorted.length; ui++) {
+        if (!findLineUserId(sorted[ui][0], sorted[ui][0])) unlinkedCount++;
+      }
+      var countEl = document.getElementById('driver-unlinked-count');
+      if (countEl) {
+        if (unlinkedCount > 0) {
+          countEl.textContent = '(LINE未連携: ' + unlinkedCount + '名)';
+        } else {
+          countEl.textContent = '';
+        }
       }
     }
 
