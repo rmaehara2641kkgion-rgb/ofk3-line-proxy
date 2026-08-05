@@ -670,6 +670,7 @@
             <button onclick="printAllQR()" class="btn-secondary text-xs px-3 py-1.5 rounded">🖨 QR一括印刷</button>
             <button onclick="toggleBulkLinePanelMaster()" class="btn-secondary text-xs px-3 py-1.5 rounded">📩 一斉LINE送信</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
+            <button class="text-xs px-3 py-1.5 rounded font-bold bg-green-600 text-white hover:bg-green-700 transition-colors" onclick="showDecryptZipModal()">🔓 ZIP展開</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="showDuplicateMergePanel()">🔗 同一人物候補</button>
           </div>
         </div>
@@ -2483,6 +2484,10 @@
               <p class="text-xs text-ink-lighter mb-2 mt-1">住所→緯度経度のキャッシュ用Google Apps Script WebアプリURL（未設定でも動作します）。</p>
               <input type="text" id="addr-master-gas-url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent" oninput="saveLineSettings()">
             </div>
+            <div class="mt-2">
+              <label class="text-sm font-bold text-text">Proxy Secret（任意）</label>
+              <input type="password" id="proxy-secret" placeholder="Render環境変数 PROXY_SECRET と同じ値" class="w-full border border-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent mt-1" oninput="saveLineSettings()">
+            </div>
 
             <!-- Address Master Rebuild Index -->
             <div class="mt-4 pt-4 border-t border-border">
@@ -2652,6 +2657,36 @@ var driverDB = {
       "百合香 筑紫": {"workDays": 4, "totalHours": 16.5, "totalPackages": 125, "packagesPerHour": 7.58, "totalPackagesAll": 155, "distanceKm": 43, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.71, "lastUpdated": "W22-W31"},
       "蒼汰 北野": {"workDays": 2, "totalHours": 17.0, "totalPackages": 127, "packagesPerHour": 7.47, "totalPackagesAll": 127, "distanceKm": 37, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 100.0, "lastUpdated": "W22-W31"}
     };
+    // driverDBオーバーレイ: 埋め込みにない/差分のあるエントリをlocalStorageから復元
+    var _driverDBEmbeddedKeys = {};
+    for (var _ek in driverDB) { _driverDBEmbeddedKeys[_ek] = true; }
+    try {
+      var _overlay = JSON.parse(localStorage.getItem('driverDBOverlay') || '{}');
+      for (var _ok in _overlay) {
+        if (!driverDB[_ok]) {
+          driverDB[_ok] = _overlay[_ok];
+        } else if (_overlay[_ok].driverId && !driverDB[_ok].driverId) {
+          driverDB[_ok].driverId = _overlay[_ok].driverId;
+        }
+      }
+    } catch(e) { console.warn('driverDBOverlay parse error:', e.message); }
+
+    function saveDriverDBOverlay() {
+      var overlay = {};
+      for (var k in driverDB) {
+        if (!_driverDBEmbeddedKeys[k]) {
+          overlay[k] = driverDB[k];
+        } else if (driverDB[k].driverId) {
+          overlay[k] = { driverId: driverDB[k].driverId };
+        }
+      }
+      try {
+        localStorage.setItem('driverDBOverlay', JSON.stringify(overlay));
+      } catch(e) {
+        console.warn('driverDBOverlay save failed (storage full?):', e.message);
+      }
+    }
+
     var driverIdCounter = parseInt(localStorage.getItem('driverIdCounter') || '0', 10);
     let currentTab = 'dashboard';
 
@@ -2776,6 +2811,7 @@ var driverDB = {
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
       localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+      saveDriverDBOverlay();
       return { merged: true, canonical: canonicalKey, alias: aliasKey };
     }
 
@@ -2904,6 +2940,15 @@ var driverDB = {
       return y + '-' + m + '-' + d;
     }
 
+    // プロキシ認証ヘッダ生成（PROXY_SECRET設定時のみ付与）
+    function getProxyHeaders() {
+      var headers = { 'Content-Type': 'application/json' };
+      if (lineSettings.proxySecret) {
+        headers['X-Proxy-Secret'] = lineSettings.proxySecret;
+      }
+      return headers;
+    }
+
     function escapeHtml(str) {
       var div = document.createElement('div');
       div.appendChild(document.createTextNode(str || ''));
@@ -2918,16 +2963,13 @@ var driverDB = {
 
     // LINE設定（renderMasterTable等より先に必要）
     var lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
-    if (!lineSettings.adminLineId) { lineSettings.adminLineId = 'raizo0428gion'; }
+    if (!lineSettings.adminLineId) { lineSettings.adminLineId = ''; }
     if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
     if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
     localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
     var notifyMode = 'messaging';
 
-    // Pre-register admin
-    if (!lineMapping['前原雷蔵']) { lineMapping['前原雷蔵'] = 'raizo0428gion'; localStorage.setItem('lineMapping', JSON.stringify(lineMapping)); }
-    if (!phoneMapping['前原雷蔵']) { phoneMapping['前原雷蔵'] = '08068286938'; localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping)); }
-    if (!masterNotes['前原雷蔵']) { masterNotes['前原雷蔵'] = '管理者'; localStorage.setItem('masterNotes', JSON.stringify(masterNotes)); }
+    // Admin data removed from source for security — set via master UI on first launch
 
     // ドライバーアイコン共通関数
     function getDriverIcon(name, sizeClass) {
@@ -3823,7 +3865,8 @@ var driverDB = {
         }
       }
       try {
-        // driverDB埋め込み式 — localStorage保存不要
+        // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       } catch (e) {
         alert('ストレージ容量超過: ブラウザのデベロッパーツール > Application > Local Storage からdriverDBを削除してください');
       }
@@ -4068,7 +4111,8 @@ var driverDB = {
       });
 
       // Save to localStorage
-      // driverDB埋め込み式 — localStorage保存不要
+      // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       renderDriverTable();
 
       // Re-calculate predictions if assignment data exists
@@ -4575,7 +4619,8 @@ var driverDB = {
               }
 
               if (updated) {
-                // driverDB埋め込み式 — localStorage保存不要
+                // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
                 localStorage.setItem('driverIdCounter', String(driverIdCounter));
                 localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
                 localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
@@ -4585,19 +4630,19 @@ var driverDB = {
                 localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
                 localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
                 console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
-                // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ
-                if (!forceOverwrite) {
-                  for (var aliasK in driverNameAliases) {
-                    var canonK = driverNameAliases[aliasK];
-                    if (lineMapping[aliasK] || transportIDs[aliasK]) {
-                      mergeDriverKeys(aliasK, canonK);
-                    }
-                  }
-                }
                 renderMasterTable();
               }
             } else if (forceOverwrite) {
               console.log('サーバーにマスタデータが空です');
+            }
+            // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ（updated有無に関わらず）
+            if (!forceOverwrite) {
+              for (var aliasK in driverNameAliases) {
+                var canonK = driverNameAliases[aliasK];
+                if (lineMapping[aliasK] || transportIDs[aliasK] || phoneMapping[aliasK]) {
+                  mergeDriverKeys(aliasK, canonK);
+                }
+              }
             }
           } catch (e) {
             console.warn('マスタ読み込みパースエラー:', e.message);
@@ -6560,7 +6605,7 @@ var driverDB = {
     function mergeSingleDuplicate(idx) {
       var c = window._dupCandidates[idx];
       if (!c) return;
-      if (!confirm(escapeHtml(c.alias) + ' を ' + escapeHtml(c.canonical) + ' に統合しますか？')) return;
+      if (!confirm(c.alias + ' を ' + c.canonical + ' に統合しますか？')) return;
       mergeDriverKeys(c.alias, c.canonical);
       renderMasterTable();
       showDuplicateMergePanel();
@@ -6592,6 +6637,7 @@ var driverDB = {
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
       modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);">'
         + '<h3 style="font-size:16px;font-weight:bold;margin-bottom:16px;">🔒 パスワード付きZIP作成</h3>'
+        + '<p style="font-size:11px;color:#e65100;margin-bottom:12px;background:#fff3e0;padding:6px 10px;border-radius:4px;">⚠ Windows標準の展開では開けません。7-Zip または本アプリの「🔓 ZIP展開」を使用してください。</p>'
         + '<div id="encrypt-zip-dropzone" style="border:2px dashed #ccc;border-radius:8px;padding:30px;text-align:center;margin-bottom:16px;cursor:pointer;transition:border-color 0.2s;" onclick="document.getElementById(\'encrypt-zip-input\').click()">'
         + '<p style="font-size:13px;color:#888;">ファイルをドラッグ＆ドロップ<br>またはクリックして選択</p>'
         + '<p style="font-size:11px;color:#aaa;margin-top:4px;">Excel / PDF / 画像 など何でもOK</p>'
@@ -6716,6 +6762,214 @@ var driverDB = {
       xhr.send(formData);
     }
 
+    // ===== パスワードZIP展開 =====
+    var decryptZipFile = null;
+
+    function showDecryptZipModal() {
+      decryptZipFile = null;
+      var modal = document.createElement('div');
+      modal.id = 'decrypt-zip-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+      modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);">'
+        + '<h3 style="font-size:16px;font-weight:bold;margin-bottom:16px;">🔓 パスワードZIP展開</h3>'
+        + '<div id="decrypt-zip-dropzone" style="border:2px dashed #ccc;border-radius:8px;padding:30px;text-align:center;margin-bottom:16px;cursor:pointer;transition:border-color 0.2s;" onclick="document.getElementById(\'decrypt-zip-input\').click()">'
+        + '<p style="font-size:13px;color:#888;">ZIPファイルをドラッグ＆ドロップ<br>またはクリックして選択</p>'
+        + '<input type="file" id="decrypt-zip-input" accept=".zip" style="display:none;" onchange="onDecryptFileSelect(this)" />'
+        + '</div>'
+        + '<div id="decrypt-zip-file-info" style="display:none;margin-bottom:12px;padding:8px 12px;background:#f0fdf4;border-radius:6px;">'
+        + '<p id="decrypt-zip-filename" style="font-size:12px;font-weight:bold;"></p>'
+        + '<p id="decrypt-zip-filesize" style="font-size:11px;color:#888;"></p>'
+        + '</div>'
+        + '<div style="margin-bottom:16px;">'
+        + '<label style="font-size:12px;font-weight:bold;display:block;margin-bottom:4px;">ZIPパスワード</label>'
+        + '<input type="password" id="decrypt-zip-pw" placeholder="パスワードを入力" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;" />'
+        + '</div>'
+        + '<div id="decrypt-zip-filelist" style="display:none;margin-bottom:12px;max-height:200px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;"></div>'
+        + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+        + '<button onclick="closeDecryptZipModal()" style="padding:8px 16px;border:1px solid #ddd;border-radius:6px;font-size:13px;cursor:pointer;background:white;">キャンセル</button>'
+        + '<button id="decrypt-zip-list-btn" onclick="doDecryptZipList()" style="padding:8px 16px;background:#059669;color:white;border:none;border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;">📋 一覧</button>'
+        + '<button id="decrypt-zip-btn" onclick="doDecryptZipDownload()" style="padding:8px 16px;background:#16a34a;color:white;border:none;border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;">🔓 展開＆ダウンロード</button>'
+        + '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
+
+      var dropzone = document.getElementById('decrypt-zip-dropzone');
+      dropzone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#16a34a';
+        dropzone.style.background = '#f0fdf4';
+      });
+      dropzone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#ccc';
+        dropzone.style.background = 'white';
+      });
+      dropzone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dropzone.style.borderColor = '#ccc';
+        dropzone.style.background = 'white';
+        if (e.dataTransfer.files.length > 0) {
+          setDecryptFile(e.dataTransfer.files[0]);
+        }
+      });
+    }
+
+    function onDecryptFileSelect(input) {
+      if (input.files.length > 0) {
+        setDecryptFile(input.files[0]);
+      }
+    }
+
+    function setDecryptFile(file) {
+      decryptZipFile = file;
+      document.getElementById('decrypt-zip-dropzone').style.display = 'none';
+      var info = document.getElementById('decrypt-zip-file-info');
+      info.style.display = 'block';
+      document.getElementById('decrypt-zip-filename').textContent = '📎 ' + file.name;
+      var sizeKB = (file.size / 1024).toFixed(1);
+      var sizeText = file.size > 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : sizeKB + ' KB';
+      document.getElementById('decrypt-zip-filesize').textContent = sizeText;
+      document.getElementById('decrypt-zip-pw').focus();
+    }
+
+    function closeDecryptZipModal() {
+      var modal = document.getElementById('decrypt-zip-modal');
+      if (modal) modal.remove();
+      decryptZipFile = null;
+    }
+
+    function getDecryptZipUrl() {
+      if (window.location.protocol === 'file:') {
+        return 'https://ofk3-line-proxy-1.onrender.com/decrypt-zip';
+      }
+      return window.location.origin + '/decrypt-zip';
+    }
+
+    function doDecryptZipList() {
+      if (!decryptZipFile) { alert('ZIPファイルを選択してください'); return; }
+      var pw = document.getElementById('decrypt-zip-pw').value;
+      if (!pw) { alert('パスワードを入力してください'); return; }
+
+      var btn = document.getElementById('decrypt-zip-list-btn');
+      btn.disabled = true;
+      btn.textContent = '取得中...';
+
+      var formData = new FormData();
+      formData.append('file', decryptZipFile);
+      formData.append('password', pw);
+      formData.append('mode', 'list');
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', getDecryptZipUrl(), true);
+      xhr.onload = function() {
+        btn.disabled = false;
+        btn.textContent = '📋 一覧';
+        if (xhr.status === 200) {
+          try {
+            var result = JSON.parse(xhr.responseText);
+            var files = result.files || [];
+            var listDiv = document.getElementById('decrypt-zip-filelist');
+            if (files.length === 0) {
+              listDiv.innerHTML = '<p style="padding:8px;font-size:12px;color:#888;">ファイルが見つかりません</p>';
+            } else {
+              var html = '';
+              for (var i = 0; i < files.length; i++) {
+                var f = files[i];
+                if (f.type === 'Directory') continue;
+                var sizeStr = f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(1) + ' KB';
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid #f3f4f6;">'
+                  + '<span style="font-size:12px;">' + escapeHtml(f.path) + ' <span style="color:#888;">(' + sizeStr + ')</span></span>'
+                  + '<button onclick="doDecryptZipDownload(\'' + escapeHtml(f.path).replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:2px 8px;background:#16a34a;color:white;border:none;border-radius:4px;cursor:pointer;">DL</button>'
+                  + '</div>';
+              }
+              listDiv.innerHTML = html;
+            }
+            listDiv.style.display = 'block';
+          } catch(e) {
+            alert('レスポンス解析エラー');
+          }
+        } else {
+          try {
+            var errJson = JSON.parse(xhr.responseText);
+            alert('エラー: ' + (errJson.error || xhr.status));
+          } catch(e) {
+            alert('ZIP展開エラー: ' + xhr.status);
+          }
+        }
+      };
+      xhr.onerror = function() {
+        btn.disabled = false;
+        btn.textContent = '📋 一覧';
+        alert('サーバー通信エラー');
+      };
+      xhr.send(formData);
+    }
+
+    function doDecryptZipDownload(targetFile) {
+      if (!decryptZipFile) { alert('ZIPファイルを選択してください'); return; }
+      var pw = document.getElementById('decrypt-zip-pw').value;
+      if (!pw) { alert('パスワードを入力してください'); return; }
+
+      var btn = document.getElementById('decrypt-zip-btn');
+      btn.disabled = true;
+      btn.textContent = '展開中...';
+
+      var formData = new FormData();
+      formData.append('file', decryptZipFile);
+      formData.append('password', pw);
+      formData.append('mode', 'download');
+      if (targetFile) {
+        formData.append('targetFile', targetFile);
+      }
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', getDecryptZipUrl(), true);
+      xhr.responseType = 'blob';
+      xhr.onload = function() {
+        btn.disabled = false;
+        btn.textContent = '🔓 展開＆ダウンロード';
+        if (xhr.status === 200) {
+          var blob = xhr.response;
+          // Content-Dispositionからファイル名取得
+          var disposition = xhr.getResponseHeader('Content-Disposition');
+          var filename = 'file';
+          if (disposition) {
+            var match = disposition.match(/filename\*=UTF-8''(.+)/);
+            if (match) {
+              filename = decodeURIComponent(match[1]);
+            } else {
+              var match2 = disposition.match(/filename="?([^"]+)"?/);
+              if (match2) filename = match2[1];
+            }
+          }
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+        } else {
+          var reader = new FileReader();
+          reader.onload = function() {
+            var errMsg = xhr.status;
+            try {
+              var errJson = JSON.parse(reader.result);
+              errMsg = errJson.error || errJson.message || xhr.status;
+            } catch(e) {}
+            alert('ZIP展開エラー: ' + errMsg);
+          };
+          reader.readAsText(xhr.response);
+        }
+      };
+      xhr.onerror = function() {
+        btn.disabled = false;
+        btn.textContent = '🔓 展開＆ダウンロード';
+        alert('サーバー通信エラー');
+      };
+      xhr.send(formData);
+    }
+
     function addNewDriver() {
       const name = prompt('ドライバー名を入力してください:');
       if (!name || !name.trim()) return;
@@ -6730,10 +6984,11 @@ var driverDB = {
         workDays: 0,
         totalPackages: 0,
         incidents: 0,
-        lastUpdated: new Date().toISOString().split('T')[0],
+        lastUpdated: getTodayJst(),
         history: []
       };
-      // driverDB埋め込み式 — localStorage保存不要
+      // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       renderMasterTable();
     }
 
@@ -6754,10 +7009,11 @@ var driverDB = {
         workDays: 0,
         totalPackages: 0,
         incidents: 0,
-        lastUpdated: new Date().toISOString().split('T')[0],
+        lastUpdated: getTodayJst(),
         history: []
       };
-      // driverDB埋め込み式 — localStorage保存不要
+      // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       el.value = '';
       renderMasterTable();
     }
@@ -6771,7 +7027,8 @@ var driverDB = {
       delete driverDepartments[name];
       delete driverJapaneseNames[name];
       delete masterNotes[name];
-      // driverDB埋め込み式 — localStorage保存不要
+      // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
       localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
@@ -6800,7 +7057,8 @@ var driverDB = {
       if (driverDepartments[oldName]) { driverDepartments[newName] = driverDepartments[oldName]; delete driverDepartments[oldName]; }
       if (driverJapaneseNames[oldName]) { driverJapaneseNames[newName] = driverJapaneseNames[oldName]; delete driverJapaneseNames[oldName]; }
       if (masterNotes[oldName]) { masterNotes[newName] = masterNotes[oldName]; delete masterNotes[oldName]; }
-      // driverDB埋め込み式 — localStorage保存不要
+      // driverDBオーバーレイ保存
+      saveDriverDBOverlay();
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
       localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
@@ -6843,7 +7101,7 @@ var driverDB = {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `マスタデータ_${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = 'マスタデータ_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -6885,6 +7143,9 @@ var driverDB = {
       if (lineSettings.addrMasterGasUrl) {
         document.getElementById('addr-master-gas-url').value = lineSettings.addrMasterGasUrl;
       }
+      if (lineSettings.proxySecret) {
+        document.getElementById('proxy-secret').value = lineSettings.proxySecret;
+      }
       renderLineMappings();
     }
 
@@ -6898,7 +7159,8 @@ var driverDB = {
         lineBotId: document.getElementById('line-bot-id')?.value || '',
         lineBotLogoUrl: document.getElementById('line-bot-logo-url')?.value || '',
         gasProxyUrl: document.getElementById('gas-proxy-url')?.value || '',
-        addrMasterGasUrl: document.getElementById('addr-master-gas-url')?.value || ''
+        addrMasterGasUrl: document.getElementById('addr-master-gas-url')?.value || '',
+        proxySecret: document.getElementById('proxy-secret')?.value || ''
       };
       localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
 
@@ -14488,7 +14750,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'FTDS分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = 'FTDS分析_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -14728,7 +14990,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'ContactCompliance分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = 'ContactCompliance分析_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -15241,7 +15503,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'LAT分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = 'LAT分析_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -15771,7 +16033,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'DNR分析_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = 'DNR分析_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -16026,7 +16288,7 @@ var driverDB = {
           }
         } else {
           // No date columns - just count rows
-          var today = targetDate || new Date().toISOString().split('T')[0];
+          var today = targetDate || getTodayJst();
           if (!dateMap[today]) dateMap[today] = {};
           dateMap[today][hours] = (dateMap[today][hours] || 0) + 1;
         }
@@ -16301,7 +16563,7 @@ var driverDB = {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = '台数照合_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = '台数照合_' + getTodayJst() + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }
