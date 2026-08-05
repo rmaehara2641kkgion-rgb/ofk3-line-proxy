@@ -50,6 +50,16 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// JST日付ヘルパー（UTC+9補正）
+function getTodayJst() {
+  var now = new Date();
+  var jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  var y = jst.getUTCFullYear();
+  var m = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  var d = String(jst.getUTCDate()).padStart(2, '0');
+  return y + '-' + m + '-' + d;
+}
+
 app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
@@ -394,8 +404,7 @@ var MENTOR_ADMIN_IDS = [
 app.post('/mentor-alert', async (req, res) => {
   try {
     var now = new Date();
-    var jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-    var today = jstNow.toISOString().slice(0, 10);
+    var today = getTodayJst();
     var disappeared = req.body.disappeared || [];
 
     if (disappeared.length === 0) {
@@ -488,7 +497,7 @@ app.post('/mentor-alert', async (req, res) => {
 
 // メンター通知済みドライバー取得・登録（レガシー）
 app.get('/mentor-notified', (req, res) => {
-  var today = new Date().toISOString().slice(0, 10);
+  var today = getTodayJst();
   if (mentorNotified.date !== today) {
     mentorNotified = { date: today, drivers: [] };
   }
@@ -496,7 +505,7 @@ app.get('/mentor-notified', (req, res) => {
 });
 
 app.post('/mentor-notified', (req, res) => {
-  var today = new Date().toISOString().slice(0, 10);
+  var today = getTodayJst();
   if (mentorNotified.date !== today) {
     mentorNotified = { date: today, drivers: [] };
   }
@@ -601,7 +610,7 @@ function wh60AutoCheck() {
   if (wh60AlertData.length === 0) return;
   var now = new Date();
   var nowMin = now.getHours() * 60 + now.getMinutes();
-  var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  var today = getTodayJst();
   wh60LastCheck = now.toISOString();
 
   var dangerDAs = [];
@@ -786,7 +795,7 @@ app.post('/tenko-master', async (req, res) => {
 app.post('/tenko-sync', function(req, res) {
   try {
     log('tenko-sync POST received');
-    var today = new Date().toISOString().slice(0, 10);
+    var today = getTodayJst();
     tenkoSyncStore = {
       schedule: req.body.schedule || [],
       date: req.body.date || today,
