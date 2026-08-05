@@ -3089,6 +3089,9 @@ var driverDB = {
         renderMasterTable();
         refreshAllLineProfiles();
       }
+      if (tab === 'drivers') {
+        refreshAllLineProfiles();
+      }
       if (tab === 'tenko-match') { renderTenkoMatchTable(); renderShiftAggregation(); }
       if (tab === 'scan') { updateScanStatus(); document.getElementById('scan-input') && document.getElementById('scan-input').focus(); }
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
@@ -3171,6 +3174,25 @@ var driverDB = {
           status: getStatus(predictedEnd)
         };
       }).filter(r => r.routeCode); // Filter empty rows
+
+      // 未解決名チェック
+      var unresolved = [];
+      for (var _u = 0; _u < assignmentData.length; _u++) {
+        var _dn = assignmentData[_u].driverName;
+        if (!_dn) continue;
+        var _resolved = resolveDriverKey(_dn);
+        if (!driverDB[_resolved] && !lineMapping[_resolved] && !transportIDs[_resolved]) {
+          if (unresolved.indexOf(_dn) < 0) unresolved.push(_dn);
+        }
+      }
+      if (unresolved.length > 0) {
+        console.warn('アサイン取込: マスタ未登録のドライバー名 ' + unresolved.length + '件', unresolved);
+        var _msg = '\u26A0\uFE0F マスタに未登録の名前が ' + unresolved.length + '件あります:\n'
+          + unresolved.slice(0, 5).join('\n')
+          + (unresolved.length > 5 ? '\n...他 ' + (unresolved.length - 5) + '件' : '')
+          + '\n\n\uD83D\uDCCB 別名マップまたは同一人物候補で統合してください。';
+        setTimeout(function() { alert(_msg); }, 500);
+      }
 
       renderDashboard();
     }
@@ -5115,9 +5137,10 @@ var driverDB = {
       localStorage.removeItem('tenkoSchedule'); // 古いデータがあれば削除して容量確保
     }
 
-    // Auto-refresh overdue highlights every minute
-    setInterval(() => {
+    // Auto-refresh overdue highlights every minute + LINE auto-notify check
+    setInterval(function() {
       if (tenkoSchedule.length > 0 && currentTab === 'tenko') renderTenkoTable();
+      checkTenkoLineNotify();
     }, 60000);
 
     // ===== 点呼データ同期（PC→サーバー→タブレット）=====
@@ -6360,7 +6383,14 @@ var driverDB = {
       try {
         var response = await fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' });
         var data = await response.json().catch(function() { return null; });
-        if (!data || data.status === 'error' || !data.userId) return null;
+        if (!data || data.status === 'error') {
+          console.warn('LINEプロフィール取得失敗:', userId, data && data.status);
+          return null;
+        }
+        if (!data.userId) {
+          console.warn('LINEプロフィール userId なし:', userId);
+          return null;
+        }
         return {
           userId: data.userId,
           displayName: data.displayName || '',
@@ -6384,6 +6414,8 @@ var driverDB = {
         lineProfileCache[userId] = profile;
         saveProfileCache();
         if (currentTab === 'master') renderMasterTable();
+        if (currentTab === 'drivers') renderDriverTable();
+        if (currentTab === 'dashboard' && assignmentData.length > 0) renderDashboard();
       }
     }
 
@@ -6408,7 +6440,13 @@ var driverDB = {
       // 順番に取得（同時実行しすぎないよう200ms間隔）
       var i = 0;
       function next() {
-        if (i >= targets.length) return;
+        if (i >= targets.length) {
+          // 全取得完了 → 現在タブに応じて再描画
+          if (currentTab === 'master') renderMasterTable();
+          if (currentTab === 'drivers') renderDriverTable();
+          if (currentTab === 'dashboard' && assignmentData.length > 0) renderDashboard();
+          return;
+        }
         var userId = targets[i++];
         refreshLineProfile(userId).then(function() {
           setTimeout(next, 200);
@@ -8219,6 +8257,13 @@ var driverDB = {
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) return;
 
+      // 日付変更でsent フラグリセット
+      var _notifyDateKey = getTodayJst();
+      if (window._tenkoNotifyDate !== _notifyDateKey) {
+        tenkoNotifySent = {};
+        window._tenkoNotifyDate = _notifyDateKey;
+      }
+
       var now = new Date();
       var currentMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -8233,7 +8278,7 @@ var driverDB = {
           incomplete.forEach(function(d) {
             var key5 = d.name + '_5min_' + slot.time;
             if (tenkoNotifySent[key5]) return;
-            var userId = lineMapping[d.name];
+            var userId = findLineUserId(d.name, d.name);
             if (userId && userId.indexOf('U') === 0) {
               var msg = '⚠️ 点呼リマインダー\n\n' + d.name + 'さん、着車時間 ' + slot.time + ' まであと5分です。\n点呼認証がまだ完了していません。\n\n🪪 免許証認証: ' + (d.licenseAuth ? '✅' : '❌') + '\n👨‍🏫 メンター認証: ' + (d.mentorAuth ? '✅' : '❌');
               pushTenkoNotify(userId, msg);
