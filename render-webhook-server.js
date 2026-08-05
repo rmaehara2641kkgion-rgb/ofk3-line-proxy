@@ -1,3 +1,5 @@
+// OFK3 Delivery App - Server (render-webhook-server.js)
+// ZIP roundtrip test: encrypt-zip(zip20) -> decrypt-zip(unzipper) — both ZipCrypto, compatible
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
