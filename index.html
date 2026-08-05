@@ -2669,6 +2669,53 @@ var driverDB = {
     }
     let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
     let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
+    var driverNameAliases = JSON.parse(localStorage.getItem('driverNameAliases') || '{}');
+
+    // 中央名前解決関数: 別名→正キーに変換
+    function resolveDriverKey(name) {
+      if (!name) return name;
+      // a) 別名マップに登録済み
+      if (driverNameAliases[name]) return driverNameAliases[name];
+      // b) そのまま既存データにヒット
+      if (driverDB[name] || lineMapping[name] || transportIDs[name]) return name;
+      // c) aggNormName でサフィックス除去（「• OHRE」等）
+      var norm = String(name || '');
+      var sepIdx = norm.indexOf('\u2022');
+      if (sepIdx < 0) sepIdx = norm.indexOf(' - ');
+      if (sepIdx > 0) norm = norm.substring(0, sepIdx);
+      norm = norm.replace(/\s+/g, ' ').trim();
+      if (norm !== name && (driverDB[norm] || lineMapping[norm] || transportIDs[norm])) {
+        // 自動的に別名マップに登録
+        driverNameAliases[name] = norm;
+        localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+        return norm;
+      }
+      // d) 空白除去一致
+      var noSpace = (norm || name).replace(/[\s\u3000]/g, '');
+      var dbKeys = Object.keys(driverDB);
+      for (var i = 0; i < dbKeys.length; i++) {
+        if (dbKeys[i].replace(/[\s\u3000]/g, '') === noSpace) return dbKeys[i];
+      }
+      var lmKeys = Object.keys(lineMapping);
+      for (var j = 0; j < lmKeys.length; j++) {
+        if (lmKeys[j].replace(/[\s\u3000]/g, '') === noSpace) return lmKeys[j];
+      }
+      // e) 姓名反転（2語分割）
+      var parts = (norm || name).split(/\s+/);
+      if (parts.length === 2) {
+        var reversed = parts[1] + ' ' + parts[0];
+        if (driverDB[reversed] || lineMapping[reversed] || transportIDs[reversed]) return reversed;
+      }
+      // f) transportID逆引き（同一TIDなら正キー）
+      var tidVal = transportIDs[name] || transportIDs[norm];
+      if (tidVal) {
+        for (var tKey in transportIDs) {
+          if (transportIDs[tKey] === tidVal && tKey !== name && driverDB[tKey]) return tKey;
+        }
+      }
+      // g) 解決できなければ元の name
+      return name;
+    }
     var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
 
     // LINE profile cache
@@ -2691,6 +2738,7 @@ var driverDB = {
     // ドライバーアイコン共通関数
     function getDriverIcon(name, sizeClass) {
       sizeClass = sizeClass || 'w-8 h-8';
+      name = resolveDriverKey(name);
       // 日本語名→元名の逆引きも試す
       var lid = lineMapping[name] || '';
       if (!lid) {
@@ -2805,7 +2853,7 @@ var driverDB = {
     function processAssignmentData(data) {
       assignmentData = data.map(row => {
         const routeCode = row['ルートコード'] || '';
-        const driverName = row['ドライバー名'] || '';
+        const driverName = resolveDriverKey(row['ドライバー名'] || '');
         const serviceType = row['配送サービスタイプ'] || '';
         const totalDeliveries = parseInt(row['合計配達数']) || 0;
         const allDestinations = parseInt(row['すべての目的地']) || 0;
@@ -2844,6 +2892,7 @@ var driverDB = {
 
     function findDriver(name) {
       if (!name) return null;
+      name = resolveDriverKey(name);
       // Direct match
       if (driverDB[name]) return driverDB[name];
       // Try reversing first/last name
@@ -4286,11 +4335,14 @@ var driverDB = {
               for (var i = 0; i < serverDrivers.length; i++) {
                 var d = serverDrivers[i];
                 if (!d.englishName) continue;
+                // 別名解決: サーバー名が別名なら正キーに変換
+                var resolvedName = resolveDriverKey(d.englishName);
+                serverNames[resolvedName] = true;
                 serverNames[d.englishName] = true;
 
-                if (forceOverwrite || !driverDB[d.englishName]) {
-                  if (!driverDB[d.englishName]) {
-                    driverDB[d.englishName] = {
+                if (forceOverwrite || !driverDB[resolvedName]) {
+                  if (!driverDB[resolvedName]) {
+                    driverDB[resolvedName] = {
                       driverId: ++driverIdCounter,
                       history: [],
                       haikanCount: 0,
@@ -4300,11 +4352,11 @@ var driverDB = {
                   }
                 }
 
-                if (d.japaneseName) { driverJapaneseNames[d.englishName] = d.japaneseName; updated = true; }
-                if (d.transportId) { transportIDs[d.englishName] = d.transportId; updated = true; }
-                if (d.company) { driverDepartments[d.englishName] = d.company; updated = true; }
-                if (d.lineId) { lineMapping[d.englishName] = d.lineId; updated = true; }
-                if (d.phone) { phoneMapping[d.englishName] = d.phone; updated = true; }
+                if (d.japaneseName) { driverJapaneseNames[resolvedName] = d.japaneseName; updated = true; }
+                if (d.transportId) { transportIDs[resolvedName] = d.transportId; updated = true; }
+                if (d.company) { driverDepartments[resolvedName] = d.company; updated = true; }
+                if (d.lineId) { lineMapping[resolvedName] = d.lineId; updated = true; }
+                if (d.phone) { phoneMapping[resolvedName] = d.phone; updated = true; }
               }
 
               // 強制上書きモード: サーバーに存在しないローカルデータを削除
@@ -5139,6 +5191,7 @@ var driverDB = {
 
     // ファジーマッチ: スペース・全角半角を無視して点呼スケジュールから名前検索
     function findTenkoDriver(name) {
+      name = resolveDriverKey(name);
       var clean = name.replace(/[\s　]/g, '');
       for (var i = 0; i < tenkoSchedule.length; i++) {
         if (tenkoSchedule[i].name === name) return i;
@@ -5739,8 +5792,8 @@ var driverDB = {
       // Merge all known drivers from driverDB, lineMapping, phoneMapping, AND assignmentData
       const allDrivers = new Set([
         ...Object.keys(driverDB),
-        ...Object.keys(lineMapping),
-        ...Object.keys(phoneMapping),
+        ...Object.keys(lineMapping).map(function(k) { return resolveDriverKey(k); }),
+        ...Object.keys(phoneMapping).map(function(k) { return resolveDriverKey(k); }),
         ...assignmentData.map(r => r.driverName).filter(Boolean)
       ]);
       let drivers = [...allDrivers].sort(function(a, b) {
@@ -6468,8 +6521,8 @@ var driverDB = {
     function exportMasterData() {
       const allDrivers = new Set([
         ...Object.keys(driverDB),
-        ...Object.keys(lineMapping),
-        ...Object.keys(phoneMapping),
+        ...Object.keys(lineMapping).map(function(k) { return resolveDriverKey(k); }),
+        ...Object.keys(phoneMapping).map(function(k) { return resolveDriverKey(k); }),
         ...assignmentData.map(r => r.driverName).filter(Boolean)
       ]);
       const rows = [['ドライバー名', '名前（日本語）', '所属', 'TransportID', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
@@ -9522,6 +9575,8 @@ var driverDB = {
     }
 
     function findLineUserId(driverKey, name) {
+      driverKey = resolveDriverKey(driverKey);
+      name = resolveDriverKey(name);
       if (lineMapping[driverKey]) return lineMapping[driverKey];
       if (lineMapping[name]) return lineMapping[name];
       var cleanName = name.replace(/[\s　]/g, '');
