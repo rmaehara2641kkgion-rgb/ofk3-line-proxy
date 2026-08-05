@@ -673,6 +673,7 @@
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-green-600 text-white hover:bg-green-700 transition-colors" onclick="showDecryptZipModal()">🔓 ZIP展開</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="showDuplicateMergePanel()">🔗 同一人物候補</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-gray-500 text-white hover:bg-gray-600 transition-colors" onclick="showAliasMapPanel()">📋 別名マップ</button>
+            <button class="text-xs px-3 py-1.5 rounded font-bold bg-gray-400 text-white hover:bg-gray-500 transition-colors" onclick="showDeletedDriversPanel()" id="btn-deleted-drivers">🗑 退職者(<span id="deleted-count-badge">0</span>)</button>
           </div>
         </div>
 
@@ -2672,6 +2673,33 @@ var driverDB = {
       }
     } catch(e) { console.warn('driverDBOverlay parse error:', e.message); }
 
+    // === 退職者削除リスト（永続化） ===
+    var _deletedArr = JSON.parse(localStorage.getItem('deletedDrivers') || '[]');
+    var deletedDrivers = {};
+    for (var _di = 0; _di < _deletedArr.length; _di++) {
+      if (_deletedArr[_di]) deletedDrivers[_deletedArr[_di]] = true;
+    }
+
+    function isDriverDeleted(name) {
+      if (!name) return false;
+      name = resolveDriverKey(name);
+      return !!deletedDrivers[name];
+    }
+
+    function markDriverDeleted(name) {
+      if (!name) return;
+      name = resolveDriverKey(name);
+      deletedDrivers[name] = true;
+      localStorage.setItem('deletedDrivers', JSON.stringify(Object.keys(deletedDrivers)));
+    }
+
+    function unmarkDriverDeleted(name) {
+      if (!name) return;
+      name = resolveDriverKey(name);
+      delete deletedDrivers[name];
+      localStorage.setItem('deletedDrivers', JSON.stringify(Object.keys(deletedDrivers)));
+    }
+
     function saveDriverDBOverlay() {
       var overlay = {};
       for (var k in driverDB) {
@@ -2707,6 +2735,31 @@ var driverDB = {
     let driverDepartments = JSON.parse(localStorage.getItem('driverDepartments') || '{}');
     let driverJapaneseNames = JSON.parse(localStorage.getItem('driverJapaneseNames') || '{}');
     var driverNameAliases = JSON.parse(localStorage.getItem('driverNameAliases') || '{}');
+
+    // 起動時: 退職者のマスタ表示用データを除去（driverDBキー自体は能力DB用に残す）
+    (function applyDeletedDrivers() {
+      for (var _delKey in deletedDrivers) {
+        if (!deletedDrivers[_delKey]) continue;
+        delete lineMapping[_delKey];
+        delete phoneMapping[_delKey];
+        delete transportIDs[_delKey];
+        delete driverDepartments[_delKey];
+        delete driverJapaneseNames[_delKey];
+        delete masterNotes[_delKey];
+        for (var _ak in driverNameAliases) {
+          if (_ak === _delKey || driverNameAliases[_ak] === _delKey) {
+            delete driverNameAliases[_ak];
+          }
+        }
+      }
+      localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+      localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
+      localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+      localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+      localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
+      localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+      localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+    })();
 
     // 別名登録ヘルパー
     function registerDriverAlias(alias, canonical) {
@@ -4636,7 +4689,7 @@ var driverDB = {
       var drivers = [];
       function addDriver(name) {
         var resolved = resolveDriverKey(name);
-        if (!resolved || added[resolved]) return;
+        if (!resolved || added[resolved] || isDriverDeleted(resolved)) return;
         added[resolved] = true;
         drivers.push({
           englishName: resolved,
@@ -4709,8 +4762,9 @@ var driverDB = {
               for (var i = 0; i < serverDrivers.length; i++) {
                 var d = serverDrivers[i];
                 if (!d.englishName) continue;
-                // 別名解決: サーバー名が別名なら正キーに変換
+                // 退職者はGASから復活させない
                 var resolvedName = resolveDriverKey(d.englishName);
+                if (isDriverDeleted(resolvedName)) continue;
                 if (resolvedName !== d.englishName) {
                   registerDriverAlias(d.englishName, resolvedName);
                 }
@@ -4739,6 +4793,7 @@ var driverDB = {
               // 強制上書きモード: サーバーに存在しないローカルデータを削除
               if (forceOverwrite) {
                 for (var localName in driverDB) {
+                  if (isDriverDeleted(localName)) continue;
                   if (!serverNames[localName]) {
                     delete driverDB[localName];
                     delete driverJapaneseNames[localName];
@@ -6185,7 +6240,9 @@ var driverDB = {
         ...Object.keys(phoneMapping).map(function(k) { return resolveDriverKey(k); }),
         ...assignmentData.map(function(r) { return resolveDriverKey(r.driverName || ''); }).filter(Boolean)
       ]);
-      let drivers = [...allDrivers].sort(function(a, b) {
+      let drivers = [...allDrivers].filter(function(name) {
+        return !isDriverDeleted(name);
+      }).sort(function(a, b) {
         var idA = (driverDB[a] && driverDB[a].driverId) || 99999;
         var idB = (driverDB[b] && driverDB[b].driverId) || 99999;
         return idA - idB;
@@ -6197,12 +6254,15 @@ var driverDB = {
 
       let linked = 0, unlinked = 0;
       [...allDrivers].forEach(name => {
+        if (isDriverDeleted(name)) return;
         if (lineMapping[name] || phoneMapping[name]) linked++; else unlinked++;
       });
 
-      document.getElementById('master-total').textContent = `合計: ${allDrivers.size}名`;
-      document.getElementById('master-linked').textContent = `紐付け済み: ${linked}名`;
-      document.getElementById('master-unlinked').textContent = `未紐付け: ${unlinked}名`;
+      var deletedCount = Object.keys(deletedDrivers).length;
+      document.getElementById('master-total').textContent = '\u5408\u8A08: ' + (allDrivers.size - deletedCount) + '\u540D' + (deletedCount > 0 ? '\uFF08\u9000\u8077\u8005' + deletedCount + '\u540D\u975E\u8868\u793A\uFF09' : '');
+      document.getElementById('master-linked').textContent = '\u7D10\u4ED8\u3051\u6E08\u307F: ' + linked + '\u540D';
+      document.getElementById('master-unlinked').textContent = '\u672A\u7D10\u4ED8\u3051: ' + unlinked + '\u540D';
+      updateDeletedCountBadge();
 
       if (drivers.length === 0) {
         tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-12 text-center text-sm text-ink-lighter">' +
@@ -6846,6 +6906,68 @@ var driverDB = {
       showAliasMapPanel();
     }
 
+    // === 退職者一覧パネル ===
+    function showDeletedDriversPanel() {
+      var keys = Object.keys(deletedDrivers);
+      var existing = document.getElementById('deleted-drivers-modal');
+      if (existing) existing.remove();
+      var modal = document.createElement('div');
+      modal.id = 'deleted-drivers-modal';
+      modal.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50';
+      modal.style.cssText = 'overflow:auto';
+
+      var html = '<div class="bg-surface rounded-lg shadow-xl max-w-lg w-full mx-4 my-8 max-h-[90vh] overflow-auto">';
+      html += '<div class="p-4 border-b border-border flex items-center justify-between">';
+      html += '<h3 style="font-size:16px;font-weight:bold;">\uD83D\uDDD1 \u9000\u8077\u8005\u30EA\u30B9\u30C8\uFF08' + keys.length + '\u540D\uFF09</h3>';
+      html += '<button onclick="document.getElementById(\'deleted-drivers-modal\').remove()" class="text-ink-lighter hover:text-ink text-lg cursor-pointer">\u2715</button>';
+      html += '</div>';
+      html += '<div class="p-4">';
+      if (keys.length === 0) {
+        html += '<p style="font-size:13px;color:#888;">\u9000\u8077\u8005\u306F\u3044\u307E\u305B\u3093</p>';
+      } else {
+        html += '<p style="font-size:11px;color:#6b7280;margin-bottom:8px;">\u5FA9\u5143\u3059\u308B\u3068\u30DE\u30B9\u30BF\u306B\u518D\u8868\u793A\u3055\u308C\u307E\u3059\u3002\u80FD\u529BDB\u306E\u5B9F\u7E3E\u306F\u524A\u9664\u6642\u3082\u4FDD\u6301\u3055\u308C\u3066\u3044\u307E\u3059\u3002</p>';
+        for (var i = 0; i < keys.length; i++) {
+          var n = keys[i];
+          var hasDB = driverDB[n] ? '\u2705\u80FD\u529BDB\u3042\u308A' : '';
+          html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #e5e7eb;">';
+          html += '<span style="font-size:13px;">' + escapeHtml(n) + ' <span style="font-size:10px;color:#6b7280;">' + hasDB + '</span></span>';
+          html += '<button onclick="restoreDeletedDriver(\'' + n.replace(/'/g, "\\'") + '\')" style="padding:3px 10px;border:none;border-radius:4px;background:#2563eb;color:white;font-size:11px;cursor:pointer;">\u5FA9\u5143</button>';
+          html += '</div>';
+        }
+        html += '<div style="margin-top:12px;text-align:right;">';
+        html += '<button onclick="restoreAllDeletedDrivers()" style="padding:4px 12px;border:none;border-radius:4px;background:#dc2626;color:white;font-size:11px;cursor:pointer;">\u5168\u54E1\u5FA9\u5143</button>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+      modal.innerHTML = html;
+      document.body.appendChild(modal);
+    }
+
+    function restoreDeletedDriver(name) {
+      unmarkDriverDeleted(name);
+      renderMasterTable();
+      updateDeletedCountBadge();
+      showDeletedDriversPanel();
+    }
+
+    function restoreAllDeletedDrivers() {
+      var keys = Object.keys(deletedDrivers);
+      if (keys.length === 0) return;
+      if (!confirm('\u9000\u8077\u8005' + keys.length + '\u540D\u3092\u5168\u54E1\u5FA9\u5143\u3057\u307E\u3059\u304B\uFF1F')) return;
+      for (var i = 0; i < keys.length; i++) {
+        delete deletedDrivers[keys[i]];
+      }
+      localStorage.setItem('deletedDrivers', JSON.stringify(Object.keys(deletedDrivers)));
+      renderMasterTable();
+      updateDeletedCountBadge();
+      showDeletedDriversPanel();
+    }
+
+    function updateDeletedCountBadge() {
+      var el = document.getElementById('deleted-count-badge');
+      if (el) el.textContent = String(Object.keys(deletedDrivers).length);
+    }
+
     var encryptZipFile = null;
 
     function showEncryptZipModal() {
@@ -7237,22 +7359,36 @@ var driverDB = {
     }
 
     function deleteDriver(name) {
-      if (!confirm(`「${name}」を削除しますか？\nドライバーDB・LINE紐付け・電話番号・所属・メモすべて削除されます。`)) return;
-      delete driverDB[name];
-      delete lineMapping[name];
-      delete phoneMapping[name];
-      delete transportIDs[name];
-      delete driverDepartments[name];
-      delete driverJapaneseNames[name];
-      delete masterNotes[name];
-      // driverDBオーバーレイ保存
-      saveDriverDBOverlay();
+      if (!name) return;
+      var resolved = resolveDriverKey(name);
+      if (!confirm('\u300C' + resolved + '\u300D\u3092\u30DE\u30B9\u30BF\u304B\u3089\u524A\u9664\u3057\u307E\u3059\u304B\uFF1F\n\nLINE\u30FBTID\u30FB\u96FB\u8A71\u30FB\u6240\u5C5E\u30FB\u30E1\u30E2\u3092\u524A\u9664\u3057\u3001\u9000\u8077\u8005\u30EA\u30B9\u30C8\u306B\u8FFD\u52A0\u3057\u307E\u3059\u3002\n\uFF08\u80FD\u529BDB\u306E\u904E\u53BB\u5B9F\u7E3E\u306F\u6B8B\u308A\u307E\u3059\uFF09')) return;
+
+      markDriverDeleted(resolved);
+
+      // マスタ関連データ削除
+      delete lineMapping[resolved];
+      delete phoneMapping[resolved];
+      delete transportIDs[resolved];
+      delete driverDepartments[resolved];
+      delete driverJapaneseNames[resolved];
+      delete masterNotes[resolved];
+
+      // 別名マップから除去
+      for (var ak in driverNameAliases) {
+        if (ak === resolved || driverNameAliases[ak] === resolved) {
+          delete driverNameAliases[ak];
+        }
+      }
+
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
       localStorage.setItem('phoneMapping', JSON.stringify(phoneMapping));
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
       localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+      localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+
+      saveDriverDBOverlay();
       renderMasterTable();
     }
 
@@ -7296,6 +7432,7 @@ var driverDB = {
       const rows = [['ドライバー名', '名前（日本語）', '所属', 'TransportID', 'LINE User ID', '電話番号', '能力(個/h)', '配管率(%)', '稼働日数', '総配送数', 'メモ', '連携状態']];
 
       [...allDrivers].sort((a, b) => a.localeCompare(b, 'ja')).forEach(name => {
+        if (isDriverDeleted(name)) return;
         const db = driverDB[name] || {};
         rows.push([
           name,
