@@ -672,6 +672,7 @@
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors" onclick="showEncryptZipModal()">🔒 パスワードZIP</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-green-600 text-white hover:bg-green-700 transition-colors" onclick="showDecryptZipModal()">🔓 ZIP展開</button>
             <button class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="showDuplicateMergePanel()">🔗 同一人物候補</button>
+            <button class="text-xs px-3 py-1.5 rounded font-bold bg-gray-500 text-white hover:bg-gray-600 transition-colors" onclick="showAliasMapPanel()">📋 別名マップ</button>
           </div>
         </div>
 
@@ -2955,6 +2956,34 @@ var driverDB = {
       return div.innerHTML;
     }
 
+    // ===== CameraManager シングルトン =====
+    var CameraManager = (function() {
+      var activeStream = null;
+      var activeMode = null; // 'qr' | 'ocr' | 'license' | null
+      function stop() {
+        if (activeStream) {
+          activeStream.getTracks().forEach(function(t) { t.stop(); });
+          activeStream = null;
+        }
+        activeMode = null;
+      }
+      function start(mode, constraints) {
+        stop();
+        activeMode = mode;
+        return navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+          activeStream = stream;
+          return stream;
+        });
+      }
+      function getStream() { return activeStream; }
+      function getMode() { return activeMode; }
+      return { start: start, stop: stop, getStream: getStream, getMode: getMode };
+    })();
+
+    window.addEventListener('beforeunload', function() {
+      CameraManager.stop();
+    });
+
     var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
 
     // LINE profile cache
@@ -3026,6 +3055,12 @@ var driverDB = {
 
     // ===== Tab Navigation =====
     function switchTab(tab) {
+      // カメラ安全停止: tenko/scan以外に移動する場合
+      if (tab !== 'tenko' && tab !== 'scan') {
+        CameraManager.stop();
+        if (typeof stopQrScan === 'function') stopQrScan();
+        if (typeof stopOcrScan === 'function') stopOcrScan();
+      }
       currentTab = tab;
       // Update gradient background
       var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract','tab-quality'];
@@ -4510,6 +4545,7 @@ var driverDB = {
           japaneseName: driverJapaneseNames[resolved] || driverJapaneseNames[name] || '',
           transportId: transportIDs[resolved] || transportIDs[name] || '',
           lineId: lineMapping[resolved] || lineMapping[name] || '',
+          phone: phoneMapping[resolved] || phoneMapping[name] || '',
           company: driverDepartments[resolved] || driverDepartments[name] || ''
         });
       }
@@ -4643,6 +4679,7 @@ var driverDB = {
                   mergeDriverKeys(aliasK, canonK);
                 }
               }
+              renderMasterTable();
             }
           } catch (e) {
             console.warn('マスタ読み込みパースエラー:', e.message);
@@ -4742,7 +4779,7 @@ var driverDB = {
     }
 
     // ===== Camera License Authentication =====
-    let cameraStream = null;
+    let cameraStream = null; // legacy — CameraManager に移行済み
     let cameraDriverIndex = -1;
     let cameraAuthType = 'license'; // 'license' or 'mentor'
 
@@ -4843,10 +4880,9 @@ var driverDB = {
         if (deviceId) {
           constraints.video.deviceId = { exact: deviceId };
         }
-        return navigator.mediaDevices.getUserMedia(constraints);
+        return CameraManager.start('license', constraints);
       })
         .then(function(stream) {
-          cameraStream = stream;
           video.srcObject = stream;
           video.play();
         })
@@ -4890,10 +4926,7 @@ var driverDB = {
 
     function closeCameraModal() {
       document.getElementById('camera-modal').classList.add('hidden');
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
-      }
+      CameraManager.stop();
       document.getElementById('camera-video').srcObject = null;
       cameraDriverIndex = -1;
     }
@@ -5337,8 +5370,10 @@ var driverDB = {
             html5QrCode.clear();
             html5QrCode = null;
           }
+          CameraManager.stop();
         }).catch(function() {
           html5QrCode = null;
+          CameraManager.stop();
         });
       }
     }
@@ -5471,7 +5506,7 @@ var driverDB = {
         if (bestDeviceId) {
           constraints.video.deviceId = { exact: bestDeviceId };
         }
-        ocrStream = await navigator.mediaDevices.getUserMedia(constraints);
+        ocrStream = await CameraManager.start('ocr', constraints);
         video.srcObject = ocrStream;
         video.play();
       } catch (err) {
@@ -5636,10 +5671,8 @@ var driverDB = {
 
     function stopOcrScan() {
       ocrScanning = false;
-      if (ocrStream) {
-        ocrStream.getTracks().forEach(t => t.stop());
-        ocrStream = null;
-      }
+      CameraManager.stop();
+      ocrStream = null;
       const video = document.getElementById('ocr-display-video');
       if (video) video.srcObject = null;
     }
@@ -6628,6 +6661,59 @@ var driverDB = {
       showDuplicateMergePanel();
     }
 
+    // === 別名マップ確認パネル ===
+    function showAliasMapPanel() {
+      var aliases = driverNameAliases || {};
+      var keys = Object.keys(aliases);
+      var existing = document.getElementById('alias-map-modal');
+      if (existing) existing.remove();
+
+      var modal = document.createElement('div');
+      modal.id = 'alias-map-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+      var html = '<div style="background:white;border-radius:12px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">';
+      html += '<h3 style="font-size:16px;font-weight:bold;">📋 別名マップ（' + keys.length + '件）</h3>';
+      html += '<button onclick="document.getElementById(\'alias-map-modal\').remove()" style="font-size:18px;background:none;border:none;cursor:pointer;">✕</button>';
+      html += '</div>';
+
+      if (keys.length === 0) {
+        html += '<p style="font-size:13px;color:#888;">別名マップは空です</p>';
+      } else {
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        html += '<tr style="background:#f3f4f6;"><th style="padding:6px 8px;text-align:left;">別名</th><th style="padding:6px 8px;text-align:left;">→ 正キー</th></tr>';
+        for (var i = 0; i < keys.length; i++) {
+          html += '<tr style="border-bottom:1px solid #e5e7eb;"><td style="padding:6px 8px;">' + escapeHtml(keys[i]) + '</td><td style="padding:6px 8px;">' + escapeHtml(aliases[keys[i]]) + '</td></tr>';
+        }
+        html += '</table>';
+      }
+
+      html += '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">';
+      html += '<button onclick="exportAliasMap()" style="padding:6px 14px;background:#3b82f6;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;">📥 JSONエクスポート</button>';
+      html += '<button onclick="clearAliasMap()" style="padding:6px 14px;background:#ef4444;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;">🗑 クリア</button>';
+      html += '</div></div>';
+      modal.innerHTML = html;
+      document.body.appendChild(modal);
+    }
+
+    function exportAliasMap() {
+      var json = JSON.stringify(driverNameAliases || {}, null, 2);
+      var blob = new Blob([json], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'driverNameAliases_' + getTodayJst() + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function clearAliasMap() {
+      if (!confirm('別名マップを全てクリアしますか？\n（resolveDriverKey の名前解決に影響します）')) return;
+      driverNameAliases = {};
+      localStorage.setItem('driverNameAliases', JSON.stringify(driverNameAliases));
+      alert('別名マップをクリアしました');
+      showAliasMapPanel();
+    }
+
     var encryptZipFile = null;
 
     function showEncryptZipModal() {
@@ -7471,7 +7557,7 @@ var driverDB = {
           try {
             var saveRes = await fetch('/route-data', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: getProxyHeaders(),
               body: JSON.stringify({ route: route.routeCode, points: routeDeliveryData })
             });
             var saveData = await saveRes.json();
@@ -7533,7 +7619,7 @@ var driverDB = {
 
         var response = await fetch(proxyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ to: testUserId, messages: messages })
         });
         var data = await response.json().catch(function() { return {}; });
@@ -7700,7 +7786,7 @@ var driverDB = {
             mode: 'cors',
             redirect: 'follow',
             credentials: 'omit',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify({ to, messages })
           });
           const data = await response.json().catch(() => ({}));
@@ -7763,7 +7849,7 @@ var driverDB = {
             try {
               var svRes = await fetch('/route-data', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getProxyHeaders(),
                 body: JSON.stringify({ route: route.routeCode, points: routeDD })
               });
               var svData = await svRes.json();
@@ -8162,7 +8248,7 @@ var driverDB = {
           method: 'POST',
           mode: 'cors',
           credentials: 'omit',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ to: to, messages: [{ type: 'text', text: text }] })
         });
       } catch(e) {
@@ -9071,7 +9157,7 @@ var driverDB = {
               mode: 'cors',
               redirect: 'follow',
               credentials: 'omit',
-              headers: { 'Content-Type': 'application/json' },
+              headers: getProxyHeaders(),
               body: JSON.stringify({ to: lineId, messages: batch })
             });
             var resData = await res.json().catch(function() { return {}; });
@@ -9232,7 +9318,7 @@ var driverDB = {
       try {
         var res = await fetch(proxyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ to: adminId, messages: messages })
         });
         if (res.ok) {
@@ -9269,7 +9355,7 @@ var driverDB = {
         try {
           var res = await fetch(proxyUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify({ to: lineId, messages: messages })
           });
           if (res.ok) {
@@ -10269,7 +10355,7 @@ var driverDB = {
       try {
         var resp = await fetch('/pdf-upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ filename: pdf.filename, data: pdf.base64 })
         });
         var result = await resp.json();
@@ -10446,7 +10532,7 @@ var driverDB = {
             method: 'POST',
             mode: 'cors',
             credentials: 'omit',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify({ to: userId, messages: lineMessages })
           });
           billingSent[d.name] = true;
@@ -10758,7 +10844,7 @@ var driverDB = {
         await fetch(gasUrl + '?action=save', {
           method: 'POST',
           redirect: 'follow',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ address: norm, lat: lat, lng: lng })
         });
         inMemoryAddrMaster[addr] = { lat: lat, lng: lng };
@@ -10788,7 +10874,7 @@ var driverDB = {
           var res = await fetch(gasUrl + '?action=batchSave', {
             method: 'POST',
             redirect: 'follow',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify(chunk)
           });
           var data = await res.json();
@@ -10820,7 +10906,7 @@ var driverDB = {
           var res = await fetch(gasUrl + '?action=batchUpdateCoords', {
             method: 'POST',
             redirect: 'follow',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify(chunk)
           });
           var data = await res.json();
@@ -11163,7 +11249,7 @@ var driverDB = {
         }
         var saveRes = await fetch(gasUrl + '?action=replaceAll', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify(payload),
           redirect: 'follow'
         });
@@ -11543,7 +11629,7 @@ var driverDB = {
           mode: 'cors',
           redirect: 'follow',
           credentials: 'omit',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ to: userId, messages: [{ type: 'text', text: msg }] })
         });
         var data = await response.json().catch(function() { return {}; });
@@ -13011,7 +13097,7 @@ var driverDB = {
       try {
         var res = await fetch('/volume-master?action=save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify(volumeBatchResults)
         });
         var data = await res.json();
@@ -13144,7 +13230,7 @@ var driverDB = {
       try {
         var res = await fetch('/volume-master?action=save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify([slim])
         });
         var data = await res.json();
@@ -13754,7 +13840,7 @@ var driverDB = {
         (function(target) {
           fetch(lineSettings.webhookUrl + '/proxy/line/push', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getProxyHeaders(),
             body: JSON.stringify({ to: target.lineId, message: msg })
           }).then(function(res) {
             if (res.ok) { sentOk++; } else { sentFail++; }
@@ -14172,7 +14258,7 @@ var driverDB = {
       try {
         // 管理者に送信
         var res = await fetch(proxyUrl, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: getProxyHeaders(),
           body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: adminMsg }] })
         });
         if (res.ok) sentCount++; else failCount++;
@@ -14187,7 +14273,7 @@ var driverDB = {
           personalMsg += '帰庫リミット: ' + d.returnLimit + '\n\n';
           personalMsg += '超過しないよう早めの帰庫をお願いします。';
           var res2 = await fetch(proxyUrl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: getProxyHeaders(),
             body: JSON.stringify({ to: d.lineId, messages: [{ type: 'text', text: personalMsg }] })
           });
           if (res2.ok) sentCount++; else failCount++;
@@ -14242,7 +14328,7 @@ var driverDB = {
           adminMsg += targets[i].name + '（' + targets[i].dsp + '）→ ' + targets[i].returnLimit + ' 帰庫必須\n';
         }
         var res = await fetch(proxyUrl, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: getProxyHeaders(),
           body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: adminMsg }] })
         });
         if (res.ok) sentCount++; else failCount++;
@@ -14256,7 +14342,7 @@ var driverDB = {
           msg += '残り稼働可能: ' + wh60FormatHours(t.remaining) + '\n\n';
           msg += '60時間超過防止のため、帰庫時刻を意識して行動してください。';
           var res2 = await fetch(proxyUrl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: getProxyHeaders(),
             body: JSON.stringify({ to: t.lineId, messages: [{ type: 'text', text: msg }] })
           });
           if (res2.ok) sentCount++; else failCount++;
@@ -14297,7 +14383,7 @@ var driverDB = {
       try {
         var res = await fetch('/wh60/save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify({ drivers: drivers })
         });
         var data = await res.json();
@@ -14490,7 +14576,7 @@ var driverDB = {
       try {
         var res = await fetch('/volume-master?action=save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getProxyHeaders(),
           body: JSON.stringify(saveData)
         });
         var data = await res.json();
@@ -15879,7 +15965,7 @@ var driverDB = {
       var ADMIN_LINE_ID = 'U48be7d67e979988a2298c2b9b8cb8035';
       fetch('https://ofk3-line-proxy-1.onrender.com/push', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getProxyHeaders(),
         body: JSON.stringify({ to: ADMIN_LINE_ID, messages: [{ type: 'text', text: msg }] })
       }).then(function(res) {
         if (res.ok) { alert('LINE送信完了'); dnrCloseLineModal(); }
@@ -15996,7 +16082,7 @@ var driverDB = {
 
       fetch('https://ofk3-line-proxy-1.onrender.com/push', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getProxyHeaders(),
         body: JSON.stringify({ to: lineId, messages: [{ type: 'text', text: msg }] })
       }).then(function(res) {
         if (res.ok) {
