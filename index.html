@@ -2846,7 +2846,36 @@ var driverDB = {
       var keyArr = [];
       allKeys.forEach(function(k) { keyArr.push(k); });
 
-      // canonical優先順: driverDB実績あり > driverDB存在 > シフト名側（サフィックスなし）
+      // assignmentData に含まれる名前マップ
+      var inAssign = {};
+      for (var _ai = 0; _ai < assignmentData.length; _ai++) {
+        var _adn = assignmentData[_ai].driverName;
+        if (_adn) inAssign[_adn] = true;
+      }
+
+      // Amazon名変則判定
+      function isAmazonNameVariant(shortName, longName) {
+        if (!shortName || !longName || shortName === longName) return false;
+        if (shortName.length >= longName.length) return false;
+        var sParts = shortName.split(/\s+/);
+        var lParts = longName.split(/\s+/);
+        var sNoSpace = shortName.replace(/[\s\u3000]/g, '');
+        var lNoSpace = longName.replace(/[\s\u3000]/g, '');
+        // パターン1: 空白除去で長い方に短い方が部分一致
+        if (lNoSpace.indexOf(sNoSpace) >= 0 && lNoSpace !== sNoSpace) return true;
+        // パターン2: 末尾姓重複 例: 健士朗 脇山 脇山 → 健士朗 脇山
+        if (lParts.length >= 3 && lParts[lParts.length - 1] === lParts[lParts.length - 2]) {
+          var trimmed = lParts.slice(0, -1).join(' ');
+          if (trimmed === shortName) return true;
+        }
+        // パターン3: 先頭2語が短い方と一致（3語以上の長い方）
+        if (lParts.length >= 3 && sParts.length === 2) {
+          if (lParts[0] === sParts[0] && lParts[1] === sParts[1]) return true;
+        }
+        return false;
+      }
+
+      // canonical優先順: driverDB実績 > LINE/TID片方 > Amazon取込名 > Amazon変則長い方 > サフィックスなし > 短い方
       function pickCanonical(a, b) {
         var aDB = driverDB[a], bDB = driverDB[b];
         if (aDB && !bDB) return a;
@@ -2855,16 +2884,37 @@ var driverDB = {
           if ((aDB.packagesPerHour || 0) >= (bDB.packagesPerHour || 0)) return a;
           return b;
         }
-        // どちらもdriverDBなし → サフィックスなし側
+        // LINE/TID片方のみ
+        var aHasLink = !!(lineMapping[a] || transportIDs[a]);
+        var bHasLink = !!(lineMapping[b] || transportIDs[b]);
+        if (aHasLink && !bHasLink) return a;
+        if (bHasLink && !aHasLink) return b;
+        // Amazon取込名
+        if (inAssign[a] && !inAssign[b]) return a;
+        if (inAssign[b] && !inAssign[a]) return b;
+        // Amazon変則: 長い方（Amazon名）を推奨
+        var shortN = a.length <= b.length ? a : b;
+        var longN = a.length <= b.length ? b : a;
+        if (isAmazonNameVariant(shortN, longN)) return longN;
+        // サフィックスなし側
         if (a.indexOf('\u2022') < 0 && b.indexOf('\u2022') >= 0) return a;
         if (b.indexOf('\u2022') < 0 && a.indexOf('\u2022') >= 0) return b;
         return a.length <= b.length ? a : b;
       }
-      function addPair(alias, canonical, reason, confidence) {
-        var pairKey = [alias, canonical].sort().join('|||');
+      function addPair(aliasOrA, canonicalOrB, reason, confidence) {
+        var pairKey = [aliasOrA, canonicalOrB].sort().join('|||');
         if (seen[pairKey]) return;
         seen[pairKey] = true;
-        candidates.push({ alias: alias, canonical: canonical, reason: reason, confidence: confidence });
+        var sug = pickCanonical(aliasOrA, canonicalOrB);
+        candidates.push({
+          nameA: aliasOrA,
+          nameB: canonicalOrB,
+          suggested: sug,
+          alias: sug === aliasOrA ? canonicalOrB : aliasOrA,
+          canonical: sug,
+          reason: reason,
+          confidence: confidence
+        });
       }
 
       // tid_match: transportIDが同一
@@ -2880,9 +2930,7 @@ var driverDB = {
         if (group.length < 2) continue;
         for (var g1 = 0; g1 < group.length; g1++) {
           for (var g2 = g1 + 1; g2 < group.length; g2++) {
-            var can = pickCanonical(group[g1], group[g2]);
-            var ali = can === group[g1] ? group[g2] : group[g1];
-            addPair(ali, can, 'TID一致', 'high');
+            addPair(group[g1], group[g2], 'TID一致', 'high');
           }
         }
       }
@@ -2907,9 +2955,19 @@ var driverDB = {
         if (nGroup.length < 2) continue;
         for (var n1 = 0; n1 < nGroup.length; n1++) {
           for (var n2 = n1 + 1; n2 < nGroup.length; n2++) {
-            var nCan = pickCanonical(nGroup[n1], nGroup[n2]);
-            var nAli = nCan === nGroup[n1] ? nGroup[n2] : nGroup[n1];
-            addPair(nAli, nCan, '正規化一致', 'medium');
+            addPair(nGroup[n1], nGroup[n2], '正規化一致', 'medium');
+          }
+        }
+      }
+
+      // amazon_variant_match: Amazon UI 変則名
+      for (var av1 = 0; av1 < keyArr.length; av1++) {
+        for (var av2 = av1 + 1; av2 < keyArr.length; av2++) {
+          var avA = keyArr[av1], avB = keyArr[av2];
+          var avShort = avA.length <= avB.length ? avA : avB;
+          var avLong = avA.length <= avB.length ? avB : avA;
+          if (isAmazonNameVariant(avShort, avLong)) {
+            addPair(avShort, avLong, 'Amazon名変則', 'medium');
           }
         }
       }
@@ -2926,9 +2984,7 @@ var driverDB = {
         if (fGroup.length < 2) continue;
         for (var f1 = 0; f1 < fGroup.length; f1++) {
           for (var f2 = f1 + 1; f2 < fGroup.length; f2++) {
-            var fCan = pickCanonical(fGroup[f1], fGroup[f2]);
-            var fAli = fCan === fGroup[f1] ? fGroup[f2] : fGroup[f1];
-            addPair(fAli, fCan, '空白差異', 'low');
+            addPair(fGroup[f1], fGroup[f2], '空白差異', 'low');
           }
         }
       }
@@ -2938,9 +2994,7 @@ var driverDB = {
         if (rParts.length !== 2) continue;
         var rev = rParts[1] + ' ' + rParts[0];
         if (rev !== keyArr[r] && (driverDB[rev] || lineMapping[rev] || transportIDs[rev])) {
-          var rCan = pickCanonical(keyArr[r], rev);
-          var rAli = rCan === keyArr[r] ? rev : keyArr[r];
-          addPair(rAli, rCan, '姓名反転', 'low');
+          addPair(keyArr[r], rev, '姓名反転', 'low');
         }
       }
 
@@ -6659,9 +6713,10 @@ var driverDB = {
       var html = '<div class="bg-surface rounded-lg shadow-xl max-w-2xl w-full mx-4 my-8 max-h-[90vh] overflow-auto">';
       html += '<div class="p-4 border-b border-border flex items-center justify-between">';
       html += '<h3 class="font-bold text-ink">同一人物候補（' + candidates.length + '件）</h3>';
-      html += '<button onclick="document.getElementById(\'duplicate-merge-modal\').remove()" class="text-ink-lighter hover:text-ink text-lg cursor-pointer">✕</button>';
+      html += '<button onclick="document.getElementById(\'duplicate-merge-modal\').remove()" class="text-ink-lighter hover:text-ink text-lg cursor-pointer">\u2715</button>';
       html += '</div>';
       html += '<div class="p-4">';
+      html += '<p style="font-size:11px;color:#6b7280;margin-bottom:12px;">\uD83D\uDCA1 Amazon名を正キーに残す場合は長い名前側のボタンを押してください。統合せず別名だけ登録する場合: \uD83D\uDCCB 別名マップ</p>';
 
       // TID一致のみ一括統合ボタン
       var tidCount = 0;
@@ -6669,37 +6724,54 @@ var driverDB = {
         if (candidates[t].confidence === 'high' && candidates[t].reason === 'TID一致') tidCount++;
       }
       if (tidCount > 0) {
-        html += '<div class="mb-4"><button onclick="mergeTidMatchAll()" class="px-3 py-1.5 text-xs rounded font-bold bg-red-500 text-white hover:bg-red-600 transition-colors">TID一致のみ一括統合（' + tidCount + '件）</button></div>';
+        html += '<div class="mb-4"><button onclick="mergeTidMatchAll()" class="px-3 py-1.5 text-xs rounded font-bold bg-red-500 text-white hover:bg-red-600 transition-colors cursor-pointer">TID一致のみ一括統合（' + tidCount + '件・推奨方向）</button></div>';
       }
 
-      html += '<table class="w-full text-xs">';
-      html += '<thead><tr class="border-b border-border"><th class="text-left p-2">別名</th><th class="text-left p-2">→</th><th class="text-left p-2">正キー</th><th class="text-left p-2">理由</th><th class="p-2"></th></tr></thead>';
-      html += '<tbody>';
       for (var i = 0; i < candidates.length; i++) {
         var c = candidates[i];
-        var rowClass = c.confidence === 'low' ? 'bg-amber-50' : '';
-        var badge = c.reason;
-        if (c.confidence === 'low') badge += ' <span class="text-amber-600 font-bold">要確認</span>';
-        html += '<tr class="border-b border-border ' + rowClass + '" id="dup-row-' + i + '">';
-        html += '<td class="p-2 font-mono">' + escapeHtml(c.alias) + '</td>';
-        html += '<td class="p-2">→</td>';
-        html += '<td class="p-2 font-mono font-bold">' + escapeHtml(c.canonical) + '</td>';
-        html += '<td class="p-2">' + badge + '</td>';
-        html += '<td class="p-2"><button onclick="mergeSingleDuplicate(' + i + ')" class="px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 text-xs cursor-pointer">統合</button></td>';
-        html += '</tr>';
+        var rowBg = c.confidence === 'low' ? 'background:#fffbeb;' : 'background:#f9fafb;';
+        var lidA = findLineUserId(c.nameA, c.nameA);
+        var lidB = findLineUserId(c.nameB, c.nameB);
+        var tidA = transportIDs[c.nameA] || transportIDs[resolveDriverKey(c.nameA)] || '';
+        var tidB = transportIDs[c.nameB] || transportIDs[resolveDriverKey(c.nameB)] || '';
+        var lineTagA = lidA ? '<span style="color:#06C755;font-size:10px;">\uD83E\uDEAA LINE \u2705</span>' : '<span style="color:#999;font-size:10px;">\uD83E\uDEAA LINE \u274C</span>';
+        var lineTagB = lidB ? '<span style="color:#06C755;font-size:10px;">\uD83E\uDEAA LINE \u2705</span>' : '<span style="color:#999;font-size:10px;">\uD83E\uDEAA LINE \u274C</span>';
+        var tidTagA = tidA ? '<span style="color:#3b82f6;font-size:10px;margin-left:4px;">TID:' + escapeHtml(tidA) + '</span>' : '';
+        var tidTagB = tidB ? '<span style="color:#3b82f6;font-size:10px;margin-left:4px;">TID:' + escapeHtml(tidB) + '</span>' : '';
+        var reasonBadge = '<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:#e5e7eb;color:#374151;">' + escapeHtml(c.reason) + '</span>';
+        if (c.confidence === 'low') reasonBadge += ' <span style="color:#d97706;font-weight:bold;font-size:10px;">要確認</span>';
+        var sugLabel = c.suggested === c.nameA ? 'A' : 'B';
+
+        html += '<div style="' + rowBg + 'border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;" id="dup-row-' + i + '">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
+        html += reasonBadge;
+        html += '<span style="font-size:10px;color:#6b7280;">推奨: 名前' + sugLabel + '</span>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:8px;margin-bottom:8px;">';
+        html += '<div style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;"><strong>A:</strong> ' + escapeHtml(c.nameA) + ' ' + lineTagA + tidTagA + '</div>';
+        html += '<div style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;"><strong>B:</strong> ' + escapeHtml(c.nameB) + ' ' + lineTagB + tidTagB + '</div>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:6px;justify-content:flex-end;">';
+        var btnStyleBase = 'padding:4px 12px;border:none;border-radius:5px;font-size:11px;cursor:pointer;';
+        var btnA = c.suggested === c.nameA ? btnStyleBase + 'background:#2563eb;color:white;font-weight:bold;' : btnStyleBase + 'background:#e5e7eb;color:#374151;';
+        var btnB = c.suggested === c.nameB ? btnStyleBase + 'background:#2563eb;color:white;font-weight:bold;' : btnStyleBase + 'background:#e5e7eb;color:#374151;';
+        html += '<button style="' + btnA + '" onclick="mergeSingleDuplicate(' + i + ',\'A\')">A を残す' + (c.suggested === c.nameA ? '(推奨)' : '') + '</button>';
+        html += '<button style="' + btnB + '" onclick="mergeSingleDuplicate(' + i + ',\'B\')">B を残す' + (c.suggested === c.nameB ? '(推奨)' : '') + '</button>';
+        html += '</div></div>';
       }
-      html += '</tbody></table></div></div>';
+      html += '</div></div>';
       modal.innerHTML = html;
       document.body.appendChild(modal);
-      // データをグローバルに保持
       window._dupCandidates = candidates;
     }
 
-    function mergeSingleDuplicate(idx) {
+    function mergeSingleDuplicate(idx, keepSide) {
       var c = window._dupCandidates[idx];
       if (!c) return;
-      if (!confirm(c.alias + ' を ' + c.canonical + ' に統合しますか？')) return;
-      mergeDriverKeys(c.alias, c.canonical);
+      var keep = keepSide === 'A' ? c.nameA : c.nameB;
+      var remove = keep === c.nameA ? c.nameB : c.nameA;
+      if (!confirm('\u300C' + remove + '\u300D\u3092\u300C' + keep + '\u300D\u306B\u7D71\u5408\u3057\u307E\u3059\u304B\uFF1F\nLINE\u30FBTID\u30FB\u96FB\u8A71\u7B49\u306F\u6B63\u30AD\u30FC\u5074\u306B\u79FB\u884C\u3055\u308C\u307E\u3059\u3002')) return;
+      mergeDriverKeys(remove, keep);
       renderMasterTable();
       showDuplicateMergePanel();
     }
@@ -6713,7 +6785,7 @@ var driverDB = {
         }
       }
       if (tidPairs.length === 0) return;
-      if (!confirm('TID一致の ' + tidPairs.length + ' 件を一括統合しますか？')) return;
+      if (!confirm('TID一致の ' + tidPairs.length + ' 件を推奨方向で一括統合しますか？\n個別に方向を変えたい場合は1件ずつ統合してください。')) return;
       for (var j = 0; j < tidPairs.length; j++) {
         mergeDriverKeys(tidPairs[j].alias, tidPairs[j].canonical);
       }
