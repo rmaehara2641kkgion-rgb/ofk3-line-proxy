@@ -34,7 +34,7 @@ const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const GAS_URL = process.env.GAS_URL || '';
-console.log('API KEY =', GOOGLE_MAPS_API_KEY);
+console.log('GOOGLE_MAPS_API_KEY configured:', !!GOOGLE_MAPS_API_KEY);
 
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
@@ -518,8 +518,14 @@ app.post('/mentor-notified', (req, res) => {
   res.json({ date: today, drivers: mentorNotified.drivers });
 });
 
+const PROXY_SECRET = process.env.PROXY_SECRET || '';
+
 app.post('/proxy', async (req, res) => {
   try {
+    // 簡易認証: PROXY_SECRET設定時のみチェック
+    if (PROXY_SECRET && req.headers['x-proxy-secret'] !== PROXY_SECRET) {
+      return res.status(403).json({ status: 'error', message: 'Forbidden' });
+    }
     const { to, messages } = req.body;
     if (!to || !messages || !Array.isArray(messages)) {
       return res.status(400).json({ status: 'error', message: 'Invalid payload' });
@@ -923,6 +929,105 @@ app.post('/encrypt-zip', function(req, res) {
   });
 });
 
+// ===== パスワードZIP復号 =====
+var unzipperCache = null;
+function getUnzipper() {
+  if (unzipperCache) return unzipperCache;
+  try {
+    unzipperCache = require('unzipper');
+    log('unzipper loaded lazily');
+  } catch (e) {
+    log('unzipper lazy init failed: ' + e.message);
+    unzipperCache = null;
+  }
+  return unzipperCache;
+}
+
+app.post('/decrypt-zip', function(req, res) {
+  var zipMulter = getZipMulter();
+  if (!zipMulter) {
+    return res.status(500).json({ error: 'server modules not ready' });
+  }
+
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) {
+      log('decrypt-zip multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ error: err.message || 'upload error' });
+    }
+
+    var unzipLib = getUnzipper();
+    if (!unzipLib) {
+      return res.status(500).json({ error: 'unzipper module not available' });
+    }
+
+    try {
+      var file = req.file;
+      var password = (req.body && req.body.password) ? String(req.body.password) : '';
+      var mode = (req.body && req.body.mode) ? String(req.body.mode) : 'download';
+
+      if (!file) return res.status(400).json({ error: 'file required' });
+      if (!password) return res.status(400).json({ error: 'password required' });
+
+      var bufferStream = require('stream').Readable.from(file.buffer);
+
+      if (mode === 'list') {
+        var fileList = [];
+        bufferStream
+          .pipe(unzipLib.Parse({ password: password }))
+          .on('entry', function(entry) {
+            fileList.push({ path: entry.path, type: entry.type, size: entry.vars && entry.vars.uncompressedSize || 0 });
+            entry.autodrain();
+          })
+          .on('close', function() {
+            res.json({ files: fileList });
+          })
+          .on('error', function(e) {
+            log('decrypt-zip list error: ' + e.message);
+            if (!res.headersSent) res.status(400).json({ error: 'ZIP展開に失敗しました。パスワードを確認してください。' });
+          });
+      } else {
+        var targetFile = (req.body && req.body.targetFile) ? String(req.body.targetFile) : '';
+        var found = false;
+
+        bufferStream
+          .pipe(unzipLib.Parse({ password: password }))
+          .on('entry', function(entry) {
+            if (entry.type === 'Directory') {
+              entry.autodrain();
+              return;
+            }
+            if (!found && (!targetFile || entry.path === targetFile)) {
+              found = true;
+              var entryName = entry.path.split('/').pop() || 'file';
+              var encodedName = encodeURIComponent(entryName);
+              res.set({
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': "attachment; filename*=UTF-8''" + encodedName
+              });
+              entry.pipe(res);
+            } else {
+              entry.autodrain();
+            }
+          })
+          .on('close', function() {
+            if (!found && !res.headersSent) {
+              res.status(404).json({ error: 'ファイルが見つかりません' });
+            }
+          })
+          .on('error', function(e) {
+            log('decrypt-zip error: ' + e.message);
+            if (!res.headersSent) res.status(400).json({ error: 'ZIP展開に失敗しました。パスワードを確認してください。' });
+          });
+      }
+    } catch(e) {
+      log('decrypt-zip endpoint error: ' + e.message);
+      if (!res.headersSent) res.status(500).json({ error: e.message });
+    }
+  });
+});
+
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
 });
+
+
