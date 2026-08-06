@@ -4504,11 +4504,6 @@ var driverDB = {
       }
     })();
 
-    // tenkoLog保存（40日制限 + 容量チェック）
-    function saveTenkoLog() {
-      persistTenkoLog();
-    }
-
     // 着車時間（分）→ デフォルトシフトコード自動判定
     // 9:00=bike, 11:00=○, 14:40=❽, 15:00=b2, 18:30=C3
     function guessShiftCode(minutes) {
@@ -4711,6 +4706,10 @@ var driverDB = {
 
     // 点呼ログ保存（点呼完了時に呼び出す）
     function saveTenkoLog(d) {
+      if (!d || !d.name) {
+        persistTenkoLog();
+        return;
+      }
       var now = new Date();
       var todayStr = getTodayJst();
       var timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
@@ -9082,7 +9081,7 @@ var driverDB = {
       tenkoLog[idx].shiftCode = newShift;
       tenkoLog[idx].scheduledArrival = newArrival;
       tenkoLog[idx].completedAt = newCompleted;
-      saveTenkoLog();
+      persistTenkoLog();
 
       alert('✅ 変更を保存しました');
       renderTenkoEditList();
@@ -9094,7 +9093,7 @@ var driverDB = {
       if (!confirm('⚠ 以下の点呼ログを削除します。よろしいですか？\n\n' + log.driverName + '\n日付: ' + log.date + '\nシフト: ' + log.shiftCode)) return;
 
       tenkoLog.splice(idx, 1);
-      saveTenkoLog();
+      persistTenkoLog();
 
       alert('✅ 削除しました');
       renderTenkoEditList();
@@ -9119,7 +9118,7 @@ var driverDB = {
         mentorVerified: false,
         isTemporary: false
       });
-      saveTenkoLog();
+      persistTenkoLog();
 
       alert('✅ 追加しました');
       renderTenkoEditList();
@@ -15034,10 +15033,10 @@ var driverDB = {
           var h = normalizeReportHeader(hdr[hi]);
           if (isTransporterHeader(hdr[hi])) hasTransporter = true;
           if (kind === 'ftds') {
-            if (h.indexOf('transporter_id') >= 0 || h === 'transporter id') score += 3;
-            if (h.indexOf('failure_reason') >= 0 || h === 'failure reason') score += 4;
-            if (h.indexOf('cycle_name') >= 0 || h === 'cycle name') score += 2;
-            if (h.indexOf('route_code') >= 0 || h === 'route code') score += 2;
+            if (isTransporterHeader(hdr[hi])) score += 3;
+            if (h.indexOf('failure') >= 0 && h.indexOf('reason') >= 0) score += 4;
+            if (h.indexOf('cycle') >= 0 && h.indexOf('name') >= 0) score += 2;
+            if (h.indexOf('route') >= 0 && h.indexOf('code') >= 0) score += 2;
           } else {
             if (isTransporterHeader(hdr[hi])) score += 3;
             if (h.indexOf('scannable') >= 0) score += 4;
@@ -15052,6 +15051,157 @@ var driverDB = {
         }
       }
       return best;
+    }
+
+    function csvTextToRows(text) {
+      var wb = XLSX.read(String(text || '').replace(/^\ufeff/, ''), { type: 'string' });
+      if (!wb.SheetNames || wb.SheetNames.length === 0) return [];
+      return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+    }
+
+    function extractDriverNameFromExport(label) {
+      var s = String(label || '').trim();
+      if (!s) return '';
+      var m = s.match(/\(([^)]+)\)/);
+      if (m && m[1]) {
+        var inner = resolveDriverKey(m[1].trim());
+        if (inner) return inner;
+      }
+      return resolveDriverKey(s) || s;
+    }
+
+    function findExportDetailHeaderRow(rows) {
+      for (var i = 0; i < rows.length; i++) {
+        var c0 = String(rows[i][0] || '').trim();
+        if (c0.indexOf('\u8A73\u7D30\u30C7\u30FC\u30BF') >= 0) return i + 1;
+        var h0 = normalizeReportHeader(rows[i][0]);
+        var h1 = rows[i][1] ? normalizeReportHeader(rows[i][1]) : '';
+        if (h0 === '\u65e5\u4ed8' && h1.indexOf('\u30c9\u30e9\u30a4\u30d0\u30fc') >= 0) return i;
+      }
+      return -1;
+    }
+
+    var exportedQualityCounts = {};
+
+    function importFtdsExportCsv(text) {
+      var rows = csvTextToRows(text);
+      var startIdx = findExportDetailHeaderRow(rows);
+      if (startIdx < 0) return false;
+      var tidToName = {};
+      var keys = Object.keys(transportIDs);
+      for (var k = 0; k < keys.length; k++) {
+        var tid = String(transportIDs[keys[k]] || '').trim();
+        if (tid) tidToName[tid] = keys[k];
+      }
+      var results = [];
+      for (var r = startIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row || !row[2]) continue;
+        var tid = String(row[2] || '').trim();
+        if (!tid) continue;
+        var driverName = extractDriverNameFromExport(row[1]) || tidToName[tid] || String(row[1] || '').trim();
+        var dateVal = String(row[0] || '');
+        if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
+        results.push({
+          date: dateVal,
+          driverName: driverName,
+          transporterId: tid,
+          cycle: String(row[3] || ''),
+          route: String(row[4] || ''),
+          tracking: String(row[5] || ''),
+          zip: String(row[6] || ''),
+          reason: String(row[7] || '')
+        });
+      }
+      if (results.length === 0) return false;
+      ftdsResultData = results;
+      renderFtdsResultsUI();
+      return true;
+    }
+
+    function importCcExportCsv(text) {
+      var rows = csvTextToRows(text);
+      var headerIdx = -1;
+      for (var i = 0; i < rows.length; i++) {
+        var h0 = normalizeReportHeader(rows[i][0]);
+        if (h0.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0 && isTransporterHeader(rows[i][1])) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx < 0) return false;
+      exportedQualityCounts = exportedQualityCounts || {};
+      var imported = 0;
+      for (var r = headerIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row || !row[0] || String(row[0]).indexOf('===') >= 0) break;
+        var name = extractDriverNameFromExport(row[0]) || resolveDriverKey(String(row[0]).trim());
+        if (!name) continue;
+        var ccCount = parseInt(row[2], 10) || 0;
+        var ccCalls = parseInt(row[3], 10) || 0;
+        if (!exportedQualityCounts[name]) exportedQualityCounts[name] = {};
+        exportedQualityCounts[name].ccCount = ccCount;
+        exportedQualityCounts[name].ccCalls = ccCalls;
+        imported++;
+      }
+      if (imported === 0) return false;
+      ccResultData = [];
+      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
+      if (typeof currentTab !== 'undefined' && currentTab === 'team-quality') renderTeamQualityDashboard();
+      return true;
+    }
+
+    function importDnrExportCsv(text) {
+      var rows = csvTextToRows(text);
+      if (rows.length < 2) return false;
+      var header = rows[0];
+      var col = {};
+      for (var hi = 0; hi < header.length; hi++) {
+        var h = normalizeReportHeader(header[hi]);
+        if (h.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0) col.driver = hi;
+        else if (h.indexOf('transport') >= 0) col.tid = hi;
+        else if (h.indexOf('dnr') >= 0 && h.indexOf('\u7406\u7531') >= 0) col.reason = hi;
+        else if (h.indexOf('\u91d1\u984d') >= 0) col.cost = hi;
+        else if (h.indexOf('\u500b\u6570') >= 0) col.units = hi;
+        else if (h.indexOf('\u7def\u5ea6') >= 0) col.lat = hi;
+        else if (h.indexOf('\u7d4c\u5ea6') >= 0) col.lng = hi;
+        else if (h.indexOf('\u4f4f\u6240') >= 0) col.addr = hi;
+        else if (h.indexOf('\u914d\u9054\u65e5') >= 0 || h === '\u65e5\u4ed8') col.date = hi;
+      }
+      if (col.driver === undefined) return false;
+      dnrResultData = [];
+      for (var ri = 1; ri < rows.length; ri++) {
+        var row = rows[ri];
+        if (!row || !row[col.driver]) continue;
+        var driverName = extractDriverNameFromExport(row[col.driver]);
+        var rec = {
+          driverName: driverName,
+          delivery_date_jst: col.date !== undefined ? String(row[col.date] || '') : '',
+          transporter_id: col.tid !== undefined ? String(row[col.tid] || '') : '',
+          shipment_reason: col.reason !== undefined ? String(row[col.reason] || '') : '',
+          address: col.addr !== undefined ? String(row[col.addr] || '') : '',
+          _cost: col.cost !== undefined ? (parseFloat(String(row[col.cost]).replace(/[^\d.-]/g, '')) || 0) : 0,
+          _units: col.units !== undefined ? (parseInt(row[col.units], 10) || 0) : 0,
+          _lat: col.lat !== undefined ? (parseFloat(row[col.lat]) || 0) : 0,
+          _lng: col.lng !== undefined ? (parseFloat(row[col.lng]) || 0) : 0
+        };
+        dnrResultData.push(rec);
+      }
+      if (dnrResultData.length === 0) return false;
+      var cnt = dnrResultData.length;
+      var msgEl = document.getElementById('dnr-loaded-msg');
+      if (msgEl) {
+        msgEl.classList.remove('hidden');
+        msgEl.textContent = '\u2705 ' + cnt + '\u4ef6\u8aad\u8fbc\u6e08';
+      }
+      var dz = document.getElementById('dnr-drop-zone');
+      if (dz) dz.style.borderColor = '#eab308';
+      if (typeof renderDnrResults === 'function') renderDnrResults();
+      if (typeof updateQualitySummary === 'function') updateQualitySummary();
+      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
+      var qh = document.getElementById('quality-hero');
+      if (qh) qh.style.display = 'none';
+      return true;
     }
 
     function setFtdsCcActiveView(view) {
@@ -15098,16 +15248,106 @@ var driverDB = {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
+        var fname = (file.name || '').toLowerCase();
+        if (fname.endsWith('.csv')) {
+          var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
+          if (importFtdsExportCsv(text)) {
+            alert('FTDS分析CSVを読込: ' + ftdsResultData.length + '件');
+            return;
+          }
+        }
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
         var sheetData = findReportSheet(wb, 'ftds');
         if (!sheetData || sheetData.length < 2) {
-          alert('FTDS形式のシートが見つかりません（transporter_id / failure_reason 列を確認）');
+          alert('FTDS形式のシートが見つかりません。\n・Amazon生データ（transporter_id列）\n・または FTDS分析_*.csv（詳細データ付き）\nを確認してください');
           return;
         }
         processFtdsData(sheetData);
       };
       reader.readAsArrayBuffer(file);
+    }
+
+    function renderFtdsResultsUI() {
+      var results = ftdsResultData;
+      var matched = 0;
+      var unmatched = 0;
+      var driverStats = {};
+      for (var i = 0; i < results.length; i++) {
+        var rec = results[i];
+        var tid = rec.transporterId || '';
+        var driverName = rec.driverName || '';
+        if (driverName) {
+          matched++;
+          if (!driverStats[driverName]) driverStats[driverName] = { tid: tid, count: 0, reasons: {} };
+          driverStats[driverName].count++;
+          if (rec.reason) {
+            driverStats[driverName].reasons[rec.reason] = (driverStats[driverName].reasons[rec.reason] || 0) + 1;
+          }
+        } else if (tid) {
+          unmatched++;
+          var unkKey = '(不明) ' + tid;
+          if (!driverStats[unkKey]) driverStats[unkKey] = { tid: tid, count: 0, reasons: {} };
+          driverStats[unkKey].count++;
+          if (rec.reason) {
+            driverStats[unkKey].reasons[rec.reason] = (driverStats[unkKey].reasons[rec.reason] || 0) + 1;
+          }
+        }
+      }
+
+      document.getElementById('ftds-summary').classList.remove('hidden');
+      document.getElementById('ftds-total').textContent = results.length;
+      document.getElementById('ftds-matched').textContent = matched;
+      document.getElementById('ftds-unmatched').textContent = unmatched;
+      var rate = results.length > 0 ? Math.round(matched / results.length * 100) : 0;
+      document.getElementById('ftds-rate').textContent = rate + '%';
+
+      document.getElementById('ftds-driver-summary').classList.remove('hidden');
+      var driverTbody = document.getElementById('ftds-driver-tbody');
+      var driverKeys = Object.keys(driverStats).sort(function(a, b) {
+        return driverStats[b].count - driverStats[a].count;
+      });
+      var driverHtml = '';
+      for (var d = 0; d < driverKeys.length; d++) {
+        var dk = driverKeys[d];
+        var ds = driverStats[dk];
+        var reasonParts = [];
+        var rKeys = Object.keys(ds.reasons);
+        for (var ri = 0; ri < rKeys.length; ri++) {
+          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
+        }
+        var isUnknown = dk.indexOf('(不明)') === 0;
+        driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
+          '<td class="px-3 py-2' + (isUnknown ? ' text-red-600 font-medium' : '') + '">' + dk + '</td>' +
+          '<td class="px-3 py-2 text-xs font-mono">' + ds.tid + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ds.count + '</td>' +
+          '<td class="px-3 py-2 text-xs">' + reasonParts.join(', ') + '</td>' +
+          '</tr>';
+      }
+      driverTbody.innerHTML = driverHtml;
+
+      document.getElementById('ftds-detail').classList.remove('hidden');
+      var detailTbody = document.getElementById('ftds-detail-tbody');
+      var detailHtml = '';
+      for (var ii = 0; ii < results.length; ii++) {
+        var rec2 = results[ii];
+        var isUnk = !rec2.driverName;
+        detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
+          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec2.date) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec2.driverName || '(未特定)') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec2.transporterId + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec2.cycle + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec2.route + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec2.tracking + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec2.zip + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec2.reason) + '</td>' +
+          '</tr>';
+      }
+      detailTbody.innerHTML = detailHtml;
+
+      document.getElementById('ftds-export-btn').disabled = false;
+      setFtdsCcActiveView('ftds');
+      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
     }
 
     function processFtdsData(rows) {
@@ -15191,64 +15431,7 @@ var driverDB = {
       }
 
       ftdsResultData = results;
-
-      // Update summary
-      document.getElementById('ftds-summary').classList.remove('hidden');
-      document.getElementById('ftds-total').textContent = results.length;
-      document.getElementById('ftds-matched').textContent = matched;
-      document.getElementById('ftds-unmatched').textContent = unmatched;
-      var rate = results.length > 0 ? Math.round(matched / results.length * 100) : 0;
-      document.getElementById('ftds-rate').textContent = rate + '%';
-
-      // Driver summary table
-      document.getElementById('ftds-driver-summary').classList.remove('hidden');
-      var driverTbody = document.getElementById('ftds-driver-tbody');
-      var driverKeys = Object.keys(driverStats).sort(function(a, b) {
-        return driverStats[b].count - driverStats[a].count;
-      });
-      var driverHtml = '';
-      for (var d = 0; d < driverKeys.length; d++) {
-        var dk = driverKeys[d];
-        var ds = driverStats[dk];
-        var reasonParts = [];
-        var rKeys = Object.keys(ds.reasons);
-        for (var ri = 0; ri < rKeys.length; ri++) {
-          reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
-        }
-        var isUnknown = dk.indexOf('(不明)') === 0;
-        driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
-          '<td class="px-3 py-2' + (isUnknown ? ' text-red-600 font-medium' : '') + '">' + dk + '</td>' +
-          '<td class="px-3 py-2 text-xs font-mono">' + ds.tid + '</td>' +
-          '<td class="px-3 py-2 text-center font-bold">' + ds.count + '</td>' +
-          '<td class="px-3 py-2 text-xs">' + reasonParts.join(', ') + '</td>' +
-          '</tr>';
-      }
-      driverTbody.innerHTML = driverHtml;
-
-      // Detail table
-      document.getElementById('ftds-detail').classList.remove('hidden');
-      var detailTbody = document.getElementById('ftds-detail-tbody');
-      var detailHtml = '';
-      for (var i = 0; i < results.length; i++) {
-        var rec = results[i];
-        var isUnk = !rec.driverName;
-        detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
-          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec.date) + '</td>' +
-          '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
-          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.cycle + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.route + '</td>' +
-          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.zip + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.reason) + '</td>' +
-          '</tr>';
-      }
-      detailTbody.innerHTML = detailHtml;
-
-      // Enable export
-      document.getElementById('ftds-export-btn').disabled = false;
-      setFtdsCcActiveView('ftds');
-      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
+      renderFtdsResultsUI();
     }
 
     function exportFtdsResult() {
@@ -15317,11 +15500,19 @@ var driverDB = {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
+        var fname = (file.name || '').toLowerCase();
+        if (fname.endsWith('.csv')) {
+          var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
+          if (importCcExportCsv(text)) {
+            alert('Contact Compliance分析CSVを読込: ' + Object.keys(exportedQualityCounts).length + '名');
+            return;
+          }
+        }
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
         var sheetData = findReportSheet(wb, 'cc');
         if (!sheetData || sheetData.length < 2) {
-          alert('Contact Compliance形式のシートが見つかりません（Transporter ID / Scannable ID 列を確認）');
+          alert('Contact Compliance形式のシートが見つかりません。\n・Amazon生データ\n・または ContactCompliance分析_*.csv\nを確認してください');
           return;
         }
         processCcData(sheetData);
@@ -16154,6 +16345,14 @@ var driverDB = {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
+        var fname = (file.name || '').toLowerCase();
+        if (fname.endsWith('.csv')) {
+          var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
+          if (importDnrExportCsv(text)) {
+            alert('DNR分析CSVを読込: ' + dnrResultData.length + '件');
+            return;
+          }
+        }
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, { type: 'array' });
         var ws = wb.Sheets[wb.SheetNames[0]];
@@ -16680,6 +16879,18 @@ var driverDB = {
         sources.dnr = true;
       }
 
+      // 4.5) CCエクスポートCSV等の集計上書き
+      if (exportedQualityCounts) {
+        for (var eq in exportedQualityCounts) {
+          var o = exportedQualityCounts[eq];
+          var eqKey = resolveDriverKey(eq);
+          if (!eqKey) continue;
+          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+          if (o.ccCount != null) { drivers[eqKey].ccCount = o.ccCount; sources.cc = true; }
+          if (o.ccCalls != null) drivers[eqKey].ccCalls = o.ccCalls;
+        }
+      }
+
       // 5) Assign dept + score
       for (var dk in drivers) {
         var dept = driverDepartments[dk] || driverDepartments[resolveDriverKey(dk)] || '';
@@ -16693,8 +16904,48 @@ var driverDB = {
         drivers: drivers
       };
 
-      localStorage.setItem('teamQualitySnapshot', JSON.stringify(teamQualitySnapshot));
+      persistTeamQualitySnapshot(teamQualitySnapshot);
       return teamQualitySnapshot;
+    }
+
+    function persistTeamQualitySnapshot(snap) {
+      if (!snap) return;
+      try {
+        var slim = { updatedAt: snap.updatedAt, sources: snap.sources, drivers: {} };
+        for (var k in snap.drivers) {
+          var d = snap.drivers[k];
+          slim.drivers[k] = {
+            dept: d.dept,
+            packagesPerHour: d.packagesPerHour,
+            misdeliveryRate: d.misdeliveryRate,
+            deliveryRate: d.deliveryRate,
+            workDays: d.workDays,
+            totalPackages: d.totalPackages,
+            dnrCount: d.dnrCount,
+            dnrCost: d.dnrCost,
+            ftdsCount: d.ftdsCount,
+            ccCount: d.ccCount,
+            ccCalls: d.ccCalls,
+            qualityScore: d.qualityScore
+          };
+        }
+        localStorage.setItem('teamQualitySnapshot', JSON.stringify(slim));
+      } catch (e) {
+        console.warn('teamQualitySnapshot: localStorage保存スキップ（容量超過）', e);
+        try { localStorage.removeItem('teamQualitySnapshot'); } catch (e2) {}
+      }
+    }
+
+    function getDriverFtdsReasons(driverKey) {
+      var reasons = {};
+      for (var i = 0; i < ftdsResultData.length; i++) {
+        var fr = ftdsResultData[i];
+        var k = fr.driverName ? resolveDriverKey(fr.driverName) : resolveDriverKeyByTid(fr.transporterId);
+        if (k !== driverKey) continue;
+        var reason = fr.reason || 'OTHER';
+        reasons[reason] = (reasons[reason] || 0) + 1;
+      }
+      return reasons;
     }
 
     function resolveDriverKeyByTid(tid) {
@@ -17079,15 +17330,16 @@ var driverDB = {
       html += '</div>';
 
       // FTDS breakdown accordion
-      if (d.ftdsTopReasons && Object.keys(d.ftdsTopReasons).length > 0) {
+      var ftdsReasons = (d.ftdsTopReasons && Object.keys(d.ftdsTopReasons).length > 0) ? d.ftdsTopReasons : getDriverFtdsReasons(driverKey);
+      if (ftdsReasons && Object.keys(ftdsReasons).length > 0) {
         html += '<details style="margin-bottom:8px;">';
         html += '<summary style="font-size:12px;font-weight:bold;cursor:pointer;padding:4px 0;">\u25B6 \u6301\u3061\u623B\u308A\u5185\u8A33</summary>';
         html += '<div style="padding:4px 0 4px 12px;">';
-        var reasons = Object.keys(d.ftdsTopReasons).sort(function(a, b) { return d.ftdsTopReasons[b] - d.ftdsTopReasons[a]; });
+        var reasons = Object.keys(ftdsReasons).sort(function(a, b) { return ftdsReasons[b] - ftdsReasons[a]; });
         for (var rri = 0; rri < Math.min(reasons.length, 5); rri++) {
           var rr = reasons[rri];
           html += '<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #f1f5f9;">';
-          html += '<span>' + (translateReason(rr) || rr) + '</span><span style="font-weight:bold;">' + d.ftdsTopReasons[rr] + '</span>';
+          html += '<span>' + (translateReason(rr) || rr) + '</span><span style="font-weight:bold;">' + ftdsReasons[rr] + '</span>';
           html += '</div>';
         }
         html += '</div></details>';
@@ -17122,11 +17374,12 @@ var driverDB = {
       var text = '\u3010' + driverKey + ' / ' + d.dept + '\u3011\u54C1\u8CEA\u30EC\u30DD\u30FC\u30C8\n';
       text += '\u25A0 \u80FD\u529B: ' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) + '\u500B/h' : '-') + ' / \u8AA4\u914D' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + ' / \u914D\u9054' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '\n';
       text += '\u25A0 \u6301\u3061\u623B\u308A: ' + (d.ftdsCount || 0) + '\u4EF6\uFF08\u30C1\u30FC\u30E0\u5E73\u5747' + teamAvgFtds + '\uFF09\n';
-      if (d.ftdsTopReasons) {
-        var reasons = Object.keys(d.ftdsTopReasons).sort(function(a, b) { return d.ftdsTopReasons[b] - d.ftdsTopReasons[a]; });
+      var ftdsReasons = (d.ftdsTopReasons && Object.keys(d.ftdsTopReasons).length > 0) ? d.ftdsTopReasons : getDriverFtdsReasons(driverKey);
+      if (ftdsReasons && Object.keys(ftdsReasons).length > 0) {
+        var reasons = Object.keys(ftdsReasons).sort(function(a, b) { return ftdsReasons[b] - ftdsReasons[a]; });
         var top3 = [];
         for (var ri = 0; ri < Math.min(reasons.length, 3); ri++) {
-          top3.push((translateReason(reasons[ri]) || reasons[ri]) + ':' + d.ftdsTopReasons[reasons[ri]]);
+          top3.push((translateReason(reasons[ri]) || reasons[ri]) + ':' + ftdsReasons[reasons[ri]]);
         }
         if (top3.length > 0) text += '  \u2514 ' + top3.join(' / ') + '\n';
       }
@@ -17150,25 +17403,45 @@ var driverDB = {
     // === CSV再読込（一括D&D） ===
     function handleTeamQualityBulkFiles(files) {
       if (!files || files.length === 0) return;
-      for (var fi = 0; fi < files.length; fi++) {
-        var file = files[fi];
-        var fname = file.name.toLowerCase();
-        if (fname.indexOf('dnr') >= 0 && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
-          handleDnrFile(file);
-        } else if (fname.indexOf('ftds') >= 0 && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
-          handleFtdsFile(file);
-        } else if ((fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0) && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
-          handleCcFile(file);
-        } else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) {
-          // Try FTDS first, then CC
-          handleFtdsFile(file);
+      var loaded = 0;
+      var pending = files.length;
+      var asyncFallback = false;
+      function doneOne() {
+        pending--;
+        if (pending <= 0) {
+          setTimeout(function() {
+            buildTeamQualitySnapshot();
+            if (typeof currentTab !== 'undefined' && currentTab === 'team-quality') renderTeamQualityDashboard();
+            if (loaded > 0) alert(loaded + '件のファイルを読込みました');
+          }, asyncFallback ? 800 : 0);
         }
       }
-      // Rebuild snapshot after a short delay for async processing
-      setTimeout(function() {
-        buildTeamQualitySnapshot();
-        if (currentTab === 'team-quality') renderTeamQualityDashboard();
-      }, 1500);
+      for (var fi = 0; fi < files.length; fi++) {
+        (function(file) {
+          var fname = file.name.toLowerCase();
+          var reader = new FileReader();
+          reader.onload = function(e) {
+            var ok = false;
+            if (fname.endsWith('.csv')) {
+              var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
+              if (fname.indexOf('dnr') >= 0) ok = importDnrExportCsv(text);
+              else if (fname.indexOf('ftds') >= 0) ok = importFtdsExportCsv(text);
+              else if (fname.indexOf('contact') >= 0 || fname.indexOf('compliance') >= 0 || (fname.indexOf('cc') >= 0 && fname.indexOf('cycle') < 0)) ok = importCcExportCsv(text);
+            }
+            if (!ok) {
+              asyncFallback = true;
+              if (fname.indexOf('dnr') >= 0) handleDnrFile(file);
+              else if (fname.indexOf('ftds') >= 0) handleFtdsFile(file);
+              else if (fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0) handleCcFile(file);
+              else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) handleFtdsFile(file);
+            } else {
+              loaded++;
+            }
+            doneOne();
+          };
+          reader.readAsArrayBuffer(file);
+        })(files[fi]);
+      }
     }
 
     function exportTeamQualityCsv() {
