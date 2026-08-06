@@ -307,6 +307,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('fleet')" id="tab-fleet">🔔 台数照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('quality')" id="tab-quality">✅ 品質管理</button>
+        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('team-quality')" id="tab-team-quality">🏢 協力会社</button>
         <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('exec')" id="tab-exec">💰 経営ダッシュボード</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('billing')" id="tab-billing">請求照合</button>
       </nav>
@@ -1437,6 +1438,121 @@
           </div>
         </div>
 
+      </div>
+
+      <!-- ===== 協力会社ダッシュボード Tab ===== -->
+      <div id="panel-team-quality" class="hidden">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h2 class="text-sm font-medium">&nbsp;&#127970; &#21332;&#21147;&#20250;&#31038;&#12480;&#12483;&#12471;&#12517;&#12508;&#12540;&#12489;</h2>
+            <p class="text-xs text-ink-lighter mt-1" id="tq-period-label">&#12487;&#12540;&#12479;&#26410;&#35501;&#36796;</p>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <label class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">
+              &#128194; &#19968;&#25324;&#35501;&#36796;
+              <input type="file" accept=".xlsx,.xls,.csv" multiple class="hidden" id="tq-bulk-file-input" onchange="handleTeamQualityBulkFiles(this.files)">
+            </label>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportTeamQualityCsv()" id="tq-export-btn" disabled>&#128229; CSV&#12456;&#12463;&#12473;&#12509;&#12540;&#12488;</button>
+          </div>
+        </div>
+
+        <!-- 全体サマリーカード -->
+        <div id="tq-global-summary" class="hidden mb-4">
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div class="card p-3 text-center border-l-4 border-blue-500">
+              <div class="text-xs text-ink-lighter">&#30331;&#37682;&#12489;&#12521;&#12452;&#12496;&#12540;</div>
+              <div class="text-lg font-bold text-blue-600" id="tq-total-drivers">0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-green-500">
+              <div class="text-xs text-ink-lighter">&#24179;&#22343;&#20181;&#20998;&#12369;&#33021;&#21147;</div>
+              <div class="text-lg font-bold text-green-600" id="tq-avg-pph">-</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-red-500">
+              <div class="text-xs text-ink-lighter">&#20840;&#20307;&#35492;&#37197;&#29575;</div>
+              <div class="text-lg font-bold text-red-500" id="tq-avg-mis">-</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-orange-500">
+              <div class="text-xs text-ink-lighter">&#25345;&#12385;&#25147;&#12426;&#21512;&#35336;</div>
+              <div class="text-lg font-bold text-orange-500" id="tq-total-ftds">0</div>
+            </div>
+            <div class="card p-3 text-center border-l-4 border-yellow-500">
+              <div class="text-xs text-ink-lighter">DNR&#25613;&#23475;</div>
+              <div class="text-lg font-bold text-yellow-600" id="tq-total-dnr-cost">&yen;0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- データソース状態 -->
+        <div id="tq-source-status" class="mb-4 flex gap-3 flex-wrap text-xs text-ink-lighter">
+          <span id="tq-src-ability">&#9744; &#33021;&#21147;DB</span>
+          <span id="tq-src-ftds">&#9744; FTDS</span>
+          <span id="tq-src-cc">&#9744; CC</span>
+          <span id="tq-src-dnr">&#9744; DNR</span>
+          <span id="tq-src-updated"></span>
+        </div>
+
+        <!-- 会社比較テーブル -->
+        <div class="card p-4 mb-4" id="tq-company-table-wrap">
+          <h3 class="text-sm font-bold mb-2">&#21332;&#21147;&#20250;&#31038;&#27604;&#36611;</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs" id="tq-company-table">
+              <thead>
+                <tr class="border-b-2 border-border">
+                  <th class="text-left p-2">&#25152;&#23646;</th>
+                  <th class="text-right p-2">&#20154;&#25968;</th>
+                  <th class="text-right p-2">&#24179;&#22343;pph</th>
+                  <th class="text-right p-2">&#35492;&#37197;&#29575;</th>
+                  <th class="text-right p-2">&#37197;&#36948;&#29575;</th>
+                  <th class="text-right p-2">&#25345;&#25147;&#12426;</th>
+                  <th class="text-right p-2">DNR</th>
+                  <th class="text-right p-2">CC</th>
+                  <th class="text-right p-2">&#21697;&#36074;&#12473;&#12467;&#12450;</th>
+                </tr>
+              </thead>
+              <tbody id="tq-company-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 3カラム: 所属選択 + メンバー一覧 + 個人詳細 -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <!-- 左: 所属選択 -->
+          <div class="lg:col-span-2">
+            <div class="card p-3">
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;</h4>
+              <div id="tq-dept-list" class="flex flex-col gap-1"></div>
+            </div>
+          </div>
+          <!-- 中: メンバー一覧 -->
+          <div class="lg:col-span-5">
+            <div class="card p-3">
+              <h4 class="text-xs font-bold mb-2" id="tq-selected-dept-label">&#25152;&#23646;&#12434;&#36984;&#25246;</h4>
+              <div class="overflow-x-auto">
+                <table class="w-full text-xs" id="tq-member-table">
+                  <thead>
+                    <tr class="border-b border-border">
+                      <th class="text-left p-1.5">&#21517;&#21069;</th>
+                      <th class="text-right p-1.5">pph</th>
+                      <th class="text-right p-1.5">&#35492;&#37197;</th>
+                      <th class="text-right p-1.5">&#37197;&#36948;&#29575;</th>
+                      <th class="text-right p-1.5">&#25345;&#25147;&#12426;</th>
+                      <th class="text-right p-1.5">DNR</th>
+                      <th class="text-right p-1.5">CC</th>
+                      <th class="text-right p-1.5">&#12473;&#12467;&#12450;</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tq-member-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <!-- 右: 個人詳細 -->
+          <div class="lg:col-span-5">
+            <div class="card p-4" id="tq-driver-detail">
+              <p class="text-sm text-ink-lighter">&#12513;&#12531;&#12496;&#12540;&#12434;&#36984;&#25246;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ===== 品質管理 Tab ===== -->
@@ -3182,11 +3298,11 @@ var driverDB = {
       }
       currentTab = tab;
       // Update gradient background
-      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract','tab-quality'];
+      var tabClasses = ['tab-exec','tab-dashboard','tab-drivers','tab-master','tab-optimization','tab-tenko','tab-tenko-match','tab-map-master','tab-scan','tab-addr-search','tab-billing','tab-ftds','tab-fleet','tab-volume','tab-wh60','tab-tw-extract','tab-quality','tab-team-quality'];
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
-      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract','quality':'tab-quality'};
+      var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract','quality':'tab-quality','team-quality':'tab-team-quality'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['dashboard', 'optimization', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'quality', 'exec', 'billing'];
+      var allTabs = ['dashboard', 'optimization', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'quality', 'team-quality', 'exec', 'billing'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -3208,6 +3324,7 @@ var driverDB = {
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
       if (tab === 'map-master') wh60LoadAddrStats();
+      if (tab === 'team-quality') renderTeamQualityDashboard();
     }
 
     // ===== File Upload - Assignment Data =====
@@ -15131,6 +15248,7 @@ var driverDB = {
       // Enable export
       document.getElementById('ftds-export-btn').disabled = false;
       setFtdsCcActiveView('ftds');
+      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
     }
 
     function exportFtdsResult() {
@@ -15357,6 +15475,7 @@ var driverDB = {
       // Enable export
       document.getElementById('cc-export-btn').disabled = false;
       setFtdsCcActiveView('cc');
+      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
     }
 
     function exportCcResult() {
@@ -16102,6 +16221,7 @@ var driverDB = {
 
         renderDnrResults();
         updateQualitySummary();
+        if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
         var qh = document.getElementById('quality-hero');
         if (qh) qh.style.display = 'none';
       };
@@ -16489,7 +16609,591 @@ var driverDB = {
       document.getElementById('q-score').textContent = Math.round(score) + '点';
     }
 
-    // ===== 台数照合 =====
+    // ===== 協力会社ダッシュボード =====
+    var teamQualitySnapshot = null;
+    var _tqSelectedDept = null;
+    var _tqSelectedDriver = null;
+
+    var TEAM_QUALITY_WEIGHTS = { dnrPerDriver: 5, ftdsPerPkg: 2, misRate: 10, deliveryGap: 0.5 };
+
+    function calcDriverScore(d) {
+      var s = 100;
+      s -= (d.dnrCount || 0) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
+      if (d.totalPackages > 0) s -= ((d.ftdsCount || 0) / d.totalPackages * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
+      s -= (d.misdeliveryRate || 0) * TEAM_QUALITY_WEIGHTS.misRate;
+      s -= (100 - (d.deliveryRate || 100)) * TEAM_QUALITY_WEIGHTS.deliveryGap;
+      if (s < 0) s = 0;
+      if (s > 100) s = 100;
+      return Math.round(s);
+    }
+
+    function buildTeamQualitySnapshot() {
+      var drivers = {};
+      var sources = { ability: false, ftds: false, cc: false, dnr: false };
+
+      // 1) driverDB (ability)
+      for (var name in driverDB) {
+        if (isDriverDeleted(name)) continue;
+        var key = resolveDriverKey(name);
+        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        var db = driverDB[name];
+        if (db.packagesPerHour) {
+          drivers[key].packagesPerHour = db.packagesPerHour || 0;
+          drivers[key].misdeliveryRate = db.misdeliveryRate || 0;
+          drivers[key].deliveryRate = db.deliveryRate || 0;
+          drivers[key].workDays = db.workDays || 0;
+          drivers[key].totalPackages = db.totalPackages || 0;
+          sources.ability = true;
+        }
+      }
+
+      // 2) FTDS
+      for (var fi = 0; fi < ftdsResultData.length; fi++) {
+        var fr = ftdsResultData[fi];
+        var fkey = fr.driverName ? resolveDriverKey(fr.driverName) : (fr.transporterId ? resolveDriverKeyByTid(fr.transporterId) : '');
+        if (!fkey) fkey = '(未特定)';
+        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + 1;
+        var reason = fr.reason || 'OTHER';
+        drivers[fkey].ftdsTopReasons[reason] = (drivers[fkey].ftdsTopReasons[reason] || 0) + 1;
+        sources.ftds = true;
+      }
+
+      // 3) CC
+      for (var ci = 0; ci < ccResultData.length; ci++) {
+        var cr = ccResultData[ci];
+        var ckey = cr.driverName ? resolveDriverKey(cr.driverName) : (cr.transporterId ? resolveDriverKeyByTid(cr.transporterId) : '');
+        if (!ckey) ckey = '(未特定)';
+        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        drivers[ckey].ccCount = (drivers[ckey].ccCount || 0) + 1;
+        if (cr.duration && parseInt(cr.duration) > 0) drivers[ckey].ccCalls = (drivers[ckey].ccCalls || 0) + 1;
+        sources.cc = true;
+      }
+
+      // 4) DNR
+      for (var di = 0; di < dnrResultData.length; di++) {
+        var dr = dnrResultData[di];
+        var dkey = dr.driverName ? resolveDriverKey(dr.driverName) : '(未特定)';
+        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        drivers[dkey].dnrCount = (drivers[dkey].dnrCount || 0) + 1;
+        drivers[dkey].dnrCost = (drivers[dkey].dnrCost || 0) + (dr._cost || 0);
+        sources.dnr = true;
+      }
+
+      // 5) Assign dept + score
+      for (var dk in drivers) {
+        var dept = driverDepartments[dk] || driverDepartments[resolveDriverKey(dk)] || '';
+        drivers[dk].dept = dept || '未所属';
+        drivers[dk].qualityScore = calcDriverScore(drivers[dk]);
+      }
+
+      teamQualitySnapshot = {
+        updatedAt: new Date().toISOString(),
+        sources: sources,
+        drivers: drivers
+      };
+
+      localStorage.setItem('teamQualitySnapshot', JSON.stringify(teamQualitySnapshot));
+      return teamQualitySnapshot;
+    }
+
+    function resolveDriverKeyByTid(tid) {
+      if (!tid) return '';
+      for (var k in transportIDs) {
+        if (transportIDs[k] === tid) return resolveDriverKey(k);
+      }
+      return '';
+    }
+
+    function getCompanyStats(snapshot) {
+      var companies = {};
+      var deptOrder = DEPARTMENTS.concat(['未所属']);
+      for (var di2 = 0; di2 < deptOrder.length; di2++) {
+        companies[deptOrder[di2]] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, cc: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
+      }
+      for (var name in snapshot.drivers) {
+        var d = snapshot.drivers[name];
+        var dept = d.dept || '未所属';
+        if (!companies[dept]) companies[dept] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, cc: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
+        var c = companies[dept];
+        c.count++;
+        c.totalPkgs += d.totalPackages || 0;
+        c.weightedPph += (d.packagesPerHour || 0) * (d.totalPackages || 0);
+        c.weightedMis += (d.misdeliveryRate || 0) * (d.totalPackages || 0);
+        c.weightedDel += (d.deliveryRate || 0) * (d.totalPackages || 0);
+        c.ftds += d.ftdsCount || 0;
+        c.dnr += d.dnrCount || 0;
+        c.dnrCost += d.dnrCost || 0;
+        c.cc += d.ccCount || 0;
+      }
+      // Compute averages
+      for (var dept in companies) {
+        var c = companies[dept];
+        c.avgPph = c.totalPkgs > 0 ? c.weightedPph / c.totalPkgs : 0;
+        c.avgMis = c.totalPkgs > 0 ? c.weightedMis / c.totalPkgs : 0;
+        c.avgDel = c.totalPkgs > 0 ? c.weightedDel / c.totalPkgs : 0;
+        // team score
+        var activeDrivers = c.count || 1;
+        c.score = 100;
+        c.score -= (c.dnr / activeDrivers) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
+        if (c.totalPkgs > 0) c.score -= (c.ftds / c.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
+        c.score -= c.avgMis * TEAM_QUALITY_WEIGHTS.misRate;
+        c.score -= (100 - c.avgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
+        if (c.score < 0) c.score = 0;
+        if (c.score > 100) c.score = 100;
+        c.score = Math.round(c.score);
+      }
+      return companies;
+    }
+
+    function renderTeamQualityDashboard() {
+      if (!teamQualitySnapshot) {
+        // Try localStorage
+        var saved = localStorage.getItem('teamQualitySnapshot');
+        if (saved) { try { teamQualitySnapshot = JSON.parse(saved); } catch(e) {} }
+      }
+      if (!teamQualitySnapshot) {
+        buildTeamQualitySnapshot();
+      }
+      var snap = teamQualitySnapshot;
+      if (!snap || !snap.drivers) return;
+
+      // Source status
+      var srcAbEl = document.getElementById('tq-src-ability');
+      var srcFtEl = document.getElementById('tq-src-ftds');
+      var srcCcEl = document.getElementById('tq-src-cc');
+      var srcDnEl = document.getElementById('tq-src-dnr');
+      var srcUpEl = document.getElementById('tq-src-updated');
+      if (srcAbEl) srcAbEl.textContent = (snap.sources.ability ? '\u2611' : '\u2610') + ' \u80FD\u529BDB';
+      if (srcFtEl) srcFtEl.textContent = (snap.sources.ftds ? '\u2611' : '\u2610') + ' FTDS';
+      if (srcCcEl) srcCcEl.textContent = (snap.sources.cc ? '\u2611' : '\u2610') + ' CC';
+      if (srcDnEl) srcDnEl.textContent = (snap.sources.dnr ? '\u2611' : '\u2610') + ' DNR';
+      if (srcUpEl && snap.updatedAt) srcUpEl.textContent = '\u6700\u7D42\u66F4\u65B0: ' + new Date(snap.updatedAt).toLocaleString('ja-JP');
+
+      // Period label
+      var periodEl = document.getElementById('tq-period-label');
+      var srcList = [];
+      if (snap.sources.ability) srcList.push('\u80FD\u529BDB');
+      if (snap.sources.ftds) srcList.push('FTDS ' + ftdsResultData.length + '\u4EF6');
+      if (snap.sources.cc) srcList.push('CC ' + ccResultData.length + '\u4EF6');
+      if (snap.sources.dnr) srcList.push('DNR ' + dnrResultData.length + '\u4EF6');
+      if (periodEl) periodEl.textContent = srcList.length > 0 ? srcList.join(' / ') : '\u30C7\u30FC\u30BF\u672A\u8AAD\u8FBC';
+
+      // Global summary
+      var allDriverKeys = Object.keys(snap.drivers);
+      var totalDrivers = allDriverKeys.length;
+      var totalPkgs = 0, wPph = 0, wMis = 0, totalFtds = 0, totalDnrCost = 0;
+      for (var ai = 0; ai < allDriverKeys.length; ai++) {
+        var dd = snap.drivers[allDriverKeys[ai]];
+        totalPkgs += dd.totalPackages || 0;
+        wPph += (dd.packagesPerHour || 0) * (dd.totalPackages || 0);
+        wMis += (dd.misdeliveryRate || 0) * (dd.totalPackages || 0);
+        totalFtds += dd.ftdsCount || 0;
+        totalDnrCost += dd.dnrCost || 0;
+      }
+      document.getElementById('tq-total-drivers').textContent = totalDrivers;
+      document.getElementById('tq-avg-pph').textContent = totalPkgs > 0 ? (wPph / totalPkgs).toFixed(1) + ' \u500B/h' : '-';
+      document.getElementById('tq-avg-mis').textContent = totalPkgs > 0 ? (wMis / totalPkgs).toFixed(2) + '%' : '-';
+      document.getElementById('tq-total-ftds').textContent = totalFtds.toLocaleString() + '\u4EF6';
+      document.getElementById('tq-total-dnr-cost').textContent = '\u00A5' + totalDnrCost.toLocaleString();
+      document.getElementById('tq-global-summary').classList.remove('hidden');
+      document.getElementById('tq-export-btn').disabled = false;
+
+      // Company table
+      var companies = getCompanyStats(snap);
+      var tbody = document.getElementById('tq-company-tbody');
+      var html = '';
+      var deptOrder = DEPARTMENTS.concat(['\u672A\u6240\u5C5E']);
+      // GDS合計
+      var gdsTotal = { count: 0, avgPph: 0, avgMis: 0, avgDel: 0, ftds: 0, dnr: 0, cc: 0, score: 0, totalPkgs: 0, wPph: 0, wMis: 0, wDel: 0 };
+      for (var gi = 0; gi < deptOrder.length; gi++) {
+        var dept = deptOrder[gi];
+        var c = companies[dept];
+        if (!c || c.count === 0) continue;
+        var scoreColor = c.score >= 90 ? 'color:#16a34a;' : (c.score >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
+        var rowStyle = dept === '\u672A\u6240\u5C5E' ? 'background:#f9fafb;font-style:italic;' : '';
+        html += '<tr style="' + rowStyle + 'cursor:pointer;" onclick="selectTeamDept(\'' + dept.replace(/'/g, "\\'") + '\')">';
+        html += '<td class="p-2 font-bold">' + escapeHtml(dept) + '</td>';
+        html += '<td class="p-2 text-right">' + c.count + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgPph > 0 ? c.avgPph.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgMis > 0 ? c.avgMis.toFixed(2) + '%' : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgDel > 0 ? c.avgDel.toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + c.ftds + '</td>';
+        html += '<td class="p-2 text-right">' + c.dnr + '</td>';
+        html += '<td class="p-2 text-right">' + c.cc + '</td>';
+        html += '<td class="p-2 text-right font-bold" style="' + scoreColor + '">' + c.score + '</td>';
+        html += '</tr>';
+        // GDS accumulate
+        if (dept.indexOf('GDS') === 0) {
+          gdsTotal.count += c.count;
+          gdsTotal.totalPkgs += c.totalPkgs;
+          gdsTotal.wPph += c.weightedPph;
+          gdsTotal.wMis += c.weightedMis;
+          gdsTotal.wDel += c.weightedDel;
+          gdsTotal.ftds += c.ftds;
+          gdsTotal.dnr += c.dnr;
+          gdsTotal.cc += c.cc;
+        }
+      }
+      // GDS合計行
+      if (gdsTotal.count > 0) {
+        var gdsAvgPph = gdsTotal.totalPkgs > 0 ? gdsTotal.wPph / gdsTotal.totalPkgs : 0;
+        var gdsAvgMis = gdsTotal.totalPkgs > 0 ? gdsTotal.wMis / gdsTotal.totalPkgs : 0;
+        var gdsAvgDel = gdsTotal.totalPkgs > 0 ? gdsTotal.wDel / gdsTotal.totalPkgs : 0;
+        var gdsScore = 100 - (gdsTotal.dnr / (gdsTotal.count || 1)) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
+        if (gdsTotal.totalPkgs > 0) gdsScore -= (gdsTotal.ftds / gdsTotal.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
+        gdsScore -= gdsAvgMis * TEAM_QUALITY_WEIGHTS.misRate;
+        gdsScore -= (100 - gdsAvgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
+        gdsScore = Math.max(0, Math.min(100, Math.round(gdsScore)));
+        var gdsScoreColor = gdsScore >= 90 ? 'color:#16a34a;' : (gdsScore >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
+        html += '<tr style="background:#e5e7eb;font-weight:bold;">';
+        html += '<td class="p-2">GDS\u5408\u8A08</td>';
+        html += '<td class="p-2 text-right">' + gdsTotal.count + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsAvgPph > 0 ? gdsAvgPph.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsAvgMis > 0 ? gdsAvgMis.toFixed(2) + '%' : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsAvgDel > 0 ? gdsAvgDel.toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + gdsTotal.ftds + '</td>';
+        html += '<td class="p-2 text-right">' + gdsTotal.dnr + '</td>';
+        html += '<td class="p-2 text-right">' + gdsTotal.cc + '</td>';
+        html += '<td class="p-2 text-right" style="' + gdsScoreColor + '">' + gdsScore + '</td>';
+        html += '</tr>';
+      }
+      // 全体平均行
+      html += '<tr style="background:#232f3e;color:white;font-weight:bold;">';
+      html += '<td class="p-2">\u5168\u4F53\u5E73\u5747</td>';
+      html += '<td class="p-2 text-right">' + totalDrivers + '</td>';
+      html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (wPph / totalPkgs).toFixed(1) : '-') + '</td>';
+      html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (wMis / totalPkgs).toFixed(2) + '%' : '-') + '</td>';
+      var globalDel = 0;
+      for (var ai2 = 0; ai2 < allDriverKeys.length; ai2++) { var dd2 = snap.drivers[allDriverKeys[ai2]]; globalDel += (dd2.deliveryRate || 0) * (dd2.totalPackages || 0); }
+      html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (globalDel / totalPkgs).toFixed(1) + '%' : '-') + '</td>';
+      html += '<td class="p-2 text-right">' + totalFtds + '</td>';
+      var totalDnr = 0; for (var ai3 = 0; ai3 < allDriverKeys.length; ai3++) totalDnr += snap.drivers[allDriverKeys[ai3]].dnrCount || 0;
+      html += '<td class="p-2 text-right">' + totalDnr + '</td>';
+      var totalCc = 0; for (var ai4 = 0; ai4 < allDriverKeys.length; ai4++) totalCc += snap.drivers[allDriverKeys[ai4]].ccCount || 0;
+      html += '<td class="p-2 text-right">' + totalCc + '</td>';
+      html += '<td class="p-2 text-right">-</td>';
+      html += '</tr>';
+      tbody.innerHTML = html;
+
+      // Dept list (left sidebar)
+      var deptListEl = document.getElementById('tq-dept-list');
+      var deptHtml = '';
+      for (var di3 = 0; di3 < deptOrder.length; di3++) {
+        var dpt = deptOrder[di3];
+        var cc2 = companies[dpt];
+        if (!cc2 || cc2.count === 0) continue;
+        var isActive = _tqSelectedDept === dpt;
+        var btnCls = isActive ? 'background:#232f3e;color:white;' : 'background:#f1f5f9;color:#374151;';
+        deptHtml += '<button style="' + btnCls + 'border:none;padding:6px 10px;border-radius:6px;font-size:11px;cursor:pointer;text-align:left;font-weight:' + (isActive ? '700' : '400') + ';" onclick="selectTeamDept(\'' + dpt.replace(/'/g, "\\'") + '\')">' + escapeHtml(dpt) + ' (' + cc2.count + ')</button>';
+      }
+      deptListEl.innerHTML = deptHtml;
+
+      // Auto select first dept
+      if (!_tqSelectedDept) {
+        for (var di4 = 0; di4 < deptOrder.length; di4++) {
+          var dpt2 = deptOrder[di4];
+          if (companies[dpt2] && companies[dpt2].count > 0) { _tqSelectedDept = dpt2; break; }
+        }
+      }
+      if (_tqSelectedDept) renderTeamMemberTable(_tqSelectedDept);
+    }
+
+    function selectTeamDept(dept) {
+      _tqSelectedDept = dept;
+      _tqSelectedDriver = null;
+      renderTeamQualityDashboard();
+    }
+
+    function getTeamMembers(dept) {
+      if (!teamQualitySnapshot) return [];
+      var members = [];
+      for (var name in teamQualitySnapshot.drivers) {
+        var d = teamQualitySnapshot.drivers[name];
+        if (d.dept === dept) {
+          members.push({ name: name, data: d });
+        }
+      }
+      // Sort by score ascending (worst first)
+      members.sort(function(a, b) { return (a.data.qualityScore || 0) - (b.data.qualityScore || 0); });
+      return members;
+    }
+
+    function renderTeamMemberTable(dept) {
+      var members = getTeamMembers(dept);
+      var label = document.getElementById('tq-selected-dept-label');
+      if (label) label.textContent = dept + ' (' + members.length + '\u540D)';
+
+      var tbody = document.getElementById('tq-member-tbody');
+      var html = '';
+      var sumPph = 0, sumMis = 0, sumDel = 0, sumFtds = 0, sumDnr = 0, sumCc = 0, sumScore = 0, sumPkgs = 0;
+
+      for (var i = 0; i < members.length; i++) {
+        var m = members[i];
+        var d = m.data;
+        var scoreColor = d.qualityScore >= 90 ? 'color:#16a34a;' : (d.qualityScore >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
+        var isSelected = _tqSelectedDriver === m.name;
+        var rowBg = isSelected ? 'background:#dbeafe;' : (i % 2 === 0 ? '' : 'background:#f9fafb;');
+        html += '<tr style="cursor:pointer;' + rowBg + '" onclick="selectTeamDriver(\'' + m.name.replace(/'/g, "\\'") + '\')">';
+        html += '<td class="p-1.5 font-mono">' + escapeHtml(m.name) + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.ftdsCount || 0) + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.dnrCount || 0) + '</td>';
+        html += '<td class="p-1.5 text-right">' + (d.ccCount || 0) + '</td>';
+        html += '<td class="p-1.5 text-right font-bold" style="' + scoreColor + '">' + d.qualityScore + '</td>';
+        html += '</tr>';
+        sumPkgs += d.totalPackages || 0;
+        sumPph += (d.packagesPerHour || 0) * (d.totalPackages || 0);
+        sumMis += (d.misdeliveryRate || 0) * (d.totalPackages || 0);
+        sumDel += (d.deliveryRate || 0) * (d.totalPackages || 0);
+        sumFtds += d.ftdsCount || 0;
+        sumDnr += d.dnrCount || 0;
+        sumCc += d.ccCount || 0;
+        sumScore += d.qualityScore || 0;
+      }
+      // Team average row
+      if (members.length > 0) {
+        var avgPph = sumPkgs > 0 ? sumPph / sumPkgs : 0;
+        var avgMis = sumPkgs > 0 ? sumMis / sumPkgs : 0;
+        var avgDel = sumPkgs > 0 ? sumDel / sumPkgs : 0;
+        var avgScore = Math.round(sumScore / members.length);
+        html += '<tr style="background:#e5e7eb;font-weight:bold;">';
+        html += '<td class="p-1.5">\u30C1\u30FC\u30E0\u5E73\u5747</td>';
+        html += '<td class="p-1.5 text-right">' + (avgPph > 0 ? avgPph.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + (avgMis > 0 ? avgMis.toFixed(2) + '%' : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + (avgDel > 0 ? avgDel.toFixed(1) + '%' : '-') + '</td>';
+        html += '<td class="p-1.5 text-right">' + sumFtds + '</td>';
+        html += '<td class="p-1.5 text-right">' + sumDnr + '</td>';
+        html += '<td class="p-1.5 text-right">' + sumCc + '</td>';
+        html += '<td class="p-1.5 text-right">' + avgScore + '</td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+
+      // Auto select first member
+      if (!_tqSelectedDriver && members.length > 0) _tqSelectedDriver = members[0].name;
+      if (_tqSelectedDriver) renderDriverDetailPanel(_tqSelectedDriver);
+    }
+
+    function selectTeamDriver(name) {
+      _tqSelectedDriver = name;
+      renderTeamMemberTable(_tqSelectedDept);
+    }
+
+    function renderDriverDetailPanel(driverKey) {
+      var panel = document.getElementById('tq-driver-detail');
+      if (!teamQualitySnapshot || !teamQualitySnapshot.drivers[driverKey]) {
+        panel.innerHTML = '<p class="text-sm text-ink-lighter">\u30C7\u30FC\u30BF\u306A\u3057</p>';
+        return;
+      }
+      var d = teamQualitySnapshot.drivers[driverKey];
+      var tid = transportIDs[driverKey] || transportIDs[resolveDriverKey(driverKey)] || '-';
+      var dept = d.dept || '\u672A\u6240\u5C5E';
+
+      // Team stats for comparison
+      var teamMembers = getTeamMembers(dept);
+      var teamAvgPph = 0, teamAvgMis = 0, teamAvgFtds = 0, teamPkgs = 0, teamCount = teamMembers.length || 1;
+      for (var ti = 0; ti < teamMembers.length; ti++) {
+        var tm = teamMembers[ti].data;
+        teamPkgs += tm.totalPackages || 0;
+        teamAvgPph += (tm.packagesPerHour || 0) * (tm.totalPackages || 0);
+        teamAvgMis += (tm.misdeliveryRate || 0) * (tm.totalPackages || 0);
+        teamAvgFtds += tm.ftdsCount || 0;
+      }
+      teamAvgPph = teamPkgs > 0 ? teamAvgPph / teamPkgs : 0;
+      teamAvgMis = teamPkgs > 0 ? teamAvgMis / teamPkgs : 0;
+      teamAvgFtds = teamCount > 0 ? teamAvgFtds / teamCount : 0;
+
+      // Rank
+      var pphRank = 1, misRank = 1, ftdsRank = 1;
+      for (var ri = 0; ri < teamMembers.length; ri++) {
+        if (teamMembers[ri].data.packagesPerHour > d.packagesPerHour) pphRank++;
+        if ((teamMembers[ri].data.misdeliveryRate || 0) < (d.misdeliveryRate || 0)) misRank++;
+        if ((teamMembers[ri].data.ftdsCount || 0) < (d.ftdsCount || 0)) ftdsRank++;
+      }
+
+      function deltaTag(val, avg, reverse) {
+        var diff = val - avg;
+        if (reverse) diff = -diff;
+        var isGood = diff >= 0;
+        if (reverse) isGood = val <= avg;
+        else isGood = val >= avg;
+        var color = isGood ? '#16a34a' : (Math.abs(val - avg) > avg * 0.3 ? '#dc2626' : '#d97706');
+        var sign = (val - avg) >= 0 ? '+' : '';
+        return '<span style="font-size:10px;color:' + color + ';">' + sign + (val - avg).toFixed(1) + '</span>';
+      }
+
+      var html = '';
+      // Header
+      html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">';
+      html += '<div style="width:40px;height:40px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:16px;">\uD83D\uDE97</div>';
+      html += '<div>';
+      html += '<div style="font-size:14px;font-weight:bold;">' + escapeHtml(driverKey) + '</div>';
+      html += '<div style="font-size:11px;color:#6b7280;">\u6240\u5C5E: ' + escapeHtml(dept) + ' | TID: ' + escapeHtml(tid) + '</div>';
+      html += '</div>';
+      html += '</div>';
+
+      // Score badge
+      var scoreColor = d.qualityScore >= 90 ? '#16a34a' : (d.qualityScore >= 75 ? '#d97706' : '#dc2626');
+      html += '<div style="display:inline-block;padding:4px 16px;border-radius:20px;background:' + scoreColor + ';color:white;font-weight:bold;font-size:14px;margin-bottom:12px;">\u54C1\u8CEA\u30B9\u30B3\u30A2: ' + d.qualityScore + '\u70B9</div>';
+
+      // 6 metric cards
+      html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">';
+      // pph
+      html += '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">\u4ED5\u5206\u3051\u80FD\u529B</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) : '-') + '</div>';
+      html += '<div style="font-size:10px;">\u30C1\u30FC\u30E0' + teamAvgPph.toFixed(1) + ' ' + (d.packagesPerHour > 0 ? deltaTag(d.packagesPerHour, teamAvgPph, false) : '') + ' ' + pphRank + '/' + teamCount + '\u4F4D</div>';
+      html += '</div>';
+      // mis
+      html += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">\u8AA4\u914D\u7387</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + '</div>';
+      html += '<div style="font-size:10px;">\u30C1\u30FC\u30E0' + teamAvgMis.toFixed(2) + '% ' + (d.misdeliveryRate > 0 ? deltaTag(d.misdeliveryRate, teamAvgMis, true) : '') + ' ' + misRank + '/' + teamCount + '\u4F4D</div>';
+      html += '</div>';
+      // delivery rate
+      html += '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">\u914D\u9054\u7387</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '</div>';
+      html += '</div>';
+      // ftds
+      html += '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">\u6301\u3061\u623B\u308A</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.ftdsCount || 0) + '\u4EF6</div>';
+      html += '<div style="font-size:10px;">\u30C1\u30FC\u30E0\u5E73\u5747' + teamAvgFtds.toFixed(0) + ' ' + ftdsRank + '/' + teamCount + '\u4F4D</div>';
+      html += '</div>';
+      // dnr
+      html += '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">DNR</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.dnrCount || 0) + '\u4EF6</div>';
+      html += '<div style="font-size:10px;">\u00A5' + (d.dnrCost || 0).toLocaleString() + '</div>';
+      html += '</div>';
+      // cc
+      html += '<div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px;padding:8px;text-align:center;">';
+      html += '<div style="font-size:10px;color:#6b7280;">CC</div>';
+      html += '<div style="font-size:16px;font-weight:bold;">' + (d.ccCount || 0) + '\u4EF6</div>';
+      html += '<div style="font-size:10px;">\u901A\u8A71' + (d.ccCalls || 0) + '\u56DE</div>';
+      html += '</div>';
+      html += '</div>';
+
+      // FTDS breakdown accordion
+      if (d.ftdsTopReasons && Object.keys(d.ftdsTopReasons).length > 0) {
+        html += '<details style="margin-bottom:8px;">';
+        html += '<summary style="font-size:12px;font-weight:bold;cursor:pointer;padding:4px 0;">\u25B6 \u6301\u3061\u623B\u308A\u5185\u8A33</summary>';
+        html += '<div style="padding:4px 0 4px 12px;">';
+        var reasons = Object.keys(d.ftdsTopReasons).sort(function(a, b) { return d.ftdsTopReasons[b] - d.ftdsTopReasons[a]; });
+        for (var rri = 0; rri < Math.min(reasons.length, 5); rri++) {
+          var rr = reasons[rri];
+          html += '<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #f1f5f9;">';
+          html += '<span>' + (translateReason(rr) || rr) + '</span><span style="font-weight:bold;">' + d.ftdsTopReasons[rr] + '</span>';
+          html += '</div>';
+        }
+        html += '</div></details>';
+      }
+
+      // Ability details
+      if (d.workDays > 0) {
+        html += '<details style="margin-bottom:8px;">';
+        html += '<summary style="font-size:12px;font-weight:bold;cursor:pointer;padding:4px 0;">\u25B6 \u80FD\u529B\u8A73\u7D30</summary>';
+        html += '<div style="padding:4px 0 4px 12px;font-size:11px;">';
+        html += '<div>\u7A3C\u50CD\u65E5\u6570: ' + d.workDays + '\u65E5</div>';
+        html += '<div>\u7DCF\u500B\u6570: ' + (d.totalPackages || 0).toLocaleString() + '\u500B</div>';
+        html += '</div></details>';
+      }
+
+      // LINE report copy button
+      html += '<div style="margin-top:12px;display:flex;gap:6px;">';
+      html += '<button style="padding:4px 12px;border:none;border-radius:5px;background:#06C755;color:white;font-size:11px;cursor:pointer;" onclick="copyDriverReport(\'' + driverKey.replace(/'/g, "\\'") + '\')">\uD83D\uDCCB \u500B\u4EBA\u30EC\u30DD\u30FC\u30C8\u30B3\u30D4\u30FC</button>';
+      html += '</div>';
+
+      panel.innerHTML = html;
+    }
+
+    function copyDriverReport(driverKey) {
+      if (!teamQualitySnapshot || !teamQualitySnapshot.drivers[driverKey]) return;
+      var d = teamQualitySnapshot.drivers[driverKey];
+      var teamMembers = getTeamMembers(d.dept);
+      var teamAvgFtds = 0;
+      for (var i = 0; i < teamMembers.length; i++) teamAvgFtds += teamMembers[i].data.ftdsCount || 0;
+      teamAvgFtds = teamMembers.length > 0 ? Math.round(teamAvgFtds / teamMembers.length) : 0;
+
+      var text = '\u3010' + driverKey + ' / ' + d.dept + '\u3011\u54C1\u8CEA\u30EC\u30DD\u30FC\u30C8\n';
+      text += '\u25A0 \u80FD\u529B: ' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) + '\u500B/h' : '-') + ' / \u8AA4\u914D' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + ' / \u914D\u9054' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '\n';
+      text += '\u25A0 \u6301\u3061\u623B\u308A: ' + (d.ftdsCount || 0) + '\u4EF6\uFF08\u30C1\u30FC\u30E0\u5E73\u5747' + teamAvgFtds + '\uFF09\n';
+      if (d.ftdsTopReasons) {
+        var reasons = Object.keys(d.ftdsTopReasons).sort(function(a, b) { return d.ftdsTopReasons[b] - d.ftdsTopReasons[a]; });
+        var top3 = [];
+        for (var ri = 0; ri < Math.min(reasons.length, 3); ri++) {
+          top3.push((translateReason(reasons[ri]) || reasons[ri]) + ':' + d.ftdsTopReasons[reasons[ri]]);
+        }
+        if (top3.length > 0) text += '  \u2514 ' + top3.join(' / ') + '\n';
+      }
+      text += '\u25A0 DNR: ' + (d.dnrCount || 0) + '\u4EF6 / \u00A5' + (d.dnrCost || 0).toLocaleString() + '\n';
+      text += '\u25A0 CC: ' + (d.ccCount || 0) + '\u4EF6\uFF08\u901A\u8A71' + (d.ccCalls || 0) + '\u56DE\uFF09\n';
+      text += '\u25A0 \u54C1\u8CEA\u30B9\u30B3\u30A2: ' + d.qualityScore + '\u70B9';
+
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+      } else {
+        var tmp = document.createElement('textarea');
+        tmp.value = text;
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tmp);
+      }
+      alert('\u500B\u4EBA\u30EC\u30DD\u30FC\u30C8\u3092\u30B3\u30D4\u30FC\u3057\u307E\u3057\u305F');
+    }
+
+    // === CSV再読込（一括D&D） ===
+    function handleTeamQualityBulkFiles(files) {
+      if (!files || files.length === 0) return;
+      for (var fi = 0; fi < files.length; fi++) {
+        var file = files[fi];
+        var fname = file.name.toLowerCase();
+        if (fname.indexOf('dnr') >= 0 && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
+          handleDnrFile(file);
+        } else if (fname.indexOf('ftds') >= 0 && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
+          handleFtdsFile(file);
+        } else if ((fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0) && (fname.endsWith('.csv') || fname.endsWith('.xlsx') || fname.endsWith('.xls'))) {
+          handleCcFile(file);
+        } else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) {
+          // Try FTDS first, then CC
+          handleFtdsFile(file);
+        }
+      }
+      // Rebuild snapshot after a short delay for async processing
+      setTimeout(function() {
+        buildTeamQualitySnapshot();
+        if (currentTab === 'team-quality') renderTeamQualityDashboard();
+      }, 1500);
+    }
+
+    function exportTeamQualityCsv() {
+      if (!teamQualitySnapshot) return;
+      var drivers = teamQualitySnapshot.drivers;
+      var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u9054\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,CC,\u54C1\u8CEA\u30B9\u30B3\u30A2'];
+      for (var name in drivers) {
+        var d = drivers[name];
+        lines.push([
+          name, d.dept,
+          d.packagesPerHour ? d.packagesPerHour.toFixed(1) : '',
+          d.misdeliveryRate ? d.misdeliveryRate.toFixed(2) : '',
+          d.deliveryRate ? d.deliveryRate.toFixed(1) : '',
+          d.workDays || '', d.totalPackages || '',
+          d.ftdsCount || 0, d.dnrCount || 0, d.dnrCost || 0,
+          d.ccCount || 0, d.qualityScore
+        ].join(','));
+      }
+      var csv = '\uFEFF' + lines.join('\n');
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = '\u5354\u529B\u4F1A\u793E\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+    }
     var FLEET_MASTER_KEY = 'fleetMasterV2';
     var fleetCompareResults = [];
 
