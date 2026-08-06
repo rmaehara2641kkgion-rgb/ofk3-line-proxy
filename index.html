@@ -15139,18 +15139,49 @@ var driverDB = {
       return (parseInt(rec.duration, 10) || 0) > 0;
     }
 
+    function parseCcCountCell(val, blankAsZero) {
+      if (val === undefined || val === null || String(val).trim() === '') {
+        return blankAsZero ? 0 : null;
+      }
+      var n = parseInt(String(val).trim(), 10);
+      if (isNaN(n)) return blankAsZero ? 0 : null;
+      return n;
+    }
+
+    function findCcSummaryColumns(headerRow) {
+      var colReq = -1;
+      var colAct = -1;
+      for (var hi = 0; hi < headerRow.length; hi++) {
+        var h = normalizeReportHeader(headerRow[hi]);
+        if (h.indexOf('\u3079\u304d') >= 0 || h.indexOf('\u30d9\u30ad') >= 0 || (h.indexOf('\u67b6\u96fb') >= 0 && h.indexOf('\u5b9f') < 0)) {
+          colReq = hi;
+        } else if (h.indexOf('\u5b9f') >= 0 && h.indexOf('\u67b6') >= 0) {
+          colAct = hi;
+        } else if (h.indexOf('\u901a\u8a71') >= 0 && h.indexOf('\u56de') >= 0) {
+          if (colAct < 0) colAct = hi;
+        } else if (h === '\u4ef6\u6570' || h.indexOf('\u4ef6\u6570') >= 0) {
+          if (colReq < 0) colReq = hi;
+        }
+      }
+      if (colReq < 0) colReq = 2;
+      if (colAct < 0) colAct = 3;
+      return { req: colReq, act: colAct };
+    }
+
     function calcCcCallRate(required, actual) {
-      if (!required || required <= 0) return null;
-      return Math.round((actual || 0) / required * 1000) / 10;
+      var r = required != null ? required : 0;
+      var a = actual != null ? actual : 0;
+      if (r <= 0) return null;
+      return Math.round(a / r * 1000) / 10;
     }
 
     function formatCcCallDisplay(required, actual, compact) {
-      var r = required || 0;
-      var a = actual || 0;
-      if (r === 0 && a === 0) return '-';
-      var rate = calcCcCallRate(r, a);
+      var r = required != null ? required : 0;
+      var a = actual != null ? actual : 0;
+      if (r <= 0 && a <= 0) return '-';
       var base = a + '/' + r;
       if (compact) return base;
+      var rate = calcCcCallRate(r, a);
       return rate != null ? base + ' (' + rate + '%)' : base;
     }
 
@@ -15212,6 +15243,7 @@ var driverDB = {
         }
       }
       if (headerIdx < 0) return false;
+      var cols = findCcSummaryColumns(rows[headerIdx]);
       exportedQualityCounts = exportedQualityCounts || {};
       var imported = 0;
       for (var r = headerIdx + 1; r < rows.length; r++) {
@@ -15219,6 +15251,14 @@ var driverDB = {
         if (!row || !row[0] || String(row[0]).indexOf('===') >= 0) break;
         var name = extractDriverNameFromExport(row[0]) || resolveDriverKey(String(row[0]).trim());
         if (!name) continue;
+        var ccRequired = parseCcCountCell(row[cols.req], true) || 0;
+        var ccActual = 0;
+        if (row[cols.act] !== undefined && row[cols.act] !== null && String(row[cols.act]).trim() !== '') {
+          ccActual = parseCcCountCell(row[cols.act], true) || 0;
+        }
+        if (!exportedQualityCounts[name]) exportedQualityCounts[name] = {};
+        exportedQualityCounts[name].ccRequired = ccRequired;
+        exportedQualityCounts[name].ccActual = ccActual;
         imported++;
       }
       return imported > 0;
@@ -15809,14 +15849,69 @@ var driverDB = {
         driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
           '<td class="px-3 py-2' + (isUnknown ? ' text-red-600 font-medium' : '') + '">' + dk + '</td>' +
           '<td class="px-3 py-2 text-xs font-mono">' + ds.tid + '</td>' +
-          '<td class="px-3 py-2 text-center font-bold">' + ds.required + '</td>' +
-          '<td class="px-3 py-2 text-center font-bold">' + ds.actual + '</td>' +
-          '<td class="px-3 py-2 text-center font-bold" style="color:' + rateColor + ';">' + (rate != null ? rate + '%' : '-') + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + (ds.required != null ? ds.required : 0) + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + (ds.actual != null ? ds.actual : 0) + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold" style="color:' + rateColor + ';">' + (rate != null ? rate + '%' : (ds.required > 0 ? '0%' : '-')) + '</td>' +
           '<td class="px-3 py-2 text-center">' + ds.duration + '</td>' +
           '<td class="px-3 py-2 text-xs">' + reasonParts.join(', ') + '</td>' +
           '</tr>';
       }
       driverTbody.innerHTML = driverHtml;
+
+      // サマリーCSVのべき/実で上書き（空白実=0）
+      if (exportedQualityCounts) {
+        for (var sk in exportedQualityCounts) {
+          var so = exportedQualityCounts[sk];
+          if (so.ccRequired == null && so.ccActual == null) continue;
+          var displayKey = sk;
+          var found = false;
+          for (var dk2 in driverStats) {
+            if (resolveDriverKey(dk2) === resolveDriverKey(sk) || dk2 === sk) {
+              driverStats[dk2].required = so.ccRequired != null ? so.ccRequired : 0;
+              driverStats[dk2].actual = so.ccActual != null ? so.ccActual : 0;
+              found = true;
+              break;
+            }
+          }
+          if (!found && (so.ccRequired || 0) > 0) {
+            driverStats[displayKey] = { tid: '-', count: 0, required: so.ccRequired || 0, actual: so.ccActual != null ? so.ccActual : 0, duration: 0, reasons: {} };
+          }
+        }
+        driverKeys = Object.keys(driverStats).sort(function(a, b) {
+          return driverStats[b].required - driverStats[a].required;
+        });
+        driverHtml = '';
+        for (var d2 = 0; d2 < driverKeys.length; d2++) {
+          var dk3 = driverKeys[d2];
+          var ds2 = driverStats[dk3];
+          var reasonParts2 = [];
+          var rKeys2 = Object.keys(ds2.reasons);
+          for (var ri2 = 0; ri2 < rKeys2.length; ri2++) {
+            reasonParts2.push(translateReason(rKeys2[ri2]) + ':' + ds2.reasons[rKeys2[ri2]]);
+          }
+          var rate2 = calcCcCallRate(ds2.required, ds2.actual);
+          var rateColor2 = ccCallRateColor(ds2.required, ds2.actual);
+          var isUnknown2 = dk3.indexOf('(不明)') === 0;
+          driverHtml += '<tr class="border-b border-border' + (isUnknown2 ? ' bg-red-50' : '') + '">' +
+            '<td class="px-3 py-2' + (isUnknown2 ? ' text-red-600 font-medium' : '') + '">' + dk3 + '</td>' +
+            '<td class="px-3 py-2 text-xs font-mono">' + ds2.tid + '</td>' +
+            '<td class="px-3 py-2 text-center font-bold">' + (ds2.required != null ? ds2.required : 0) + '</td>' +
+            '<td class="px-3 py-2 text-center font-bold">' + (ds2.actual != null ? ds2.actual : 0) + '</td>' +
+            '<td class="px-3 py-2 text-center font-bold" style="color:' + rateColor2 + ';">' + (rate2 != null ? rate2 + '%' : (ds2.required > 0 ? '0%' : '-')) + '</td>' +
+            '<td class="px-3 py-2 text-center">' + ds2.duration + '</td>' +
+            '<td class="px-3 py-2 text-xs">' + reasonParts2.join(', ') + '</td>' +
+            '</tr>';
+        }
+        driverTbody.innerHTML = driverHtml;
+        var reqEl2 = document.getElementById('cc-required');
+        var totalReq2 = 0, totalAct2 = 0;
+        for (var ti = 0; ti < driverKeys.length; ti++) {
+          totalReq2 += driverStats[driverKeys[ti]].required || 0;
+          totalAct2 += driverStats[driverKeys[ti]].actual != null ? driverStats[driverKeys[ti]].actual : 0;
+        }
+        if (reqEl2) reqEl2.textContent = totalReq2;
+        document.getElementById('cc-calls').textContent = totalAct2;
+      }
 
       document.getElementById('cc-detail').classList.remove('hidden');
       var detailTbody = document.getElementById('cc-detail-tbody');
@@ -17058,15 +17153,24 @@ var driverDB = {
         sources.dnr = true;
       }
 
-      // 4.5) CCエクスポートCSV等の集計上書き（詳細データ未読込時のみ）
-      if (exportedQualityCounts && ccResultData.length === 0) {
+      // 4.5) CCサマリーCSV（べき/実）を反映（空白の実架電=0）
+      if (exportedQualityCounts) {
         for (var eq in exportedQualityCounts) {
           var o = exportedQualityCounts[eq];
+          if (o.ccRequired == null && o.ccActual == null) continue;
           var eqKey = resolveDriverKey(eq);
           if (!eqKey) continue;
           if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
-          if (o.ccRequired != null) { drivers[eqKey].ccRequired = o.ccRequired; sources.cc = true; }
-          if (o.ccActual != null) drivers[eqKey].ccActual = o.ccActual;
+          drivers[eqKey].ccRequired = o.ccRequired != null ? o.ccRequired : 0;
+          drivers[eqKey].ccActual = o.ccActual != null ? o.ccActual : 0;
+          sources.cc = true;
+        }
+      }
+
+      // CC: べき>0 なのに実未設定は 0 扱い
+      for (var ccNorm in drivers) {
+        if ((drivers[ccNorm].ccRequired || 0) > 0 && drivers[ccNorm].ccActual == null) {
+          drivers[ccNorm].ccActual = 0;
         }
       }
 
@@ -17154,8 +17258,8 @@ var driverDB = {
         c.ftds += d.ftdsCount || 0;
         c.dnr += d.dnrCount || 0;
         c.dnrCost += d.dnrCost || 0;
-        c.ccRequired += d.ccRequired || 0;
-        c.ccActual += d.ccActual || 0;
+        c.ccRequired += d.ccRequired != null ? d.ccRequired : 0;
+        c.ccActual += d.ccActual != null ? d.ccActual : 0;
       }
       // Compute averages
       for (var dept in companies) {
@@ -17691,7 +17795,7 @@ var driverDB = {
       html += '<div style="font-size:16px;font-weight:bold;color:' + ccCallRateColor(d.ccRequired, d.ccActual) + ';">' + formatCcCallDisplay(d.ccRequired, d.ccActual, true) + '</div>';
       var ccRate = calcCcCallRate(d.ccRequired, d.ccActual);
       html += '<div style="font-size:10px;">\u67B6\u96FB\u7387 ' + (ccRate != null ? ccRate + '%' : '-') + '</div>';
-      html += '<div style="font-size:10px;color:#6b7280;">\u5B9F\u969B' + (d.ccActual || 0) + ' / \u30D9\u30AD' + (d.ccRequired || 0) + '</div>';
+      html += '<div style="font-size:10px;color:#6b7280;">\u5B9F\u969B' + (d.ccActual != null ? d.ccActual : 0) + ' / \u30D9\u30AD' + (d.ccRequired != null ? d.ccRequired : 0) + '</div>';
       html += '</div>';
       html += '</div>';
 
