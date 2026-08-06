@@ -1368,7 +1368,7 @@
         <!-- CC Summary -->
         <div id="cc-summary" class="hidden mb-4">
           <h3 class="text-sm font-medium mb-2">📞 Contact Compliance サマリー</h3>
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div class="card p-3 text-center">
               <div class="text-xs text-ink-lighter">総レコード</div>
               <div class="text-lg font-bold" id="cc-total">0</div>
@@ -1382,7 +1382,11 @@
               <div class="text-lg font-bold text-red-600" id="cc-unmatched">0</div>
             </div>
             <div class="card p-3 text-center">
-              <div class="text-xs text-ink-lighter">通話あり</div>
+              <div class="text-xs text-ink-lighter">べき架電</div>
+              <div class="text-lg font-bold text-violet-600" id="cc-required">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">実架電</div>
               <div class="text-lg font-bold text-blue-600" id="cc-calls">0</div>
             </div>
             <div class="card p-3 text-center">
@@ -1402,8 +1406,9 @@
                   <tr class="border-b border-border bg-surface">
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー名</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">件数</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">通話回数</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">べき架電</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">実架電</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">架電率</th>
                     <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">通話時間(秒)</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">配送理由内訳</th>
                   </tr>
@@ -1505,7 +1510,8 @@
                   <th class="text-right p-2">&#37197;&#31649;&#29575;</th>
                   <th class="text-right p-2">&#24179;&#22343;&#25345;&#25147;&#12426;</th>
                   <th class="text-right p-2">&#24179;&#22343;DNR</th>
-                  <th class="text-right p-2">&#24179;&#22343;CC</th>
+                  <th class="text-right p-2">&#26550;&#38651;&#65288;&#23455;/&#12409;&#12365;&#65289;</th>
+                  <th class="text-right p-2">&#26550;&#38651;&#29575;</th>
                   <th class="text-right p-2">&#21697;&#36074;&#12473;&#12467;&#12450;</th>
                 </tr>
               </thead>
@@ -1537,7 +1543,7 @@
                       <th class="text-right p-1.5">&#37197;&#31649;&#29575;</th>
                       <th class="text-right p-1.5">&#25345;&#25147;&#12426;</th>
                       <th class="text-right p-1.5">DNR</th>
-                      <th class="text-right p-1.5">CC</th>
+                      <th class="text-right p-1.5">&#26550;&#38651;&#65288;&#23455;/&#12409;&#12365;&#65289;</th>
                       <th class="text-right p-1.5">&#12473;&#12467;&#12450;</th>
                     </tr>
                   </thead>
@@ -15121,6 +15127,41 @@ var driverDB = {
       return -1;
     }
 
+    function isCcCallRequired(rec) {
+      var ct = String(rec.contactType || rec.callEvent || '').trim();
+      if (!ct) return false;
+      if (ct.indexOf('\u96fb\u8a71') >= 0) return true;
+      if (ct.toLowerCase().indexOf('call') >= 0) return true;
+      return false;
+    }
+
+    function isCcCallMade(rec) {
+      return (parseInt(rec.duration, 10) || 0) > 0;
+    }
+
+    function calcCcCallRate(required, actual) {
+      if (!required || required <= 0) return null;
+      return Math.round((actual || 0) / required * 1000) / 10;
+    }
+
+    function formatCcCallDisplay(required, actual, compact) {
+      var r = required || 0;
+      var a = actual || 0;
+      if (r === 0 && a === 0) return '-';
+      var rate = calcCcCallRate(r, a);
+      var base = a + '/' + r;
+      if (compact) return base;
+      return rate != null ? base + ' (' + rate + '%)' : base;
+    }
+
+    function ccCallRateColor(required, actual) {
+      var rate = calcCcCallRate(required, actual);
+      if (rate == null) return '#6b7280';
+      if (rate >= 100) return '#16a34a';
+      if (rate >= 90) return '#d97706';
+      return '#dc2626';
+    }
+
     var exportedQualityCounts = {};
 
     function importFtdsExportCsv(text) {
@@ -15178,11 +15219,6 @@ var driverDB = {
         if (!row || !row[0] || String(row[0]).indexOf('===') >= 0) break;
         var name = extractDriverNameFromExport(row[0]) || resolveDriverKey(String(row[0]).trim());
         if (!name) continue;
-        var ccCount = parseInt(row[2], 10) || 0;
-        var ccCalls = parseInt(row[3], 10) || 0;
-        if (!exportedQualityCounts[name]) exportedQualityCounts[name] = {};
-        exportedQualityCounts[name].ccCount = ccCount;
-        exportedQualityCounts[name].ccCalls = ccCalls;
         imported++;
       }
       return imported > 0;
@@ -15716,6 +15752,7 @@ var driverDB = {
       var results = ccResultData;
       var matched = 0;
       var unmatched = 0;
+      var totalRequired = 0;
       var totalCalls = 0;
       var totalDuration = 0;
       var driverStats = {};
@@ -15723,18 +15760,20 @@ var driverDB = {
       for (var i = 0; i < results.length; i++) {
         var rec = results[i];
         var driverName = rec.driverName || '';
-        var contactType = rec.contactType || '';
         var duration = rec.duration || 0;
-        var hasCall = contactType.toLowerCase().indexOf('call') >= 0 || contactType.indexOf('\u96fb\u8a71') >= 0;
+        var required = isCcCallRequired(rec);
+        var made = isCcCallMade(rec);
         if (driverName) matched++;
         else unmatched++;
-        if (hasCall) totalCalls++;
+        if (required) totalRequired++;
+        if (made) totalCalls++;
         totalDuration += duration;
 
         var statKey = driverName || ('(不明) ' + rec.transporterId);
-        if (!driverStats[statKey]) driverStats[statKey] = { tid: rec.transporterId, count: 0, calls: 0, duration: 0, reasons: {} };
+        if (!driverStats[statKey]) driverStats[statKey] = { tid: rec.transporterId, count: 0, required: 0, actual: 0, duration: 0, reasons: {} };
         driverStats[statKey].count++;
-        if (hasCall) driverStats[statKey].calls++;
+        if (required) driverStats[statKey].required++;
+        if (made) driverStats[statKey].actual++;
         driverStats[statKey].duration += duration;
         if (rec.reason) {
           driverStats[statKey].reasons[rec.reason] = (driverStats[statKey].reasons[rec.reason] || 0) + 1;
@@ -15745,13 +15784,15 @@ var driverDB = {
       document.getElementById('cc-total').textContent = results.length;
       document.getElementById('cc-matched').textContent = matched;
       document.getElementById('cc-unmatched').textContent = unmatched;
+      var reqEl = document.getElementById('cc-required');
+      if (reqEl) reqEl.textContent = totalRequired;
       document.getElementById('cc-calls').textContent = totalCalls;
       document.getElementById('cc-duration').textContent = totalDuration + 's';
 
       document.getElementById('cc-driver-summary').classList.remove('hidden');
       var driverTbody = document.getElementById('cc-driver-tbody');
       var driverKeys = Object.keys(driverStats).sort(function(a, b) {
-        return driverStats[b].count - driverStats[a].count;
+        return driverStats[b].required - driverStats[a].required;
       });
       var driverHtml = '';
       for (var d = 0; d < driverKeys.length; d++) {
@@ -15762,12 +15803,15 @@ var driverDB = {
         for (var ri = 0; ri < rKeys.length; ri++) {
           reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
+        var rate = calcCcCallRate(ds.required, ds.actual);
+        var rateColor = ccCallRateColor(ds.required, ds.actual);
         var isUnknown = dk.indexOf('(不明)') === 0;
         driverHtml += '<tr class="border-b border-border' + (isUnknown ? ' bg-red-50' : '') + '">' +
           '<td class="px-3 py-2' + (isUnknown ? ' text-red-600 font-medium' : '') + '">' + dk + '</td>' +
           '<td class="px-3 py-2 text-xs font-mono">' + ds.tid + '</td>' +
-          '<td class="px-3 py-2 text-center font-bold">' + ds.count + '</td>' +
-          '<td class="px-3 py-2 text-center">' + ds.calls + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ds.required + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ds.actual + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold" style="color:' + rateColor + ';">' + (rate != null ? rate + '%' : '-') + '</td>' +
           '<td class="px-3 py-2 text-center">' + ds.duration + '</td>' +
           '<td class="px-3 py-2 text-xs">' + reasonParts.join(', ') + '</td>' +
           '</tr>';
@@ -15806,9 +15850,10 @@ var driverDB = {
       for (var i = 0; i < ccResultData.length; i++) {
         var r = ccResultData[i];
         var dName = r.driverName || '(未特定)';
-        if (!driverStats[dName]) driverStats[dName] = {tid: r.transporterId, count: 0, calls: 0, duration: 0, reasons: {}, dates: {}};
+        if (!driverStats[dName]) driverStats[dName] = {tid: r.transporterId, count: 0, required: 0, actual: 0, duration: 0, reasons: {}, dates: {}};
         driverStats[dName].count++;
-        if (r.duration > 0) driverStats[dName].calls++;
+        if (isCcCallRequired(r)) driverStats[dName].required++;
+        if (isCcCallMade(r)) driverStats[dName].actual++;
         driverStats[dName].duration += (r.duration || 0);
         if (r.reason) {
           driverStats[dName].reasons[r.reason] = (driverStats[dName].reasons[r.reason] || 0) + 1;
@@ -15817,9 +15862,9 @@ var driverDB = {
       }
 
       // ドライバー別集計CSV
-      var csvRows = [['ドライバー名', 'TransportID', '件数', '通話回数', '通話時間(秒)', '日付', '理由内訳']];
+      var csvRows = [['ドライバー名', 'TransportID', 'べき架電', '実架電', '架電率(%)', '通話時間(秒)', '日付', '配送理由内訳']];
       var dKeys = Object.keys(driverStats).sort(function(a, b) {
-        return driverStats[b].count - driverStats[a].count;
+        return driverStats[b].required - driverStats[a].required;
       });
       for (var d = 0; d < dKeys.length; d++) {
         var dk = dKeys[d];
@@ -15830,7 +15875,8 @@ var driverDB = {
           reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var dateList = Object.keys(ds.dates).sort().join(' / ');
-        csvRows.push([dk, ds.tid, ds.count, ds.calls, ds.duration, dateList, reasonParts.join(' | ')]);
+        var rate = calcCcCallRate(ds.required, ds.actual);
+        csvRows.push([dk, ds.tid, ds.required, ds.actual, rate != null ? rate : '', ds.duration, dateList, reasonParts.join(' | ')]);
       }
 
       // 空行で区切り、詳細データも追加
@@ -16967,7 +17013,7 @@ var driverDB = {
       for (var name in driverDB) {
         if (isDriverDeleted(name)) continue;
         var key = resolveDriverKey(name);
-        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         var db = driverDB[name];
         if (db.packagesPerHour) {
           drivers[key].packagesPerHour = db.packagesPerHour || 0;
@@ -16984,7 +17030,7 @@ var driverDB = {
         var fr = ftdsResultData[fi];
         var fkey = fr.driverName ? resolveDriverKey(fr.driverName) : (fr.transporterId ? resolveDriverKeyByTid(fr.transporterId) : '');
         if (!fkey) fkey = '(未特定)';
-        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + 1;
         var reason = fr.reason || 'OTHER';
         drivers[fkey].ftdsTopReasons[reason] = (drivers[fkey].ftdsTopReasons[reason] || 0) + 1;
@@ -16996,9 +17042,9 @@ var driverDB = {
         var cr = ccResultData[ci];
         var ckey = cr.driverName ? resolveDriverKey(cr.driverName) : (cr.transporterId ? resolveDriverKeyByTid(cr.transporterId) : '');
         if (!ckey) ckey = '(未特定)';
-        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
-        drivers[ckey].ccCount = (drivers[ckey].ccCount || 0) + 1;
-        if (cr.duration && parseInt(cr.duration) > 0) drivers[ckey].ccCalls = (drivers[ckey].ccCalls || 0) + 1;
+        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (isCcCallRequired(cr)) drivers[ckey].ccRequired = (drivers[ckey].ccRequired || 0) + 1;
+        if (isCcCallMade(cr)) drivers[ckey].ccActual = (drivers[ckey].ccActual || 0) + 1;
         sources.cc = true;
       }
 
@@ -17006,21 +17052,21 @@ var driverDB = {
       for (var di = 0; di < dnrResultData.length; di++) {
         var dr = dnrResultData[di];
         var dkey = dr.driverName ? resolveDriverKey(dr.driverName) : '(未特定)';
-        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
+        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         drivers[dkey].dnrCount = (drivers[dkey].dnrCount || 0) + 1;
         drivers[dkey].dnrCost = (drivers[dkey].dnrCost || 0) + (dr._cost || 0);
         sources.dnr = true;
       }
 
-      // 4.5) CCエクスポートCSV等の集計上書き
-      if (exportedQualityCounts) {
+      // 4.5) CCエクスポートCSV等の集計上書き（詳細データ未読込時のみ）
+      if (exportedQualityCounts && ccResultData.length === 0) {
         for (var eq in exportedQualityCounts) {
           var o = exportedQualityCounts[eq];
           var eqKey = resolveDriverKey(eq);
           if (!eqKey) continue;
-          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccCount: 0, ccCalls: 0 };
-          if (o.ccCount != null) { drivers[eqKey].ccCount = o.ccCount; sources.cc = true; }
-          if (o.ccCalls != null) drivers[eqKey].ccCalls = o.ccCalls;
+          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+          if (o.ccRequired != null) { drivers[eqKey].ccRequired = o.ccRequired; sources.cc = true; }
+          if (o.ccActual != null) drivers[eqKey].ccActual = o.ccActual;
         }
       }
 
@@ -17057,8 +17103,8 @@ var driverDB = {
             dnrCount: d.dnrCount,
             dnrCost: d.dnrCost,
             ftdsCount: d.ftdsCount,
-            ccCount: d.ccCount,
-            ccCalls: d.ccCalls,
+            ccRequired: d.ccRequired,
+            ccActual: d.ccActual,
             qualityScore: d.qualityScore
           };
         }
@@ -17093,12 +17139,12 @@ var driverDB = {
       var companies = {};
       var deptOrder = DEPARTMENTS.concat(['未所属']);
       for (var di2 = 0; di2 < deptOrder.length; di2++) {
-        companies[deptOrder[di2]] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, cc: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
+        companies[deptOrder[di2]] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, ccRequired: 0, ccActual: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
       }
       for (var name in snapshot.drivers) {
         var d = snapshot.drivers[name];
         var dept = d.dept || '未所属';
-        if (!companies[dept]) companies[dept] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, cc: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
+        if (!companies[dept]) companies[dept] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, ccRequired: 0, ccActual: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
         var c = companies[dept];
         c.count++;
         c.totalPkgs += d.totalPackages || 0;
@@ -17108,7 +17154,8 @@ var driverDB = {
         c.ftds += d.ftdsCount || 0;
         c.dnr += d.dnrCount || 0;
         c.dnrCost += d.dnrCost || 0;
-        c.cc += d.ccCount || 0;
+        c.ccRequired += d.ccRequired || 0;
+        c.ccActual += d.ccActual || 0;
       }
       // Compute averages
       for (var dept in companies) {
@@ -17118,7 +17165,7 @@ var driverDB = {
         c.avgDel = c.totalPkgs > 0 ? c.weightedDel / c.totalPkgs : 0;
         c.avgFtds = c.count > 0 ? c.ftds / c.count : 0;
         c.avgDnr = c.count > 0 ? c.dnr / c.count : 0;
-        c.avgCc = c.count > 0 ? c.cc / c.count : 0;
+        c.ccCallRate = calcCcCallRate(c.ccRequired, c.ccActual);
         // team score
         var activeDrivers = c.count || 1;
         c.score = 100;
@@ -17192,7 +17239,7 @@ var driverDB = {
       var html = '';
       var deptOrder = DEPARTMENTS.concat(['\u672A\u6240\u5C5E']);
       // GDS合計
-      var gdsTotal = { count: 0, avgPph: 0, avgMis: 0, avgDel: 0, ftds: 0, dnr: 0, cc: 0, score: 0, totalPkgs: 0, wPph: 0, wMis: 0, wDel: 0 };
+      var gdsTotal = { count: 0, avgPph: 0, avgMis: 0, avgDel: 0, ftds: 0, dnr: 0, ccRequired: 0, ccActual: 0, score: 0, totalPkgs: 0, wPph: 0, wMis: 0, wDel: 0 };
       for (var gi = 0; gi < deptOrder.length; gi++) {
         var dept = deptOrder[gi];
         var c = companies[dept];
@@ -17207,7 +17254,8 @@ var driverDB = {
         html += '<td class="p-2 text-right">' + (c.avgDel > 0 ? c.avgDel.toFixed(1) + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (c.avgFtds > 0 ? c.avgFtds.toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (c.avgDnr > 0 ? c.avgDnr.toFixed(1) : '-') + '</td>';
-        html += '<td class="p-2 text-right">' + (c.avgCc > 0 ? c.avgCc.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + formatCcCallDisplay(c.ccRequired, c.ccActual, true) + '</td>';
+        html += '<td class="p-2 text-right font-bold" style="color:' + ccCallRateColor(c.ccRequired, c.ccActual) + ';">' + (c.ccCallRate != null ? c.ccCallRate + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right font-bold" style="' + scoreColor + '">' + c.score + '</td>';
         html += '</tr>';
         // GDS accumulate
@@ -17219,7 +17267,8 @@ var driverDB = {
           gdsTotal.wDel += c.weightedDel;
           gdsTotal.ftds += c.ftds;
           gdsTotal.dnr += c.dnr;
-          gdsTotal.cc += c.cc;
+          gdsTotal.ccRequired += c.ccRequired;
+          gdsTotal.ccActual += c.ccActual;
         }
       }
       // GDS合計行
@@ -17241,7 +17290,8 @@ var driverDB = {
         html += '<td class="p-2 text-right">' + (gdsAvgDel > 0 ? gdsAvgDel.toFixed(1) + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.ftds / gdsTotal.count).toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.dnr / gdsTotal.count).toFixed(1) : '-') + '</td>';
-        html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.cc / gdsTotal.count).toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + formatCcCallDisplay(gdsTotal.ccRequired, gdsTotal.ccActual, true) + '</td>';
+        html += '<td class="p-2 text-right" style="color:' + ccCallRateColor(gdsTotal.ccRequired, gdsTotal.ccActual) + ';">' + (calcCcCallRate(gdsTotal.ccRequired, gdsTotal.ccActual) != null ? calcCcCallRate(gdsTotal.ccRequired, gdsTotal.ccActual) + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right" style="' + gdsScoreColor + '">' + gdsScore + '</td>';
         html += '</tr>';
       }
@@ -17257,8 +17307,13 @@ var driverDB = {
       html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalFtds / totalDrivers).toFixed(1) : '-') + '</td>';
       var totalDnr = 0; for (var ai3 = 0; ai3 < allDriverKeys.length; ai3++) totalDnr += snap.drivers[allDriverKeys[ai3]].dnrCount || 0;
       html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalDnr / totalDrivers).toFixed(1) : '-') + '</td>';
-      var totalCc = 0; for (var ai4 = 0; ai4 < allDriverKeys.length; ai4++) totalCc += snap.drivers[allDriverKeys[ai4]].ccCount || 0;
-      html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalCc / totalDrivers).toFixed(1) : '-') + '</td>';
+      var totalCcReq = 0, totalCcAct = 0;
+      for (var ai4 = 0; ai4 < allDriverKeys.length; ai4++) {
+        totalCcReq += snap.drivers[allDriverKeys[ai4]].ccRequired || 0;
+        totalCcAct += snap.drivers[allDriverKeys[ai4]].ccActual || 0;
+      }
+      html += '<td class="p-2 text-right">' + formatCcCallDisplay(totalCcReq, totalCcAct, true) + '</td>';
+      html += '<td class="p-2 text-right">' + (calcCcCallRate(totalCcReq, totalCcAct) != null ? calcCcCallRate(totalCcReq, totalCcAct) + '%' : '-') + '</td>';
       html += '<td class="p-2 text-right">-</td>';
       html += '</tr>';
       tbody.innerHTML = html;
@@ -17484,7 +17539,7 @@ var driverDB = {
 
       var tbody = document.getElementById('tq-member-tbody');
       var html = '';
-      var sumPph = 0, sumMis = 0, sumDel = 0, sumFtds = 0, sumDnr = 0, sumCc = 0, sumScore = 0, sumPkgs = 0;
+      var sumPph = 0, sumMis = 0, sumDel = 0, sumFtds = 0, sumDnr = 0, sumCcReq = 0, sumCcAct = 0, sumScore = 0, sumPkgs = 0;
 
       for (var i = 0; i < members.length; i++) {
         var m = members[i];
@@ -17499,7 +17554,8 @@ var driverDB = {
         html += '<td class="p-1.5 text-right">' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '</td>';
         html += '<td class="p-1.5 text-right">' + (d.ftdsCount || 0) + '</td>';
         html += '<td class="p-1.5 text-right">' + (d.dnrCount || 0) + '</td>';
-        html += '<td class="p-1.5 text-right">' + (d.ccCount || 0) + '</td>';
+        var ccColor = ccCallRateColor(d.ccRequired, d.ccActual);
+        html += '<td class="p-1.5 text-right font-bold" style="color:' + ccColor + ';">' + formatCcCallDisplay(d.ccRequired, d.ccActual, true) + '</td>';
         html += '<td class="p-1.5 text-right font-bold" style="' + scoreColor + '">' + d.qualityScore + '</td>';
         html += '</tr>';
         sumPkgs += d.totalPackages || 0;
@@ -17508,7 +17564,8 @@ var driverDB = {
         sumDel += (d.deliveryRate || 0) * (d.totalPackages || 0);
         sumFtds += d.ftdsCount || 0;
         sumDnr += d.dnrCount || 0;
-        sumCc += d.ccCount || 0;
+        sumCcReq += d.ccRequired || 0;
+        sumCcAct += d.ccActual || 0;
         sumScore += d.qualityScore || 0;
       }
       // Team average row
@@ -17524,7 +17581,7 @@ var driverDB = {
         html += '<td class="p-1.5 text-right">' + (avgDel > 0 ? avgDel.toFixed(1) + '%' : '-') + '</td>';
         html += '<td class="p-1.5 text-right">' + sumFtds + '</td>';
         html += '<td class="p-1.5 text-right">' + sumDnr + '</td>';
-        html += '<td class="p-1.5 text-right">' + sumCc + '</td>';
+        html += '<td class="p-1.5 text-right">' + formatCcCallDisplay(sumCcReq, sumCcAct, true) + '</td>';
         html += '<td class="p-1.5 text-right">' + avgScore + '</td>';
         html += '</tr>';
       }
@@ -17630,9 +17687,11 @@ var driverDB = {
       html += '</div>';
       // cc
       html += '<div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px;padding:8px;text-align:center;">';
-      html += '<div style="font-size:10px;color:#6b7280;">CC</div>';
-      html += '<div style="font-size:16px;font-weight:bold;">' + (d.ccCount || 0) + '\u4EF6</div>';
-      html += '<div style="font-size:10px;">\u901A\u8A71' + (d.ccCalls || 0) + '\u56DE</div>';
+      html += '<div style="font-size:10px;color:#6b7280;">\u67B6\u96FB\uFF08\u5B9F/\u30D9\u30AD\uFF09</div>';
+      html += '<div style="font-size:16px;font-weight:bold;color:' + ccCallRateColor(d.ccRequired, d.ccActual) + ';">' + formatCcCallDisplay(d.ccRequired, d.ccActual, true) + '</div>';
+      var ccRate = calcCcCallRate(d.ccRequired, d.ccActual);
+      html += '<div style="font-size:10px;">\u67B6\u96FB\u7387 ' + (ccRate != null ? ccRate + '%' : '-') + '</div>';
+      html += '<div style="font-size:10px;color:#6b7280;">\u5B9F\u969B' + (d.ccActual || 0) + ' / \u30D9\u30AD' + (d.ccRequired || 0) + '</div>';
       html += '</div>';
       html += '</div>';
 
@@ -17691,7 +17750,10 @@ var driverDB = {
         if (top3.length > 0) text += '  \u2514 ' + top3.join(' / ') + '\n';
       }
       text += '\u25A0 DNR: ' + (d.dnrCount || 0) + '\u4EF6 / \u00A5' + (d.dnrCost || 0).toLocaleString() + '\n';
-      text += '\u25A0 CC: ' + (d.ccCount || 0) + '\u4EF6\uFF08\u901A\u8A71' + (d.ccCalls || 0) + '\u56DE\uFF09\n';
+      text += '\u25A0 \u67B6\u96FB: \u5B9F\u969B' + (d.ccActual || 0) + ' / \u30D9\u30AD' + (d.ccRequired || 0);
+      var ccRateR = calcCcCallRate(d.ccRequired, d.ccActual);
+      if (ccRateR != null) text += ' (' + ccRateR + '%)';
+      text += '\n';
       text += '\u25A0 \u54C1\u8CEA\u30B9\u30B3\u30A2: ' + d.qualityScore + '\u70B9';
 
       if (navigator.clipboard) {
@@ -17754,9 +17816,10 @@ var driverDB = {
     function exportTeamQualityCsv() {
       if (!teamQualitySnapshot) return;
       var drivers = teamQualitySnapshot.drivers;
-      var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u7BA1\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,CC,\u54C1\u8CEA\u30B9\u30B3\u30A2'];
+      var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u7BA1\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,\u30D9\u30AD\u67B6\u96FB,\u5B9F\u67B6\u96FB,\u67B6\u96FB\u7387(%),\u54C1\u8CEA\u30B9\u30B3\u30A2'];
       for (var name in drivers) {
         var d = drivers[name];
+        var ccRateE = calcCcCallRate(d.ccRequired, d.ccActual);
         lines.push([
           name, d.dept,
           d.packagesPerHour ? d.packagesPerHour.toFixed(1) : '',
@@ -17764,7 +17827,8 @@ var driverDB = {
           d.deliveryRate ? d.deliveryRate.toFixed(1) : '',
           d.workDays || '', d.totalPackages || '',
           d.ftdsCount || 0, d.dnrCount || 0, d.dnrCost || 0,
-          d.ccCount || 0, d.qualityScore
+          d.ccRequired || 0, d.ccActual || 0, ccRateE != null ? ccRateE : '',
+          d.qualityScore
         ].join(','));
       }
       var csv = '\uFEFF' + lines.join('\n');
