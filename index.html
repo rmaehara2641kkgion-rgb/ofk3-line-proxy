@@ -1503,9 +1503,9 @@
                   <th class="text-right p-2">&#24179;&#22343;pph</th>
                   <th class="text-right p-2">&#35492;&#37197;&#29575;</th>
                   <th class="text-right p-2">&#37197;&#31649;&#29575;</th>
-                  <th class="text-right p-2">&#25345;&#25147;&#12426;</th>
-                  <th class="text-right p-2">DNR</th>
-                  <th class="text-right p-2">CC</th>
+                  <th class="text-right p-2">&#24179;&#22343;&#25345;&#25147;&#12426;</th>
+                  <th class="text-right p-2">&#24179;&#22343;DNR</th>
+                  <th class="text-right p-2">&#24179;&#22343;CC</th>
                   <th class="text-right p-2">&#21697;&#36074;&#12473;&#12467;&#12450;</th>
                 </tr>
               </thead>
@@ -1569,7 +1569,7 @@
           </div>
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
             <div class="card p-4">
-              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#25345;&#25147;&#12426;&#12539;DNR</h4>
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#24179;&#22343;&#25345;&#25147;&#12426;&#12539;DNR&#65288;1&#20154;&#12354;&#12383;&#12426;&#65289;</h4>
               <canvas id="tq-chart-quality" height="220"></canvas>
             </div>
             <div class="card p-4">
@@ -15056,7 +15056,8 @@ var driverDB = {
 
     function isTransporterHeader(h) {
       var n = normalizeReportHeader(h);
-      return n === 'transporter id' || n === 'transporter_id' || n.replace(/\s/g, '') === 'transporterid';
+      var compact = n.replace(/\s/g, '');
+      return n === 'transporter id' || n === 'transporter_id' || compact === 'transporterid' || compact === 'transportid';
     }
 
     function findReportSheet(wb, kind) {
@@ -15158,14 +15159,15 @@ var driverDB = {
       return true;
     }
 
-    function importCcExportCsv(text) {
-      var rows = csvTextToRows(text);
+    function importCcExportSummary(rows) {
       var headerIdx = -1;
       for (var i = 0; i < rows.length; i++) {
         var h0 = normalizeReportHeader(rows[i][0]);
-        if (h0.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0 && isTransporterHeader(rows[i][1])) {
-          headerIdx = i;
-          break;
+        if (h0.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0) {
+          for (var ci = 1; ci < Math.min(rows[i].length, 4); ci++) {
+            if (isTransporterHeader(rows[i][ci])) { headerIdx = i; break; }
+          }
+          if (headerIdx >= 0) break;
         }
       }
       if (headerIdx < 0) return false;
@@ -15183,10 +15185,68 @@ var driverDB = {
         exportedQualityCounts[name].ccCalls = ccCalls;
         imported++;
       }
-      if (imported === 0) return false;
-      ccResultData = [];
-      if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
-      if (typeof currentTab !== 'undefined' && currentTab === 'team-quality') renderTeamQualityDashboard();
+      return imported > 0;
+    }
+
+    function findCcExportDetailHeaderRow(rows) {
+      for (var i = 0; i < rows.length; i++) {
+        var c0 = String(rows[i][0] || '').trim();
+        if (c0.indexOf('\u8A73\u7D30\u30C7\u30FC\u30BF') >= 0) return i + 1;
+        var h0 = normalizeReportHeader(rows[i][0]);
+        var h1 = rows[i][1] ? normalizeReportHeader(rows[i][1]) : '';
+        if ((h0.indexOf('\u65e5\u4ed8') >= 0 || h0 === '\u65e5\u4ed8') && h1.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0) return i;
+      }
+      return -1;
+    }
+
+    function importCcExportDetailRows(rows) {
+      var startIdx = findCcExportDetailHeaderRow(rows);
+      if (startIdx < 0) return false;
+      var tidToName = {};
+      var keys = Object.keys(transportIDs);
+      for (var k = 0; k < keys.length; k++) {
+        var tid = String(transportIDs[keys[k]] || '').trim();
+        if (tid) tidToName[tid] = keys[k];
+      }
+      var results = [];
+      for (var r = startIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row || !row[2]) continue;
+        var tid = String(row[2] || '').trim();
+        if (!tid) continue;
+        var driverName = extractDriverNameFromExport(row[1]) || tidToName[tid] || String(row[1] || '').trim();
+        var dateVal = String(row[0] || '');
+        if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
+        var contactType = String(row[6] || '');
+        var duration = parseInt(row[7], 10) || 0;
+        results.push({
+          date: dateVal,
+          driverName: driverName,
+          transporterId: tid,
+          tracking: String(row[3] || ''),
+          reason: String(row[4] || ''),
+          method: String(row[5] || ''),
+          contactType: contactType,
+          duration: duration
+        });
+      }
+      if (results.length === 0) return false;
+      ccResultData = results;
+      return true;
+    }
+
+    function importCcExportCsv(text) {
+      var rows = csvTextToRows(text);
+      var summaryOk = importCcExportSummary(rows);
+      var detailOk = importCcExportDetailRows(rows);
+      if (!summaryOk && !detailOk) return false;
+      if (detailOk) {
+        renderCcResultsUI();
+      } else {
+        ccResultData = [];
+        if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
+        if (typeof currentTab !== 'undefined' && currentTab === 'team-quality') renderTeamQualityDashboard();
+      }
       return true;
     }
 
@@ -15543,7 +15603,10 @@ var driverDB = {
         if (fname.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importCcExportCsv(text)) {
-            alert('Contact Compliance分析CSVを読込: ' + Object.keys(exportedQualityCounts).length + '名');
+            var msg = ccResultData.length > 0
+              ? ('Contact Compliance分析CSVを読込: ' + ccResultData.length + '件')
+              : ('Contact Compliance集計CSVを読込: ' + Object.keys(exportedQualityCounts).length + '名');
+            alert(msg);
             return;
           }
         }
@@ -15646,8 +15709,38 @@ var driverDB = {
       }
 
       ccResultData = results;
+      renderCcResultsUI();
+    }
 
-      // Summary
+    function renderCcResultsUI() {
+      var results = ccResultData;
+      var matched = 0;
+      var unmatched = 0;
+      var totalCalls = 0;
+      var totalDuration = 0;
+      var driverStats = {};
+
+      for (var i = 0; i < results.length; i++) {
+        var rec = results[i];
+        var driverName = rec.driverName || '';
+        var contactType = rec.contactType || '';
+        var duration = rec.duration || 0;
+        var hasCall = contactType.toLowerCase().indexOf('call') >= 0 || contactType.indexOf('\u96fb\u8a71') >= 0;
+        if (driverName) matched++;
+        else unmatched++;
+        if (hasCall) totalCalls++;
+        totalDuration += duration;
+
+        var statKey = driverName || ('(不明) ' + rec.transporterId);
+        if (!driverStats[statKey]) driverStats[statKey] = { tid: rec.transporterId, count: 0, calls: 0, duration: 0, reasons: {} };
+        driverStats[statKey].count++;
+        if (hasCall) driverStats[statKey].calls++;
+        driverStats[statKey].duration += duration;
+        if (rec.reason) {
+          driverStats[statKey].reasons[rec.reason] = (driverStats[statKey].reasons[rec.reason] || 0) + 1;
+        }
+      }
+
       document.getElementById('cc-summary').classList.remove('hidden');
       document.getElementById('cc-total').textContent = results.length;
       document.getElementById('cc-matched').textContent = matched;
@@ -15655,7 +15748,6 @@ var driverDB = {
       document.getElementById('cc-calls').textContent = totalCalls;
       document.getElementById('cc-duration').textContent = totalDuration + 's';
 
-      // Driver summary
       document.getElementById('cc-driver-summary').classList.remove('hidden');
       var driverTbody = document.getElementById('cc-driver-tbody');
       var driverKeys = Object.keys(driverStats).sort(function(a, b) {
@@ -15682,27 +15774,25 @@ var driverDB = {
       }
       driverTbody.innerHTML = driverHtml;
 
-      // Detail table
       document.getElementById('cc-detail').classList.remove('hidden');
       var detailTbody = document.getElementById('cc-detail-tbody');
       var detailHtml = '';
-      for (var i = 0; i < results.length; i++) {
-        var rec = results[i];
-        var isUnk = !rec.driverName;
+      for (var j = 0; j < results.length; j++) {
+        var rec2 = results[j];
+        var isUnk = !rec2.driverName;
         detailHtml += '<tr class="border-b border-border' + (isUnk ? ' bg-red-50' : '') + '">' +
-          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec.date) + '</td>' +
-          '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec.driverName || '(未特定)') + '</td>' +
-          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.transporterId + '</td>' +
-          '<td class="px-2 py-1.5 text-xs font-mono">' + rec.tracking + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.reason) + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + rec.method + '</td>' +
-          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec.contactType) + '</td>' +
-          '<td class="px-2 py-1.5 text-xs text-center">' + rec.duration + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + latFormatDate(rec2.date) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs' + (isUnk ? ' text-red-600' : '') + '">' + (rec2.driverName || '(未特定)') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec2.transporterId + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + rec2.tracking + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec2.reason) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + rec2.method + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + translateReason(rec2.contactType) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs text-center">' + rec2.duration + '</td>' +
           '</tr>';
       }
       detailTbody.innerHTML = detailHtml;
 
-      // Enable export
       document.getElementById('cc-export-btn').disabled = false;
       setFtdsCcActiveView('cc');
       if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
@@ -17026,6 +17116,9 @@ var driverDB = {
         c.avgPph = c.totalPkgs > 0 ? c.weightedPph / c.totalPkgs : 0;
         c.avgMis = c.totalPkgs > 0 ? c.weightedMis / c.totalPkgs : 0;
         c.avgDel = c.totalPkgs > 0 ? c.weightedDel / c.totalPkgs : 0;
+        c.avgFtds = c.count > 0 ? c.ftds / c.count : 0;
+        c.avgDnr = c.count > 0 ? c.dnr / c.count : 0;
+        c.avgCc = c.count > 0 ? c.cc / c.count : 0;
         // team score
         var activeDrivers = c.count || 1;
         c.score = 100;
@@ -17112,9 +17205,9 @@ var driverDB = {
         html += '<td class="p-2 text-right">' + (c.avgPph > 0 ? c.avgPph.toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (c.avgMis > 0 ? c.avgMis.toFixed(2) + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (c.avgDel > 0 ? c.avgDel.toFixed(1) + '%' : '-') + '</td>';
-        html += '<td class="p-2 text-right">' + c.ftds + '</td>';
-        html += '<td class="p-2 text-right">' + c.dnr + '</td>';
-        html += '<td class="p-2 text-right">' + c.cc + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgFtds > 0 ? c.avgFtds.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgDnr > 0 ? c.avgDnr.toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (c.avgCc > 0 ? c.avgCc.toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right font-bold" style="' + scoreColor + '">' + c.score + '</td>';
         html += '</tr>';
         // GDS accumulate
@@ -17146,9 +17239,9 @@ var driverDB = {
         html += '<td class="p-2 text-right">' + (gdsAvgPph > 0 ? gdsAvgPph.toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (gdsAvgMis > 0 ? gdsAvgMis.toFixed(2) + '%' : '-') + '</td>';
         html += '<td class="p-2 text-right">' + (gdsAvgDel > 0 ? gdsAvgDel.toFixed(1) + '%' : '-') + '</td>';
-        html += '<td class="p-2 text-right">' + gdsTotal.ftds + '</td>';
-        html += '<td class="p-2 text-right">' + gdsTotal.dnr + '</td>';
-        html += '<td class="p-2 text-right">' + gdsTotal.cc + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.ftds / gdsTotal.count).toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.dnr / gdsTotal.count).toFixed(1) : '-') + '</td>';
+        html += '<td class="p-2 text-right">' + (gdsTotal.count > 0 ? (gdsTotal.cc / gdsTotal.count).toFixed(1) : '-') + '</td>';
         html += '<td class="p-2 text-right" style="' + gdsScoreColor + '">' + gdsScore + '</td>';
         html += '</tr>';
       }
@@ -17161,11 +17254,11 @@ var driverDB = {
       var globalDel = 0;
       for (var ai2 = 0; ai2 < allDriverKeys.length; ai2++) { var dd2 = snap.drivers[allDriverKeys[ai2]]; globalDel += (dd2.deliveryRate || 0) * (dd2.totalPackages || 0); }
       html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (globalDel / totalPkgs).toFixed(1) + '%' : '-') + '</td>';
-      html += '<td class="p-2 text-right">' + totalFtds + '</td>';
+      html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalFtds / totalDrivers).toFixed(1) : '-') + '</td>';
       var totalDnr = 0; for (var ai3 = 0; ai3 < allDriverKeys.length; ai3++) totalDnr += snap.drivers[allDriverKeys[ai3]].dnrCount || 0;
-      html += '<td class="p-2 text-right">' + totalDnr + '</td>';
+      html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalDnr / totalDrivers).toFixed(1) : '-') + '</td>';
       var totalCc = 0; for (var ai4 = 0; ai4 < allDriverKeys.length; ai4++) totalCc += snap.drivers[allDriverKeys[ai4]].ccCount || 0;
-      html += '<td class="p-2 text-right">' + totalCc + '</td>';
+      html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalCc / totalDrivers).toFixed(1) : '-') + '</td>';
       html += '<td class="p-2 text-right">-</td>';
       html += '</tr>';
       tbody.innerHTML = html;
@@ -17247,8 +17340,8 @@ var driverDB = {
         scores.push(rows[ri].data.score || 0);
         pphs.push(rows[ri].data.avgPph || 0);
         haikans.push(rows[ri].data.avgDel || 0);
-        ftdsArr.push(rows[ri].data.ftds || 0);
-        dnrArr.push(rows[ri].data.dnr || 0);
+        ftdsArr.push(Math.round((rows[ri].data.avgFtds || 0) * 10) / 10);
+        dnrArr.push(Math.round((rows[ri].data.avgDnr || 0) * 10) / 10);
         counts.push(rows[ri].data.count || 0);
       }
 
@@ -17307,14 +17400,14 @@ var driverDB = {
             data: {
               labels: labels,
               datasets: [
-                { label: '\u6301\u3061\u623B\u308A', data: ftdsArr, backgroundColor: '#f97316', borderRadius: 4 },
-                { label: 'DNR', data: dnrArr, backgroundColor: '#eab308', borderRadius: 4 }
+                { label: '\u5E73\u5747\u6301\u3061\u623B\u308A', data: ftdsArr, backgroundColor: '#f97316', borderRadius: 4 },
+                { label: '\u5E73\u5747DNR', data: dnrArr, backgroundColor: '#eab308', borderRadius: 4 }
               ]
             },
             options: {
               responsive: true,
               plugins: { legend: { position: 'top', labels: { font: { size: 10 } } } },
-              scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+              scales: { y: { beginAtZero: true, title: { display: true, text: '\u4EF6/\u4EBA', font: { size: 10 } } } }
             }
           });
         }
