@@ -1502,7 +1502,7 @@
                   <th class="text-right p-2">&#20154;&#25968;</th>
                   <th class="text-right p-2">&#24179;&#22343;pph</th>
                   <th class="text-right p-2">&#35492;&#37197;&#29575;</th>
-                  <th class="text-right p-2">&#37197;&#36948;&#29575;</th>
+                  <th class="text-right p-2">&#37197;&#31649;&#29575;</th>
                   <th class="text-right p-2">&#25345;&#25147;&#12426;</th>
                   <th class="text-right p-2">DNR</th>
                   <th class="text-right p-2">CC</th>
@@ -1534,7 +1534,7 @@
                       <th class="text-left p-1.5">&#21517;&#21069;</th>
                       <th class="text-right p-1.5">pph</th>
                       <th class="text-right p-1.5">&#35492;&#37197;</th>
-                      <th class="text-right p-1.5">&#37197;&#36948;&#29575;</th>
+                      <th class="text-right p-1.5">&#37197;&#31649;&#29575;</th>
                       <th class="text-right p-1.5">&#25345;&#25147;&#12426;</th>
                       <th class="text-right p-1.5">DNR</th>
                       <th class="text-right p-1.5">CC</th>
@@ -1550,6 +1550,45 @@
           <div class="lg:col-span-5">
             <div class="card p-4" id="tq-driver-detail">
               <p class="text-sm text-ink-lighter">&#12513;&#12531;&#12496;&#12540;&#12434;&#36984;&#25246;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- チーム分析（グラフ・ランキング） -->
+        <div id="tq-insights-section" class="hidden mt-6">
+          <h3 class="text-sm font-bold mb-3">&#128202; &#12481;&#12540;&#12512;&#20998;&#26512;</h3>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#21697;&#36074;&#12473;&#12467;&#12450;</h4>
+              <canvas id="tq-chart-score" height="220"></canvas>
+            </div>
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#24179;&#22343;pph / &#37197;&#31649;&#29575;</h4>
+              <canvas id="tq-chart-ability" height="220"></canvas>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#25345;&#25147;&#12426;&#12539;DNR</h4>
+              <canvas id="tq-chart-quality" height="220"></canvas>
+            </div>
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2">&#25152;&#23646;&#21029; &#12513;&#12531;&#12496;&#12540;&#27083;&#25104;</h4>
+              <canvas id="tq-chart-dept-pie" height="220"></canvas>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2" style="color:#16a34a;">&#127942; &#21697;&#36074;&#12473;&#12467;&#12450; TOP10</h4>
+              <div id="tq-rank-score-top" class="text-xs"></div>
+            </div>
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2" style="color:#dc2626;">&#9888; &#35201;&#25913;&#21892; TOP10</h4>
+              <div id="tq-rank-score-bottom" class="text-xs"></div>
+            </div>
+            <div class="card p-4">
+              <h4 class="text-xs font-bold mb-2" style="color:#ea580c;">&#128230; &#25345;&#25147;&#12426; TOP10</h4>
+              <div id="tq-rank-ftds" class="text-xs"></div>
             </div>
           </div>
         </div>
@@ -16812,6 +16851,10 @@ var driverDB = {
     var teamQualitySnapshot = null;
     var _tqSelectedDept = null;
     var _tqSelectedDriver = null;
+    var tqChartScore = null;
+    var tqChartAbility = null;
+    var tqChartQuality = null;
+    var tqChartDeptPie = null;
 
     var TEAM_QUALITY_WEIGHTS = { dnrPerDriver: 5, ftdsPerPkg: 2, misRate: 10, deliveryGap: 0.5 };
 
@@ -17148,6 +17191,177 @@ var driverDB = {
         }
       }
       if (_tqSelectedDept) renderTeamMemberTable(_tqSelectedDept);
+      renderTeamQualityInsights(snap, companies);
+    }
+
+    function getTqDeptChartRows(companies) {
+      var deptOrder = DEPARTMENTS.concat(['\u672A\u6240\u5C5E']);
+      var rows = [];
+      for (var i = 0; i < deptOrder.length; i++) {
+        var dept = deptOrder[i];
+        var c = companies[dept];
+        if (c && c.count > 0) rows.push({ dept: dept, data: c });
+      }
+      rows.sort(function(a, b) { return (b.data.score || 0) - (a.data.score || 0); });
+      return rows;
+    }
+
+    function renderTqRankingList(elId, items, valueFn, suffix) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      if (!items || items.length === 0) {
+        el.innerHTML = '<p class="text-ink-lighter">&#12487;&#12540;&#12479;&#12394;&#12375;</p>';
+        return;
+      }
+      var html = '<table class="w-full"><tbody>';
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var rank = i + 1;
+        var medal = rank === 1 ? '\uD83E\uDD47' : (rank === 2 ? '\uD83E\uDD48' : (rank === 3 ? '\uD83E\uDD49' : rank + '.'));
+        html += '<tr class="border-b border-border" style="' + (i % 2 ? 'background:#f9fafb;' : '') + '">';
+        html += '<td class="py-1 pr-2" style="width:28px;">' + medal + '</td>';
+        html += '<td class="py-1 font-mono">' + escapeHtml(it.name) + '</td>';
+        html += '<td class="py-1 text-ink-lighter" style="font-size:10px;">' + escapeHtml(it.dept || '') + '</td>';
+        html += '<td class="py-1 text-right font-bold" style="white-space:nowrap;">' + valueFn(it) + (suffix || '') + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
+
+    function renderTeamQualityInsights(snap, companies) {
+      var section = document.getElementById('tq-insights-section');
+      if (!section || !snap || !snap.drivers) return;
+      section.classList.remove('hidden');
+
+      var rows = getTqDeptChartRows(companies);
+      var labels = [];
+      var scores = [];
+      var pphs = [];
+      var haikans = [];
+      var ftdsArr = [];
+      var dnrArr = [];
+      var counts = [];
+      for (var ri = 0; ri < rows.length; ri++) {
+        labels.push(rows[ri].dept);
+        scores.push(rows[ri].data.score || 0);
+        pphs.push(rows[ri].data.avgPph || 0);
+        haikans.push(rows[ri].data.avgDel || 0);
+        ftdsArr.push(rows[ri].data.ftds || 0);
+        dnrArr.push(rows[ri].data.dnr || 0);
+        counts.push(rows[ri].data.count || 0);
+      }
+
+      var scoreColors = scores.map(function(s) {
+        return s >= 90 ? '#16a34a' : (s >= 75 ? '#d97706' : '#dc2626');
+      });
+
+      if (typeof Chart !== 'undefined') {
+        if (tqChartScore) { tqChartScore.destroy(); tqChartScore = null; }
+        if (tqChartAbility) { tqChartAbility.destroy(); tqChartAbility = null; }
+        if (tqChartQuality) { tqChartQuality.destroy(); tqChartQuality = null; }
+        if (tqChartDeptPie) { tqChartDeptPie.destroy(); tqChartDeptPie = null; }
+
+        var cScore = document.getElementById('tq-chart-score');
+        if (cScore && labels.length > 0) {
+          tqChartScore = new Chart(cScore, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [{ label: '\u54C1\u8CEA\u30B9\u30B3\u30A2', data: scores, backgroundColor: scoreColors, borderRadius: 4 }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: { y: { min: 0, max: 100, ticks: { stepSize: 20 } } }
+            }
+          });
+        }
+
+        var cAbility = document.getElementById('tq-chart-ability');
+        if (cAbility && labels.length > 0) {
+          tqChartAbility = new Chart(cAbility, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [
+                { label: 'pph', data: pphs, backgroundColor: '#3b82f6', borderRadius: 4, yAxisID: 'y' },
+                { label: '\u914D\u7BA1\u7387(%)', data: haikans, backgroundColor: '#10b981', borderRadius: 4, yAxisID: 'y1' }
+              ]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { position: 'top', labels: { font: { size: 10 } } } },
+              scales: {
+                y: { position: 'left', title: { display: true, text: 'pph', font: { size: 10 } } },
+                y1: { position: 'right', min: 80, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: '\u914D\u7BA1\u7387%', font: { size: 10 } } }
+              }
+            }
+          });
+        }
+
+        var cQuality = document.getElementById('tq-chart-quality');
+        if (cQuality && labels.length > 0) {
+          tqChartQuality = new Chart(cQuality, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [
+                { label: '\u6301\u3061\u623B\u308A', data: ftdsArr, backgroundColor: '#f97316', borderRadius: 4 },
+                { label: 'DNR', data: dnrArr, backgroundColor: '#eab308', borderRadius: 4 }
+              ]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { position: 'top', labels: { font: { size: 10 } } } },
+              scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+          });
+        }
+
+        var cPie = document.getElementById('tq-chart-dept-pie');
+        if (cPie && labels.length > 0) {
+          var pieColors = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#64748b'];
+          tqChartDeptPie = new Chart(cPie, {
+            type: 'doughnut',
+            data: {
+              labels: labels,
+              datasets: [{ data: counts, backgroundColor: pieColors.slice(0, labels.length), borderWidth: 2, borderColor: '#fff' }]
+            },
+            options: {
+              responsive: true,
+              plugins: {
+                legend: { position: 'right', labels: { font: { size: 10 }, usePointStyle: true } },
+                tooltip: {
+                  callbacks: {
+                    label: function(ctx) {
+                      var total = 0;
+                      for (var ti = 0; ti < ctx.dataset.data.length; ti++) total += ctx.dataset.data[ti];
+                      var pct = total > 0 ? (ctx.parsed / total * 100).toFixed(1) : '0';
+                      return ctx.label + ': ' + ctx.parsed + '\u540D (' + pct + '%)';
+                    }
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+
+      var allDrivers = [];
+      for (var name in snap.drivers) {
+        var d = snap.drivers[name];
+        allDrivers.push({ name: name, dept: d.dept || '', data: d });
+      }
+      allDrivers.sort(function(a, b) { return (b.data.qualityScore || 0) - (a.data.qualityScore || 0); });
+      renderTqRankingList('tq-rank-score-top', allDrivers.slice(0, 10), function(it) { return it.data.qualityScore || 0; }, '\u70B9');
+
+      var bottom = allDrivers.slice().sort(function(a, b) { return (a.data.qualityScore || 0) - (b.data.qualityScore || 0); });
+      renderTqRankingList('tq-rank-score-bottom', bottom.slice(0, 10), function(it) { return it.data.qualityScore || 0; }, '\u70B9');
+
+      var ftdsRank = allDrivers.slice().sort(function(a, b) { return (b.data.ftdsCount || 0) - (a.data.ftdsCount || 0); });
+      ftdsRank = ftdsRank.filter(function(it) { return (it.data.ftdsCount || 0) > 0; });
+      renderTqRankingList('tq-rank-ftds', ftdsRank.slice(0, 10), function(it) { return it.data.ftdsCount || 0; }, '\u4EF6');
     }
 
     function selectTeamDept(dept) {
@@ -17306,7 +17520,7 @@ var driverDB = {
       html += '</div>';
       // delivery rate
       html += '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;text-align:center;">';
-      html += '<div style="font-size:10px;color:#6b7280;">\u914D\u9054\u7387</div>';
+      html += '<div style="font-size:10px;color:#6b7280;">\u914D\u7BA1\u7387</div>';
       html += '<div style="font-size:16px;font-weight:bold;">' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '</div>';
       html += '</div>';
       // ftds
@@ -17372,7 +17586,7 @@ var driverDB = {
       teamAvgFtds = teamMembers.length > 0 ? Math.round(teamAvgFtds / teamMembers.length) : 0;
 
       var text = '\u3010' + driverKey + ' / ' + d.dept + '\u3011\u54C1\u8CEA\u30EC\u30DD\u30FC\u30C8\n';
-      text += '\u25A0 \u80FD\u529B: ' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) + '\u500B/h' : '-') + ' / \u8AA4\u914D' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + ' / \u914D\u9054' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '\n';
+      text += '\u25A0 \u80FD\u529B: ' + (d.packagesPerHour > 0 ? d.packagesPerHour.toFixed(1) + '\u500B/h' : '-') + ' / \u8AA4\u914D' + (d.misdeliveryRate > 0 ? d.misdeliveryRate.toFixed(2) + '%' : '-') + ' / \u914D\u7BA1' + (d.deliveryRate > 0 ? d.deliveryRate.toFixed(1) + '%' : '-') + '\n';
       text += '\u25A0 \u6301\u3061\u623B\u308A: ' + (d.ftdsCount || 0) + '\u4EF6\uFF08\u30C1\u30FC\u30E0\u5E73\u5747' + teamAvgFtds + '\uFF09\n';
       var ftdsReasons = (d.ftdsTopReasons && Object.keys(d.ftdsTopReasons).length > 0) ? d.ftdsTopReasons : getDriverFtdsReasons(driverKey);
       if (ftdsReasons && Object.keys(ftdsReasons).length > 0) {
@@ -17447,7 +17661,7 @@ var driverDB = {
     function exportTeamQualityCsv() {
       if (!teamQualitySnapshot) return;
       var drivers = teamQualitySnapshot.drivers;
-      var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u9054\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,CC,\u54C1\u8CEA\u30B9\u30B3\u30A2'];
+      var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u7BA1\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,CC,\u54C1\u8CEA\u30B9\u30B3\u30A2'];
       for (var name in drivers) {
         var d = drivers[name];
         lines.push([
