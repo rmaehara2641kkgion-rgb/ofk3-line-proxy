@@ -1258,7 +1258,11 @@
             <h2 class="text-sm font-medium">📋 FTDS / CC</h2>
             <p class="text-xs text-ink-lighter mt-1">FTDS・Contact ComplianceのTransportIDをマスタと突合してドライバー名を特定</p>
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 items-center flex-wrap">
+            <div id="ftds-cc-view-toggle" class="hidden flex gap-1 mr-2">
+              <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-blue-600 text-white" id="btn-view-ftds" onclick="setFtdsCcActiveView('ftds')">FTDS表示</button>
+              <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white" id="btn-view-cc" onclick="setFtdsCcActiveView('cc')">CC表示</button>
+            </div>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled>CC エクスポート</button>
           </div>
@@ -9965,7 +9969,7 @@ var driverDB = {
         document.getElementById('addr-search-da-label').textContent = 'DA: ' + da;
         resultEl.classList.remove('hidden');
         notFoundEl.classList.add('hidden');
-        document.getElementById('addr-search-map-container').classList.add('hidden');
+        showAddressMap();
 
         addrSearchHistory.unshift({ da: da, address: address, routeCode: routeCode, time: new Date().toLocaleTimeString() });
         if (addrSearchHistory.length > 50) addrSearchHistory.pop();
@@ -9973,6 +9977,7 @@ var driverDB = {
         resultEl.classList.add('hidden');
         notFoundEl.classList.remove('hidden');
         document.getElementById('addr-search-not-found-da').textContent = da;
+        document.getElementById('addr-search-map-container').classList.add('hidden');
 
         addrSearchHistory.unshift({ da: da, address: null, routeCode: '', time: new Date().toLocaleTimeString() });
       }
@@ -14887,6 +14892,85 @@ var driverDB = {
 
     // ===== FTDS分析 =====
     var ftdsResultData = [];
+    var ccResultData = [];
+    var ftdsCcActiveView = null;
+
+    function normalizeReportHeader(h) {
+      return String(h || '').replace(/^\ufeff/, '').toLowerCase().trim().replace(/[\s_]+/g, ' ');
+    }
+
+    function isTransporterHeader(h) {
+      var n = normalizeReportHeader(h);
+      return n === 'transporter id' || n === 'transporter_id' || n.replace(/\s/g, '') === 'transporterid';
+    }
+
+    function findReportSheet(wb, kind) {
+      var best = null;
+      var bestScore = 0;
+      for (var si = 0; si < wb.SheetNames.length; si++) {
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], { header: 1, defval: '' });
+        if (!rows || rows.length < 2) continue;
+        var hdr = rows[0];
+        var score = 0;
+        var hasTransporter = false;
+        for (var hi = 0; hi < hdr.length; hi++) {
+          var h = normalizeReportHeader(hdr[hi]);
+          if (isTransporterHeader(hdr[hi])) hasTransporter = true;
+          if (kind === 'ftds') {
+            if (h.indexOf('transporter_id') >= 0 || h === 'transporter id') score += 3;
+            if (h.indexOf('failure_reason') >= 0 || h === 'failure reason') score += 4;
+            if (h.indexOf('cycle_name') >= 0 || h === 'cycle name') score += 2;
+            if (h.indexOf('route_code') >= 0 || h === 'route code') score += 2;
+          } else {
+            if (isTransporterHeader(hdr[hi])) score += 3;
+            if (h.indexOf('scannable') >= 0) score += 4;
+            if (h.indexOf('call event') >= 0 || h.indexOf('text event') >= 0) score += 3;
+            if (h.indexOf('shipment reason') >= 0) score += 2;
+            if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) score += 2;
+          }
+        }
+        if (hasTransporter && score > bestScore) {
+          bestScore = score;
+          best = rows;
+        }
+      }
+      return best;
+    }
+
+    function setFtdsCcActiveView(view) {
+      ftdsCcActiveView = view;
+      var ftdsIds = ['ftds-summary', 'ftds-driver-summary', 'ftds-detail'];
+      var ccIds = ['cc-summary', 'cc-driver-summary', 'cc-detail'];
+      var fi, el;
+      for (fi = 0; fi < ftdsIds.length; fi++) {
+        el = document.getElementById(ftdsIds[fi]);
+        if (el) el.classList.toggle('hidden', view !== 'ftds');
+      }
+      for (fi = 0; fi < ccIds.length; fi++) {
+        el = document.getElementById(ccIds[fi]);
+        if (el) el.classList.toggle('hidden', view !== 'cc');
+      }
+      var btnF = document.getElementById('btn-view-ftds');
+      var btnC = document.getElementById('btn-view-cc');
+      if (btnF) {
+        btnF.className = view === 'ftds'
+          ? 'text-xs px-3 py-1.5 rounded font-bold bg-blue-600 text-white'
+          : 'text-xs px-3 py-1.5 rounded font-bold bg-white border border-border text-ink-lighter hover:bg-gray-50';
+      }
+      if (btnC) {
+        btnC.className = view === 'cc'
+          ? 'text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white'
+          : 'text-xs px-3 py-1.5 rounded font-bold bg-white border border-border text-ink-lighter hover:bg-gray-50';
+      }
+      var toggle = document.getElementById('ftds-cc-view-toggle');
+      if (toggle) {
+        toggle.classList.toggle('hidden', !(ftdsResultData.length > 0 && ccResultData.length > 0));
+      }
+      var hero = document.getElementById('ftds-hero');
+      if (hero) hero.style.display = (ftdsResultData.length > 0 || ccResultData.length > 0) ? 'none' : '';
+      var scrollTarget = view === 'cc' ? document.getElementById('cc-summary') : document.getElementById('ftds-summary');
+      if (scrollTarget) scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 
     function handleFtdsDrop(e) {
       var files = e.dataTransfer.files;
@@ -14899,21 +14983,9 @@ var driverDB = {
       reader.onload = function(e) {
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
-        // Find sheet with transporter_id column
-        var sheetData = null;
-        for (var si = 0; si < wb.SheetNames.length; si++) {
-          var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], {header: 1, defval: ''});
-          if (rows.length > 0) {
-            var hdr = rows[0];
-            var hasTransporter = false;
-            for (var hi = 0; hi < hdr.length; hi++) {
-              if (String(hdr[hi]).toLowerCase().indexOf('transporter_id') >= 0) { hasTransporter = true; break; }
-            }
-            if (hasTransporter) { sheetData = rows; break; }
-          }
-        }
+        var sheetData = findReportSheet(wb, 'ftds');
         if (!sheetData || sheetData.length < 2) {
-          alert('transporter_id列が見つかりません');
+          alert('FTDS形式のシートが見つかりません（transporter_id / failure_reason 列を確認）');
           return;
         }
         processFtdsData(sheetData);
@@ -15058,8 +15130,7 @@ var driverDB = {
 
       // Enable export
       document.getElementById('ftds-export-btn').disabled = false;
-      var fh = document.getElementById('ftds-hero');
-      if (fh) fh.style.display = 'none';
+      setFtdsCcActiveView('ftds');
     }
 
     function exportFtdsResult() {
@@ -15118,7 +15189,6 @@ var driverDB = {
     }
 
     // ===== Contact Compliance分析 =====
-    var ccResultData = [];
 
     function handleCcDrop(e) {
       var files = e.dataTransfer.files;
@@ -15131,19 +15201,9 @@ var driverDB = {
       reader.onload = function(e) {
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
-        var sheetData = null;
-        for (var si = 0; si < wb.SheetNames.length; si++) {
-          var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], {header: 1, defval: ''});
-          if (rows.length > 0) {
-            var hdr = rows[0];
-            for (var hi = 0; hi < hdr.length; hi++) {
-              if (String(hdr[hi]).toLowerCase().indexOf('transporter') >= 0) { sheetData = rows; break; }
-            }
-            if (sheetData) break;
-          }
-        }
+        var sheetData = findReportSheet(wb, 'cc');
         if (!sheetData || sheetData.length < 2) {
-          alert('Transporter ID列が見つかりません');
+          alert('Contact Compliance形式のシートが見つかりません（Transporter ID / Scannable ID 列を確認）');
           return;
         }
         processCcData(sheetData);
@@ -15155,15 +15215,15 @@ var driverDB = {
       var header = rows[0];
       var colMap = {};
       for (var i = 0; i < header.length; i++) {
-        var h = String(header[i]).toLowerCase().trim();
-        if (h === 'transporter id' || h === 'transporter_id') colMap.tid = i;
+        var h = normalizeReportHeader(header[i]);
+        if (isTransporterHeader(header[i])) colMap.tid = i;
         else if (h === 'event date' || h === 'event_date') colMap.date = i;
         else if (h === 'scannable id' || h === 'scannable_id') colMap.tracking = i;
         else if (h === 'shipment reason' || h === 'shipment_reason') colMap.reason = i;
         else if (h === 'ship method' || h === 'ship_method') colMap.method = i;
         else if (h === 'call event' || h === 'call_event') colMap.callEvent = i;
         else if (h === 'text event' || h === 'text_event') colMap.textEvent = i;
-        else if (h.indexOf('total call duration') >= 0 || h.indexOf('call_duration') >= 0) colMap.duration = i;
+        else if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) colMap.duration = i;
         else if (h === 'dsp') colMap.dsp = i;
       }
       if (colMap.tid === undefined) {
@@ -15296,8 +15356,7 @@ var driverDB = {
 
       // Enable export
       document.getElementById('cc-export-btn').disabled = false;
-      var fh2 = document.getElementById('ftds-hero');
-      if (fh2) fh2.style.display = 'none';
+      setFtdsCcActiveView('cc');
     }
 
     function exportCcResult() {
