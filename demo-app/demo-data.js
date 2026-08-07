@@ -62,7 +62,180 @@ var DEMO_DNR_REASONS = [
   '配達遅延', '荷物破損', '誤配達', '紛失', '未配達'
 ];
 
-function seedDemoData() {
+var demoDashboardLoaded = false;
+
+// 起動時：ドライバー・品質データのみ（ダッシュボードはクリックまで表示しない）
+function initDemoEnvironment() {
+  _populateDemoDrivers();
+  _setupDemoUploadZones();
+  _showDemoBanner();
+  setTimeout(function() {
+    if (typeof renderDriverTable === 'function') {
+      try { renderDriverTable(); } catch(e) {}
+    }
+    if (typeof renderFtdsTable === 'function') {
+      try { renderFtdsTable(); } catch(e) {}
+    }
+    if (typeof renderDnrResults === 'function') {
+      try { renderDnrResults(); } catch(e) {}
+    }
+    if (typeof updateQualitySummary === 'function') {
+      try { updateQualitySummary(); } catch(e) {}
+    }
+    if (typeof renderTeamQualityDashboard === 'function') {
+      try { renderTeamQualityDashboard(); } catch(e) {}
+    }
+    if (typeof renderTenkoTable === 'function') {
+      try { renderTenkoTable(); } catch(e) {}
+    }
+    _addTenkoShowcase();
+  }, 200);
+}
+
+// アップロード枠クリック → サンプルデータ読込 → ダッシュボード表示
+function startDemoFromUpload(source) {
+  if (!demoDashboardLoaded) {
+    loadDemoDashboardData();
+    demoDashboardLoaded = true;
+  }
+  var cycleStatus = document.getElementById('cycle-status');
+  var assignStatus = document.getElementById('assign-status');
+  if (cycleStatus) {
+    cycleStatus.textContent = '✓ デモ：住所データ読込済み';
+    cycleStatus.className = 'text-xs text-emerald-600 mt-1 font-medium';
+  }
+  if (assignStatus) {
+    assignStatus.textContent = '✓ デモ：' + (typeof assignmentData !== 'undefined' ? assignmentData.length : 0) + 'ルート読込済み';
+    assignStatus.className = 'text-xs text-emerald-600 mt-1 font-medium';
+  }
+  if (typeof renderDashboard === 'function') {
+    renderDashboard();
+  }
+  var uploadSec = document.getElementById('upload-section');
+  if (uploadSec) uploadSec.classList.add('hidden');
+}
+
+function _setupDemoUploadZones() {
+  var cycleZone = document.getElementById('upload-zone-cycle');
+  var assignZone = document.getElementById('upload-zone-assign');
+  var cycleInput = document.getElementById('cycle-file-input');
+  var assignInput = document.getElementById('file-input');
+
+  if (cycleZone) {
+    cycleZone.onclick = function(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      startDemoFromUpload('cycle');
+    };
+    var cycleHint = cycleZone.querySelector('.demo-upload-hint');
+    if (!cycleHint) {
+      cycleHint = document.createElement('p');
+      cycleHint.className = 'demo-upload-hint text-sm font-bold text-blue-600 mt-3';
+      cycleHint.textContent = '👆 クリックするとデモがはじまります';
+      cycleZone.appendChild(cycleHint);
+    }
+    var cycleSub = cycleZone.querySelector('.demo-upload-sub');
+    if (!cycleSub) {
+      cycleSub = document.createElement('p');
+      cycleSub.className = 'demo-upload-sub text-xs text-ink-lighter mt-1';
+      cycleSub.textContent = 'サンプル住所データ → ダッシュボード表示';
+      cycleZone.appendChild(cycleSub);
+    }
+  }
+  if (assignZone) {
+    assignZone.onclick = function(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      startDemoFromUpload('assign');
+    };
+    var assignHint = assignZone.querySelector('.demo-upload-hint');
+    if (!assignHint) {
+      assignHint = document.createElement('p');
+      assignHint.className = 'demo-upload-hint text-sm font-bold text-blue-600 mt-3';
+      assignHint.textContent = '👆 クリックするとデモがはじまります';
+      assignZone.appendChild(assignHint);
+    }
+    var assignSub = assignZone.querySelector('.demo-upload-sub');
+    if (!assignSub) {
+      assignSub = document.createElement('p');
+      assignSub.className = 'demo-upload-sub text-xs text-ink-lighter mt-1';
+      assignSub.textContent = 'サンプルアサインデータ → ルート表が表示されます';
+      assignZone.appendChild(assignSub);
+    }
+  }
+  if (cycleInput) cycleInput.onchange = function(ev) { if (ev) ev.preventDefault(); startDemoFromUpload('cycle'); };
+  if (assignInput) assignInput.onchange = function(ev) { if (ev) ev.preventDefault(); startDemoFromUpload('assign'); };
+}
+
+function loadDemoDashboardData() {
+  _populateDemoDrivers();
+
+  var routeCodes = ['C001','C002','C003','C004','C005','C006','C007','C008','C009','C010','C011','C012','C013','C014','C015'];
+  var areas = ['福岡市東区','福岡市博多区','福岡市中央区','福岡市南区','福岡市西区','福岡市城南区','福岡市早良区','福岡市東区','福岡市博多区','福岡市中央区','福岡市南区','福岡市西区','福岡市城南区','福岡市早良区','福岡市東区'];
+  var departures = ['08:15','08:18','08:21','08:24','08:27','08:30','08:33','08:36','08:39','08:42','08:45','08:48','08:51','08:54','08:57'];
+  var ends = ['17:30','17:45','18:00','18:15','17:20','18:30','17:55','18:10','19:05','17:40','18:20','17:35','18:45','17:50','19:15'];
+  var statuses = ['ok','ok','ok','warning','ok','ok','warning','ok','risk','ok','ok','warning','ok','ok','warning'];
+  var baseCoords = [
+    { lat: 33.650, lng: 130.430 }, { lat: 33.590, lng: 130.420 }, { lat: 33.592, lng: 130.398 },
+    { lat: 33.560, lng: 130.415 }, { lat: 33.585, lng: 130.335 }, { lat: 33.565, lng: 130.370 },
+    { lat: 33.580, lng: 130.360 }, { lat: 33.635, lng: 130.435 }, { lat: 33.605, lng: 130.428 },
+    { lat: 33.583, lng: 130.402 }, { lat: 33.570, lng: 130.410 }, { lat: 33.575, lng: 130.380 }
+  ];
+
+  if (typeof assignmentData !== 'undefined') {
+    assignmentData.length = 0;
+    for (var r = 0; r < 15; r++) {
+      var rDriver = DEMO_DRIVERS[r];
+      var pkg = 120 + (r * 7) % 80;
+      assignmentData.push({
+        routeCode: routeCodes[r],
+        driverName: rDriver.name,
+        area: areas[r],
+        serviceType: 'Standard',
+        totalDeliveries: pkg,
+        allDestinations: Math.max(1, Math.floor(pkg * 0.85)),
+        capability: rDriver.pph,
+        departure: departures[r],
+        predictedEnd: ends[r],
+        status: statuses[r]
+      });
+    }
+  }
+
+  if (typeof cycleData !== 'undefined') {
+    for (var rc = 0; rc < routeCodes.length; rc++) {
+      var code = routeCodes[rc];
+      var addrs = [];
+      var pinCount = 8 + (rc % 5);
+      for (var pi = 0; pi < pinCount; pi++) {
+        var bc = baseCoords[(rc + pi) % baseCoords.length];
+        var addrStr = '福岡県' + areas[rc] + 'サンプル' + (pi + 1) + '丁目' + (pi + 2) + '-' + (pi + 3);
+        addrs.push(addrStr);
+        if (typeof inMemoryAddrMaster !== 'undefined') {
+          inMemoryAddrMaster[addrStr] = {
+            lat: bc.lat + (pi * 0.002) - 0.004,
+            lng: bc.lng + (pi * 0.001) - 0.002
+          };
+        }
+      }
+      cycleData[code] = addrs;
+    }
+  }
+
+  if (typeof routeAreas !== 'undefined') {
+    for (var ra = 0; ra < routeCodes.length; ra++) {
+      routeAreas[routeCodes[ra]] = areas[ra];
+    }
+  }
+}
+
+function ensureDemoCycleForRoute(routeCode) {
+  if (!demoDashboardLoaded) loadDemoDashboardData();
+  if (typeof cycleData !== 'undefined' && (!cycleData[routeCode] || cycleData[routeCode].length === 0)) {
+    loadDemoDashboardData();
+  }
+}
+
+function _populateDemoDrivers() {
+  if (typeof driverDB === 'undefined') return;
   // 1. driverDB を架空データに置換
   for (var _k in driverDB) { delete driverDB[_k]; }
   var demoDepartments = {};
@@ -152,73 +325,44 @@ function seedDemoData() {
     });
   }
 
-  // 8. assignmentData (ダッシュボード用 — 15ルート)
-  var routes = [];
-  var routeCodes = ['C001','C002','C003','C004','C005','C006','C007','C008','C009','C010','C011','C012','C013','C014','C015'];
-  var areas = ['東区','博多区','中央区','南区','西区','城南区','早良区','東区','博多区','中央区','南区','西区','城南区','早良区','東区'];
-  for (var r = 0; r < 15; r++) {
-    var rDriver = DEMO_DRIVERS[r];
-    routes.push({
-      'ルートコード': routeCodes[r],
-      'Transport ID': rDriver.tid,
-      'ドライバー': rDriver.name,
-      'エリア': areas[r],
-      '個数': 120 + Math.floor(Math.random() * 80),
-      '出発時間': '08:' + String(15 + r * 3).padStart(2,'0'),
-      'ステータス': r < 5 ? '配達中' : (r < 10 ? '出発済' : '準備中'),
-      '進捗': r < 5 ? (60 + Math.floor(Math.random() * 35)) : (r < 10 ? (20 + Math.floor(Math.random() * 30)) : 0)
-    });
+  // 8. 点呼スケジュール (12行) → tenkoSchedule
+  if (typeof tenkoSchedule !== 'undefined') {
+    tenkoSchedule.length = 0;
+    for (var tk = 0; tk < 12; tk++) {
+      var arrH = 7 + Math.floor(tk / 4);
+      var arrM = 15 * (tk % 4);
+      var arrTime = String(arrH).padStart(2, '0') + ':' + String(arrM).padStart(2, '0');
+      tenkoSchedule.push({
+        name: DEMO_DRIVERS[tk].name,
+        arrivalTime: arrTime,
+        arrivalMinutes: arrH * 60 + arrM,
+        licenseAuth: tk < 7,
+        mentorAuth: tk < 5,
+        shiftCode: 'AM',
+        temporary: false
+      });
+    }
   }
 
-  // 9. 点呼スケジュール (12行)
-  var tenkoData = [];
-  var tenkoStatuses = ['✅ 完了','✅ 完了','✅ 完了','✅ 完了','✅ 完了','✅ 完了','✅ 完了','⏳ 未完了','⏳ 未完了','⏳ 未完了','🚫 未着手','🚫 未着手'];
-  for (var tk = 0; tk < 12; tk++) {
-    tenkoData.push({
-      name: DEMO_DRIVERS[tk].name,
-      tid: DEMO_DRIVERS[tk].tid,
-      arrivalTime: '0' + (7 + Math.floor(tk / 4)) + ':' + String(15 * (tk % 4)).padStart(2, '0'),
-      qrStatus: tk < 7 ? '済' : '未',
-      mentorStatus: tk < 5 ? '済' : '未',
-      status: tenkoStatuses[tk]
-    });
+  // 9. 時間指定荷物 (30件) — twExtractedData 等は将来拡張用に保持
+  var twAreas = ['東区','博多区','中央区','南区','西区','城南区','早良区'];
+  if (typeof twExtractedData !== 'undefined') {
+    twExtractedData.length = 0;
+    var twSlots = ['08-12','12-14','14-16','16-18','18-20','19-21'];
+    for (var tw = 0; tw < 30; tw++) {
+      var twDriver = DEMO_DRIVERS[tw % 15];
+      twExtractedData.push({
+        trackingId: 'TBA' + String(500000000 + tw),
+        driverName: twDriver.name,
+        routeCode: 'C' + String((tw % 15) + 1).padStart(3, '0'),
+        address: '福岡市' + twAreas[tw % twAreas.length] + 'サンプル' + (tw + 1) + '丁目',
+        timeWindow: twSlots[tw % twSlots.length],
+        status: tw < 20 ? 'done' : (tw < 25 ? 'active' : 'pending')
+      });
+    }
   }
 
-  // 10. 時間指定荷物 (30件)
-  var twData = [];
-  var twSlots = ['08-12','12-14','14-16','16-18','18-20','19-21'];
-  for (var tw = 0; tw < 30; tw++) {
-    var twDriver = DEMO_DRIVERS[tw % 15];
-    twData.push({
-      trackingId: 'TBA' + String(500000000 + tw),
-      driver: twDriver.name,
-      address: '福岡市' + areas[tw % areas.length] + (tw + 1) + '丁目' + ((tw % 10) + 1) + '-' + ((tw % 20) + 1),
-      timeWindow: twSlots[tw % twSlots.length],
-      status: tw < 20 ? '配達済' : (tw < 25 ? '配達中' : '未配達')
-    });
-  }
-
-  // 11. 住所検索用ダミー（10件）
-  var addrData = [];
-  var addrSamples = [
-    {da:'TBA300000050',addr:'福岡市東区香住ヶ丘1-2-3',lat:33.6500,lng:130.4300},
-    {da:'TBA300000051',addr:'福岡市博多区博多駅前2-5-10',lat:33.5900,lng:130.4200},
-    {da:'TBA300000052',addr:'福岡市中央区天神3-4-1',lat:33.5920,lng:130.3980},
-    {da:'TBA300000053',addr:'福岡市南区大橋4-8-15',lat:33.5600,lng:130.4150},
-    {da:'TBA300000054',addr:'福岡市西区姪浜駅南1-1-1',lat:33.5850,lng:130.3350},
-    {da:'TBA300000055',addr:'福岡市城南区七隈7-12-3',lat:33.5650,lng:130.3700},
-    {da:'TBA300000056',addr:'福岡市早良区西新5-3-8',lat:33.5800,lng:130.3600},
-    {da:'TBA300000057',addr:'福岡市東区千早2-6-14',lat:33.6350,lng:130.4350},
-    {da:'TBA300000058',addr:'福岡市博多区吉塚3-9-7',lat:33.6050,lng:130.4280},
-    {da:'TBA300000059',addr:'福岡市中央区薬院2-1-5',lat:33.5830,lng:130.4020}
-  ];
-
-  // グローバル変数にセット
-  if (typeof assignmentData !== 'undefined') {
-    assignmentData.length = 0;
-    for (var ai = 0; ai < routes.length; ai++) assignmentData.push(routes[ai]);
-  }
-
+  // グローバル変数にセット（ダッシュボード assignment は loadDemoDashboardData で別途）
   if (typeof ftdsResultData !== 'undefined') {
     ftdsResultData.length = 0;
     for (var fi = 0; fi < ftdsData.length; fi++) ftdsResultData.push(ftdsData[fi]);
@@ -288,44 +432,12 @@ function seedDemoData() {
   try {
     localStorage.setItem('teamQualitySnapshot', JSON.stringify(teamQualitySnapshot));
   } catch(e) {}
-
-  // 各テーブル・UIの描画
-  setTimeout(function() {
-    // ダッシュボード
-    if (typeof renderAssignmentTable === 'function') {
-      try { renderAssignmentTable(); } catch(e) { console.log('Demo: renderAssignmentTable skip', e.message); }
-    }
-
-    // 点呼テーブルseed
-    _seedTenkoTable(tenkoData);
-
-    // FTDS/CC表示
-    if (typeof renderFtdsTable === 'function') {
-      try { renderFtdsTable(); } catch(e) {}
-    }
-
-    // 品質
-    if (typeof renderDnrResults === 'function') {
-      try { renderDnrResults(); } catch(e) {}
-    }
-    if (typeof updateQualitySummary === 'function') {
-      try { updateQualitySummary(); } catch(e) {}
-    }
-
-    // 協力会社
-    if (typeof renderTeamQualityDashboard === 'function') {
-      try { renderTeamQualityDashboard(); } catch(e) {}
-    }
-
-    // デモバナー表示
-    _showDemoBanner();
-  }, 300);
-
-  // 点呼タブのショーケースを追加
-  setTimeout(function() { _addTenkoShowcase(); }, 500);
 }
 
-// 点呼テーブル seed
+// 後方互換
+function seedDemoData() { initDemoEnvironment(); }
+
+// 点呼テーブル seed（旧関数・未使用）
 function _seedTenkoTable(data) {
   var tbody = document.getElementById('tenko-tbody');
   if (!tbody) return;
@@ -358,6 +470,7 @@ function _seedTenkoTable(data) {
 
 // デモバナー
 function _showDemoBanner() {
+  if (document.getElementById('demo-banner')) return;
   var banner = document.createElement('div');
   banner.id = 'demo-banner';
   banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#F59E0B;color:#1a1a1a;text-align:center;padding:8px 16px;font-weight:bold;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);';
@@ -370,9 +483,10 @@ function _showDemoBanner() {
 // 点呼ショーケース（画像ギャラリー + LINE通知プレビュー）
 function _addTenkoShowcase() {
   var panel = document.getElementById('panel-tenko');
-  if (!panel) return;
+  if (!panel || document.getElementById('demo-tenko-showcase')) return;
 
   var showcase = document.createElement('div');
+  showcase.id = 'demo-tenko-showcase';
   showcase.className = 'mt-8 space-y-6';
   showcase.innerHTML = ''
     // セクションタイトル
@@ -384,13 +498,13 @@ function _addTenkoShowcase() {
     + '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">'
     // QR画像
     + '<div class="bg-white rounded-xl shadow p-4 text-center">'
-    + '<img src="demo/assets/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
+    + '<img src="demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
     + '<p class="text-sm font-bold text-ink">点呼QR認証</p>'
     + '<p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p>'
     + '</div>'
     // Mentor画像
     + '<div class="bg-white rounded-xl shadow p-4 text-center">'
-    + '<img src="demo/assets/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
+    + '<img src="demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
     + '<p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p>'
     + '<p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p>'
     + '</div>'

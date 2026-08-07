@@ -1,12 +1,12 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>配送管理 - OFK3（デモ版）</title>
   <!-- Sentry removed for demo -->
-  <link rel="icon" type="image/png" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
-  <link rel="apple-touch-icon" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
+  <link rel="icon" type="image/png" href="../b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
+  <link rel="apple-touch-icon" href="../b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -254,7 +254,7 @@
   <!-- Splash Screen -->
   <div id="splash-screen">
     <video autoplay muted playsinline onended="this.parentElement.classList.add('splash-fadeout')">
-      <source src="ofk3-splash.mp4" type="video/mp4">
+      <source src="../ofk3-splash.mp4" type="video/mp4">
     </video>
   </div>
   <script>
@@ -276,7 +276,7 @@
     <!-- Header -->
     <header id="app-header" class="px-6 py-3 flex items-center justify-between sticky top-0 z-50">
       <div class="flex items-center gap-3">
-        <img src="b10eaee0-7936-4dd7-a922-6bdf3914c296.png" alt="OFK3" class="h-10 w-10 object-contain rounded">
+        <img src="../b10eaee0-7936-4dd7-a922-6bdf3914c296.png" alt="OFK3" class="h-10 w-10 object-contain rounded">
         <div class="flex items-center gap-4">
           <h1 class="text-lg font-bold tracking-tight">配送管理</h1>
           <span class="text-xs text-ink-lighter font-mono bg-surface px-2 py-0.5 rounded">OFK3</span>
@@ -493,36 +493,32 @@
         <!-- Upload Section -->
         <div id="upload-section">
           <div class="grid grid-cols-2 gap-4">
-            <!-- Cycle / Address Data Upload -->
-            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-cycle" onclick="document.getElementById('cycle-file-input').click()">
-              <input type="file" id="cycle-file-input" accept=".xlsx,.xls" onchange="handleCycleDataUpload(event)" style="display:none;">
+            <!-- Cycle / Address Data Upload (Demo) -->
+            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-cycle" onclick="startDemoFromUpload()">
               <div class="mb-2">
                 <svg class="w-8 h-8 mx-auto text-ink-lighter" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
                 </svg>
               </div>
               <p class="text-sm font-medium text-ink mb-1">住所データ（コース詳細）</p>
-              <p class="text-xs text-ink-lighter">OFK3_CYCLE...xlsx</p>
-              <p class="text-xs text-ink-lighter mt-1" id="cycle-status"></p>
+              <p class="text-xs text-amber-600 font-bold mt-2">👆 クリックするとデモがはじまります</p>
             </div>
-            <!-- Assign Data Upload -->
-            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-assign" onclick="document.getElementById('file-input').click()">
-              <input type="file" id="file-input" accept=".xlsx,.xls,.csv" onchange="handleFileUpload(event)">
+            <!-- Assign Data Upload (Demo) -->
+            <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-assign" onclick="startDemoFromUpload()">
               <div class="mb-2">
                 <svg class="w-8 h-8 mx-auto text-ink-lighter" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
               </div>
               <p class="text-sm font-medium text-ink mb-1">アサインデータ</p>
-              <p class="text-xs text-ink-lighter">ルート_OFK3...xlsx</p>
-              <p class="text-xs text-ink-lighter mt-1" id="assign-status"></p>
+              <p class="text-xs text-amber-600 font-bold mt-2">👆 クリックするとデモがはじまります</p>
             </div>
           </div>
         </div>
 
         <!-- ヒーロー画像（データ未読込時表示） -->
         <div id="dashboard-hero" class="flex justify-center mt-6 mb-4">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
+          <img src="../OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
         </div>
 
         <!-- Dashboard Content (after upload) -->
@@ -750,7 +746,7 @@
         </div>
 
         <div id="optimization-empty" class="text-center py-16">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
+          <img src="../OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
           <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
         </div>
       </div>
@@ -1307,7 +1303,7 @@
 
         <!-- ヒーロー画像（FTDS/CC未読込時） -->
         <div id="ftds-hero" class="flex justify-center my-6">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
+          <img src="../OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
         </div>
 
         <!-- Driver summary -->
@@ -1657,7 +1653,7 @@
 
         <!-- ヒーロー画像（データ未読込時） -->
         <div id="quality-hero" class="flex justify-center my-6">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
+          <img src="../OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
         </div>
 
         <!-- ========== DNR分析セクション ========== -->
@@ -2035,9 +2031,9 @@
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">件数</th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">コース数</th>
                     <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">コース内訳</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium bg-yellow-100 border-l-2 border-yellow-400"><img src="logo-gds.png" alt="GDS" class="inline-block h-7"></th>
-                    <th class="px-3 py-2 text-center text-xs font-medium bg-orange-100 border-l-2 border-orange-400"><img src="logo-flex.png" alt="Flex" class="inline-block h-5"></th>
-                    <th class="px-3 py-2 text-center text-xs font-medium bg-blue-100 border-l-2 border-blue-400"><img src="logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>
+                    <th class="px-3 py-2 text-center text-xs font-medium bg-yellow-100 border-l-2 border-yellow-400"><img src="../logo-gds.png" alt="GDS" class="inline-block h-7"></th>
+                    <th class="px-3 py-2 text-center text-xs font-medium bg-orange-100 border-l-2 border-orange-400"><img src="../logo-flex.png" alt="Flex" class="inline-block h-5"></th>
+                    <th class="px-3 py-2 text-center text-xs font-medium bg-blue-100 border-l-2 border-blue-400"><img src="../logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>
                     <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter border-l-2 border-gray-300">全体台数</th>
                   </tr>
                 </thead>
@@ -2746,96 +2742,11 @@
 
     let assignmentData = [];
     // ===== ドライバー能力データベース（W22-W31 累計、埋め込み） =====
-var driverDB = {
-      "和香 安田": {"workDays": 1, "totalHours": 2.8, "totalPackages": 86, "packagesPerHour": 30.71, "totalPackagesAll": 86, "distanceKm": 30, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.85, "lastUpdated": "W22-W31"},
-      "晴樹 藤永": {"workDays": 13, "totalHours": 77.1, "totalPackages": 2175, "packagesPerHour": 28.21, "totalPackagesAll": 2175, "distanceKm": 646, "incidents": 1, "misdeliveryRate": 0.05, "deliveryRate": 93.4, "lastUpdated": "W22-W31"},
-      "怜奈 田中": {"workDays": 5, "totalHours": 23.6, "totalPackages": 652, "packagesPerHour": 27.63, "totalPackagesAll": 853, "distanceKm": 182, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.27, "lastUpdated": "W22-W31"},
-      "和也 平田": {"workDays": 15, "totalHours": 56.4, "totalPackages": 1553, "packagesPerHour": 27.54, "totalPackagesAll": 2050, "distanceKm": 586, "incidents": 1, "misdeliveryRate": 0.06, "deliveryRate": 98.33, "lastUpdated": "W22-W31"},
-      "陸 安樂": {"workDays": 46, "totalHours": 296.7, "totalPackages": 8066, "packagesPerHour": 27.19, "totalPackagesAll": 8637, "distanceKm": 2532, "incidents": 2, "misdeliveryRate": 0.02, "deliveryRate": 98.39, "lastUpdated": "W22-W31"},
-      "俊二 勝山": {"workDays": 1, "totalHours": 5.4, "totalPackages": 146, "packagesPerHour": 27.04, "totalPackagesAll": 1064, "distanceKm": 45, "incidents": 1, "misdeliveryRate": 0.68, "deliveryRate": 98.58, "lastUpdated": "W22-W31"},
-      "敬一郎 行徳": {"workDays": 5, "totalHours": 23.9, "totalPackages": 646, "packagesPerHour": 27.03, "totalPackagesAll": 646, "distanceKm": 172, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.39, "lastUpdated": "W22-W31"},
-      "訓幸 川口": {"workDays": 36, "totalHours": 141.1, "totalPackages": 3783, "packagesPerHour": 26.81, "totalPackagesAll": 5877, "distanceKm": 809, "incidents": 2, "misdeliveryRate": 0.05, "deliveryRate": 99.86, "lastUpdated": "W22-W31"},
-      "政勝 瀧本": {"workDays": 1, "totalHours": 1.9, "totalPackages": 50, "packagesPerHour": 26.32, "totalPackagesAll": 94, "distanceKm": 19, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 95.92, "lastUpdated": "W22-W31"},
-      "謙伸 中村": {"workDays": 21, "totalHours": 138.7, "totalPackages": 3607, "packagesPerHour": 26.01, "totalPackagesAll": 4212, "distanceKm": 1129, "incidents": 1, "misdeliveryRate": 0.03, "deliveryRate": 93.8, "lastUpdated": "W22-W31"},
-      "naoki kanesue": {"workDays": 28, "totalHours": 148.7, "totalPackages": 3784, "packagesPerHour": 25.45, "totalPackagesAll": 4444, "distanceKm": 1095, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 99.18, "lastUpdated": "W22-W31"},
-      "優太 原": {"workDays": 2, "totalHours": 7.7, "totalPackages": 195, "packagesPerHour": 25.32, "totalPackagesAll": 195, "distanceKm": 85, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.01, "lastUpdated": "W22-W31"},
-      "立騎 菅原": {"workDays": 39, "totalHours": 252.1, "totalPackages": 6372, "packagesPerHour": 25.28, "totalPackagesAll": 6940, "distanceKm": 2068, "incidents": 8, "misdeliveryRate": 0.13, "deliveryRate": 94.62, "lastUpdated": "W22-W31"},
-      "光希 真子": {"workDays": 38, "totalHours": 266.0, "totalPackages": 6640, "packagesPerHour": 24.96, "totalPackagesAll": 7137, "distanceKm": 1781, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.59, "lastUpdated": "W22-W31"},
-      "林 正樹": {"workDays": 3, "totalHours": 19.7, "totalPackages": 487, "packagesPerHour": 24.72, "totalPackagesAll": 690, "distanceKm": 142, "incidents": 4, "misdeliveryRate": 0.82, "deliveryRate": 97.69, "lastUpdated": "W22-W31"},
-      "hyoga nakae": {"workDays": 31, "totalHours": 192.8, "totalPackages": 4763, "packagesPerHour": 24.7, "totalPackagesAll": 5383, "distanceKm": 1814, "incidents": 6, "misdeliveryRate": 0.13, "deliveryRate": 90.78, "lastUpdated": "W22-W31"},
-      "etsuo uchida": {"workDays": 25, "totalHours": 163.7, "totalPackages": 3974, "packagesPerHour": 24.28, "totalPackagesAll": 4735, "distanceKm": 1634, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.71, "lastUpdated": "W22-W31"},
-      "竜也 大竹": {"workDays": 45, "totalHours": 304.8, "totalPackages": 7387, "packagesPerHour": 24.24, "totalPackagesAll": 7675, "distanceKm": 2150, "incidents": 12, "misdeliveryRate": 0.16, "deliveryRate": 90.11, "lastUpdated": "W22-W31"},
-      "健太郎 豊島": {"workDays": 34, "totalHours": 135.0, "totalPackages": 3241, "packagesPerHour": 24.01, "totalPackagesAll": 5874, "distanceKm": 779, "incidents": 1, "misdeliveryRate": 0.03, "deliveryRate": 97.38, "lastUpdated": "W22-W31"},
-      "真也 田中": {"workDays": 61, "totalHours": 273.0, "totalPackages": 6290, "packagesPerHour": 23.04, "totalPackagesAll": 8321, "distanceKm": 1664, "incidents": 2, "misdeliveryRate": 0.03, "deliveryRate": 99.36, "lastUpdated": "W22-W31"},
-      "高徳 長崎": {"workDays": 54, "totalHours": 235.1, "totalPackages": 5370, "packagesPerHour": 22.84, "totalPackagesAll": 6752, "distanceKm": 1578, "incidents": 7, "misdeliveryRate": 0.13, "deliveryRate": 98.55, "lastUpdated": "W22-W31"},
-      "秀治 平田": {"workDays": 64, "totalHours": 318.3, "totalPackages": 7265, "packagesPerHour": 22.82, "totalPackagesAll": 7993, "distanceKm": 1912, "incidents": 1, "misdeliveryRate": 0.01, "deliveryRate": 97.08, "lastUpdated": "W22-W31"},
-      "良聖 執行": {"workDays": 7, "totalHours": 47.0, "totalPackages": 1067, "packagesPerHour": 22.7, "totalPackagesAll": 1408, "distanceKm": 392, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 94.87, "lastUpdated": "W22-W31"},
-      "yuuta takahashi": {"workDays": 20, "totalHours": 109.9, "totalPackages": 2460, "packagesPerHour": 22.38, "totalPackagesAll": 3989, "distanceKm": 506, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.49, "lastUpdated": "W22-W31"},
-      "裕司 持田": {"workDays": 33, "totalHours": 137.2, "totalPackages": 2985, "packagesPerHour": 21.76, "totalPackagesAll": 3342, "distanceKm": 958, "incidents": 2, "misdeliveryRate": 0.07, "deliveryRate": 97.64, "lastUpdated": "W22-W31"},
-      "真天 基": {"workDays": 5, "totalHours": 33.8, "totalPackages": 726, "packagesPerHour": 21.48, "totalPackagesAll": 796, "distanceKm": 191, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.94, "lastUpdated": "W22-W31"},
-      "明弘 生野": {"workDays": 1, "totalHours": 5.7, "totalPackages": 122, "packagesPerHour": 21.4, "totalPackagesAll": 122, "distanceKm": 28, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 100.0, "lastUpdated": "W22-W31"},
-      "弘暉 末岡": {"workDays": 20, "totalHours": 145.8, "totalPackages": 3101, "packagesPerHour": 21.27, "totalPackagesAll": 4223, "distanceKm": 1022, "incidents": 2, "misdeliveryRate": 0.06, "deliveryRate": 96.31, "lastUpdated": "W22-W31"},
-      "太 武富": {"workDays": 36, "totalHours": 236.5, "totalPackages": 5020, "packagesPerHour": 21.23, "totalPackagesAll": 5816, "distanceKm": 1036, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.04, "lastUpdated": "W22-W31"},
-      "悠衣 山口": {"workDays": 27, "totalHours": 140.5, "totalPackages": 2958, "packagesPerHour": 21.05, "totalPackagesAll": 3023, "distanceKm": 1004, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.23, "lastUpdated": "W22-W31"},
-      "yukihiro matsuo": {"workDays": 2, "totalHours": 12.1, "totalPackages": 247, "packagesPerHour": 20.41, "totalPackagesAll": 1120, "distanceKm": 174, "incidents": 4, "misdeliveryRate": 1.62, "deliveryRate": 97.69, "lastUpdated": "W22-W31"},
-      "健士朗 脇山": {"workDays": 64, "totalHours": 335.7, "totalPackages": 6788, "packagesPerHour": 20.22, "totalPackagesAll": 7230, "distanceKm": 2300, "incidents": 1, "misdeliveryRate": 0.01, "deliveryRate": 95.56, "lastUpdated": "W22-W31"},
-      "清己 谷口": {"workDays": 48, "totalHours": 261.0, "totalPackages": 5271, "packagesPerHour": 20.2, "totalPackagesAll": 5698, "distanceKm": 2462, "incidents": 2, "misdeliveryRate": 0.04, "deliveryRate": 98.35, "lastUpdated": "W22-W31"},
-      "夕月 酒本": {"workDays": 18, "totalHours": 99.7, "totalPackages": 2010, "packagesPerHour": 20.16, "totalPackagesAll": 2430, "distanceKm": 643, "incidents": 1, "misdeliveryRate": 0.05, "deliveryRate": 99.21, "lastUpdated": "W22-W31"},
-      "剛 鴛海": {"workDays": 2, "totalHours": 12.4, "totalPackages": 240, "packagesPerHour": 19.35, "totalPackagesAll": 1261, "distanceKm": 231, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 95.96, "lastUpdated": "W22-W31"},
-      "伸哉 重松": {"workDays": 11, "totalHours": 75.1, "totalPackages": 1426, "packagesPerHour": 18.99, "totalPackagesAll": 2085, "distanceKm": 349, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.95, "lastUpdated": "W22-W31"},
-      "里枝 井上": {"workDays": 3, "totalHours": 12.4, "totalPackages": 235, "packagesPerHour": 18.95, "totalPackagesAll": 235, "distanceKm": 61, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.23, "lastUpdated": "W22-W31"},
-      "海亜 楢原": {"workDays": 43, "totalHours": 272.2, "totalPackages": 5144, "packagesPerHour": 18.9, "totalPackagesAll": 5687, "distanceKm": 1372, "incidents": 7, "misdeliveryRate": 0.14, "deliveryRate": 97.84, "lastUpdated": "W22-W31"},
-      "涼太 山口": {"workDays": 33, "totalHours": 223.4, "totalPackages": 4213, "packagesPerHour": 18.86, "totalPackagesAll": 5269, "distanceKm": 1255, "incidents": 1, "misdeliveryRate": 0.02, "deliveryRate": 95.65, "lastUpdated": "W22-W31"},
-      "力也 浦中": {"workDays": 1, "totalHours": 6.6, "totalPackages": 122, "packagesPerHour": 18.48, "totalPackagesAll": 137, "distanceKm": 40, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 90.73, "lastUpdated": "W22-W31"},
-      "午 佐藤": {"workDays": 37, "totalHours": 201.5, "totalPackages": 3673, "packagesPerHour": 18.23, "totalPackagesAll": 3832, "distanceKm": 1015, "incidents": 3, "misdeliveryRate": 0.08, "deliveryRate": 97.0, "lastUpdated": "W22-W31"},
-      "聖人 中村": {"workDays": 40, "totalHours": 247.8, "totalPackages": 4418, "packagesPerHour": 17.83, "totalPackagesAll": 4799, "distanceKm": 1431, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.55, "lastUpdated": "W22-W31"},
-      "愛斗 深川": {"workDays": 47, "totalHours": 349.0, "totalPackages": 6151, "packagesPerHour": 17.62, "totalPackagesAll": 7250, "distanceKm": 1860, "incidents": 1, "misdeliveryRate": 0.02, "deliveryRate": 96.23, "lastUpdated": "W22-W31"},
-      "亜希 冨永": {"workDays": 38, "totalHours": 240.4, "totalPackages": 4187, "packagesPerHour": 17.42, "totalPackagesAll": 4477, "distanceKm": 1016, "incidents": 3, "misdeliveryRate": 0.07, "deliveryRate": 98.75, "lastUpdated": "W22-W31"},
-      "愛芳 浦野": {"workDays": 2, "totalHours": 11.0, "totalPackages": 191, "packagesPerHour": 17.36, "totalPackagesAll": 191, "distanceKm": 63, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 94.9, "lastUpdated": "W22-W31"},
-      "gouhei towata": {"workDays": 22, "totalHours": 140.5, "totalPackages": 2437, "packagesPerHour": 17.35, "totalPackagesAll": 2448, "distanceKm": 918, "incidents": 1, "misdeliveryRate": 0.04, "deliveryRate": 93.26, "lastUpdated": "W22-W31"},
-      "貴翔 勝野": {"workDays": 34, "totalHours": 201.4, "totalPackages": 3478, "packagesPerHour": 17.27, "totalPackagesAll": 3886, "distanceKm": 1028, "incidents": 1, "misdeliveryRate": 0.03, "deliveryRate": 97.64, "lastUpdated": "W22-W31"},
-      "michiaki yamashita": {"workDays": 36, "totalHours": 255.8, "totalPackages": 4372, "packagesPerHour": 17.09, "totalPackagesAll": 6335, "distanceKm": 1211, "incidents": 1, "misdeliveryRate": 0.02, "deliveryRate": 96.26, "lastUpdated": "W22-W31"},
-      "ニーラジ シュレスタ": {"workDays": 15, "totalHours": 96.6, "totalPackages": 1634, "packagesPerHour": 16.92, "totalPackagesAll": 2117, "distanceKm": 393, "incidents": 2, "misdeliveryRate": 0.12, "deliveryRate": 97.61, "lastUpdated": "W22-W31"},
-      "元 小林": {"workDays": 14, "totalHours": 57.9, "totalPackages": 976, "packagesPerHour": 16.86, "totalPackagesAll": 976, "distanceKm": 400, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.83, "lastUpdated": "W22-W31"},
-      "明華 宮崎": {"workDays": 41, "totalHours": 261.6, "totalPackages": 4323, "packagesPerHour": 16.53, "totalPackagesAll": 5355, "distanceKm": 1114, "incidents": 4, "misdeliveryRate": 0.09, "deliveryRate": 98.14, "lastUpdated": "W22-W31"},
-      "masato mihara": {"workDays": 30, "totalHours": 197.8, "totalPackages": 3224, "packagesPerHour": 16.3, "totalPackagesAll": 3765, "distanceKm": 821, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 94.25, "lastUpdated": "W22-W31"},
-      "恋世 西原": {"workDays": 8, "totalHours": 51.4, "totalPackages": 837, "packagesPerHour": 16.28, "totalPackagesAll": 1010, "distanceKm": 270, "incidents": 6, "misdeliveryRate": 0.72, "deliveryRate": 91.63, "lastUpdated": "W22-W31"},
-      "範久 西": {"workDays": 39, "totalHours": 182.6, "totalPackages": 2941, "packagesPerHour": 16.11, "totalPackagesAll": 3186, "distanceKm": 873, "incidents": 2, "misdeliveryRate": 0.07, "deliveryRate": 97.78, "lastUpdated": "W22-W31"},
-      "義 宮原": {"workDays": 47, "totalHours": 328.9, "totalPackages": 5160, "packagesPerHour": 15.69, "totalPackagesAll": 5917, "distanceKm": 1414, "incidents": 4, "misdeliveryRate": 0.08, "deliveryRate": 96.88, "lastUpdated": "W22-W31"},
-      "研斗 藤田": {"workDays": 34, "totalHours": 181.8, "totalPackages": 2779, "packagesPerHour": 15.29, "totalPackagesAll": 2987, "distanceKm": 860, "incidents": 1, "misdeliveryRate": 0.04, "deliveryRate": 92.51, "lastUpdated": "W22-W31"},
-      "ryuhei kikuchi": {"workDays": 1, "totalHours": 1.9, "totalPackages": 29, "packagesPerHour": 15.26, "totalPackagesAll": 371, "distanceKm": 11, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 85.58, "lastUpdated": "W22-W31"},
-      "昌樹 木村": {"workDays": 6, "totalHours": 29.7, "totalPackages": 445, "packagesPerHour": 14.98, "totalPackagesAll": 1006, "distanceKm": 255, "incidents": 4, "misdeliveryRate": 0.9, "deliveryRate": 96.83, "lastUpdated": "W22-W31"},
-      "yuusuke oki": {"workDays": 43, "totalHours": 352.8, "totalPackages": 5138, "packagesPerHour": 14.56, "totalPackagesAll": 6264, "distanceKm": 1527, "incidents": 8, "misdeliveryRate": 0.16, "deliveryRate": 98.26, "lastUpdated": "W22-W31"},
-      "将義 園田": {"workDays": 4, "totalHours": 18.2, "totalPackages": 262, "packagesPerHour": 14.4, "totalPackagesAll": 262, "distanceKm": 101, "incidents": 1, "misdeliveryRate": 0.38, "deliveryRate": 98.34, "lastUpdated": "W22-W31"},
-      "心望 田中": {"workDays": 12, "totalHours": 66.9, "totalPackages": 958, "packagesPerHour": 14.32, "totalPackagesAll": 2114, "distanceKm": 506, "incidents": 5, "misdeliveryRate": 0.52, "deliveryRate": 97.22, "lastUpdated": "W22-W31"},
-      "康明 永浦": {"workDays": 58, "totalHours": 522.5, "totalPackages": 7455, "packagesPerHour": 14.27, "totalPackagesAll": 8977, "distanceKm": 1590, "incidents": 6, "misdeliveryRate": 0.08, "deliveryRate": 97.22, "lastUpdated": "W22-W31"},
-      "ゆかり 永田": {"workDays": 40, "totalHours": 223.9, "totalPackages": 3172, "packagesPerHour": 14.17, "totalPackagesAll": 3409, "distanceKm": 963, "incidents": 9, "misdeliveryRate": 0.28, "deliveryRate": 98.26, "lastUpdated": "W22-W31"},
-      "勇一 松嶋": {"workDays": 13, "totalHours": 68.6, "totalPackages": 932, "packagesPerHour": 13.59, "totalPackagesAll": 932, "distanceKm": 270, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 96.7, "lastUpdated": "W22-W31"},
-      "大斗 岩尾": {"workDays": 4, "totalHours": 23.3, "totalPackages": 316, "packagesPerHour": 13.56, "totalPackagesAll": 354, "distanceKm": 89, "incidents": 1, "misdeliveryRate": 0.32, "deliveryRate": 89.81, "lastUpdated": "W22-W31"},
-      "takayuki kimura": {"workDays": 45, "totalHours": 445.4, "totalPackages": 5577, "packagesPerHour": 12.52, "totalPackagesAll": 5956, "distanceKm": 2508, "incidents": 1, "misdeliveryRate": 0.02, "deliveryRate": 97.82, "lastUpdated": "W22-W31"},
-      "雄也 田中": {"workDays": 12, "totalHours": 111.5, "totalPackages": 1389, "packagesPerHour": 12.46, "totalPackagesAll": 1629, "distanceKm": 412, "incidents": 2, "misdeliveryRate": 0.14, "deliveryRate": 95.23, "lastUpdated": "W22-W31"},
-      "史之 中村": {"workDays": 50, "totalHours": 390.0, "totalPackages": 4831, "packagesPerHour": 12.39, "totalPackagesAll": 5670, "distanceKm": 1552, "incidents": 2, "misdeliveryRate": 0.04, "deliveryRate": 98.07, "lastUpdated": "W22-W31"},
-      "健一 内山": {"workDays": 50, "totalHours": 470.6, "totalPackages": 5762, "packagesPerHour": 12.24, "totalPackagesAll": 6787, "distanceKm": 2318, "incidents": 2, "misdeliveryRate": 0.03, "deliveryRate": 96.99, "lastUpdated": "W22-W31"},
-      "環 藤井": {"workDays": 41, "totalHours": 254.6, "totalPackages": 3092, "packagesPerHour": 12.14, "totalPackagesAll": 3685, "distanceKm": 933, "incidents": 1, "misdeliveryRate": 0.03, "deliveryRate": 98.26, "lastUpdated": "W22-W31"},
-      "章巳 森崎": {"workDays": 72, "totalHours": 411.7, "totalPackages": 4637, "packagesPerHour": 11.26, "totalPackagesAll": 5104, "distanceKm": 1657, "incidents": 12, "misdeliveryRate": 0.26, "deliveryRate": 96.22, "lastUpdated": "W22-W31"},
-      "恵美 柴原": {"workDays": 7, "totalHours": 37.4, "totalPackages": 417, "packagesPerHour": 11.15, "totalPackagesAll": 417, "distanceKm": 132, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 95.6, "lastUpdated": "W22-W31"},
-      "汐奈 脇坂": {"workDays": 10, "totalHours": 70.8, "totalPackages": 787, "packagesPerHour": 11.12, "totalPackagesAll": 927, "distanceKm": 309, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 91.12, "lastUpdated": "W22-W31"},
-      "淳 木下": {"workDays": 55, "totalHours": 418.3, "totalPackages": 4344, "packagesPerHour": 10.38, "totalPackagesAll": 4741, "distanceKm": 1361, "incidents": 3, "misdeliveryRate": 0.07, "deliveryRate": 99.73, "lastUpdated": "W22-W31"},
-      "太悟 宇佐美": {"workDays": 7, "totalHours": 51.8, "totalPackages": 533, "packagesPerHour": 10.29, "totalPackagesAll": 866, "distanceKm": 113, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 93.63, "lastUpdated": "W22-W31"},
-      "千輝 渡邊": {"workDays": 11, "totalHours": 86.0, "totalPackages": 882, "packagesPerHour": 10.26, "totalPackagesAll": 1249, "distanceKm": 379, "incidents": 6, "misdeliveryRate": 0.68, "deliveryRate": 87.72, "lastUpdated": "W22-W31"},
-      "安香音 辻": {"workDays": 67, "totalHours": 422.0, "totalPackages": 4169, "packagesPerHour": 9.88, "totalPackagesAll": 4480, "distanceKm": 1556, "incidents": 1, "misdeliveryRate": 0.02, "deliveryRate": 96.68, "lastUpdated": "W22-W31"},
-      "健 石田": {"workDays": 8, "totalHours": 47.6, "totalPackages": 465, "packagesPerHour": 9.77, "totalPackagesAll": 620, "distanceKm": 147, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 76.62, "lastUpdated": "W22-W31"},
-      "圭輔 百田": {"workDays": 2, "totalHours": 31.5, "totalPackages": 301, "packagesPerHour": 9.56, "totalPackagesAll": 301, "distanceKm": 94, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 93.77, "lastUpdated": "W22-W31"},
-      "忠義 由利": {"workDays": 21, "totalHours": 108.2, "totalPackages": 982, "packagesPerHour": 9.08, "totalPackagesAll": 1014, "distanceKm": 360, "incidents": 8, "misdeliveryRate": 0.81, "deliveryRate": 93.2, "lastUpdated": "W22-W31"},
-      "学 斎田": {"workDays": 18, "totalHours": 116.1, "totalPackages": 999, "packagesPerHour": 8.6, "totalPackagesAll": 1123, "distanceKm": 341, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 98.83, "lastUpdated": "W22-W31"},
-      "勝幸 矢野": {"workDays": 33, "totalHours": 204.5, "totalPackages": 1641, "packagesPerHour": 8.02, "totalPackagesAll": 1706, "distanceKm": 677, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.0, "lastUpdated": "W22-W31"},
-      "朋子 三隅": {"workDays": 2, "totalHours": 12.9, "totalPackages": 99, "packagesPerHour": 7.67, "totalPackagesAll": 165, "distanceKm": 40, "incidents": 1, "misdeliveryRate": 1.01, "deliveryRate": 89.72, "lastUpdated": "W22-W31"},
-      "百合香 筑紫": {"workDays": 4, "totalHours": 16.5, "totalPackages": 125, "packagesPerHour": 7.58, "totalPackagesAll": 155, "distanceKm": 43, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.71, "lastUpdated": "W22-W31"},
-      "蒼汰 北野": {"workDays": 2, "totalHours": 17.0, "totalPackages": 127, "packagesPerHour": 7.47, "totalPackagesAll": 127, "distanceKm": 37, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 100.0, "lastUpdated": "W22-W31"}
-    };
-    // driverDBオーバーレイ: 埋め込みにない/差分のあるエントリをlocalStorageから復元
+var driverDB = {};
+    // driverDBオーバーレイ: デモモードではスキップ
     var _driverDBEmbeddedKeys = {};
     for (var _ek in driverDB) { _driverDBEmbeddedKeys[_ek] = true; }
+    if (!DEMO_MODE) {
     try {
       var _overlay = JSON.parse(localStorage.getItem('driverDBOverlay') || '{}');
       for (var _ok in _overlay) {
@@ -2846,6 +2757,7 @@ var driverDB = {
         }
       }
     } catch(e) { console.warn('driverDBOverlay parse error:', e.message); }
+    }
 
     // === 退職者削除リスト（永続化） ===
     var _deletedArr = JSON.parse(localStorage.getItem('deletedDrivers') || '[]');
@@ -3290,9 +3202,17 @@ var driverDB = {
     // LINE設定（renderMasterTable等より先に必要）
     var lineSettings = JSON.parse(localStorage.getItem('lineSettings') || '{}');
     if (!lineSettings.adminLineId) { lineSettings.adminLineId = ''; }
-    if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
-    if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
-    localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
+    if (DEMO_MODE) {
+      lineSettings.lineBotId = '@demo-ofk3';
+      lineSettings.gasProxyUrl = '';
+      lineSettings.notifyToken = '';
+    } else {
+      if (!lineSettings.lineBotId) { lineSettings.lineBotId = '@046vllck'; }
+      if (!lineSettings.gasProxyUrl) { lineSettings.gasProxyUrl = 'https://ofk3-line-proxy-1.onrender.com/proxy'; }
+    }
+    if (!DEMO_MODE) {
+      localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
+    }
     var notifyMode = 'messaging';
 
     // Admin data removed from source for security — set via master UI on first launch
@@ -3328,8 +3248,10 @@ var driverDB = {
     // Initialize
     document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 
-    // driverDBは埋め込み済み — localStorage読み込み不要
-    renderDriverTable();
+    // driverDBは埋め込み済み — デモは末尾で initDemoEnvironment が差し替え
+    if (!DEMO_MODE) {
+      renderDriverTable();
+    }
 
     function getNextDriverId() {
       var maxId = driverIdCounter || 0;
@@ -3655,13 +3577,15 @@ var driverDB = {
             </span>
           </td>
           <td class="px-4 py-2.5 text-center">
-            <button onclick="openDeliveryMap('${route.routeCode}')" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors" title="配送MAP">🗺</button>
+            <button onclick="openDeliveryMap('${route.routeCode}')" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors" title="${DEMO_MODE ? 'クリックでMAP表示（デモ）' : '配送MAP'}">🗺</button>
           </td>
         </tr>`;
       }).join('');
 
       // 当日コースの未ジオコーディング住所を自動取得（日次上限100件）
-      setTimeout(function() { autoGeocodeDashboardAddresses(); }, 1000);
+      if (!DEMO_MODE) {
+        setTimeout(function() { autoGeocodeDashboardAddresses(); }, 1000);
+      }
     }
 
     function shortenService(service) {
@@ -11075,9 +10999,16 @@ var driverDB = {
     var mapAreaColors = ['#ef4444','#f59e0b','#3b82f6','#8b5cf6','#06b6d4','#10b981','#ec4899','#6366f1','#14b8a6','#f97316'];
 
     function openDeliveryMap(routeCode) {
+      if (DEMO_MODE) {
+        if (typeof ensureDemoCycleForRoute === 'function') ensureDemoCycleForRoute(routeCode);
+      }
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) {
-        alert('このルートの住所データがありません。\n先に住所データ（コース詳細）をアップロードしてください。');
+        if (DEMO_MODE) {
+          alert('デモ：先にアップロード枠をクリックしてサンプルデータを読み込んでください。');
+        } else {
+          alert('このルートの住所データがありません。\n先に住所データ（コース詳細）をアップロードしてください。');
+        }
         return;
       }
 
@@ -11098,6 +11029,19 @@ var driverDB = {
 
       // モーダル表示
       document.getElementById('map-modal').classList.remove('hidden');
+      if (DEMO_MODE) {
+        var demoMapNote = document.getElementById('demo-map-note');
+        if (!demoMapNote) {
+          demoMapNote = document.createElement('p');
+          demoMapNote.id = 'demo-map-note';
+          demoMapNote.className = 'text-xs text-blue-600 font-medium mb-2';
+          demoMapNote.textContent = '🗺 デモ：クリックで表示されたサンプル配送MAPです（架空住所）';
+          var mapLoading = document.getElementById('map-loading');
+          if (mapLoading && mapLoading.parentNode) {
+            mapLoading.parentNode.insertBefore(demoMapNote, mapLoading);
+          }
+        }
+      }
 
       // 少し遅らせてマップ初期化（DOM描画待ち）
       setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
@@ -11858,7 +11802,7 @@ var driverDB = {
       deliveryMapMarkers = [];
 
       // マスタが未ロードなら先に取得（過去座標をオフライン表示するため）
-      if (Object.keys(inMemoryAddrMaster).length === 0) {
+      if (!DEMO_MODE && Object.keys(inMemoryAddrMaster).length === 0) {
         console.log('initDeliveryMap: マスタ自動読み込み中...');
         await loadAddrMasterFromSheet();
       }
@@ -14953,9 +14897,9 @@ var driverDB = {
       html += '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-xs"><thead>' +
         '<tr class="border-b-2 border-gray-300 bg-surface">' +
         '<th class="px-2 py-1.5 text-left" rowspan="2">日付</th>' +
-        '<th class="px-2 py-1.5 text-center bg-yellow-100 font-bold border-l-2 border-yellow-400" colspan="4"><img src="logo-gds.png" alt="GDS" class="inline-block h-7"></th>' +
-        '<th class="px-2 py-1.5 text-center bg-orange-100 font-bold border-l-2 border-orange-400" colspan="2"><img src="logo-flex.png" alt="Flex" class="inline-block h-5"></th>' +
-        '<th class="px-2 py-1.5 text-center bg-blue-100 font-bold border-l-2 border-blue-400" colspan="2"><img src="logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>' +
+        '<th class="px-2 py-1.5 text-center bg-yellow-100 font-bold border-l-2 border-yellow-400" colspan="4"><img src="../logo-gds.png" alt="GDS" class="inline-block h-7"></th>' +
+        '<th class="px-2 py-1.5 text-center bg-orange-100 font-bold border-l-2 border-orange-400" colspan="2"><img src="../logo-flex.png" alt="Flex" class="inline-block h-5"></th>' +
+        '<th class="px-2 py-1.5 text-center bg-blue-100 font-bold border-l-2 border-blue-400" colspan="2"><img src="../logo-cityact.png" alt="シティーアクト" class="inline-block h-5"></th>' +
         '<th class="px-2 py-1.5 text-right border-l-2 border-gray-300" rowspan="2">全体</th>' +
         '</tr>' +
         '<tr class="border-b-2 border-gray-300 bg-surface text-ink-lighter">' +
@@ -18452,10 +18396,8 @@ var driverDB = {
 
     // 起動時にサーバーからマスタデータ復元
     if (DEMO_MODE) {
-      // デモモード: サーバー通信なし、架空データで起動
-      seedDemoData();
-      // getDriverIcon をデモ版に差し替え
-      getDriverIcon = getDemoDriverIcon;
+      if (typeof getDemoDriverIcon === 'function') { getDriverIcon = getDemoDriverIcon; }
+      if (typeof initDemoEnvironment === 'function') { initDemoEnvironment(); }
     } else {
       loadMasterFromServer();
     }
