@@ -502,6 +502,7 @@
               </div>
               <p class="text-sm font-medium text-ink mb-1">住所データ（コース詳細）</p>
               <p class="text-xs text-amber-600 font-bold mt-2">👆 クリックするとデモがはじまります</p>
+              <p class="text-xs text-ink-lighter mt-1" id="cycle-status"></p>
             </div>
             <!-- Assign Data Upload (Demo) -->
             <div class="upload-zone rounded-lg p-8 text-center cursor-pointer" id="upload-zone-assign" onclick="startDemoFromUpload()">
@@ -512,6 +513,7 @@
               </div>
               <p class="text-sm font-medium text-ink mb-1">アサインデータ</p>
               <p class="text-xs text-amber-600 font-bold mt-2">👆 クリックするとデモがはじまります</p>
+              <p class="text-xs text-ink-lighter mt-1" id="assign-status"></p>
             </div>
           </div>
         </div>
@@ -3533,8 +3535,11 @@ var driverDB = {};
       document.getElementById('dashboard-content').classList.remove('hidden');
       var heroEl = document.getElementById('dashboard-hero');
       if (heroEl) heroEl.style.display = 'none';
-      document.getElementById('assign-status').textContent = `✓ ${assignmentData.length}ルート読込済み`;
-      document.getElementById('assign-status').className = 'text-xs text-emerald-600 mt-1 font-medium';
+      var assignStatusEl = document.getElementById('assign-status');
+      if (assignStatusEl) {
+        assignStatusEl.textContent = '✓ ' + assignmentData.length + 'ルート読込済み';
+        assignStatusEl.className = 'text-xs text-emerald-600 mt-1 font-medium';
+      }
 
       // Stats
       const totalRoutes = assignmentData.length;

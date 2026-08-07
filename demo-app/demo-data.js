@@ -89,13 +89,24 @@ function initDemoEnvironment() {
 }
 
 // ===== ドライバー・品質データ投入 =====
+function _clearDemoMap(obj) {
+  if (!obj) return;
+  for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) delete obj[k]; }
+}
+
 function _populateDemoDrivers() {
   if (typeof driverDB === 'undefined') return;
-  for (var _k in driverDB) { delete driverDB[_k]; }
+  _clearDemoMap(driverDB);
+  _clearDemoMap(typeof driverDepartments !== 'undefined' ? driverDepartments : null);
+  _clearDemoMap(typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : null);
+  _clearDemoMap(typeof transportIDs !== 'undefined' ? transportIDs : null);
+  _clearDemoMap(typeof lineMapping !== 'undefined' ? lineMapping : null);
+  _clearDemoMap(typeof phoneMapping !== 'undefined' ? phoneMapping : null);
 
   for (var i = 0; i < DEMO_DRIVERS.length; i++) {
     var d = DEMO_DRIVERS[i];
-    driverDB[d.name] = {
+    var key = d.driverName;
+    driverDB[key] = {
       driverId: d.id, workDays: d.wd, totalHours: Math.round(d.wd * 6.5 * 10) / 10,
       totalPackages: d.tp, packagesPerHour: d.pph,
       totalPackagesAll: d.tp + Math.floor(d.tp * 0.12),
@@ -105,15 +116,15 @@ function _populateDemoDrivers() {
     };
 
     // driverDepartments
-    if (typeof driverDepartments !== 'undefined') driverDepartments[d.name] = d.dept;
-    // driverJapaneseNames: 日本語名 ≠ ドライバー名
-    if (typeof driverJapaneseNames !== 'undefined') driverJapaneseNames[d.name] = d.name;
+    if (typeof driverDepartments !== 'undefined') driverDepartments[key] = d.dept;
+    // driverJapaneseNames: 日本語名 ≠ ドライバー名（英語）
+    if (typeof driverJapaneseNames !== 'undefined') driverJapaneseNames[key] = d.name;
     // transportIDs
-    if (typeof transportIDs !== 'undefined') transportIDs[d.name] = d.tid;
+    if (typeof transportIDs !== 'undefined') transportIDs[key] = d.tid;
     // lineMapping（デモバッジ用）
-    if (typeof lineMapping !== 'undefined') lineMapping[d.name] = i < 20 ? ('demo-line-' + String(i + 1).padStart(3,'0')) : '';
+    if (typeof lineMapping !== 'undefined') lineMapping[key] = i < 20 ? ('demo-line-' + String(i + 1).padStart(3,'0')) : '';
     // phoneMapping
-    if (typeof phoneMapping !== 'undefined') phoneMapping[d.name] = d.phone;
+    if (typeof phoneMapping !== 'undefined') phoneMapping[key] = d.phone;
   }
 
   // localStorage にも保存（renderMasterTable がlocalStorage読むケースの保険）
@@ -121,11 +132,11 @@ function _populateDemoDrivers() {
     var deptObj = {}; var tidObj = {}; var jnObj = {}; var phoneObj = {}; var lineObj = {};
     for (var j = 0; j < DEMO_DRIVERS.length; j++) {
       var dd = DEMO_DRIVERS[j];
-      deptObj[dd.name] = dd.dept;
-      tidObj[dd.name] = dd.tid;
-      jnObj[dd.name] = dd.name;
-      phoneObj[dd.name] = dd.phone;
-      if (j < 20) lineObj[dd.name] = 'demo-line-' + String(j + 1).padStart(3,'0');
+      deptObj[dd.driverName] = dd.dept;
+      tidObj[dd.driverName] = dd.tid;
+      jnObj[dd.driverName] = dd.name;
+      phoneObj[dd.driverName] = dd.phone;
+      if (j < 20) lineObj[dd.driverName] = 'demo-line-' + String(j + 1).padStart(3,'0');
     }
     localStorage.setItem('driverDepartments', JSON.stringify(deptObj));
     localStorage.setItem('transportIDs', JSON.stringify(tidObj));
@@ -169,7 +180,7 @@ function _seedFtdsData() {
     var driver = DEMO_DRIVERS[f % DEMO_DRIVERS.length];
     ftdsResultData.push({
       date: '2026-07-' + String(10 + (f % 18)).padStart(2,'0'),
-      driverName: driver.name,
+      driverName: driver.driverName,
       transporterId: driver.tid,
       cycle: 'OFK3_CYCLE_2026-07-' + String(10 + (f % 18)).padStart(2,'0'),
       route: 'C' + String((f % 15) + 1).padStart(3,'0'),
@@ -200,7 +211,7 @@ function _seedCcData() {
     var pattern = ccCallPatterns[c % ccCallPatterns.length];
     ccResultData.push({
       date: '2026-07-' + String(10 + (c % 18)).padStart(2,'0'),
-      driverName: cDriver.name,
+      driverName: cDriver.driverName,
       transporterId: cDriver.tid,
       tracking: 'TBA' + String(600000000 + c),
       reason: DEMO_CC_REASONS[c % DEMO_CC_REASONS.length],
@@ -220,7 +231,7 @@ function _seedDnrData() {
     var dnD = DEMO_DRIVERS[dnrIdxs[dn]];
     var coord = DEMO_COORDS[dn % DEMO_COORDS.length];
     dnrResultData.push({
-      driverName: dnD.name,
+      driverName: dnD.driverName,
       delivery_date_jst: '2026-07-' + String(12 + (dn % 15)).padStart(2,'0'),
       delivery_station_code: 'DNG3',
       provider_company_name: dnD.dept,
@@ -243,7 +254,7 @@ function _buildDemoSnapshot() {
     var dFtds = 0; var dFtdsReasons = {};
     if (typeof ftdsResultData !== 'undefined') {
       for (var sf = 0; sf < ftdsResultData.length; sf++) {
-        if (ftdsResultData[sf].driverName === sd.name) {
+        if (ftdsResultData[sf].driverName === sd.driverName) {
           dFtds++;
           var r = ftdsResultData[sf].reason || ftdsResultData[sf].shipment_reason || '';
           dFtdsReasons[r] = (dFtdsReasons[r] || 0) + 1;
@@ -253,7 +264,7 @@ function _buildDemoSnapshot() {
     var dCcReq = 0; var dCcAct = 0;
     if (typeof ccResultData !== 'undefined') {
       for (var sc = 0; sc < ccResultData.length; sc++) {
-        if (ccResultData[sc].driverName === sd.name) {
+        if (ccResultData[sc].driverName === sd.driverName) {
           var ct = ccResultData[sc].contactType || '';
           if (ct.toLowerCase().indexOf('call') >= 0) dCcReq++;
           if ((ccResultData[sc].duration || 0) > 0) dCcAct++;
@@ -263,13 +274,13 @@ function _buildDemoSnapshot() {
     var dDnr = 0; var dDnrCost = 0;
     if (typeof dnrResultData !== 'undefined') {
       for (var sdn = 0; sdn < dnrResultData.length; sdn++) {
-        if (dnrResultData[sdn].driverName === sd.name) {
+        if (dnrResultData[sdn].driverName === sd.driverName) {
           dDnr++;
           dDnrCost += dnrResultData[sdn]._cost || 0;
         }
       }
     }
-    snapDrivers[sd.name] = {
+    snapDrivers[sd.driverName] = {
       dept: sd.dept,
       packagesPerHour: sd.pph, misdeliveryRate: sd.mis, deliveryRate: sd.del,
       workDays: sd.wd, totalPackages: sd.tp,
@@ -397,7 +408,7 @@ function loadDemoDashboardData() {
       var pkg = 120 + (r * 7) % 80;
       assignmentData.push({
         routeCode: routeCodes[r],
-        driverName: rDriver.name,
+        driverName: rDriver.driverName,
         area: areas[r],
         serviceType: 'Standard',
         totalDeliveries: pkg,
@@ -435,6 +446,16 @@ function loadDemoDashboardData() {
       routeAreas[routeCodes[ra]] = areas[ra];
     }
   }
+  var cycleStatusEl = document.getElementById('cycle-status');
+  if (cycleStatusEl && typeof cycleData !== 'undefined') {
+    var routeCount = Object.keys(cycleData).length;
+    var daCount = 0;
+    for (var ck in cycleData) {
+      if (cycleData[ck]) daCount += cycleData[ck].length;
+    }
+    cycleStatusEl.textContent = routeCount + 'ルート / DA ' + daCount + '件 読込済み';
+    cycleStatusEl.className = 'text-xs text-emerald-600 mt-1 font-medium';
+  }
 }
 
 function ensureDemoCycleForRoute(routeCode) {
@@ -458,7 +479,7 @@ function demoShowTwExtract() {
     twExtractedData.push({
       seqNo: tw + 1,
       trackingId: 'TBA' + String(500000000 + tw),
-      driverName: twDriver.name,
+      driverName: twDriver.driverName,
       routeCode: 'C' + String((tw % 15) + 1).padStart(3,'0'),
       departure: '08:' + String(15 + (tw % 15) * 3).padStart(2,'0'),
       address: '福岡市' + DEMO_AREAS[tw % DEMO_AREAS.length] + 'サンプル' + (tw + 1) + '丁目',
