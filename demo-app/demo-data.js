@@ -498,13 +498,13 @@ function _addTenkoShowcase() {
     + '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">'
     // QR画像
     + '<div class="bg-white rounded-xl shadow p-4 text-center">'
-    + '<img src="demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
+    + '<img src="demo/assets/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
     + '<p class="text-sm font-bold text-ink">点呼QR認証</p>'
     + '<p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p>'
     + '</div>'
     // Mentor画像
     + '<div class="bg-white rounded-xl shadow p-4 text-center">'
-    + '<img src="demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
+    + '<img src="demo/assets/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px">'
     + '<p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p>'
     + '<p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p>'
     + '</div>'
