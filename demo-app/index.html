@@ -2138,13 +2138,18 @@
 
       <!-- 時間指定抽出 Tab -->
       <div id="panel-tw-extract" class="hidden">
+        <!-- デモ用案内 -->
+        <div id="tw-demo-banner" class="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4 text-center">
+          <button onclick="demoShowTwExtract()" class="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold hover:bg-amber-600">👆 デモデータを表示</button>
+          <p class="text-xs text-amber-700 mt-2">クリックするとサンプル30件が表示されます</p>
+        </div>
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">📦 時間指定抽出</h2>
             <p class="text-sm text-ink-lighter">別部隊への時間指定荷物引渡し — 抽出・MAP・LINE送信</p>
           </div>
           <div class="flex gap-2">
-            <button onclick="twExtract()" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">🔍 抽出実行</button>
+            <button onclick="if(typeof demoShowTwExtract==='function'){demoShowTwExtract();}else{twExtract();}" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">🔍 抽出実行</button>
             <button onclick="twExportCSV()" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">📥 CSVエクスポート</button>
             <button onclick="twOpenLineSendModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700">📲 LINE送信</button>
           </div>
