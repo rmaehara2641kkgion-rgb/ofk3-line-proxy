@@ -60,6 +60,7 @@ var demoDashboardLoaded = false;
 var demoFtdsLoaded = false;
 var demoCcLoaded = false;
 var demoQualityLoaded = false;
+var demoLatLoaded = false;
 var demoAddrLoaded = false;
 
 // ===== 起動時 =====
@@ -244,11 +245,21 @@ function startDemoAddrSearchFree() {
   if (typeof inMemoryAddrMaster !== 'undefined') {
     inMemoryAddrMaster[d.address] = { lat: d.lat, lng: d.lng };
   }
+  if (typeof addrFreeCurrentAddress !== 'undefined') addrFreeCurrentAddress = d.address;
   var statusEl = document.getElementById('addr-free-status');
   if (statusEl) statusEl.textContent = d.address;
   var inputEl = document.getElementById('addr-free-input');
   if (inputEl) inputEl.value = d.address;
   _renderDemoAddrMap('addr-free-map', 'addr-free-map-container', d.lat, d.lng, d.address, '');
+  var linePreview = document.getElementById('addr-free-line-preview');
+  if (linePreview) {
+    linePreview.classList.remove('hidden');
+    var bodyEl = document.getElementById('addr-free-line-preview-body');
+    if (bodyEl) bodyEl.textContent = d.address;
+    setTimeout(function() {
+      if (linePreview.scrollIntoView) linePreview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 400);
+  }
   _demoToast('デモ：住所直接検索 — 別の1件を表示');
 }
 window.startDemoAddrSearchFree = startDemoAddrSearchFree;
@@ -412,6 +423,47 @@ function _seedDnrData() {
   }
 }
 
+function _seedLatData() {
+  if (typeof latResultData === 'undefined') return;
+  var latSamples = [
+    { route: 'C001', arr: '08:30', ent: '08:22', fs: '08:35', ls: '08:48', dep: '09:00', act: '08:52', exit: '08:55', diff: -8, load: 13, stay: 33, judge: '早着出発' },
+    { route: 'C002', arr: '08:45', ent: '08:40', fs: '08:50', ls: '09:02', dep: '09:15', act: '09:14', exit: '09:18', diff: -1, load: 12, stay: 38, judge: '定刻' },
+    { route: 'C003', arr: '09:00', ent: '08:55', fs: '09:05', ls: '09:18', dep: '09:30', act: '09:28', exit: '09:32', diff: -2, load: 13, stay: 37, judge: '定刻' },
+    { route: 'C004', arr: '09:15', ent: '09:08', fs: '09:20', ls: '09:35', dep: '09:45', act: '09:38', exit: '09:42', diff: -7, load: 15, stay: 34, judge: '早着出発' },
+    { route: 'C005', arr: '09:30', ent: '09:25', fs: '09:35', ls: '09:50', dep: '10:00', act: '10:05', exit: '10:08', diff: 5, load: 15, stay: 43, judge: '定刻' },
+    { route: 'C006', arr: '10:00', ent: '09:55', fs: '10:05', ls: '10:20', dep: '10:30', act: '10:45', exit: '10:50', diff: 15, load: 15, stay: 55, judge: '遅延' },
+    { route: 'C007', arr: '10:15', ent: '10:10', fs: '10:18', ls: '10:32', dep: '10:45', act: '10:40', exit: '10:44', diff: -5, load: 14, stay: 34, judge: '定刻' },
+    { route: 'C008', arr: '10:30', ent: '10:22', fs: '10:35', ls: '10:48', dep: '11:00', act: '10:50', exit: '10:54', diff: -10, load: 13, stay: 32, judge: '早着出発' },
+    { route: 'C009', arr: '11:00', ent: '10:58', fs: '11:05', ls: '11:18', dep: '11:30', act: '11:29', exit: '11:33', diff: -1, load: 13, stay: 35, judge: '定刻' },
+    { route: 'C010', arr: '11:15', ent: '11:10', fs: '11:20', ls: '11:35', dep: '11:45', act: '11:50', exit: '11:55', diff: 5, load: 15, stay: 45, judge: '定刻' },
+    { route: 'C011', arr: '11:30', ent: '11:25', fs: '11:35', ls: '11:48', dep: '12:00', act: '11:55', exit: '12:00', diff: -5, load: 13, stay: 35, judge: '定刻' },
+    { route: 'C012', arr: '12:00', ent: '11:52', fs: '12:05', ls: '12:18', dep: '12:30', act: '12:15', exit: '12:20', diff: -15, load: 13, stay: 28, judge: '早着出発' }
+  ];
+  latResultData.length = 0;
+  for (var li = 0; li < latSamples.length; li++) {
+    var s = latSamples[li];
+    var drv = DEMO_DRIVERS[li % DEMO_DRIVERS.length];
+    var jName = (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[drv.driverName]) ? driverJapaneseNames[drv.driverName] : drv.name;
+    latResultData.push({
+      routeId: s.route,
+      employeeId: drv.tid,
+      driverName: jName + ' (' + drv.driverName + ')',
+      date: '2026/07/' + String(15 + (li % 10)).padStart(2, '0'),
+      plannedArrival: s.arr,
+      dsEntrance: s.ent,
+      firstScan: s.fs,
+      lastScan: s.ls,
+      plannedDeparture: s.dep,
+      actualDeparture: s.act,
+      dsExit: s.exit,
+      diffMin: s.diff,
+      loadingMin: s.load,
+      stayMin: s.stay,
+      judgment: s.judge
+    });
+  }
+}
+
 function _buildDemoSnapshot() {
   var snapDrivers = {};
   for (var si = 0; si < DEMO_DRIVERS.length; si++) {
@@ -480,7 +532,12 @@ function _setupAllDemoZones() {
 
   // 品質管理枠
   _demoifyDropZone('dnr-drop-zone', function() { startDemoQuality(); }, '👆 クリックするとDNRデモデータが表示されます');
-  _demoifyDropZone('lat-drop-zone', function() { startDemoQuality(); }, '👆 クリック → デモ');
+  _demoifyDropZone('lat-drop-zone', function() { startDemoLat(); }, '👆 クリックするとLATデモデータが表示されます');
+
+  // DSPルート枠（デモでは非表示）
+  var dspZone = document.getElementById('dsp-drop-zone');
+  if (dspZone) dspZone.style.display = 'none';
+  _disableInput('dsp-file-input');
 
   // 住所検索のドロップ枠（非表示化のみ — クリックデモは _setupAddrSearchDemoUI）
   _disableInput('addr-search-file-input');
@@ -712,18 +769,34 @@ window.demoShowTwExtract = demoShowTwExtract;
 function startDemoAddrSearch() { startDemoAddrSearchDa(); }
 window.startDemoAddrSearch = startDemoAddrSearch;
 
-function showDemoAddrLinePreview() {
+function showDemoAddrLinePreview(mode) {
+  mode = mode || 'da';
+  if (mode === 'free') {
+    var inline = document.getElementById('addr-free-line-preview');
+    if (inline) {
+      inline.classList.remove('hidden');
+      var bodyEl = document.getElementById('addr-free-line-preview-body');
+      var addr = (typeof addrFreeCurrentAddress !== 'undefined' && addrFreeCurrentAddress) ? addrFreeCurrentAddress : DEMO_ADDR_FREE.address;
+      if (bodyEl) bodyEl.textContent = addr;
+      if (inline.scrollIntoView) inline.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      _demoToast('デモ：LINE送信プレビューを表示しています');
+      return;
+    }
+  }
   _demoToast('デモ：LINE送信は実行されません');
   var modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
   modal.onclick = function() { modal.remove(); };
+  var msg = mode === 'free'
+    ? '【デモ】住所案内<br>住所: ' + DEMO_ADDR_FREE.address + '<br>※正配送先をご確認ください。'
+    : '【デモ】住所案内<br>DA: ' + DEMO_ADDR_DA.da + '<br>住所: ' + DEMO_ADDR_DA.address + '<br>コース: ' + DEMO_ADDR_DA.route + '<br>※正配送先をご確認ください。';
   modal.innerHTML = ''
     + '<div style="background:#7494C0;border-radius:16px;padding:16px;max-width:380px;width:90%;font-family:sans-serif" onclick="event.stopPropagation()">'
     + '<div style="text-align:center;color:white;font-size:12px;margin-bottom:12px">配送管理 BOT</div>'
     + '<div style="display:flex;align-items:flex-start;margin-bottom:10px">'
     + '<div style="width:36px;height:36px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:14px;flex-shrink:0;margin-right:8px">B</div>'
     + '<div style="background:white;border-radius:0 16px 16px 16px;padding:12px 14px;max-width:280px;font-size:13px;line-height:1.8;box-shadow:0 1px 2px rgba(0,0,0,0.1)">'
-    + '【デモ】住所案内<br>DA: TBA300000050<br>住所: 福岡県福岡市東区香椎1-2-3<br>コース: C001<br>※正配送先をご確認ください。'
+    + msg
     + '</div></div>'
     + '<div style="text-align:center;margin-top:12px"><button onclick="this.parentElement.parentElement.parentElement.remove()" style="background:white;border:none;padding:6px 16px;border-radius:8px;cursor:pointer;font-size:12px">閉じる</button></div>'
     + '</div>';
@@ -779,6 +852,27 @@ function startDemoQuality() {
   _demoToast('デモ：DNR 15件を表示しています');
 }
 window.startDemoQuality = startDemoQuality;
+
+function startDemoLat() {
+  if (!demoLatLoaded) {
+    demoLatLoaded = true;
+    _seedLatData();
+  }
+  var hero = document.getElementById('quality-hero');
+  if (hero) hero.style.display = 'none';
+  if (typeof renderLatResults === 'function') {
+    try { renderLatResults(); } catch(e) { console.log('Demo: renderLatResults error', e.message); }
+  }
+  if (typeof updateQualitySummary === 'function') {
+    try { updateQualitySummary(); } catch(e) {}
+  }
+  var latSection = document.getElementById('lat-summary');
+  if (latSection && latSection.scrollIntoView) {
+    setTimeout(function() { latSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
+  }
+  _demoToast('デモ：LAT 12件を表示しています');
+}
+window.startDemoLat = startDemoLat;
 
 // ===== ユーティリティ =====
 function _demoToast(msg) {

@@ -1117,7 +1117,7 @@
                 <div class="flex gap-2">
                   <button onclick="copyAddress()" class="flex-1 px-3 py-2 bg-white border border-border rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors">📋 住所コピー</button>
                   <button onclick="showAddressMap()" class="flex-1 px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 transition-colors">🗺️ 地図で見る</button>
-                  <button onclick="sendAddressToLine()" class="flex-1 px-3 py-2 bg-[#06C755] text-white rounded-lg text-xs font-medium hover:opacity-90 transition-opacity">✉ LINE送信</button>
+                  <button onclick="if(typeof showDemoAddrLinePreview==='function'){showDemoAddrLinePreview('da');}else{sendAddressToLine();}" class="flex-1 px-3 py-2 bg-[#06C755] text-white rounded-lg text-xs font-medium hover:opacity-90 transition-opacity">✉ LINE送信</button>
                 </div>
                 <p id="addr-search-da-label" class="text-xs text-ink-lighter mt-2 font-mono text-center"></p>
               </div>
@@ -1153,7 +1153,26 @@
               <div id="addr-free-map" class="w-full rounded-lg border" style="height: 350px;"></div>
               <div class="flex gap-2 mt-2">
                 <button onclick="copyFreeAddress()" class="flex-1 px-3 py-1.5 bg-white border border-border rounded text-xs hover:bg-gray-50">📋 住所コピー</button>
-                <button onclick="sendFreeAddressToLine()" class="flex-1 px-3 py-1.5 bg-[#06C755] text-white rounded text-xs hover:opacity-90">✉ LINE送信</button>
+                <button onclick="if(typeof showDemoAddrLinePreview==='function'){showDemoAddrLinePreview('free');}else{sendFreeAddressToLine();}" class="flex-1 px-3 py-1.5 bg-[#06C755] text-white rounded text-xs hover:opacity-90">✉ LINE送信</button>
+              </div>
+            </div>
+
+            <!-- デモ：住所直接検索 LINEプレビュー -->
+            <div id="addr-free-line-preview" class="hidden mt-4 mb-4">
+              <div class="bg-white rounded-xl shadow p-4">
+                <h4 class="text-xs font-bold text-ink mb-3">💬 LINE送信プレビュー（住所直接検索）</h4>
+                <div style="max-width:380px;margin:0 auto;background:#7494C0;border-radius:16px;padding:16px;font-family:sans-serif">
+                  <div style="text-align:center;color:white;font-size:12px;margin-bottom:12px">配送管理 BOT</div>
+                  <div style="display:flex;align-items:flex-start">
+                    <div style="width:36px;height:36px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:14px;flex-shrink:0;margin-right:8px">B</div>
+                    <div style="background:white;border-radius:0 16px 16px 16px;padding:12px 14px;max-width:280px;font-size:13px;line-height:1.8;box-shadow:0 1px 2px rgba(0,0,0,0.1)">
+                      <div style="font-weight:bold;color:#333;margin-bottom:4px">📍 配送先住所のご案内</div>
+                      <div style="color:#333" id="addr-free-line-preview-body">福岡県福岡市西区姪浜駅南1-1-1</div>
+                      <div style="color:#666;font-size:11px;margin-top:8px">※正配送先をご確認ください。</div>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-xs text-ink-lighter mt-2 text-center">※ デモ表示です。実際のLINE送信は行われません。</p>
               </div>
             </div>
 
@@ -1654,8 +1673,8 @@
           </div>
         </div>
 
-        <!-- ドロップゾーン3列 -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <!-- ドロップゾーン2列（デモ：DSPルートは非表示） -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
           <div id="dnr-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-yellow-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#eab308'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDnrDrop(event)">
             <p class="text-sm text-ink-lighter mb-1">🚫 DNRデータ</p>
             <p class="text-xs text-ink-lighter">xlsxドロップ</p>
@@ -1663,19 +1682,17 @@
             <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dnr-file-input').click()">選択</button>
             <p id="dnr-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
           </div>
-          <div id="dsp-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-orange-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#f97316'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDspDrop(event)">
-            <p class="text-sm text-ink-lighter mb-1">🚛 DSPルート</p>
-            <p class="text-xs text-ink-lighter">CSV（LAT用）</p>
-            <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="handleDspFile(this.files[0])">
-            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dsp-file-input').click()">選択</button>
-            <p id="dsp-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
-          </div>
           <div id="lat-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-purple-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#a855f7'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleLatDrop(event)">
             <p class="text-sm text-ink-lighter mb-1">📡 LATデータ</p>
             <p class="text-xs text-ink-lighter">xlsxドロップ</p>
             <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="lat-file-input" onchange="handleLatFile(this.files[0])">
             <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('lat-file-input').click()">選択</button>
           </div>
+        </div>
+        <!-- DSPルート（デモでは非使用・非表示） -->
+        <div id="dsp-drop-zone" class="hidden">
+          <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="handleDspFile(this.files[0])">
+          <p id="dsp-loaded-msg" class="hidden"></p>
         </div>
 
         <!-- ヒーロー画像（データ未読込時） -->
