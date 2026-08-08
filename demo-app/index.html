@@ -772,6 +772,48 @@
           </div>
         </div>
 
+        <!-- デモ：点呼ショーケース（QR / メンター / LINEプレビュー） -->
+        <div id="demo-tenko-showcase" class="mb-6 space-y-6">
+          <div class="border-t-2 border-blue-200 pt-6">
+            <h3 class="text-lg font-bold text-ink mb-4">📸 点呼管理の仕組み</h3>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-white rounded-xl shadow p-4 text-center">
+              <img src="/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;">
+              <p class="text-sm font-bold text-ink">点呼QR認証</p>
+              <p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p>
+            </div>
+            <div class="bg-white rounded-xl shadow p-4 text-center">
+              <img src="/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;">
+              <p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p>
+              <p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p>
+            </div>
+          </div>
+          <div class="bg-white rounded-xl shadow p-6">
+            <h4 class="text-sm font-bold text-ink mb-4">💬 LINE通知プレビュー（自動送信イメージ）</h4>
+            <div style="max-width:380px;margin:0 auto;background:#7494C0;border-radius:16px;padding:16px;font-family:sans-serif">
+              <div style="text-align:center;color:white;font-size:12px;margin-bottom:12px">点呼管理 BOT</div>
+              <div style="display:flex;align-items:flex-start;margin-bottom:10px">
+                <div style="width:36px;height:36px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:14px;flex-shrink:0;margin-right:8px">B</div>
+                <div style="background:white;border-radius:0 16px 16px 16px;padding:12px 14px;max-width:280px;font-size:13px;line-height:1.6;box-shadow:0 1px 2px rgba(0,0,0,0.1)">
+                  <div style="font-weight:bold;color:#D94032;margin-bottom:6px">🚨 点呼未完了通知</div>
+                  <div style="color:#333">着車時間 09:00 を過ぎましたが、以下のドライバーの点呼が完了していません。</div>
+                  <div style="margin-top:8px;color:#333">・山田 太郎 🪪❌ 👔❌<br>・佐藤 花子 🪪❌ 👔❌</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-start;margin-bottom:10px">
+                <div style="width:36px;height:36px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:14px;flex-shrink:0;margin-right:8px">B</div>
+                <div style="background:white;border-radius:0 16px 16px 16px;padding:12px 14px;max-width:280px;font-size:13px;line-height:1.6;box-shadow:0 1px 2px rgba(0,0,0,0.1)">
+                  <div style="font-weight:bold;color:#06C755;margin-bottom:6px">✅ 点呼完了通知</div>
+                  <div style="color:#333">09:05 山田 太郎 の点呼が完了しました。</div>
+                  <div style="margin-top:6px;color:#333">🪪 QR認証 ✅<br>👔 メンター確認 ✅</div>
+                </div>
+              </div>
+            </div>
+            <p class="text-xs text-ink-lighter mt-3 text-center">※ デモ表示です。実際のLINE送信は行われません。</p>
+          </div>
+        </div>
+
         <!-- Tenko Summary Cards -->
         <div id="tenko-sync-banner" class="hidden mb-4 p-3 rounded-lg bg-teal-50 border border-teal-200 flex items-center justify-between">
           <div class="flex items-center gap-2">
@@ -1052,7 +1094,7 @@
 
           <div id="addr-search-ready">
             <!-- DA番号デモ（クリック開始） -->
-            <div id="addr-demo-da-zone" class="mb-4 text-center py-10 border-2 border-dashed border-amber-300 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors">
+            <div id="addr-demo-da-zone" class="mb-4 text-center py-10 border-2 border-dashed border-amber-300 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors" onclick="if(typeof startDemoAddrSearchDa==='function'){startDemoAddrSearchDa();}else{startDemoAddrSearch();}">
               <label class="text-xs font-bold text-ink mb-2 block pointer-events-none">DA番号で住所検索</label>
               <p class="text-sm text-ink-lighter pointer-events-none">DA番号を入力またはスキャン...</p>
               <p class="text-xs text-amber-600 font-bold mt-3 pointer-events-none">👆 ここをクリックしたらデモがはじまります</p>
@@ -1098,7 +1140,7 @@
             </div>
 
             <!-- 住所から直接地図検索（デモ：クリック開始） -->
-            <div id="addr-demo-free-zone" class="mb-4 p-6 bg-gray-50 rounded-lg border-2 border-dashed border-amber-300 text-center cursor-pointer hover:bg-amber-50 transition-colors">
+            <div id="addr-demo-free-zone" class="mb-4 p-6 bg-gray-50 rounded-lg border-2 border-dashed border-amber-300 text-center cursor-pointer hover:bg-amber-50 transition-colors" onclick="if(typeof startDemoAddrSearchFree==='function'){startDemoAddrSearchFree();}">
               <h4 class="text-xs font-bold text-ink mb-2 pointer-events-none">📍 住所から直接地図を表示</h4>
               <p class="text-sm text-ink-lighter pointer-events-none">住所を入力... 例: 福岡市西区姪浜駅南1-1-1</p>
               <p class="text-xs text-amber-600 font-bold mt-3 pointer-events-none">👆 ここをクリックしたらデモがはじまります</p>
