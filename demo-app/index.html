@@ -17693,13 +17693,9 @@ var driverDB = {};
       }
 
       var html = '';
-      // Header
+      // Header（マスタ管理と同じLINEアイコン）
       html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">';
-      if (DEMO_MODE) {
-        html += '<div style="width:40px;height:40px;border-radius:10px;overflow:hidden;flex-shrink:0;background:linear-gradient(180deg,#89cff0 0%,#c5e8f7 40%,#fff 100%);display:flex;align-items:center;justify-content:center;font-size:22px;border:2px solid #06C755;box-shadow:0 1px 4px rgba(0,0,0,0.15);" title="LINE待ち受け（はなまる）">💮</div>';
-      } else {
-        html += '<div style="width:40px;height:40px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:16px;">\uD83D\uDE97</div>';
-      }
+      html += getDriverIcon(driverKey, 'w-10 h-10');
       html += '<div>';
       html += '<div style="font-size:14px;font-weight:bold;">' + escapeHtml(driverKey) + '</div>';
       html += '<div style="font-size:11px;color:#6b7280;">\u6240\u5C5E: ' + escapeHtml(dept) + ' | TID: ' + escapeHtml(tid) + '</div>';
