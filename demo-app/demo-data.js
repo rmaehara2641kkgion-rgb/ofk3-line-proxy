@@ -937,7 +937,7 @@ function _buildDemoTenkoLog() {
   var logs = [];
   var arrTimeMap = { 'bike': '09:00', '\u3007': '11:00', 'C1': '11:00', 'b2': '15:00', 'C2': '18:30', 'C3': '18:30' };
 
-  // 本日分: 点呼完了7名
+  // 本日分: 点呼完了7名（シナリオ #1,2,3,7,8,9,10）
   var todayDone = [
     { name: DEMO_DRIVERS[0].name,  tid: 'A000000001', shift: 'bike',   done: '08:52', temp: false },
     { name: DEMO_DRIVERS[1].name,  tid: 'A000000002', shift: 'bike',   done: '08:55', temp: false },

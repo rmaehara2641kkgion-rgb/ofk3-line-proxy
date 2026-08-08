@@ -1016,18 +1016,116 @@
           <p class="text-xs text-amber-600 mt-1">シフト表 × 点呼実績の照合サンプル（12名）</p>
         </div>
         <div id="tenko-match-explanation" class="bg-white border border-gray-200 rounded-lg p-4 mb-4" style="display:none;">
-          <h3 class="text-sm font-bold text-ink mb-2">📋 点呼照合とは</h3>
-          <ul class="text-xs text-ink-lighter space-y-1 mb-3">
-            <li>・DAシフト表（計画）× 配送データ点呼実績（実績）を突合</li>
-            <li>・シフト差異・未点呼・臨時点呼を自動検出</li>
-          </ul>
-          <div class="flex flex-wrap gap-3 text-xs">
-            <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700">✅ 点呼済</span>
-            <span class="px-2 py-0.5 rounded bg-orange-50 text-orange-700">⚠ シフト差異</span>
-            <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-700">🟡 臨時点呼</span>
-            <span class="px-2 py-0.5 rounded bg-red-50 text-red-700">❌ 未点呼</span>
-          </div>
-          <button onclick="switchTab('tenko')" class="mt-3 text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer">&larr; 点呼管理に戻る</button>
+          <p class="text-xs text-green-700 font-medium">✅ デモデータを表示しました。下のガイドと照合表をご確認ください。</p>
+          <button onclick="switchTab('tenko')" class="mt-2 text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer">&larr; 点呼管理に戻る</button>
+        </div>
+
+        <div id="tenko-match-guide" class="bg-white border border-blue-200 rounded-xl p-4 mb-4 text-xs">
+          <h3 class="text-sm font-bold text-ink mb-3">📖 点呼照合ガイド</h3>
+
+          <details class="mb-3 group" open>
+            <summary class="font-bold text-ink cursor-pointer py-1">ステータス判定（自動分類）</summary>
+            <div class="overflow-x-auto mt-2">
+              <table class="w-full text-xs border border-border">
+                <thead><tr class="bg-surface border-b border-border">
+                  <th class="px-2 py-1.5 text-left">ステータス</th>
+                  <th class="px-2 py-1.5 text-center">アイコン</th>
+                  <th class="px-2 py-1.5 text-left">条件</th>
+                  <th class="px-2 py-1.5 text-left">背景色</th>
+                </tr></thead>
+                <tbody>
+                  <tr class="border-b border-border bg-emerald-50"><td class="px-2 py-1.5">点呼済</td><td class="px-2 py-1.5 text-center">✅</td><td class="px-2 py-1.5">QR・メンター両方完了、シフト一致</td><td class="px-2 py-1.5">緑</td></tr>
+                  <tr class="border-b border-border bg-orange-50"><td class="px-2 py-1.5">シフト差異</td><td class="px-2 py-1.5 text-center">⚠</td><td class="px-2 py-1.5">両認証完了だがシフトコードが不一致</td><td class="px-2 py-1.5">オレンジ</td></tr>
+                  <tr class="border-b border-border bg-amber-50"><td class="px-2 py-1.5">臨時点呼</td><td class="px-2 py-1.5 text-center">⚠</td><td class="px-2 py-1.5">シフト表になく配送データのみ存在（temporary）</td><td class="px-2 py-1.5">黄</td></tr>
+                  <tr class="border-b border-border bg-amber-50"><td class="px-2 py-1.5">認証未完了</td><td class="px-2 py-1.5 text-center">⚠</td><td class="px-2 py-1.5">QRかメンター片方のみ完了</td><td class="px-2 py-1.5">黄</td></tr>
+                  <tr class="border-b border-border bg-red-50"><td class="px-2 py-1.5">未点呼</td><td class="px-2 py-1.5 text-center">❌</td><td class="px-2 py-1.5">両認証とも未実施</td><td class="px-2 py-1.5">赤</td></tr>
+                  <tr class="border-b border-border bg-blue-50"><td class="px-2 py-1.5">配送データなし</td><td class="px-2 py-1.5 text-center">ℹ</td><td class="px-2 py-1.5">シフト表にいるが配送データに不在</td><td class="px-2 py-1.5">青</td></tr>
+                  <tr class="bg-amber-50"><td class="px-2 py-1.5">シフト表なし</td><td class="px-2 py-1.5 text-center">⚠</td><td class="px-2 py-1.5">配送データにいるがシフト表に不在</td><td class="px-2 py-1.5">黄</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <details class="mb-3">
+            <summary class="font-bold text-ink cursor-pointer py-1">照合表の見方</summary>
+            <div class="overflow-x-auto mt-2">
+              <table class="w-full text-xs border border-border">
+                <thead><tr class="bg-surface border-b border-border">
+                  <th class="px-2 py-1.5 text-left">列</th>
+                  <th class="px-2 py-1.5 text-left">内容</th>
+                </tr></thead>
+                <tbody>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">ドライバー</td><td class="px-2 py-1.5">名前（アイコン付き）</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">シフト</td><td class="px-2 py-1.5">一致 → 緑表示 / 差異 → <span class="text-orange-600">C2 → b2</span> のように両方表示（オレンジ）</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">所属</td><td class="px-2 py-1.5">協力会社名</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">着車予定</td><td class="px-2 py-1.5">SHIFT_MASTERから取得（09:00 / 11:00 / 15:00 / 18:30）</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">点呼時間</td><td class="px-2 py-1.5">点呼ログの completedAt（例: 08:52）</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">QR</td><td class="px-2 py-1.5">✅ or —</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5 font-medium">メンター</td><td class="px-2 py-1.5">✅ or —</td></tr>
+                  <tr><td class="px-2 py-1.5 font-medium">ステータス</td><td class="px-2 py-1.5">上記の自動分類</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+
+          <details class="mb-3">
+            <summary class="font-bold text-ink cursor-pointer py-1">サマリーカード（5枚）・シフト別集計・月次集計</summary>
+            <div class="mt-2 space-y-3 text-ink-lighter">
+              <div>
+                <p class="font-medium text-ink mb-1">サマリーカード</p>
+                <ul class="space-y-0.5 list-disc list-inside">
+                  <li><b>シフト人数</b> — 照合対象の全ドライバー数</li>
+                  <li><b>点呼済</b> — 両認証完了（シフト差異含む）</li>
+                  <li><b>未点呼</b> — 未認証 + 認証未完了 + 配送データなし</li>
+                  <li><b>臨時点呼</b> — シフト表にない臨時参加者</li>
+                  <li><b>シフト差異</b> — シフトコード不一致の件数</li>
+                </ul>
+              </div>
+              <div>
+                <p class="font-medium text-ink mb-1">シフト別集計（サマリー下部）</p>
+                <p>シフトコード別（bike / 〇 / C1 / b2 / C2 / C3 等）に対象人数・点呼完了人数を表示。全員完了 → 緑枠。</p>
+              </div>
+              <div>
+                <p class="font-medium text-ink mb-1">月次シフト集計</p>
+                <ul class="space-y-0.5 list-disc list-inside">
+                  <li><b>対象月</b> — ◀ ▶ で月を切り替え</li>
+                  <li><b>集計内容</b> — ドライバー × シフトコードのクロス集計表</li>
+                  <li><b>データ元</b> — 点呼ログ（tenkoLog）の当月分</li>
+                  <li><b>操作</b> — ドライバー名クリック → ログ編集モーダル</li>
+                  <li><b>エクスポート</b> — CSV出力ボタン</li>
+                </ul>
+              </div>
+            </div>
+          </details>
+
+          <details>
+            <summary class="font-bold text-ink cursor-pointer py-1">デモシナリオ（12名）</summary>
+            <div class="overflow-x-auto mt-2">
+              <table class="w-full text-xs border border-border">
+                <thead><tr class="bg-surface border-b border-border">
+                  <th class="px-2 py-1.5 text-left">#</th>
+                  <th class="px-2 py-1.5 text-left">ドライバー</th>
+                  <th class="px-2 py-1.5 text-center">シフト表</th>
+                  <th class="px-2 py-1.5 text-center">配送</th>
+                  <th class="px-2 py-1.5 text-left">状態</th>
+                </tr></thead>
+                <tbody>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">1</td><td class="px-2 py-1.5">山田 太郎</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-emerald-700">✅ 点呼済</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">2</td><td class="px-2 py-1.5">佐藤 花子</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-emerald-700">✅ 点呼済</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">3</td><td class="px-2 py-1.5">鈴木 一郎</td><td class="px-2 py-1.5 text-center">〇</td><td class="px-2 py-1.5 text-center">〇</td><td class="px-2 py-1.5 text-emerald-700">✅ 点呼済</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">4</td><td class="px-2 py-1.5">高橋 美咲</td><td class="px-2 py-1.5 text-center">〇</td><td class="px-2 py-1.5 text-center">〇</td><td class="px-2 py-1.5 text-amber-700">⚠ 認証未完了</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">5</td><td class="px-2 py-1.5">田中 健太</td><td class="px-2 py-1.5 text-center">C1</td><td class="px-2 py-1.5 text-center">C1</td><td class="px-2 py-1.5 text-red-700">❌ 未点呼</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">6</td><td class="px-2 py-1.5">渡辺 翔太</td><td class="px-2 py-1.5 text-center">C1</td><td class="px-2 py-1.5 text-center">C1</td><td class="px-2 py-1.5 text-red-700">❌ 未点呼</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">7</td><td class="px-2 py-1.5">伊藤 さくら</td><td class="px-2 py-1.5 text-center">b2</td><td class="px-2 py-1.5 text-center">b2</td><td class="px-2 py-1.5 text-emerald-700">✅ 点呼済</td></tr>
+                  <tr class="border-b border-border bg-orange-50"><td class="px-2 py-1.5">8</td><td class="px-2 py-1.5">中村 大輝</td><td class="px-2 py-1.5 text-center">b2</td><td class="px-2 py-1.5 text-center text-orange-600">C2</td><td class="px-2 py-1.5 text-orange-700">⚠ シフト差異</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">9</td><td class="px-2 py-1.5">小林 裕子</td><td class="px-2 py-1.5 text-center">C3</td><td class="px-2 py-1.5 text-center">C3</td><td class="px-2 py-1.5 text-emerald-700">✅ 点呼済</td></tr>
+                  <tr class="border-b border-border"><td class="px-2 py-1.5">10</td><td class="px-2 py-1.5">加藤 拓海</td><td class="px-2 py-1.5 text-center">—</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-amber-700">⚠ 臨時点呼</td></tr>
+                  <tr class="border-b border-border bg-blue-50"><td class="px-2 py-1.5">11</td><td class="px-2 py-1.5">松本 彩花</td><td class="px-2 py-1.5 text-center">bike</td><td class="px-2 py-1.5 text-center">—</td><td class="px-2 py-1.5 text-blue-700">ℹ 配送データなし</td></tr>
+                  <tr><td class="px-2 py-1.5">12</td><td class="px-2 py-1.5">吉田 蓮</td><td class="px-2 py-1.5 text-center">—</td><td class="px-2 py-1.5 text-center">b2</td><td class="px-2 py-1.5 text-amber-700">⚠ シフト表なし</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
         <div class="flex items-center justify-between mb-4">
           <div>
@@ -9003,12 +9101,12 @@ var driverDB = {};
         } else if (!tenko && master) {
           status = '配送データなし'; statusClass = 'bg-blue-50 text-blue-700'; statusIcon = 'ℹ';
           pendingCount++;
-        } else if (tenko && !master && shiftMasterData.length > 0) {
-          status = 'シフト表なし'; statusClass = 'bg-amber-50 text-amber-700'; statusIcon = '⚠';
-          if (bothDone) tempCount++; else pendingCount++;
         } else if (isTemp && bothDone) {
           status = '臨時点呼'; statusClass = 'bg-amber-50 text-amber-700'; statusIcon = '⚠';
           tempCount++;
+        } else if (tenko && !master && shiftMasterData.length > 0) {
+          status = 'シフト表なし'; statusClass = 'bg-amber-50 text-amber-700'; statusIcon = '⚠';
+          pendingCount++;
         } else if (bothDone) {
           status = '点呼済'; statusClass = 'bg-emerald-50 text-emerald-700'; statusIcon = '✅';
           doneCount++;
