@@ -586,6 +586,46 @@
               </table>
             </div>
           </div>
+
+          <!-- デモ：ドライバーLINE受信サンプル -->
+          <div id="demo-line-inbox" class="hidden mt-6">
+            <div class="card p-4">
+              <h3 class="text-sm font-bold text-ink mb-3">📱 ドライバーが受信するLINE（サンプル）</h3>
+              <div class="flex flex-col lg:flex-row gap-6 items-start justify-center">
+                <div style="width:320px;max-width:100%;background:#111;border-radius:28px;padding:12px;box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+                  <div style="background:#1a1a1a;border-radius:20px;overflow:hidden;min-height:520px;">
+                    <div style="background:#2d2d2d;padding:10px 14px;display:flex;align-items:center;gap:8px;">
+                      <span style="color:#fff;font-size:12px">←</span>
+                      <div style="width:32px;height:32px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:bold;">OF</div>
+                      <div><div style="color:#fff;font-size:13px;font-weight:bold;">OFK3配送管理</div><div style="color:#aaa;font-size:10px;">担当者が返信します</div></div>
+                    </div>
+                    <div style="padding:12px;background:#7494C0;min-height:440px;">
+                      <div style="text-align:center;color:rgba(255,255,255,0.7);font-size:10px;margin-bottom:8px">今日 8:05</div>
+                      <div style="background:#2a2a2a;border-radius:12px;padding:10px;margin-bottom:10px;color:#eee;font-size:11px;line-height:1.7;">
+                        <div style="font-weight:bold;margin-bottom:6px;">【テスト送信】</div>
+                        Good morning! Here is today's delivery information:<br>
+                        コース: <b>DCX71</b><br>
+                        エリア: 早良区田村・次郎丸・野方<br>
+                        配達数: <b>110</b> / 目的地: <b>82</b><br>
+                        出発予定: 11:32 / 終了目安: 16:18<br>
+                        <span style="color:#aaa;">Please start the Mentor app! Drive safely!</span>
+                        <div style="margin-top:8px;font-size:10px;line-height:1.8;">
+                          📍 田村: 40件<br>📍 次郎丸: 29件<br>📍 野方: 27件<br>📍 戸切: 9件
+                        </div>
+                      </div>
+                      <div style="background:#2a2a2a;border-radius:12px;padding:4px;overflow:hidden;">
+                        <div style="height:120px;background:linear-gradient(135deg,#1e3a5f,#2d5016);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);font-size:11px;">🗺 配送エリアMAP（ピン付き）</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="text-xs text-ink-lighter max-w-sm">
+                  <p class="mb-2">確定通知送信後、ドライバーのLINEにこのようなメッセージ＋地図画像が届きます。</p>
+                  <p>コース・エリア・配達数・丁目別内訳・MAPが一括で共有されます。</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -769,7 +809,33 @@
             <button id="tenko-sync-btn" class="text-xs px-3 py-1.5 rounded font-bold bg-indigo-500 text-white hover:bg-indigo-600 transition-colors hidden" onclick="syncTenkoToServer()">📤 タブレットに同期</button>
             <button id="tenko-poll-btn" class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="toggleTenkoPolling()">📥 同期受信OFF</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="resetTenkoStatus()">認証リセット</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-700 border-blue-200" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}">📋 点呼照合デモ</button>
           </div>
+        </div>
+
+        <!-- デモ：当日点呼の流れ -->
+        <div id="demo-tenko-flow" class="mb-6 bg-white rounded-xl shadow p-5 border border-green-200">
+          <h3 class="text-base font-bold text-ink mb-3">📋 当日の点呼の流れ（点呼認証）</h3>
+          <p class="text-xs text-ink-lighter mb-4">1人のドライバーにつき <b>2段階認証</b> で点呼完了</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="rounded-lg p-4 bg-blue-50 border border-blue-200">
+              <div class="text-sm font-bold text-blue-800 mb-2">Step 1: QR認証（TransportID紐付）</div>
+              <ol class="text-xs text-ink space-y-1.5 list-decimal list-inside">
+                <li>タブレットの自動認証ボタンをタップ → カメラ起動</li>
+                <li>QRコードをかざす → 「QR認証OK」で確定</li>
+                <li>効果音「ピポン♪」</li>
+              </ol>
+            </div>
+            <div class="rounded-lg p-4 bg-purple-50 border border-purple-200">
+              <div class="text-sm font-bold text-purple-800 mb-2">Step 2: メンター認証</div>
+              <ol class="text-xs text-ink space-y-1.5 list-decimal list-inside">
+                <li>QR認証後、自動的にメンター認証画面へ</li>
+                <li>VRM Mentorアプリの起動画面をカメラに見せる → 「メンター認証OK」</li>
+                <li>効果音「ピンポーン！」（両方完了）</li>
+              </ol>
+            </div>
+          </div>
+          <p class="text-xs text-green-700 font-medium mt-3">✅ 両方完了 → 点呼完了 → ログ保存 ＋ サーバー同期</p>
         </div>
 
         <!-- デモ：点呼ショーケース（QR / メンター / LINEプレビュー） -->
@@ -912,6 +978,10 @@
 
       <!-- Tenko Match (点呼照合) Tab -->
       <div id="panel-tenko-match" class="hidden">
+        <div id="tenko-match-demo-banner" class="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4 text-center cursor-pointer hover:bg-amber-100 transition-colors" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}">
+          <p class="text-sm font-bold text-amber-800">👆 クリックすると点呼照合デモデータが表示されます</p>
+          <p class="text-xs text-amber-600 mt-1">シフト表 × 点呼実績の照合サンプル（12名）</p>
+        </div>
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">点呼照合</h2>
@@ -1772,7 +1842,7 @@
         </div>
 
         <!-- ========== LAT分析セクション ========== -->
-        <hr class="my-6 border-border">
+        <hr class="my-6 border-border" id="quality-dnr-lat-divider">
 
         <!-- LAT Summary -->
         <div id="lat-summary" class="hidden mb-4">
@@ -2762,7 +2832,7 @@
       window.fetch = function(url) {
         var urlStr = (typeof url === 'string') ? url : (url && url.url ? url.url : '');
         // ローカルfile:// と CDN (tailwind/chart/xlsx等) は許可
-        if (urlStr.indexOf('file://') === 0 || urlStr.indexOf('cdn') >= 0 || urlStr.indexOf('unpkg') >= 0 || urlStr.indexOf('fonts.') >= 0 || urlStr.indexOf('cdnjs') >= 0 || urlStr.indexOf('pravatar.cc') >= 0 || urlStr.indexOf('ui-avatars.com') >= 0) {
+        if (urlStr.indexOf('file://') === 0 || urlStr.indexOf('cdn') >= 0 || urlStr.indexOf('unpkg') >= 0 || urlStr.indexOf('fonts.') >= 0 || urlStr.indexOf('cdnjs') >= 0 || urlStr.indexOf('pravatar.cc') >= 0 || urlStr.indexOf('ui-avatars.com') >= 0 || urlStr.indexOf('picsum.photos') >= 0) {
           return _originalFetch.apply(window, arguments);
         }
         console.log('[DEMO] fetch blocked:', urlStr);

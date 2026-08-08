@@ -65,6 +65,7 @@ var demoAddrLoaded = false;
 
 // ===== 起動時 =====
 function initDemoEnvironment() {
+  window.getDriverIcon = getDemoDriverIcon;
   _populateDemoDrivers();
   _showDemoBanner();
   // マスタは起動時にseed（0名防止）
@@ -92,6 +93,7 @@ function initDemoEnvironment() {
   setTimeout(_setupAddrSearchDemoUI, 500);
   setTimeout(_setupAddrSearchDemoUI, 1500);
   setTimeout(_patchDemoLineFeatures, 600);
+  setTimeout(_refreshDemoIcons, 900);
 }
 
 // ===== 住所検索デモUI =====
@@ -246,7 +248,8 @@ function startDemoAddrSearchFree() {
   if (typeof inMemoryAddrMaster !== 'undefined') {
     inMemoryAddrMaster[d.address] = { lat: d.lat, lng: d.lng };
   }
-  if (typeof addrFreeCurrentAddress !== 'undefined') addrFreeCurrentAddress = d.address;
+  if (typeof addrFreeCurrentAddress !== 'undefined') window.addrFreeCurrentAddress = d.address;
+  else window.addrFreeCurrentAddress = d.address;
   var statusEl = document.getElementById('addr-free-status');
   if (statusEl) statusEl.textContent = d.address;
   var inputEl = document.getElementById('addr-free-input');
@@ -413,7 +416,8 @@ function _seedDnrData() {
 }
 
 function _seedLatData() {
-  if (typeof latResultData === 'undefined') return;
+  if (typeof window.latResultData === 'undefined') window.latResultData = [];
+  var latResultData = window.latResultData;
   var latSamples = [
     { route: 'C001', arr: '08:30', ent: '08:22', fs: '08:35', ls: '08:48', dep: '09:00', act: '08:52', exit: '08:55', diff: -8, load: 13, stay: 33, judge: '早着出発' },
     { route: 'C002', arr: '08:45', ent: '08:40', fs: '08:50', ls: '09:02', dep: '09:15', act: '09:14', exit: '09:18', diff: -1, load: 12, stay: 38, judge: '定刻' },
@@ -601,6 +605,7 @@ function startDemoFromUpload(source) {
   if (typeof renderDashboard === 'function') {
     try { renderDashboard(); } catch(e) { console.log('Demo: renderDashboard error', e.message); }
   }
+  _showDemoLineInbox();
   var uploadSec = document.getElementById('upload-section');
   if (uploadSec) uploadSec.classList.add('hidden');
 }
@@ -759,6 +764,8 @@ function startDemoAddrSearch() { startDemoAddrSearchDa(); }
 window.startDemoAddrSearch = startDemoAddrSearch;
 
 function setQualityActiveView(view) {
+  var dnrSec = document.getElementById('dnr-section');
+  if (dnrSec) dnrSec.classList.toggle('hidden', view !== 'dnr');
   var dnrIds = ['dnr-dashboard', 'dnr-map-section', 'dnr-detail-section'];
   var latIds = ['lat-summary', 'lat-driver-summary', 'lat-timeline-visual'];
   var qi, el;
@@ -770,6 +777,8 @@ function setQualityActiveView(view) {
     el = document.getElementById(latIds[qi]);
     if (el) el.classList.toggle('hidden', view !== 'lat');
   }
+  var divider = document.getElementById('quality-dnr-lat-divider');
+  if (divider) divider.classList.toggle('hidden', view !== 'lat');
 }
 
 // 6. 品質管理
@@ -780,6 +789,8 @@ function startDemoQuality() {
     _buildDemoSnapshot();
   }
   setQualityActiveView('dnr');
+  var dnrSecWrap = document.getElementById('dnr-section');
+  if (dnrSecWrap) dnrSecWrap.classList.remove('hidden');
   var hero = document.getElementById('quality-hero');
   if (hero) hero.style.display = 'none';
   if (typeof renderDnrResults === 'function') {
@@ -804,6 +815,8 @@ function startDemoLat() {
   setQualityActiveView('lat');
   var hero = document.getElementById('quality-hero');
   if (hero) hero.style.display = 'none';
+  var qSummary = document.getElementById('quality-summary');
+  if (qSummary) qSummary.classList.remove('hidden');
   if (typeof renderLatResults === 'function') {
     try { renderLatResults(); } catch(e) { console.log('Demo: renderLatResults error', e.message); }
   }
@@ -811,12 +824,49 @@ function startDemoLat() {
     try { updateQualitySummary(); } catch(e) {}
   }
   var latSection = document.getElementById('lat-summary');
+  if (latSection) latSection.classList.remove('hidden');
   if (latSection && latSection.scrollIntoView) {
     setTimeout(function() { latSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
   }
   _demoToast('デモ：LAT 12件を表示しています');
 }
 window.startDemoLat = startDemoLat;
+
+function _seedTenkoMatchDemo() {
+  if (typeof shiftMasterData === 'undefined') return;
+  shiftMasterData.length = 0;
+  var shifts = ['AM', 'AM', 'PM', 'AM', 'PM', 'AM', 'AM', 'PM', 'AM', 'AM', 'PM', 'AM'];
+  for (var ti = 0; ti < 12; ti++) {
+    var td = DEMO_DRIVERS[ti];
+    shiftMasterData.push({
+      name: td.name,
+      shiftCode: shifts[ti],
+      company: td.dept,
+      transportId: td.tid
+    });
+  }
+  if (typeof tenkoSchedule !== 'undefined') {
+    for (var ts = 0; ts < tenkoSchedule.length && ts < shiftMasterData.length; ts++) {
+      tenkoSchedule[ts].transportId = DEMO_DRIVERS[ts].tid;
+      tenkoSchedule[ts].shiftCode = shifts[ts];
+    }
+  }
+}
+
+function startDemoTenkoMatch() {
+  _seedTenkoMatchDemo();
+  var banner = document.getElementById('tenko-match-demo-banner');
+  if (banner) banner.style.display = 'none';
+  if (typeof switchTab === 'function') switchTab('tenko-match');
+  if (typeof renderTenkoMatchTable === 'function') {
+    try { renderTenkoMatchTable(); } catch(e) { console.log('Demo: renderTenkoMatchTable error', e.message); }
+  }
+  if (typeof renderShiftAggregation === 'function') {
+    try { renderShiftAggregation(); } catch(e) {}
+  }
+  _demoToast('デモ：点呼照合データを表示しています');
+}
+window.startDemoTenkoMatch = startDemoTenkoMatch;
 
 // 5. FTDS
 function startDemoFtds() {
@@ -934,14 +984,21 @@ function getDemoDriverIcon(name, sizeClass) {
   var safeName = (name || '?').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   var label = _demoDriverDisplayName(name, idx);
   var encLabel = encodeURIComponent(label);
-
+  var lookup = name;
+  if (typeof resolveDriverKey === 'function') {
+    try { lookup = resolveDriverKey(name); } catch(e) {}
+  }
+  var lid = (typeof lineMapping !== 'undefined' && lineMapping[lookup]) ? lineMapping[lookup] : '';
+  if (lid && typeof lineProfileCache !== 'undefined' && lineProfileCache[lid] && lineProfileCache[lid].pictureUrl) {
+    var pUrl = lineProfileCache[lid].pictureUrl.replace(/"/g, '&quot;');
+    return '<img src="' + pUrl + '" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
+  }
   if (style === 0 || style === 1) {
-    var imgNum = DEMO_AVATAR_PHOTOS[idx % DEMO_AVATAR_PHOTOS.length];
-    return '<img src="https://i.pravatar.cc/150?img=' + imgNum + '" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
+    return '<img src="https://picsum.photos/seed/ofk3-' + idx + '/128/128" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
   }
   if (style === 2) {
     var bg = DEMO_ICON_COLORS[idx % DEMO_ICON_COLORS.length].replace('#', '');
-    return '<img src="https://ui-avatars.com/api/?name=' + encLabel + '&background=' + bg + '&color=fff&size=128" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
+    return '<img src="https://ui-avatars.com/api/?name=' + encLabel + '&background=' + bg + '&color=fff&size=128&bold=true" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
   }
   if (style === 3) {
     return _demoIconFallbackHtml(name, sizeClass);
@@ -962,10 +1019,10 @@ function _seedDemoLineProfiles() {
     var style = i % 5;
     var pic = '';
     if (style === 0 || style === 1) {
-      pic = 'https://i.pravatar.cc/150?img=' + DEMO_AVATAR_PHOTOS[i % DEMO_AVATAR_PHOTOS.length];
+      pic = 'https://picsum.photos/seed/ofk3-' + i + '/128/128';
     } else if (style === 2) {
       var bg = DEMO_ICON_COLORS[i % DEMO_ICON_COLORS.length].replace('#', '');
-      pic = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name) + '&background=' + bg + '&color=fff&size=128';
+      pic = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name) + '&background=' + bg + '&color=fff&size=128&bold=true';
     }
     lineProfileCache[lid] = {
       userId: lid,
@@ -1044,7 +1101,47 @@ function _patchDemoLineFeatures() {
       return null;
     };
   }
+
+  window.sendFreeAddressToLine = function() {
+    var inputEl = document.getElementById('addr-free-input');
+    var addr = window.addrFreeCurrentAddress || (inputEl ? inputEl.value.trim() : '') || DEMO_ADDR_FREE.address;
+    if (!addr) {
+      _demoToast('先に住所デモ枠をクリックしてください');
+      return;
+    }
+    window.addrFreeCurrentAddress = addr;
+    if (inputEl) inputEl.value = addr;
+    if (typeof openDmModal !== 'function') return;
+    openDmModal('');
+    document.getElementById('dm-template-select').value = 'map_free';
+    applyDmTemplate();
+    document.getElementById('dm-seihaisou-addr').value = addr;
+    geocodeDmAddress('seihaisou');
+  };
 }
+
+function _refreshDemoIcons() {
+  window.getDriverIcon = getDemoDriverIcon;
+  _seedDemoLineProfiles();
+  if (typeof renderMasterTable === 'function') {
+    try { renderMasterTable(); } catch(e) {}
+  }
+  if (typeof renderDriverTable === 'function') {
+    try { renderDriverTable(); } catch(e) {}
+  }
+  if (typeof renderDashboard === 'function' && typeof assignmentData !== 'undefined' && assignmentData.length > 0) {
+    try { renderDashboard(); } catch(e) {}
+  }
+  if (typeof renderTenkoTable === 'function') {
+    try { renderTenkoTable(); } catch(e) {}
+  }
+}
+
+function _showDemoLineInbox() {
+  var el = document.getElementById('demo-line-inbox');
+  if (el) el.classList.remove('hidden');
+}
+window._showDemoLineInbox = _showDemoLineInbox;
 
 // 後方互換
 function seedDemoData() { initDemoEnvironment(); }
