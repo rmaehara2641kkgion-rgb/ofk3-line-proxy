@@ -6,6 +6,7 @@ var PORT = process.env.PORT || 3000;
 var rootDir = path.join(__dirname, '..');
 
 app.use(express.static(__dirname, {
+  index: false,
   maxAge: '1h',
   setHeaders: function(res, filePath) {
     if (filePath.slice(-5) === '.html' || filePath.slice(-13) === 'demo-fixes.js') {
@@ -15,6 +16,7 @@ app.use(express.static(__dirname, {
 }));
 // リポジトリ直下の共有アセット（スプラッシュ・ヒーロー画像等）
 app.use(express.static(rootDir, {
+  index: false,
   maxAge: '1h'
 }));
 
@@ -25,7 +27,7 @@ app.get('/', function(req, res) {
       res.status(500).send('Failed to load demo');
       return;
     }
-    var fixTag = '<script src="/demo-fixes.js?v=20260808-1"></script>';
+    var fixTag = '<script src="/demo-fixes.js?v=20260808-2"></script>';
     html = html.replace('</body>', fixTag + '\n</body>');
     res.setHeader('Cache-Control', 'no-cache');
     res.type('html').send(html);
