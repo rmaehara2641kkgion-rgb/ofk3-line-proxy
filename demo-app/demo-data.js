@@ -91,6 +91,7 @@ function initDemoEnvironment() {
   _setupAddrSearchDemoUI();
   setTimeout(_setupAddrSearchDemoUI, 500);
   setTimeout(_setupAddrSearchDemoUI, 1500);
+  setTimeout(_patchDemoLineFeatures, 600);
 }
 
 // ===== 住所検索デモUI =====
@@ -251,15 +252,6 @@ function startDemoAddrSearchFree() {
   var inputEl = document.getElementById('addr-free-input');
   if (inputEl) inputEl.value = d.address;
   _renderDemoAddrMap('addr-free-map', 'addr-free-map-container', d.lat, d.lng, d.address, '');
-  var linePreview = document.getElementById('addr-free-line-preview');
-  if (linePreview) {
-    linePreview.classList.remove('hidden');
-    var bodyEl = document.getElementById('addr-free-line-preview-body');
-    if (bodyEl) bodyEl.textContent = d.address;
-    setTimeout(function() {
-      if (linePreview.scrollIntoView) linePreview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 400);
-  }
   _demoToast('デモ：住所直接検索 — 別の1件を表示');
 }
 window.startDemoAddrSearchFree = startDemoAddrSearchFree;
@@ -298,7 +290,7 @@ function _populateDemoDrivers() {
     // transportIDs
     if (typeof transportIDs !== 'undefined') transportIDs[key] = d.tid;
     // lineMapping（デモバッジ用）
-    if (typeof lineMapping !== 'undefined') lineMapping[key] = i < 20 ? ('demo-line-' + String(i + 1).padStart(3,'0')) : '';
+    if (typeof lineMapping !== 'undefined') lineMapping[key] = i < 20 ? ('Udemo' + String(i + 1).padStart(28, '0')) : '';
     // phoneMapping
     if (typeof phoneMapping !== 'undefined') phoneMapping[key] = d.phone;
   }
@@ -312,7 +304,7 @@ function _populateDemoDrivers() {
       tidObj[dd.driverName] = dd.tid;
       jnObj[dd.driverName] = dd.name;
       phoneObj[dd.driverName] = dd.phone;
-      if (j < 20) lineObj[dd.driverName] = 'demo-line-' + String(j + 1).padStart(3,'0');
+      if (j < 20) lineObj[dd.driverName] = 'Udemo' + String(j + 1).padStart(28, '0');
     }
     localStorage.setItem('driverDepartments', JSON.stringify(deptObj));
     localStorage.setItem('transportIDs', JSON.stringify(tidObj));
@@ -339,13 +331,10 @@ function _populateDemoDrivers() {
     }
   }
 
-  // FTDS seed (60件) — renderFtdsResultsUI が期待する形式
+  // FTDS / CC seed（協力会社ダッシュボード用）
   _seedFtdsData();
-  // CC seed (40件)
   _seedCcData();
-  // DNR seed (15件) — renderDnrResults が期待する形式
-  _seedDnrData();
-  // teamQualitySnapshot 構築
+  // DNR/LAT は各デモ枠クリック時に投入
   _buildDemoSnapshot();
 }
 
@@ -769,40 +758,65 @@ window.demoShowTwExtract = demoShowTwExtract;
 function startDemoAddrSearch() { startDemoAddrSearchDa(); }
 window.startDemoAddrSearch = startDemoAddrSearch;
 
-function showDemoAddrLinePreview(mode) {
-  mode = mode || 'da';
-  if (mode === 'free') {
-    var inline = document.getElementById('addr-free-line-preview');
-    if (inline) {
-      inline.classList.remove('hidden');
-      var bodyEl = document.getElementById('addr-free-line-preview-body');
-      var addr = (typeof addrFreeCurrentAddress !== 'undefined' && addrFreeCurrentAddress) ? addrFreeCurrentAddress : DEMO_ADDR_FREE.address;
-      if (bodyEl) bodyEl.textContent = addr;
-      if (inline.scrollIntoView) inline.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      _demoToast('デモ：LINE送信プレビューを表示しています');
-      return;
-    }
+function setQualityActiveView(view) {
+  var dnrIds = ['dnr-dashboard', 'dnr-map-section', 'dnr-detail-section'];
+  var latIds = ['lat-summary', 'lat-driver-summary', 'lat-timeline-visual'];
+  var qi, el;
+  for (qi = 0; qi < dnrIds.length; qi++) {
+    el = document.getElementById(dnrIds[qi]);
+    if (el) el.classList.toggle('hidden', view !== 'dnr');
   }
-  _demoToast('デモ：LINE送信は実行されません');
-  var modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
-  modal.onclick = function() { modal.remove(); };
-  var msg = mode === 'free'
-    ? '【デモ】住所案内<br>住所: ' + DEMO_ADDR_FREE.address + '<br>※正配送先をご確認ください。'
-    : '【デモ】住所案内<br>DA: ' + DEMO_ADDR_DA.da + '<br>住所: ' + DEMO_ADDR_DA.address + '<br>コース: ' + DEMO_ADDR_DA.route + '<br>※正配送先をご確認ください。';
-  modal.innerHTML = ''
-    + '<div style="background:#7494C0;border-radius:16px;padding:16px;max-width:380px;width:90%;font-family:sans-serif" onclick="event.stopPropagation()">'
-    + '<div style="text-align:center;color:white;font-size:12px;margin-bottom:12px">配送管理 BOT</div>'
-    + '<div style="display:flex;align-items:flex-start;margin-bottom:10px">'
-    + '<div style="width:36px;height:36px;border-radius:50%;background:#06C755;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:14px;flex-shrink:0;margin-right:8px">B</div>'
-    + '<div style="background:white;border-radius:0 16px 16px 16px;padding:12px 14px;max-width:280px;font-size:13px;line-height:1.8;box-shadow:0 1px 2px rgba(0,0,0,0.1)">'
-    + msg
-    + '</div></div>'
-    + '<div style="text-align:center;margin-top:12px"><button onclick="this.parentElement.parentElement.parentElement.remove()" style="background:white;border:none;padding:6px 16px;border-radius:8px;cursor:pointer;font-size:12px">閉じる</button></div>'
-    + '</div>';
-  document.body.appendChild(modal);
+  for (qi = 0; qi < latIds.length; qi++) {
+    el = document.getElementById(latIds[qi]);
+    if (el) el.classList.toggle('hidden', view !== 'lat');
+  }
 }
-window.showDemoAddrLinePreview = showDemoAddrLinePreview;
+
+// 6. 品質管理
+function startDemoQuality() {
+  if (!demoQualityLoaded) {
+    demoQualityLoaded = true;
+    _seedDnrData();
+    _buildDemoSnapshot();
+  }
+  setQualityActiveView('dnr');
+  var hero = document.getElementById('quality-hero');
+  if (hero) hero.style.display = 'none';
+  if (typeof renderDnrResults === 'function') {
+    try { renderDnrResults(); } catch(e) { console.log('Demo: renderDnrResults error', e.message); }
+  }
+  if (typeof updateQualitySummary === 'function') {
+    try { updateQualitySummary(); } catch(e) {}
+  }
+  var dnrSec = document.getElementById('dnr-dashboard');
+  if (dnrSec && dnrSec.scrollIntoView) {
+    setTimeout(function() { dnrSec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
+  }
+  _demoToast('デモ：DNR 15件を表示しています');
+}
+window.startDemoQuality = startDemoQuality;
+
+function startDemoLat() {
+  if (!demoLatLoaded) {
+    demoLatLoaded = true;
+    _seedLatData();
+  }
+  setQualityActiveView('lat');
+  var hero = document.getElementById('quality-hero');
+  if (hero) hero.style.display = 'none';
+  if (typeof renderLatResults === 'function') {
+    try { renderLatResults(); } catch(e) { console.log('Demo: renderLatResults error', e.message); }
+  }
+  if (typeof updateQualitySummary === 'function') {
+    try { updateQualitySummary(); } catch(e) {}
+  }
+  var latSection = document.getElementById('lat-summary');
+  if (latSection && latSection.scrollIntoView) {
+    setTimeout(function() { latSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
+  }
+  _demoToast('デモ：LAT 12件を表示しています');
+}
+window.startDemoLat = startDemoLat;
 
 // 5. FTDS
 function startDemoFtds() {
@@ -834,45 +848,6 @@ function startDemoCc() {
   _demoToast('デモ：CC 40件を表示しています');
 }
 window.startDemoCc = startDemoCc;
-
-// 6. 品質管理
-function startDemoQuality() {
-  if (!demoQualityLoaded) {
-    demoQualityLoaded = true;
-    _seedDnrData();
-  }
-  var hero = document.getElementById('quality-hero');
-  if (hero) hero.style.display = 'none';
-  if (typeof renderDnrResults === 'function') {
-    try { renderDnrResults(); } catch(e) { console.log('Demo: renderDnrResults error', e.message); }
-  }
-  if (typeof updateQualitySummary === 'function') {
-    try { updateQualitySummary(); } catch(e) {}
-  }
-  _demoToast('デモ：DNR 15件を表示しています');
-}
-window.startDemoQuality = startDemoQuality;
-
-function startDemoLat() {
-  if (!demoLatLoaded) {
-    demoLatLoaded = true;
-    _seedLatData();
-  }
-  var hero = document.getElementById('quality-hero');
-  if (hero) hero.style.display = 'none';
-  if (typeof renderLatResults === 'function') {
-    try { renderLatResults(); } catch(e) { console.log('Demo: renderLatResults error', e.message); }
-  }
-  if (typeof updateQualitySummary === 'function') {
-    try { updateQualitySummary(); } catch(e) {}
-  }
-  var latSection = document.getElementById('lat-summary');
-  if (latSection && latSection.scrollIntoView) {
-    setTimeout(function() { latSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
-  }
-  _demoToast('デモ：LAT 12件を表示しています');
-}
-window.startDemoLat = startDemoLat;
 
 // ===== ユーティリティ =====
 function _demoToast(msg) {
@@ -917,18 +892,158 @@ function _addTenkoShowcase() {
   panel.appendChild(showcase);
 }
 
-// デモ用アイコン
+// デモ用アイコン（写真風・UIアバター・イニシャルを織り交ぜ）
 var DEMO_ICON_COLORS = ['#3B82F6','#EF4444','#10B981','#F59E0B','#8B5CF6','#EC4899','#14B8A6','#F97316'];
-function getDemoDriverIcon(name, sizeClass) {
-  sizeClass = sizeClass || 'w-8 h-8';
-  var initial = (name || '?').charAt(0);
-  var colorIdx = 0;
-  for (var ci = 0; ci < name.length; ci++) { colorIdx += name.charCodeAt(ci); }
-  var bg = DEMO_ICON_COLORS[colorIdx % DEMO_ICON_COLORS.length];
+var DEMO_AVATAR_PHOTOS = [11, 12, 15, 22, 28, 32, 38, 44, 51, 58, 63, 67];
+
+function _demoDriverIndex(name) {
+  var lookup = name;
+  if (typeof resolveDriverKey === 'function') {
+    try { lookup = resolveDriverKey(name); } catch(e) {}
+  }
+  for (var i = 0; i < DEMO_DRIVERS.length; i++) {
+    if (DEMO_DRIVERS[i].driverName === lookup || DEMO_DRIVERS[i].name === lookup || DEMO_DRIVERS[i].name === name) return i;
+  }
+  var h = 0;
+  for (var c = 0; c < (name || '').length; c++) h += name.charCodeAt(c);
+  return h % DEMO_DRIVERS.length;
+}
+
+function _demoDriverDisplayName(name, idx) {
+  var d = DEMO_DRIVERS[idx];
+  if (!d) return name || '?';
+  if (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[d.driverName]) return driverJapaneseNames[d.driverName];
+  return d.name || name;
+}
+
+function _demoIconFallbackHtml(name, sizeClass) {
+  var idx = _demoDriverIndex(name);
+  var label = _demoDriverDisplayName(name, idx);
+  var initial = label.charAt(0);
+  var bg = DEMO_ICON_COLORS[idx % DEMO_ICON_COLORS.length];
   return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center relative" style="background:' + bg + ';border:2px solid #06C755;color:white;font-weight:bold;font-size:14px">'
     + initial
     + '<div style="position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;background:#06C755;border-radius:50%;border:1.5px solid white"></div>'
     + '</div>';
+}
+
+function getDemoDriverIcon(name, sizeClass) {
+  sizeClass = sizeClass || 'w-8 h-8';
+  var idx = _demoDriverIndex(name);
+  var style = idx % 5;
+  var safeName = (name || '?').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  var label = _demoDriverDisplayName(name, idx);
+  var encLabel = encodeURIComponent(label);
+
+  if (style === 0 || style === 1) {
+    var imgNum = DEMO_AVATAR_PHOTOS[idx % DEMO_AVATAR_PHOTOS.length];
+    return '<img src="https://i.pravatar.cc/150?img=' + imgNum + '" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
+  }
+  if (style === 2) {
+    var bg = DEMO_ICON_COLORS[idx % DEMO_ICON_COLORS.length].replace('#', '');
+    return '<img src="https://ui-avatars.com/api/?name=' + encLabel + '&background=' + bg + '&color=fff&size=128" class="' + sizeClass + ' rounded-full border-2 border-[#06C755] object-cover flex-shrink-0" alt="LINE" loading="lazy" onerror="this.outerHTML=_demoIconFallbackHtml(\'' + safeName + '\',\'' + sizeClass + '\')">';
+  }
+  if (style === 3) {
+    return _demoIconFallbackHtml(name, sizeClass);
+  }
+  return '<div class="' + sizeClass + ' rounded-full flex-shrink-0 flex items-center justify-center relative" style="background:#E2E8F0;border:2px solid #06C755">'
+    + '<svg viewBox="0 0 24 24" fill="#94A3B8" style="width:65%;height:65%"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>'
+    + '<div style="position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;background:#06C755;border-radius:50%;border:1.5px solid white"></div>'
+    + '</div>';
+}
+window._demoIconFallbackHtml = _demoIconFallbackHtml;
+
+function _seedDemoLineProfiles() {
+  if (typeof lineProfileCache === 'undefined' || typeof lineMapping === 'undefined') return;
+  for (var i = 0; i < DEMO_DRIVERS.length && i < 20; i++) {
+    var d = DEMO_DRIVERS[i];
+    var lid = lineMapping[d.driverName];
+    if (!lid) continue;
+    var style = i % 5;
+    var pic = '';
+    if (style === 0 || style === 1) {
+      pic = 'https://i.pravatar.cc/150?img=' + DEMO_AVATAR_PHOTOS[i % DEMO_AVATAR_PHOTOS.length];
+    } else if (style === 2) {
+      var bg = DEMO_ICON_COLORS[i % DEMO_ICON_COLORS.length].replace('#', '');
+      pic = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name) + '&background=' + bg + '&color=fff&size=128';
+    }
+    lineProfileCache[lid] = {
+      userId: lid,
+      displayName: d.name,
+      pictureUrl: pic,
+      statusMessage: 'デモドライバー',
+      fetchedAt: Date.now()
+    };
+  }
+  try {
+    if (typeof saveProfileCache === 'function') saveProfileCache();
+    else localStorage.setItem('lineProfileCache', JSON.stringify(lineProfileCache));
+  } catch(e) {}
+}
+
+function _patchDemoLineFeatures() {
+  _seedDemoLineProfiles();
+
+  if (typeof geocodeDmAddress === 'function') {
+    window.geocodeDmAddress = async function(type) {
+      var addrInput = document.getElementById('dm-' + type + '-addr');
+      var statusEl = document.getElementById('dm-' + type + '-status');
+      var previewEl = document.getElementById('dm-' + type + '-preview');
+      var mapDiv = document.getElementById('dm-' + type + '-map');
+      if (!addrInput || !statusEl || !previewEl || !mapDiv) return;
+      var address = addrInput.value.trim();
+      if (!address) {
+        statusEl.textContent = '';
+        previewEl.classList.add('hidden');
+        if (typeof dmGeoCache !== 'undefined') dmGeoCache[type] = null;
+        return;
+      }
+      statusEl.innerHTML = '<span class="text-blue-500">座標検索中...</span>';
+      var geo = null;
+      if (typeof inMemoryAddrMaster !== 'undefined') {
+        geo = inMemoryAddrMaster[address];
+        if (!geo && typeof normalizeAddress === 'function') geo = inMemoryAddrMaster[normalizeAddress(address)];
+      }
+      if (!geo && address.indexOf('香椎') >= 0) geo = { lat: DEMO_ADDR_DA.lat, lng: DEMO_ADDR_DA.lng };
+      if (!geo && address.indexOf('姪浜') >= 0) geo = { lat: DEMO_ADDR_FREE.lat, lng: DEMO_ADDR_FREE.lng };
+      if (!geo) geo = { lat: 33.59, lng: 130.40 };
+      if (typeof dmGeoCache !== 'undefined') dmGeoCache[type] = { lat: geo.lat, lng: geo.lng, address: address };
+      statusEl.innerHTML = '<span class="text-green-600">✓ 座標取得OK（デモ）</span>';
+      previewEl.classList.remove('hidden');
+      if (typeof dmLeafletMaps !== 'undefined' && dmLeafletMaps[type]) { try { dmLeafletMaps[type].remove(); } catch(e) {} }
+      if (typeof L === 'undefined') return;
+      var map = L.map(mapDiv).setView([geo.lat, geo.lng], 17);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap', maxZoom: 19 }).addTo(map);
+      var markerColor = type === 'gohai' ? 'red' : 'green';
+      var iconHtml = '<div style="background:' + markerColor + ';width:12px;height:12px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>';
+      L.marker([geo.lat, geo.lng], { icon: L.divIcon({ html: iconHtml, className: 'demo-dm-pin', iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
+      if (typeof dmLeafletMaps !== 'undefined') dmLeafletMaps[type] = map;
+      setTimeout(function() { map.invalidateSize(); }, 200);
+    };
+  }
+
+  if (typeof sendDmMessage === 'function') {
+    window.sendDmMessage = async function() {
+      if (!dmTargetDriver) { alert('送信先ドライバーを選択してください'); return; }
+      var lineId = lineMapping[dmTargetDriver];
+      if (!lineId) {
+        alert(dmTargetDriver + ' はLINE未連携です。');
+        return;
+      }
+      var resultEl = document.getElementById('dm-send-result');
+      if (resultEl) {
+        resultEl.innerHTML = '<span class="text-green-600 font-bold">✅ デモ：LINE送信をシミュレートしました</span><br><span class="text-xs text-ink-lighter">宛先: ' + dmTargetDriver + '</span>';
+      }
+      _demoToast('デモ：LINE送信完了（実際には送信されません）');
+    };
+  }
+
+  if (typeof fetchLineProfile === 'function') {
+    window.fetchLineProfile = async function(userId) {
+      if (userId && lineProfileCache[userId]) return lineProfileCache[userId];
+      return null;
+    };
+  }
 }
 
 // 後方互換
