@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -800,7 +800,8 @@
             <h2 class="text-sm font-medium">点呼管理</h2>
             <p class="text-xs text-ink-lighter mt-1">シフトデータから当日の点呼スケジュールを生成し、認証状況をリアルタイム管理</p>
           </div>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
+            <button class="text-xs px-4 py-1.5 rounded font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}">📋 点呼照合デモ →</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-file-input').click()">スケジュールUI読み込み</button>
             <input type="file" id="shift-file-input" accept=".xlsx,.xls" class="hidden" onchange="handleShiftUpload(event)">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('shift-master-input').click()">📋 シフト表読み込み</button>
@@ -809,7 +810,6 @@
             <button id="tenko-sync-btn" class="text-xs px-3 py-1.5 rounded font-bold bg-indigo-500 text-white hover:bg-indigo-600 transition-colors hidden" onclick="syncTenkoToServer()">📤 タブレットに同期</button>
             <button id="tenko-poll-btn" class="text-xs px-3 py-1.5 rounded font-bold bg-teal-500 text-white hover:bg-teal-600 transition-colors" onclick="toggleTenkoPolling()">📥 同期受信OFF</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="resetTenkoStatus()">認証リセット</button>
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-700 border-blue-200" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}">📋 点呼照合デモ</button>
           </div>
         </div>
 
