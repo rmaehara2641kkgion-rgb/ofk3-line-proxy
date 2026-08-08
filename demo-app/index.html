@@ -836,6 +836,38 @@
             </div>
           </div>
           <p class="text-xs text-green-700 font-medium mt-3">✅ 両方完了 → 点呼完了 → ログ保存 ＋ サーバー同期</p>
+
+          <div class="mt-5 pt-4 border-t border-green-200">
+            <div class="text-sm font-bold text-red-800 mb-3">Step 3: 2段階アラート（LINE自動通知）</div>
+            <p class="text-xs text-ink-lighter mb-3">着車時間を基準に、点呼未完了者へ自動でLINE通知します。</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="rounded-lg p-4 bg-amber-50 border border-amber-200">
+                <div class="text-xs font-bold text-amber-800 mb-2">① 5分前 → ドライバー本人にリマインダー</div>
+                <p class="text-xs text-ink mb-2">着車時間の5分前（例: 09:00なら 08:55）になったら自動チェック。点呼未完了のドライバーにLINE送信:</p>
+                <pre class="text-xs text-ink bg-white border border-amber-100 rounded p-3 whitespace-pre-wrap leading-relaxed" style="font-family:inherit;margin:0;">⚠️ 点呼リマインダー
+
+山田 太郎さん、着車時間 09:00 まであと5分です。
+点呼認証がまだ完了していません。
+
+🪪 QR認証: ❌
+👨‍🏫 メンター認証: ❌</pre>
+              </div>
+              <div class="rounded-lg p-4 bg-red-50 border border-red-200">
+                <div class="text-xs font-bold text-red-800 mb-2">② 定刻 → 管理者に未完了リスト通知</div>
+                <p class="text-xs text-ink mb-2">着車時間を過ぎた時点で、まだ未完了のドライバーがいれば管理者にLINE送信:</p>
+                <pre class="text-xs text-ink bg-white border border-red-100 rounded p-3 whitespace-pre-wrap leading-relaxed" style="font-family:inherit;margin:0;">🚨 点呼未完了通知
+
+着車時間 09:00 を過ぎましたが、以下のドライバーの
+点呼が完了していません。
+
+・山田 太郎（🪪❌ 👨‍🏫❌）
+・佐藤 花子（🪪✅ 👨‍🏫❌）
+
+未完了: 2名</pre>
+              </div>
+            </div>
+            <p class="text-xs text-ink-lighter mt-3">※ デモ表示です。実際のLINE送信は行われません。</p>
+          </div>
         </div>
 
         <!-- デモ：点呼ショーケース（QR / メンター / LINEプレビュー） -->
