@@ -86,7 +86,112 @@ function initDemoEnvironment() {
   setTimeout(_addTenkoShowcase, 300);
   // アップロード枠をデモ化
   setTimeout(_setupAllDemoZones, 400);
+  // 住所検索デモUI
+  setTimeout(_setupAddrSearchDemoUI, 500);
 }
+
+// ===== 住所検索デモUI =====
+var DEMO_ADDR_DA = {
+  da: 'TBA300000050',
+  route: 'C001',
+  address: '福岡県福岡市東区香椎1-2-3',
+  lat: 33.650,
+  lng: 130.430
+};
+var DEMO_ADDR_FREE = {
+  address: '福岡県福岡市西区姪浜駅南1-1-1',
+  lat: 33.583,
+  lng: 130.326
+};
+
+function _setupAddrSearchDemoUI() {
+  var dropzone = document.getElementById('addr-search-dropzone');
+  if (dropzone) dropzone.style.display = 'none';
+  var sampleWrap = document.getElementById('addr-sample-map-wrap');
+  if (sampleWrap) sampleWrap.style.display = 'none';
+  var ready = document.getElementById('addr-search-ready');
+  if (ready) ready.classList.remove('hidden');
+
+  var daZone = document.getElementById('addr-demo-da-zone');
+  if (daZone && !daZone._demoBound) {
+    daZone._demoBound = true;
+    daZone.onclick = function(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      startDemoAddrSearchDa();
+    };
+  }
+  var freeZone = document.getElementById('addr-demo-free-zone');
+  if (freeZone && !freeZone._demoBound) {
+    freeZone._demoBound = true;
+    freeZone.onclick = function(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      startDemoAddrSearchFree();
+    };
+  }
+}
+
+function _renderDemoAddrMap(mapId, containerId, lat, lng, address, popupExtra) {
+  var container = document.getElementById(containerId);
+  if (container) container.classList.remove('hidden');
+  setTimeout(function() {
+    if (typeof L === 'undefined') return;
+    var mapKey = mapId + '_demo_instance';
+    if (window[mapKey]) { try { window[mapKey].remove(); } catch(e) {} }
+    var map = L.map(mapId).setView([lat, lng], 16);
+    window[mapKey] = map;
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap', maxZoom: 19
+    }).addTo(map);
+    L.marker([lat, lng]).addTo(map)
+      .bindPopup('<b>' + address + '</b>' + (popupExtra || ''))
+      .openPopup();
+    setTimeout(function() { map.invalidateSize(); }, 200);
+  }, 120);
+}
+
+function startDemoAddrSearchDa() {
+  var zone = document.getElementById('addr-demo-da-zone');
+  if (zone) zone.style.display = 'none';
+  var d = DEMO_ADDR_DA;
+  if (typeof inMemoryAddrMaster !== 'undefined') {
+    inMemoryAddrMaster[d.address] = { lat: d.lat, lng: d.lng };
+  }
+  if (typeof addrSearchCurrentAddress !== 'undefined') addrSearchCurrentAddress = d.address;
+  if (typeof addrSearchCurrentRoute !== 'undefined') addrSearchCurrentRoute = d.route;
+  if (typeof addrSearchCurrentDA !== 'undefined') addrSearchCurrentDA = d.da;
+
+  var resultEl = document.getElementById('addr-search-result');
+  var notFoundEl = document.getElementById('addr-search-not-found');
+  if (notFoundEl) notFoundEl.classList.add('hidden');
+  if (resultEl) {
+    resultEl.classList.remove('hidden');
+    var routeEl = document.getElementById('addr-search-route');
+    var addrEl = document.getElementById('addr-search-address');
+    var daEl = document.getElementById('addr-search-da-label');
+    if (routeEl) routeEl.textContent = d.route;
+    if (addrEl) addrEl.textContent = d.address;
+    if (daEl) daEl.textContent = 'DA: ' + d.da;
+  }
+  _renderDemoAddrMap('addr-search-map', 'addr-search-map-container', d.lat, d.lng, d.address, '<br>DA: ' + d.da);
+  _demoToast('デモ：DA番号検索 — 1件表示');
+}
+window.startDemoAddrSearchDa = startDemoAddrSearchDa;
+
+function startDemoAddrSearchFree() {
+  var zone = document.getElementById('addr-demo-free-zone');
+  if (zone) zone.style.display = 'none';
+  var d = DEMO_ADDR_FREE;
+  if (typeof inMemoryAddrMaster !== 'undefined') {
+    inMemoryAddrMaster[d.address] = { lat: d.lat, lng: d.lng };
+  }
+  var statusEl = document.getElementById('addr-free-status');
+  if (statusEl) statusEl.textContent = d.address;
+  var inputEl = document.getElementById('addr-free-input');
+  if (inputEl) inputEl.value = d.address;
+  _renderDemoAddrMap('addr-free-map', 'addr-free-map-container', d.lat, d.lng, d.address, '');
+  _demoToast('デモ：住所直接検索 — 別の1件を表示');
+}
+window.startDemoAddrSearchFree = startDemoAddrSearchFree;
 
 // ===== ドライバー・品質データ投入 =====
 function _clearDemoMap(obj) {
@@ -317,8 +422,9 @@ function _setupAllDemoZones() {
   _demoifyDropZone('dnr-drop-zone', function() { startDemoQuality(); }, '👆 クリックするとDNRデモデータが表示されます');
   _demoifyDropZone('lat-drop-zone', function() { startDemoQuality(); }, '👆 クリック → デモ');
 
-  // 住所検索のドロップ枠
-  _demoifyDropZone('addr-search-dropzone', function() { startDemoAddrSearch(); }, '👆 クリックするとデモがはじまります');
+  // 住所検索のドロップ枠（非表示化のみ — クリックデモは _setupAddrSearchDemoUI）
+  _disableInput('addr-search-file-input');
+  _disableInput('addr-search-file-input2');
 }
 
 function _demoifyZone(id, handler) {
@@ -525,60 +631,33 @@ function demoShowTwExtract() {
     }
     tbody.innerHTML = html;
   }
+  // MAP用座標をseed（ジオコーディング不要）
+  if (typeof inMemoryAddrMaster !== 'undefined') {
+    for (var tm = 0; tm < twExtractedData.length; tm++) {
+      var twItem = twExtractedData[tm];
+      var twBase = DEMO_COORDS[tm % DEMO_COORDS.length];
+      inMemoryAddrMaster[twItem.address] = {
+        lat: twBase.lat + (tm * 0.0012) - 0.006,
+        lng: twBase.lng + (tm * 0.0009) - 0.004
+      };
+    }
+  }
+  // MAP表示
+  var twMapContainer = document.getElementById('tw-map-container');
+  if (twMapContainer) twMapContainer.classList.remove('hidden');
+  if (typeof twRenderMapAsync === 'function') {
+    setTimeout(function() {
+      try {
+        twRenderMapAsync('tw-map', twExtractedData, true);
+      } catch(e) { console.log('Demo: tw map error', e.message); }
+    }, 150);
+  }
   _demoToast('デモ：サンプル30件を表示しています');
 }
 window.demoShowTwExtract = demoShowTwExtract;
 
-// 4. 住所検索
-function startDemoAddrSearch() {
-  if (demoAddrLoaded) return;
-  demoAddrLoaded = true;
-  _demoToast('デモ：サンプル住所1件を表示しています');
-  // ドロップ枠を非表示
-  var dropzone = document.getElementById('addr-search-dropzone');
-  if (dropzone) dropzone.style.display = 'none';
-  // 既存の結果エリアを使用
-  var resultEl = document.getElementById('addr-search-result');
-  var resultCard = document.getElementById('addr-search-result-card');
-  if (resultEl && resultCard) {
-    resultEl.classList.remove('hidden');
-    resultCard.innerHTML = ''
-      + '<h4 class="font-bold text-sm mb-3">📍 住所検索結果（デモ）</h4>'
-      + '<table class="w-full text-sm"><thead><tr class="border-b"><th class="text-left px-2 py-1">DA番号</th><th class="text-left px-2 py-1">コース</th><th class="text-left px-2 py-1">住所</th></tr></thead>'
-      + '<tbody><tr class="border-b hover:bg-gray-50"><td class="px-2 py-2 font-mono text-xs">TBA300000050</td><td class="px-2 py-2">C001</td><td class="px-2 py-2">福岡県福岡市東区香椎1-2-3</td></tr></tbody></table>'
-      + '<div id="demo-addr-map" style="height:300px;border-radius:8px;margin-top:12px"></div>'
-      + '<div class="mt-3 flex gap-2">'
-      + '<button onclick="showDemoAddrLinePreview()" class="bg-green-500 text-white text-xs px-3 py-1.5 rounded hover:bg-green-600">✉ LINE送信</button>'
-      + '</div>';
-  } else {
-    // フォールバック
-    var panel = document.getElementById('panel-addr-search');
-    if (!panel) return;
-    var div = document.createElement('div');
-    div.className = 'bg-white rounded-xl shadow p-4 mt-4';
-    div.innerHTML = ''
-      + '<h4 class="font-bold text-sm mb-3">📍 住所検索結果（デモ）</h4>'
-      + '<table class="w-full text-sm"><thead><tr class="border-b"><th class="text-left px-2 py-1">DA番号</th><th class="text-left px-2 py-1">コース</th><th class="text-left px-2 py-1">住所</th></tr></thead>'
-      + '<tbody><tr class="border-b hover:bg-gray-50"><td class="px-2 py-2 font-mono text-xs">TBA300000050</td><td class="px-2 py-2">C001</td><td class="px-2 py-2">福岡県福岡市東区香椎1-2-3</td></tr></tbody></table>'
-      + '<div id="demo-addr-map" style="height:300px;border-radius:8px;margin-top:12px"></div>'
-      + '<div class="mt-3 flex gap-2">'
-      + '<button onclick="showDemoAddrLinePreview()" class="bg-green-500 text-white text-xs px-3 py-1.5 rounded hover:bg-green-600">✉ LINE送信</button>'
-      + '</div>';
-    panel.appendChild(div);
-  }
-  // Leaflet MAP
-  setTimeout(function() {
-    var mapEl = document.getElementById('demo-addr-map');
-    if (mapEl && typeof L !== 'undefined') {
-      var map = L.map('demo-addr-map').setView([33.650, 130.430], 15);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap'
-      }).addTo(map);
-      L.marker([33.650, 130.430]).addTo(map).bindPopup('<b>TBA300000050</b><br>福岡県福岡市東区香椎1-2-3').openPopup();
-      setTimeout(function() { map.invalidateSize(); }, 200);
-    }
-  }, 100);
-}
+// 4. 住所検索（後方互換）
+function startDemoAddrSearch() { startDemoAddrSearchDa(); }
 window.startDemoAddrSearch = startDemoAddrSearch;
 
 function showDemoAddrLinePreview() {
@@ -678,8 +757,8 @@ function _addTenkoShowcase() {
   showcase.innerHTML = ''
     + '<div class="border-t-2 border-blue-200 pt-6"><h3 class="text-lg font-bold text-ink mb-4">📸 点呼管理の仕組み</h3></div>'
     + '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">'
-    + '<div class="bg-white rounded-xl shadow p-4 text-center"><img src="demo/assets/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px"><p class="text-sm font-bold text-ink">点呼QR認証</p><p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p></div>'
-    + '<div class="bg-white rounded-xl shadow p-4 text-center"><img src="demo/assets/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px"><p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p><p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p></div>'
+    + '<div class="bg-white rounded-xl shadow p-4 text-center"><img src="demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><div style="display:none;padding:40px;background:#f3f4f6;border-radius:12px;font-size:48px">🪪</div><p class="text-sm font-bold text-ink">点呼QR認証</p><p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p></div>'
+    + '<div class="bg-white rounded-xl shadow p-4 text-center"><img src="demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'"><div style="display:none;padding:40px;background:#f3f4f6;border-radius:12px;font-size:48px">📱</div><p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p><p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p></div>'
     + '</div>'
     + '<div class="bg-white rounded-xl shadow p-6"><h4 class="text-sm font-bold text-ink mb-4">💬 LINE通知プレビュー（自動送信イメージ）</h4>'
     + '<div style="max-width:380px;margin:0 auto;background:#7494C0;border-radius:16px;padding:16px;font-family:sans-serif">'

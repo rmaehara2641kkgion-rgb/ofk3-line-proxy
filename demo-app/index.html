@@ -1043,39 +1043,23 @@
             </div>
           </div>
 
-          <!-- マニフェストドロップゾーン -->
-          <div id="addr-search-dropzone" class="text-center py-10 mb-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
-            onclick="document.getElementById('addr-search-file-input2').click()"
-            ondragover="event.preventDefault(); this.classList.add('border-blue-400','bg-blue-50')"
-            ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
-            ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handleScanFileDrop(event)">
+          <!-- マニフェストドロップゾーン（デモでは非表示） -->
+          <div id="addr-search-dropzone" class="hidden text-center py-10 mb-4 border-2 border-dashed border-gray-300 rounded-lg">
             <div class="text-4xl mb-3">📦</div>
             <p class="text-sm font-semibold text-ink">マニフェストExcelをドロップ</p>
-            <p class="text-xs text-ink-lighter mt-1">またはクリックしてファイル選択（複数可）</p>
-            <p class="text-xs text-ink-lighter mt-1">※ダッシュボードのサイクルデータ読込でもOK</p>
-            <input type="file" id="addr-search-file-input2" accept=".xlsx,.xls" multiple onchange="handleScanFileSelect(event)" class="hidden">
+            <input type="file" id="addr-search-file-input2" accept=".xlsx,.xls" multiple class="hidden">
           </div>
 
-          <!-- プレゼン用：ワンクリックで全サンプル住所を地図表示 -->
-          <div class="mb-4 text-center">
-            <button id="sample-map-btn" class="px-5 py-2.5 rounded-lg font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors text-sm shadow" onclick="showSampleAddressMap()">🗺️ サンプル住所100件を地図に表示</button>
-            <span id="sample-map-status" class="text-xs text-ink-lighter ml-2"></span>
-          </div>
-
-          <div id="addr-search-ready" class="hidden">
-            <!-- DA番号入力 -->
-            <div class="mb-4">
-              <label class="text-xs font-bold text-ink mb-2 block">DA番号で住所検索</label>
-              <input type="text" id="addr-search-input" placeholder="DA番号を入力またはスキャン..."
-                class="w-full text-lg px-4 py-3 border-2 border-blue-300 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none font-mono"
-                onkeydown="if(event.key==='Enter'){lookupAddress(); event.preventDefault();}"
-                onpaste="setTimeout(function(){ lookupAddress(); }, 50)"
-                oninput="clearTimeout(window._addrDebounce); window._addrDebounce=setTimeout(function(){ var v=document.getElementById('addr-search-input').value.trim(); if(v.length>=6) lookupAddress(); },300)"
-                autocomplete="off">
-              <p class="text-xs text-ink-lighter mt-1">6文字以上で自動検索 / Enter / 貼り付け</p>
+          <div id="addr-search-ready">
+            <!-- DA番号デモ（クリック開始） -->
+            <div id="addr-demo-da-zone" class="mb-4 text-center py-10 border-2 border-dashed border-amber-300 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors">
+              <label class="text-xs font-bold text-ink mb-2 block pointer-events-none">DA番号で住所検索</label>
+              <p class="text-sm text-ink-lighter pointer-events-none">DA番号を入力またはスキャン...</p>
+              <p class="text-xs text-amber-600 font-bold mt-3 pointer-events-none">👆 ここをクリックしたらデモがはじまります</p>
+              <input type="hidden" id="addr-search-input" value="">
             </div>
 
-            <!-- 結果表示 -->
+            <!-- 結果表示（デモクリック後に表示） -->
             <div id="addr-search-result" class="hidden mb-4">
               <div id="addr-search-result-card" class="rounded-2xl p-6" style="background: #F0FDF4;">
                 <div class="flex items-center justify-between mb-2">
@@ -1113,22 +1097,19 @@
               <div id="addr-search-map" class="w-full rounded-lg border" style="height: 400px;"></div>
             </div>
 
-            <!-- 住所から直接地図検索 -->
-            <div class="mb-4 p-4 bg-gray-50 rounded-lg border border-border">
-              <h4 class="text-xs font-bold text-ink mb-2">📍 住所から直接地図を表示</h4>
-              <div class="flex gap-2">
-                <input type="text" id="addr-free-input" placeholder="住所を入力... 例: 福岡市西区姪浜駅南1-1-1"
-                  class="flex-1 border border-border rounded px-3 py-2 text-sm"
-                  onkeydown="if(event.key==='Enter'){showFreeAddressMap(); event.preventDefault();}">
-                <button onclick="showFreeAddressMap()" class="px-4 py-2 bg-blue-500 text-white rounded text-xs font-medium hover:bg-blue-600 transition-colors">🗺️ 地図</button>
-              </div>
-              <div id="addr-free-status" class="text-xs mt-1"></div>
-              <div id="addr-free-map-container" class="hidden mt-2">
-                <div id="addr-free-map" class="w-full rounded-lg border" style="height: 350px;"></div>
-                <div class="flex gap-2 mt-2">
-                  <button onclick="copyFreeAddress()" class="flex-1 px-3 py-1.5 bg-white border border-border rounded text-xs hover:bg-gray-50">📋 住所コピー</button>
-                  <button onclick="sendFreeAddressToLine()" class="flex-1 px-3 py-1.5 bg-[#06C755] text-white rounded text-xs hover:opacity-90">✉ LINE送信</button>
-                </div>
+            <!-- 住所から直接地図検索（デモ：クリック開始） -->
+            <div id="addr-demo-free-zone" class="mb-4 p-6 bg-gray-50 rounded-lg border-2 border-dashed border-amber-300 text-center cursor-pointer hover:bg-amber-50 transition-colors">
+              <h4 class="text-xs font-bold text-ink mb-2 pointer-events-none">📍 住所から直接地図を表示</h4>
+              <p class="text-sm text-ink-lighter pointer-events-none">住所を入力... 例: 福岡市西区姪浜駅南1-1-1</p>
+              <p class="text-xs text-amber-600 font-bold mt-3 pointer-events-none">👆 ここをクリックしたらデモがはじまります</p>
+            </div>
+            <input type="hidden" id="addr-free-input" value="">
+            <div id="addr-free-status" class="text-xs mt-1 text-center font-medium text-ink"></div>
+            <div id="addr-free-map-container" class="hidden mt-2">
+              <div id="addr-free-map" class="w-full rounded-lg border" style="height: 350px;"></div>
+              <div class="flex gap-2 mt-2">
+                <button onclick="copyFreeAddress()" class="flex-1 px-3 py-1.5 bg-white border border-border rounded text-xs hover:bg-gray-50">📋 住所コピー</button>
+                <button onclick="sendFreeAddressToLine()" class="flex-1 px-3 py-1.5 bg-[#06C755] text-white rounded text-xs hover:opacity-90">✉ LINE送信</button>
               </div>
             </div>
 
@@ -10020,6 +10001,10 @@ var driverDB = {};
     var addrSearchCurrentDA = '';
 
     function updateAddrSearchStatus() {
+      if (DEMO_MODE) {
+        if (typeof _setupAddrSearchDemoUI === 'function') _setupAddrSearchDemoUI();
+        return;
+      }
       var daKeys = Object.keys(daAddressMap);
       var countEl = document.getElementById('addr-search-da-count');
       var dropzoneEl = document.getElementById('addr-search-dropzone');
@@ -17710,7 +17695,11 @@ var driverDB = {};
       var html = '';
       // Header
       html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">';
-      html += '<div style="width:40px;height:40px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:16px;">\uD83D\uDE97</div>';
+      if (DEMO_MODE) {
+        html += '<div style="width:40px;height:40px;border-radius:10px;overflow:hidden;flex-shrink:0;background:linear-gradient(180deg,#89cff0 0%,#c5e8f7 40%,#fff 100%);display:flex;align-items:center;justify-content:center;font-size:22px;border:2px solid #06C755;box-shadow:0 1px 4px rgba(0,0,0,0.15);" title="LINE待ち受け（はなまる）">💮</div>';
+      } else {
+        html += '<div style="width:40px;height:40px;border-radius:50%;background:#e5e7eb;display:flex;align-items:center;justify-content:center;font-size:16px;">\uD83D\uDE97</div>';
+      }
       html += '<div>';
       html += '<div style="font-size:14px;font-weight:bold;">' + escapeHtml(driverKey) + '</div>';
       html += '<div style="font-size:11px;color:#6b7280;">\u6240\u5C5E: ' + escapeHtml(dept) + ' | TID: ' + escapeHtml(tid) + '</div>';
