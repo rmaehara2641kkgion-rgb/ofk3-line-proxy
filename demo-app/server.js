@@ -1,5 +1,6 @@
 var express = require('express');
 var path = require('path');
+var fs = require('fs');
 var app = express();
 var PORT = process.env.PORT || 3000;
 var rootDir = path.join(__dirname, '..');
@@ -7,7 +8,7 @@ var rootDir = path.join(__dirname, '..');
 app.use(express.static(__dirname, {
   maxAge: '1h',
   setHeaders: function(res, filePath) {
-    if (filePath.slice(-5) === '.html') {
+    if (filePath.slice(-5) === '.html' || filePath.slice(-13) === 'demo-fixes.js') {
       res.setHeader('Cache-Control', 'no-cache');
     }
   }
@@ -18,7 +19,17 @@ app.use(express.static(rootDir, {
 }));
 
 app.get('/', function(req, res) {
-  res.sendFile(path.join(__dirname, 'index.html'));
+  var indexPath = path.join(__dirname, 'index.html');
+  fs.readFile(indexPath, 'utf8', function(err, html) {
+    if (err) {
+      res.status(500).send('Failed to load demo');
+      return;
+    }
+    var fixTag = '<script src="/demo-fixes.js?v=20260808-1"></script>';
+    html = html.replace('</body>', fixTag + '\n</body>');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('html').send(html);
+  });
 });
 
 app.listen(PORT, function() {
