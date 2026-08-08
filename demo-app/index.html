@@ -298,6 +298,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
+        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}else{switchTab('tenko-match');}" id="tab-tenko-match">📋 点呼照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('ftds')" id="tab-ftds">📋 FTDS/CC</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('quality')" id="tab-quality">✅ 品質管理</button>
