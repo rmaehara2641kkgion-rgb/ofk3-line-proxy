@@ -316,23 +316,8 @@ function _populateDemoDrivers() {
     localStorage.setItem('lineMapping', JSON.stringify(lineObj));
   } catch(e) {}
 
-  // 点呼スケジュール seed
-  if (typeof tenkoSchedule !== 'undefined') {
-    tenkoSchedule.length = 0;
-    for (var tk = 0; tk < 12; tk++) {
-      var arrH = 7 + Math.floor(tk / 4);
-      var arrM = 15 * (tk % 4);
-      tenkoSchedule.push({
-        name: DEMO_DRIVERS[tk].name,
-        arrivalTime: String(arrH).padStart(2,'0') + ':' + String(arrM).padStart(2,'0'),
-        arrivalMinutes: arrH * 60 + arrM,
-        licenseAuth: tk < 7,
-        mentorAuth: tk < 5,
-        shiftCode: 'AM',
-        temporary: false
-      });
-    }
-  }
+  // 点呼スケジュール + 照合データ + ログ → 統合seed
+  _seedTenkoDemoData();
 
   // FTDS / CC seed（協力会社ダッシュボード用）
   _seedFtdsData();
@@ -832,39 +817,176 @@ function startDemoLat() {
 }
 window.startDemoLat = startDemoLat;
 
-function _seedTenkoMatchDemo() {
-  if (typeof shiftMasterData === 'undefined') return;
-  shiftMasterData.length = 0;
-  var shifts = ['AM', 'AM', 'PM', 'AM', 'PM', 'AM', 'AM', 'PM', 'AM', 'AM', 'PM', 'AM'];
-  for (var ti = 0; ti < 12; ti++) {
-    var td = DEMO_DRIVERS[ti];
-    shiftMasterData.push({
-      name: td.name,
-      shiftCode: shifts[ti],
-      company: td.dept,
-      transportId: td.tid
-    });
-  }
+// ===== 統合seed: tenkoSchedule + shiftMasterData + tenkoLog =====
+function _seedTenkoDemoData() {
+  // --- tenkoSchedule（配送データ＝点呼実績側）---
+  // #11 松本彩花 はtenkoScheduleに入れない（シフト表のみ）
   if (typeof tenkoSchedule !== 'undefined') {
-    for (var ts = 0; ts < tenkoSchedule.length && ts < shiftMasterData.length; ts++) {
-      tenkoSchedule[ts].transportId = DEMO_DRIVERS[ts].tid;
-      tenkoSchedule[ts].shiftCode = shifts[ts];
+    tenkoSchedule.length = 0;
+    var tenkoEntries = [
+      { idx: 0,  shift: 'bike',   arrival: '09:00', min: 540,  lic: true,  men: true,  temp: false },
+      { idx: 1,  shift: 'bike',   arrival: '09:00', min: 540,  lic: true,  men: true,  temp: false },
+      { idx: 2,  shift: '\u3007', arrival: '11:00', min: 660,  lic: true,  men: true,  temp: false },
+      { idx: 3,  shift: '\u3007', arrival: '11:00', min: 660,  lic: true,  men: false, temp: false },
+      { idx: 4,  shift: 'C1',     arrival: '11:00', min: 660,  lic: false, men: false, temp: false },
+      { idx: 5,  shift: 'C1',     arrival: '11:00', min: 660,  lic: false, men: false, temp: false },
+      { idx: 6,  shift: 'b2',     arrival: '15:00', min: 900,  lic: true,  men: true,  temp: false },
+      { idx: 7,  shift: 'C2',     arrival: '18:30', min: 1110, lic: true,  men: true,  temp: false },
+      { idx: 8,  shift: 'C3',     arrival: '18:30', min: 1110, lic: true,  men: true,  temp: false },
+      { idx: 9,  shift: 'bike',   arrival: '09:00', min: 540,  lic: true,  men: true,  temp: true  },
+      { idx: 11, shift: 'b2',     arrival: '15:00', min: 900,  lic: false, men: false, temp: false }
+    ];
+    for (var te = 0; te < tenkoEntries.length; te++) {
+      var e = tenkoEntries[te];
+      var d = DEMO_DRIVERS[e.idx];
+      tenkoSchedule.push({
+        name: d.name,
+        transportId: d.tid,
+        shiftCode: e.shift,
+        arrivalTime: e.arrival,
+        arrivalMinutes: e.min,
+        licenseAuth: e.lic,
+        mentorAuth: e.men,
+        temporary: e.temp
+      });
+    }
+    tenkoSchedule.sort(function(a, b) { return a.arrivalMinutes - b.arrivalMinutes; });
+  }
+
+  // --- shiftMasterData（DAシフト表側）---
+  // #10 加藤拓海・#12 吉田蓮 はシフト表に入れない
+  if (typeof shiftMasterData !== 'undefined') {
+    shiftMasterData.length = 0;
+    var masterEntries = [
+      { idx: 0,  shift: 'bike'   },
+      { idx: 1,  shift: 'bike'   },
+      { idx: 2,  shift: '\u3007' },
+      { idx: 3,  shift: '\u3007' },
+      { idx: 4,  shift: 'C1'     },
+      { idx: 5,  shift: 'C1'     },
+      { idx: 6,  shift: 'b2'     },
+      { idx: 7,  shift: 'b2'     },
+      { idx: 8,  shift: 'C3'     },
+      { idx: 10, shift: 'bike'   }
+    ];
+    for (var me2 = 0; me2 < masterEntries.length; me2++) {
+      var mEntry = masterEntries[me2];
+      var md = DEMO_DRIVERS[mEntry.idx];
+      shiftMasterData.push({
+        name: md.name,
+        shiftCode: mEntry.shift,
+        company: md.dept,
+        transportId: md.tid
+      });
+    }
+  }
+
+  // --- tenkoLog（本日分 + 当月過去分）---
+  if (typeof tenkoLog !== 'undefined') {
+    var demoLogs = _buildDemoTenkoLog();
+    tenkoLog.length = 0;
+    for (var tl = 0; tl < demoLogs.length; tl++) {
+      tenkoLog.push(demoLogs[tl]);
     }
   }
 }
 
+// ===== デモ用tenkoLog生成 =====
+function _buildDemoTenkoLog() {
+  var now = new Date();
+  var y = now.getFullYear();
+  var m = now.getMonth() + 1;
+  var today = now.getDate();
+  var mStr = String(m).padStart(2, '0');
+  var todayStr = y + '-' + mStr + '-' + String(today).padStart(2, '0');
+  var logs = [];
+  var arrTimeMap = { 'bike': '09:00', '\u3007': '11:00', 'C1': '11:00', 'b2': '15:00', 'C2': '18:30', 'C3': '18:30' };
+
+  // 本日分: 点呼完了7名
+  var todayDone = [
+    { name: DEMO_DRIVERS[0].name,  tid: 'A000000001', shift: 'bike',   done: '08:52', temp: false },
+    { name: DEMO_DRIVERS[1].name,  tid: 'A000000002', shift: 'bike',   done: '08:55', temp: false },
+    { name: DEMO_DRIVERS[2].name,  tid: 'A000000003', shift: '\u3007', done: '10:48', temp: false },
+    { name: DEMO_DRIVERS[6].name,  tid: 'A000000007', shift: 'b2',     done: '14:52', temp: false },
+    { name: DEMO_DRIVERS[7].name,  tid: 'A000000008', shift: 'C2',     done: '18:22', temp: false },
+    { name: DEMO_DRIVERS[8].name,  tid: 'A000000009', shift: 'C3',     done: '18:28', temp: false },
+    { name: DEMO_DRIVERS[9].name,  tid: 'A000000010', shift: 'bike',   done: '08:58', temp: true  }
+  ];
+  for (var i = 0; i < todayDone.length; i++) {
+    var t = todayDone[i];
+    logs.push({
+      date: todayStr,
+      driverName: t.name,
+      transportId: t.tid,
+      shiftCode: t.shift,
+      scheduledArrival: arrTimeMap[t.shift] || '09:00',
+      completedAt: t.done,
+      licenseAuth: true,
+      mentorAuth: true,
+      isTemporary: t.temp,
+      attendanceStatus: '\u6b63\u5e38'
+    });
+  }
+
+  // 当月過去分（月次シフト集計用・25件程度）
+  var pastData = [
+    { name: DEMO_DRIVERS[0].name,  tid: 'A000000001', shift: 'bike',   days: [1, 3, 5, 7] },
+    { name: DEMO_DRIVERS[1].name,  tid: 'A000000002', shift: 'bike',   days: [1, 2, 4, 6] },
+    { name: DEMO_DRIVERS[2].name,  tid: 'A000000003', shift: '\u3007', days: [2, 4, 6] },
+    { name: DEMO_DRIVERS[3].name,  tid: 'A000000004', shift: '\u3007', days: [1, 5] },
+    { name: DEMO_DRIVERS[4].name,  tid: 'A000000005', shift: 'C1',     days: [2, 3, 6] },
+    { name: DEMO_DRIVERS[5].name,  tid: 'A000000006', shift: 'C1',     days: [1, 4] },
+    { name: DEMO_DRIVERS[6].name,  tid: 'A000000007', shift: 'b2',     days: [3, 5, 7] },
+    { name: DEMO_DRIVERS[7].name,  tid: 'A000000008', shift: 'b2',     days: [2, 6] },
+    { name: DEMO_DRIVERS[8].name,  tid: 'A000000009', shift: 'C3',     days: [1, 4] }
+  ];
+  var doneMap = { '09:00': '08:53', '11:00': '10:50', '15:00': '14:48', '18:30': '18:25' };
+  for (var p = 0; p < pastData.length; p++) {
+    var pd = pastData[p];
+    for (var di = 0; di < pd.days.length; di++) {
+      var day = pd.days[di];
+      if (day >= today) continue;
+      var dateStr = y + '-' + mStr + '-' + String(day).padStart(2, '0');
+      var arr = arrTimeMap[pd.shift] || '09:00';
+      logs.push({
+        date: dateStr,
+        driverName: pd.name,
+        transportId: pd.tid,
+        shiftCode: pd.shift,
+        scheduledArrival: arr,
+        completedAt: doneMap[arr] || '09:00',
+        licenseAuth: true,
+        mentorAuth: true,
+        isTemporary: false,
+        attendanceStatus: '\u6b63\u5e38'
+      });
+    }
+  }
+
+  return logs;
+}
+
+// ===== 点呼照合デモ起動 =====
 function startDemoTenkoMatch() {
-  _seedTenkoMatchDemo();
+  _seedTenkoDemoData();
   var banner = document.getElementById('tenko-match-demo-banner');
   if (banner) banner.style.display = 'none';
+  var expl = document.getElementById('tenko-match-explanation');
+  if (expl) expl.style.display = 'block';
   if (typeof switchTab === 'function') switchTab('tenko-match');
   if (typeof renderTenkoMatchTable === 'function') {
     try { renderTenkoMatchTable(); } catch(e) { console.log('Demo: renderTenkoMatchTable error', e.message); }
   }
   if (typeof renderShiftAggregation === 'function') {
-    try { renderShiftAggregation(); } catch(e) {}
+    try { renderShiftAggregation(); } catch(e) { console.log('Demo: renderShiftAggregation error', e.message); }
   }
-  _demoToast('デモ：点呼照合データを表示しています');
+  if (typeof renderTenkoTable === 'function') {
+    try { renderTenkoTable(); } catch(e) {}
+  }
+  if (typeof updateTenkoSummary === 'function') {
+    try { updateTenkoSummary(); } catch(e) {}
+  }
+  _demoToast('\u30c7\u30e2\uff1a\u70b9\u547c\u7167\u5408\u30c7\u30fc\u30bf\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059');
 }
 window.startDemoTenkoMatch = startDemoTenkoMatch;
 
