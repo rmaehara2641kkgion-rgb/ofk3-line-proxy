@@ -779,12 +779,14 @@
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="bg-white rounded-xl shadow p-4 text-center">
-              <img src="/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;">
+              <img src="/demo-tenko-qr.png" alt="点呼QR認証" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;" loading="eager" onerror="this.style.display='none';var f=this.nextElementSibling;if(f)f.style.display='block';">
+              <div style="display:none;font-size:72px;line-height:1.2" aria-hidden="true">🪪📱</div>
               <p class="text-sm font-bold text-ink">点呼QR認証</p>
               <p class="text-xs text-ink-lighter mt-1">ドライバーがQRコードをスキャンして出勤登録</p>
             </div>
             <div class="bg-white rounded-xl shadow p-4 text-center">
-              <img src="/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;">
+              <img src="/demo-tenko-mentor.png" alt="メンターアプリ" class="mx-auto mb-3" style="max-height:240px;border-radius:12px;width:auto;" loading="eager" onerror="this.style.display='none';var f=this.nextElementSibling;if(f)f.style.display='block';">
+              <div style="display:none;font-size:72px;line-height:1.2" aria-hidden="true">🪪📱</div>
               <p class="text-sm font-bold text-ink">メンターアプリ（FICO安全運転スコア）</p>
               <p class="text-xs text-ink-lighter mt-1">Solera/eDriving提供。起動確認で安全運転を担保</p>
             </div>

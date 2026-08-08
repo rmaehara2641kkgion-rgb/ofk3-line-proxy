@@ -187,8 +187,8 @@ function _renderDemoTwMap(items) {
       if (!geo || !geo.lat) continue;
       var color = colorList[i % colorList.length];
       var icon = L.divIcon({
-        className: '',
-        html: '<div style="background:' + color + ';color:#fff;width:24px;height:24px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;">' + (item.seqNo || (i+1)) + '</div>',
+        className: 'demo-tw-pin',
+        html: '<div style="background:' + color + ';color:#fff;width:24px;height:24px;border-radius:50%;border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;box-shadow:0 1px 4px rgba(0,0,0,0.3);">' + (item.seqNo || (i+1)) + '</div>',
         iconSize: [24, 24], iconAnchor: [12, 12]
       });
       L.marker([geo.lat, geo.lng], { icon: icon }).addTo(map)
