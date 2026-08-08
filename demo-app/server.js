@@ -27,8 +27,11 @@ app.get('/', function(req, res) {
       res.status(500).send('Failed to load demo');
       return;
     }
-    var fixTag = '<script src="/demo-fixes.js?v=20260808-2"></script>';
-    html = html.replace('</body>', fixTag + '\n</body>');
+    var fixTag = '<script src="/demo-fixes.js?v=20260808-3"></script>';
+    var bodyCloseIndex = html.lastIndexOf('</body>');
+    if (bodyCloseIndex >= 0) {
+      html = html.slice(0, bodyCloseIndex) + fixTag + '\n' + html.slice(bodyCloseIndex);
+    }
     res.setHeader('Cache-Control', 'no-cache');
     res.type('html').send(html);
   });
