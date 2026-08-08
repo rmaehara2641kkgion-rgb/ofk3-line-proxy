@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -981,6 +981,20 @@
         <div id="tenko-match-demo-banner" class="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4 text-center cursor-pointer hover:bg-amber-100 transition-colors" onclick="if(typeof startDemoTenkoMatch==='function'){startDemoTenkoMatch();}">
           <p class="text-sm font-bold text-amber-800">👆 クリックすると点呼照合デモデータが表示されます</p>
           <p class="text-xs text-amber-600 mt-1">シフト表 × 点呼実績の照合サンプル（12名）</p>
+        </div>
+        <div id="tenko-match-explanation" class="bg-white border border-gray-200 rounded-lg p-4 mb-4" style="display:none;">
+          <h3 class="text-sm font-bold text-ink mb-2">📋 点呼照合とは</h3>
+          <ul class="text-xs text-ink-lighter space-y-1 mb-3">
+            <li>・DAシフト表（計画）× 配送データ点呼実績（実績）を突合</li>
+            <li>・シフト差異・未点呼・臨時点呼を自動検出</li>
+          </ul>
+          <div class="flex flex-wrap gap-3 text-xs">
+            <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700">✅ 点呼済</span>
+            <span class="px-2 py-0.5 rounded bg-orange-50 text-orange-700">⚠ シフト差異</span>
+            <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-700">🟡 臨時点呼</span>
+            <span class="px-2 py-0.5 rounded bg-red-50 text-red-700">❌ 未点呼</span>
+          </div>
+          <button onclick="switchTab('tenko')" class="mt-3 text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer">&larr; 点呼管理に戻る</button>
         </div>
         <div class="flex items-center justify-between mb-4">
           <div>
