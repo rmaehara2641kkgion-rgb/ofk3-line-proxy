@@ -46,6 +46,10 @@ var DEMO_DRIVERS = [
 ];
 
 var DEMO_FTDS_REASONS = ['不在','配達未試行','荷物紛失','住所不明','お届け先アクセス不可','配達日変更','営業所保管','受取拒否','持戻り（その他）','天候不良'];
+// 協力会社TOP10用：ドライバーごとにばらつきを持たせる（40名分）
+var DEMO_FTDS_COUNTS = [1,0,2,4,1,7,3,0,5,2,8,3,1,6,0,4,2,1,5,0,3,2,6,1,0,4,9,2,3,1,0,2,5,7,3,1,0,4,2,1];
+var DEMO_DNR_COUNTS  = [0,0,1,0,2,0,0,1,0,0,2,0,1,0,0,1,0,0,2,0,1,0,0,3,0,0,1,0,2,0,0,1,0,0,2,0,0,1,0,0];
+var DEMO_DNR_COSTS   = [0,0,1200,0,2500,0,0,800,0,0,3000,0,1500,0,0,900,0,0,1800,0,1100,0,0,4200,0,0,2000,0,3500,0,0,600,0,0,2800,0,0,1200,0,0];
 var DEMO_CC_REASONS = ['不在','住所不明','お届け先アクセス不可','時間指定変更','配達日変更','再配達依頼','その他'];
 var DEMO_DNR_REASONS = ['Carrier - Loss/Stolen','Damaged - Carrier','Delivered Not Received','Missing from Bag','Undeliverable'];
 var DEMO_AREAS = ['東区','博多区','中央区','南区','西区','城南区','早良区'];
@@ -329,18 +333,23 @@ function _populateDemoDrivers() {
 function _seedFtdsData() {
   if (typeof ftdsResultData === 'undefined') return;
   ftdsResultData.length = 0;
-  for (var f = 0; f < 60; f++) {
-    var driver = DEMO_DRIVERS[f % DEMO_DRIVERS.length];
-    ftdsResultData.push({
-      date: '2026-07-' + String(10 + (f % 18)).padStart(2,'0'),
-      driverName: driver.driverName,
-      transporterId: driver.tid,
-      cycle: 'OFK3_CYCLE_2026-07-' + String(10 + (f % 18)).padStart(2,'0'),
-      route: 'C' + String((f % 15) + 1).padStart(3,'0'),
-      tracking: 'TBA' + String(300000000 + f),
-      zip: '81' + String(2000 + f),
-      reason: DEMO_FTDS_REASONS[f % DEMO_FTDS_REASONS.length]
-    });
+  var seq = 0;
+  for (var fi = 0; fi < DEMO_DRIVERS.length; fi++) {
+    var driver = DEMO_DRIVERS[fi];
+    var count = DEMO_FTDS_COUNTS[fi] != null ? DEMO_FTDS_COUNTS[fi] : 0;
+    for (var fj = 0; fj < count; fj++) {
+      ftdsResultData.push({
+        date: '2026-07-' + String(10 + ((fi + fj) % 18)).padStart(2,'0'),
+        driverName: driver.driverName,
+        transporterId: driver.tid,
+        cycle: 'OFK3_CYCLE_2026-07-' + String(10 + ((fi + fj) % 18)).padStart(2,'0'),
+        route: 'C' + String(((fi + fj) % 15) + 1).padStart(3,'0'),
+        tracking: 'TBA' + String(300000000 + seq),
+        zip: '81' + String(2000 + seq),
+        reason: DEMO_FTDS_REASONS[(fi + fj) % DEMO_FTDS_REASONS.length]
+      });
+      seq++;
+    }
   }
 }
 
@@ -442,6 +451,19 @@ function _seedLatData() {
   }
 }
 
+function _calcDemoQualityScore(d) {
+  var s = 100;
+  s -= (d.dnrCount || 0) * 5;
+  if (d.totalPackages > 0) {
+    s -= ((d.ftdsCount || 0) / d.totalPackages * 1000) * 2;
+  }
+  s -= (d.misdeliveryRate || 0) * 10;
+  s -= (100 - (d.deliveryRate || 100)) * 0.5;
+  if (s < 0) s = 0;
+  if (s > 100) s = 100;
+  return Math.round(s);
+}
+
 function _buildDemoSnapshot() {
   var snapDrivers = {};
   for (var si = 0; si < DEMO_DRIVERS.length; si++) {
@@ -455,6 +477,10 @@ function _buildDemoSnapshot() {
           dFtdsReasons[r] = (dFtdsReasons[r] || 0) + 1;
         }
       }
+    }
+    if (dFtds === 0 && DEMO_FTDS_COUNTS[si]) {
+      dFtds = DEMO_FTDS_COUNTS[si];
+      dFtdsReasons[DEMO_FTDS_REASONS[si % DEMO_FTDS_REASONS.length]] = dFtds;
     }
     var dCcReq = 0; var dCcAct = 0;
     if (typeof ccResultData !== 'undefined') {
@@ -475,7 +501,11 @@ function _buildDemoSnapshot() {
         }
       }
     }
-    snapDrivers[sd.driverName] = {
+    if (dDnr === 0 && DEMO_DNR_COUNTS[si]) {
+      dDnr = DEMO_DNR_COUNTS[si];
+      dDnrCost = DEMO_DNR_COSTS[si] || 0;
+    }
+    var entry = {
       dept: sd.dept,
       packagesPerHour: sd.pph, misdeliveryRate: sd.mis, deliveryRate: sd.del,
       workDays: sd.wd, totalPackages: sd.tp,
@@ -483,6 +513,8 @@ function _buildDemoSnapshot() {
       ftdsCount: dFtds, ftdsTopReasons: dFtdsReasons,
       ccRequired: dCcReq, ccActual: dCcAct
     };
+    entry.qualityScore = _calcDemoQualityScore(entry);
+    snapDrivers[sd.driverName] = entry;
   }
   if (typeof teamQualitySnapshot !== 'undefined') {
     teamQualitySnapshot = {
@@ -492,6 +524,9 @@ function _buildDemoSnapshot() {
       drivers: snapDrivers
     };
     try { localStorage.setItem('teamQualitySnapshot', JSON.stringify(teamQualitySnapshot)); } catch(e) {}
+  }
+  if (typeof renderTeamQualityDashboard === 'function') {
+    try { renderTeamQualityDashboard(); } catch(e) {}
   }
 }
 
