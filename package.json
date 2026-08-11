@@ -4,8 +4,8 @@
   "description": "LINE Messaging API webhook receiver and push proxy for OFK3 delivery app",
   "main": "render-webhook-server.js",
   "scripts": {
-    "start": "node render-webhook-server.js",
-    "dev": "node render-webhook-server.js"
+    "start": "node inject-tenko-audit.js",
+    "dev": "node inject-tenko-audit.js"
   },
   "engines": {
     "node": ">=18.0.0"
