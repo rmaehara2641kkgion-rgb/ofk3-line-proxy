@@ -16117,6 +16117,11 @@ var driverDB = {
         var fsIdx = colMap['beacon_firstpackagescan'] !== undefined ? colMap['beacon_firstpackagescan'] : -1;
         var lsIdx = colMap['beacon_lastpackagescan'] !== undefined ? colMap['beacon_lastpackagescan'] : -1;
         var toIdx = colMap['loading_area_turnover'] !== undefined ? colMap['loading_area_turnover'] : -1;
+        // 新LAT原本対応: employee_id, date, wave, route_code（存在しない場合は-1で安全にスキップ）
+        var latEmpIdx = colMap['employee_id'] !== undefined ? colMap['employee_id'] : -1;
+        var latDateIdx = colMap['date'] !== undefined ? colMap['date'] : -1;
+        var latWaveIdx = colMap['wave'] !== undefined ? colMap['wave'] : -1;
+        var latRcIdx = colMap['route_code'] !== undefined ? colMap['route_code'] : -1;
 
         latBeaconMap = {};
         for (var i = 1; i < json.length; i++) {
@@ -16130,7 +16135,11 @@ var driverDB = {
             exit: bexIdx >= 0 && row[bexIdx] ? latExtractTime(String(row[bexIdx])) : '',
             firstScan: fsIdx >= 0 && row[fsIdx] ? latExtractTime(String(row[fsIdx])) : '',
             lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : '',
-            turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : ''
+            turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : '',
+            employeeId: latEmpIdx >= 0 && row[latEmpIdx] ? String(row[latEmpIdx]).trim() : '',
+            date: latDateIdx >= 0 && row[latDateIdx] ? String(row[latDateIdx]).trim() : '',
+            wave: latWaveIdx >= 0 && row[latWaveIdx] ? String(row[latWaveIdx]).trim() : '',
+            routeCode: latRcIdx >= 0 && row[latRcIdx] ? String(row[latRcIdx]).trim() : ''
           };
         }
 
@@ -16244,7 +16253,7 @@ var driverDB = {
       for (rid in allRouteIds) {
         var dsp = dspRouteMap[rid] || {};
         var lat = latBeaconMap[rid] || {};
-        var empId = dsp.employeeId || '';
+        var empId = dsp.employeeId || lat.employeeId || '';
         var driverName = '';
 
         if (empId) {
@@ -16285,7 +16294,9 @@ var driverDB = {
           routeId: rid,
           employeeId: empId,
           driverName: driverName,
-          date: dsp.date || '',
+          date: dsp.date || lat.date || '',
+          wave: lat.wave || '',
+          routeCode: lat.routeCode || '',
           plannedArrival: plannedArr,
           dsEntrance: dsEntrance,
           firstScan: firstScan,
@@ -16492,10 +16503,10 @@ var driverDB = {
 
     function exportLatResult() {
       if (!latResultData.length) return;
-      var csvRows = [['日付', 'ドライバー名', 'TransportID', 'ルートID', '着車予定', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', '滞在時間(分)', '判定']];
+      var csvRows = [['日付', 'Wave', 'ドライバー名', 'TransportID', 'ルートID', 'ルートコード', '着車予定', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', '滞在時間(分)', '判定']];
       for (var i = 0; i < latResultData.length; i++) {
         var r = latResultData[i];
-        csvRows.push([r.date, r.driverName || '(未特定)', r.employeeId, r.routeId, r.plannedArrival, r.dsEntrance, r.firstScan, r.lastScan, r.plannedDeparture, r.actualDeparture, r.dsExit, r.diffMin, r.loadingMin, r.stayMin, r.judgment]);
+        csvRows.push([r.date, r.wave || '', r.driverName || '(未特定)', r.employeeId, r.routeId, r.routeCode || '', r.plannedArrival, r.dsEntrance, r.firstScan, r.lastScan, r.plannedDeparture, r.actualDeparture, r.dsExit, r.diffMin, r.loadingMin, r.stayMin, r.judgment]);
       }
       var csv = csvRows.map(function(row) {
         return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
