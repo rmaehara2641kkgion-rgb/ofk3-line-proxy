@@ -17379,15 +17379,108 @@ var driverDB = {
 
     var TEAM_QUALITY_WEIGHTS = { dnrPerDriver: 5, ftdsPerPkg: 2, misRate: 10, deliveryGap: 0.5 };
 
+    function getEffectiveWeeklyFtds(d) {
+      var count = d.ftdsCount || 0;
+      if (!count) return 0;
+      var weeks = d.ftdsWeekCount || 0;
+      return weeks > 1 ? count / weeks : count;
+    }
+
+    function calcFtdsScorePenalty(d) {
+      var weekly = getEffectiveWeeklyFtds(d);
+      if (weekly <= 0) return 0;
+      var tier = 0;
+      if (weekly <= 2) tier = 3;
+      else if (weekly <= 5) tier = 8;
+      else if (weekly <= 10) tier = 14;
+      else if (weekly <= 20) tier = 20;
+      else if (weekly <= 35) tier = 26;
+      else tier = 32;
+      var ratePen = 0;
+      if (d.totalPackages > 0) {
+        var pkgBase = d.totalPackages;
+        if ((d.ftdsWeekCount || 0) > 1) pkgBase = d.totalPackages / d.ftdsWeekCount;
+        if (pkgBase < weekly) pkgBase = weekly;
+        var rate = weekly / pkgBase * 1000;
+        if (rate >= 80) ratePen = 40;
+        else if (rate >= 50) ratePen = 32;
+        else if (rate >= 30) ratePen = 24;
+        else if (rate >= 15) ratePen = 16;
+        else if (rate >= 8) ratePen = 10;
+        else if (rate >= 4) ratePen = 6;
+      }
+      return Math.min(Math.max(tier, ratePen), 40);
+    }
+
+    function calcDnrScorePenalty(d) {
+      var count = d.dnrCount || 0;
+      if (count <= 0) return 0;
+      if (count === 1) return 5;
+      if (count <= 2) return 10;
+      if (count <= 4) return 15;
+      return 20;
+    }
+
+    function calcMisScorePenalty(d) {
+      var rate = d.misdeliveryRate || 0;
+      if (!rate) return 0;
+      var raw = rate * TEAM_QUALITY_WEIGHTS.misRate;
+      if (raw >= 12) return 20;
+      return Math.min(raw, 15);
+    }
+
+    function calcDeliveryScorePenalty(d) {
+      var deliveryRate = d.deliveryRate || 0;
+      if (!deliveryRate) return 0;
+      var gap = 100 - deliveryRate;
+      if (gap <= 0) return 0;
+      var raw = gap * TEAM_QUALITY_WEIGHTS.deliveryGap;
+      if (gap >= 15) return Math.min(raw, 20);
+      return Math.min(raw, 12);
+    }
+
+    function calcCcScorePenalty(d) {
+      var required = d.ccRequired || 0;
+      var actual = d.ccActual != null ? d.ccActual : 0;
+      if (required <= 0) return 0;
+      var rate = actual / required;
+      if (rate >= 0.5) return 0;
+      if (rate >= 0.3) return 4;
+      if (rate >= 0.15) return 8;
+      if (rate >= 0.08) return 12;
+      if (rate > 0) return 16;
+      return 18;
+    }
+
+    function calcDriverScoreBreakdown(d) {
+      return {
+        base: 100,
+        dnr: calcDnrScorePenalty(d),
+        ftds: calcFtdsScorePenalty(d),
+        mis: calcMisScorePenalty(d),
+        delivery: calcDeliveryScorePenalty(d),
+        cc: calcCcScorePenalty(d)
+      };
+    }
+
     function calcDriverScore(d) {
-      var s = 100;
-      s -= (d.dnrCount || 0) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-      if (d.totalPackages > 0) s -= ((d.ftdsCount || 0) / d.totalPackages * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-      s -= (d.misdeliveryRate || 0) * TEAM_QUALITY_WEIGHTS.misRate;
-      s -= (100 - (d.deliveryRate || 100)) * TEAM_QUALITY_WEIGHTS.deliveryGap;
+      var parts = calcDriverScoreBreakdown(d);
+      var s = parts.base - parts.dnr - parts.ftds - parts.mis - parts.delivery - parts.cc;
       if (s < 0) s = 0;
       if (s > 100) s = 100;
       return Math.round(s);
+    }
+
+    function calcCompanyScoreFromMembers(driverSet, dept) {
+      var sum = 0;
+      var cnt = 0;
+      for (var name in driverSet) {
+        var dd = driverSet[name];
+        if ((dd.dept || '\u672a\u6240\u5c5e') !== dept) continue;
+        sum += dd.qualityScore != null ? dd.qualityScore : calcDriverScore(dd);
+        cnt++;
+      }
+      return cnt > 0 ? Math.round(sum / cnt) : 0;
     }
 
     function buildTeamQualitySnapshot() {
@@ -17398,7 +17491,7 @@ var driverDB = {
       for (var name in driverDB) {
         if (isDriverDeleted(name)) continue;
         var key = resolveDriverKey(name);
-        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         var db = driverDB[name];
         if (db.packagesPerHour) {
           drivers[key].packagesPerHour = db.packagesPerHour || 0;
@@ -17415,9 +17508,10 @@ var driverDB = {
         var fr = ftdsResultData[fi];
         var fkey = fr.driverName ? resolveDriverKey(fr.driverName) : (fr.transporterId ? resolveDriverKeyByTid(fr.transporterId) : '');
         if (!fkey) fkey = '(未特定)';
-        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         var fWeight = ftdsRecordWeight(fr);
         drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + fWeight;
+        if (fr.weekCount) drivers[fkey].ftdsWeekCount = Math.max(drivers[fkey].ftdsWeekCount || 0, fr.weekCount);
         if (fr.reasonBreakdown && Object.keys(fr.reasonBreakdown).length > 0) {
           var fRbKeys = Object.keys(fr.reasonBreakdown);
           for (var fRb = 0; fRb < fRbKeys.length; fRb++) {
@@ -17436,7 +17530,7 @@ var driverDB = {
         var cr = ccResultData[ci];
         var ckey = cr.driverName ? resolveDriverKey(cr.driverName) : (cr.transporterId ? resolveDriverKeyByTid(cr.transporterId) : '');
         if (!ckey) ckey = '(未特定)';
-        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         if (isCcCallRequired(cr)) drivers[ckey].ccRequired = (drivers[ckey].ccRequired || 0) + 1;
         if (isCcCallMade(cr)) drivers[ckey].ccActual = (drivers[ckey].ccActual || 0) + 1;
         sources.cc = true;
@@ -17446,7 +17540,7 @@ var driverDB = {
       for (var di = 0; di < dnrResultData.length; di++) {
         var dr = dnrResultData[di];
         var dkey = dr.driverName ? resolveDriverKey(dr.driverName) : '(未特定)';
-        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         drivers[dkey].dnrCount = (drivers[dkey].dnrCount || 0) + 1;
         drivers[dkey].dnrCost = (drivers[dkey].dnrCost || 0) + (dr._cost || 0);
         sources.dnr = true;
@@ -17459,7 +17553,7 @@ var driverDB = {
           if (o.ccRequired == null && o.ccActual == null) continue;
           var eqKey = resolveDriverKey(eq);
           if (!eqKey) continue;
-          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
           drivers[eqKey].ccRequired = o.ccRequired != null ? o.ccRequired : 0;
           drivers[eqKey].ccActual = o.ccActual != null ? o.ccActual : 0;
           sources.cc = true;
@@ -17578,16 +17672,7 @@ var driverDB = {
         c.avgFtds = c.count > 0 ? c.ftds / c.count : 0;
         c.avgDnr = c.count > 0 ? c.dnr / c.count : 0;
         c.ccCallRate = calcCcCallRate(c.ccRequired, c.ccActual);
-        // team score
-        var activeDrivers = c.count || 1;
-        c.score = 100;
-        c.score -= (c.dnr / activeDrivers) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-        if (c.totalPkgs > 0) c.score -= (c.ftds / c.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-        c.score -= c.avgMis * TEAM_QUALITY_WEIGHTS.misRate;
-        c.score -= (100 - c.avgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
-        if (c.score < 0) c.score = 0;
-        if (c.score > 100) c.score = 100;
-        c.score = Math.round(c.score);
+        c.score = calcCompanyScoreFromMembers(driverSet, dept);
       }
       return companies;
     }
@@ -17691,11 +17776,17 @@ var driverDB = {
         var gdsAvgPph = gdsTotal.totalPkgs > 0 ? gdsTotal.wPph / gdsTotal.totalPkgs : 0;
         var gdsAvgMis = gdsTotal.totalPkgs > 0 ? gdsTotal.wMis / gdsTotal.totalPkgs : 0;
         var gdsAvgDel = gdsTotal.totalPkgs > 0 ? gdsTotal.wDel / gdsTotal.totalPkgs : 0;
-        var gdsScore = 100 - (gdsTotal.dnr / (gdsTotal.count || 1)) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-        if (gdsTotal.totalPkgs > 0) gdsScore -= (gdsTotal.ftds / gdsTotal.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-        gdsScore -= gdsAvgMis * TEAM_QUALITY_WEIGHTS.misRate;
-        gdsScore -= (100 - gdsAvgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
-        gdsScore = Math.max(0, Math.min(100, Math.round(gdsScore)));
+        var gdsScoreSum = 0;
+        var gdsScoreCnt = 0;
+        for (var gdsDi = 0; gdsDi < deptOrder.length; gdsDi++) {
+          var gdsDept = deptOrder[gdsDi];
+          if (gdsDept.indexOf('GDS') !== 0) continue;
+          var gdsC = companies[gdsDept];
+          if (!gdsC || gdsC.count === 0) continue;
+          gdsScoreSum += gdsC.score || 0;
+          gdsScoreCnt++;
+        }
+        var gdsScore = gdsScoreCnt > 0 ? Math.round(gdsScoreSum / gdsScoreCnt) : 0;
         var gdsScoreColor = gdsScore >= 90 ? 'color:#16a34a;' : (gdsScore >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
         html += '<tr style="background:#e5e7eb;font-weight:bold;">';
         html += '<td class="p-2">GDS\u5408\u8A08</td>';
