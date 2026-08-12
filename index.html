@@ -15640,13 +15640,15 @@ var driverDB = {
         if (fnameLower.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importFtdsExportCsv(text)) {
-            showFtdsImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
+            ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
+            showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
             return;
           }
           var csvRows = csvTextToRows(text);
           if (findAnalysisHeaderRow(csvRows, 'ftds') >= 0) {
+            ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
             processFtdsData(csvRows);
-            showFtdsImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
+            showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
             return;
           }
           alert('FTDS CSV形式を認識できませんでした。\nFTDS分析_*.csv（詳細データ付き）を確認してください');
@@ -15659,6 +15661,7 @@ var driverDB = {
           var cumRows = getSheetRows(wb, cumSheet);
           var cumInfo = importFtdsCumulativeRows(cumRows, { sheetName: cumSheet, fileName: fname });
           if (cumInfo) {
+            ftdsImportPeriodLabel = cumInfo.period || extractReportPeriodLabel(cumSheet, fname);
             showFtdsImportMessage(cumInfo);
             return;
           }
@@ -15669,7 +15672,8 @@ var driverDB = {
           return;
         }
         processFtdsData(sheetData);
-        showFtdsImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
+        ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
+        showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
       };
       reader.readAsArrayBuffer(file);
     }
@@ -17370,6 +17374,7 @@ var driverDB = {
       return out;
     }
     var teamQualitySnapshot = null;
+    var ftdsImportPeriodLabel = '';
     var _tqSelectedDept = null;
     var _tqSelectedDriver = null;
     var tqChartScore = null;
@@ -17386,30 +17391,51 @@ var driverDB = {
       return weeks > 1 ? count / weeks : count;
     }
 
+    function parseWeekRangeLabel(label) {
+      var s = String(label || '');
+      var m = s.match(/W(\d+)\s*[-\u2013~]\s*W(\d+)/i);
+      if (m) return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+      m = s.match(/W(\d+)/i);
+      if (m) {
+        var w = parseInt(m[1], 10);
+        return { start: w, end: w };
+      }
+      return null;
+    }
+
+    function isAbilityFtdsPeriodAligned(d) {
+      var ab = parseWeekRangeLabel(d.abilityPeriod);
+      var ft = parseWeekRangeLabel(d.ftdsPeriodLabel);
+      if (!ab || !ft) return false;
+      return ab.start === ft.start && ab.end === ft.end;
+    }
+
+    function calcFtdsTierPenalty(weeklyCount) {
+      if (weeklyCount <= 0) return 0;
+      if (weeklyCount <= 2) return 3;
+      if (weeklyCount <= 5) return 8;
+      if (weeklyCount <= 10) return 14;
+      if (weeklyCount <= 20) return 20;
+      if (weeklyCount <= 35) return 26;
+      return 32;
+    }
+
     function calcFtdsScorePenalty(d) {
       var weekly = getEffectiveWeeklyFtds(d);
       if (weekly <= 0) return 0;
-      var tier = 0;
-      if (weekly <= 2) tier = 3;
-      else if (weekly <= 5) tier = 8;
-      else if (weekly <= 10) tier = 14;
-      else if (weekly <= 20) tier = 20;
-      else if (weekly <= 35) tier = 26;
-      else tier = 32;
-      var ratePen = 0;
-      if (d.totalPackages > 0) {
-        var pkgBase = d.totalPackages;
-        if ((d.ftdsWeekCount || 0) > 1) pkgBase = d.totalPackages / d.ftdsWeekCount;
-        if (pkgBase < weekly) pkgBase = weekly;
-        var rate = weekly / pkgBase * 1000;
+      var tier = calcFtdsTierPenalty(weekly);
+      if (isAbilityFtdsPeriodAligned(d) && d.totalPackages > 0) {
+        var rate = weekly / d.totalPackages * 1000;
+        var ratePen = 0;
         if (rate >= 80) ratePen = 40;
         else if (rate >= 50) ratePen = 32;
         else if (rate >= 30) ratePen = 24;
         else if (rate >= 15) ratePen = 16;
         else if (rate >= 8) ratePen = 10;
         else if (rate >= 4) ratePen = 6;
+        return Math.min(Math.max(tier, ratePen), 40);
       }
-      return Math.min(Math.max(tier, ratePen), 40);
+      return Math.min(tier, 40);
     }
 
     function calcDnrScorePenalty(d) {
@@ -17471,16 +17497,22 @@ var driverDB = {
       return Math.round(s);
     }
 
-    function calcCompanyScoreFromMembers(driverSet, dept) {
+    function calcGroupScoreFromMembers(driverSet, matchFn) {
       var sum = 0;
       var cnt = 0;
       for (var name in driverSet) {
         var dd = driverSet[name];
-        if ((dd.dept || '\u672a\u6240\u5c5e') !== dept) continue;
+        if (!matchFn(dd, name)) continue;
         sum += dd.qualityScore != null ? dd.qualityScore : calcDriverScore(dd);
         cnt++;
       }
       return cnt > 0 ? Math.round(sum / cnt) : 0;
+    }
+
+    function calcCompanyScoreFromMembers(driverSet, dept) {
+      return calcGroupScoreFromMembers(driverSet, function(dd) {
+        return (dd.dept || '\u672a\u6240\u5c5e') === dept;
+      });
     }
 
     function buildTeamQualitySnapshot() {
@@ -17491,8 +17523,9 @@ var driverDB = {
       for (var name in driverDB) {
         if (isDriverDeleted(name)) continue;
         var key = resolveDriverKey(name);
-        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, abilityPeriod: '', ftdsPeriodLabel: '', dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         var db = driverDB[name];
+        drivers[key].abilityPeriod = db.lastUpdated || drivers[key].abilityPeriod || '';
         if (db.packagesPerHour) {
           drivers[key].packagesPerHour = db.packagesPerHour || 0;
           drivers[key].misdeliveryRate = db.misdeliveryRate || 0;
@@ -17512,6 +17545,7 @@ var driverDB = {
         var fWeight = ftdsRecordWeight(fr);
         drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + fWeight;
         if (fr.weekCount) drivers[fkey].ftdsWeekCount = Math.max(drivers[fkey].ftdsWeekCount || 0, fr.weekCount);
+        if (ftdsImportPeriodLabel) drivers[fkey].ftdsPeriodLabel = ftdsImportPeriodLabel;
         if (fr.reasonBreakdown && Object.keys(fr.reasonBreakdown).length > 0) {
           var fRbKeys = Object.keys(fr.reasonBreakdown);
           for (var fRb = 0; fRb < fRbKeys.length; fRb++) {
@@ -17776,17 +17810,10 @@ var driverDB = {
         var gdsAvgPph = gdsTotal.totalPkgs > 0 ? gdsTotal.wPph / gdsTotal.totalPkgs : 0;
         var gdsAvgMis = gdsTotal.totalPkgs > 0 ? gdsTotal.wMis / gdsTotal.totalPkgs : 0;
         var gdsAvgDel = gdsTotal.totalPkgs > 0 ? gdsTotal.wDel / gdsTotal.totalPkgs : 0;
-        var gdsScoreSum = 0;
-        var gdsScoreCnt = 0;
-        for (var gdsDi = 0; gdsDi < deptOrder.length; gdsDi++) {
-          var gdsDept = deptOrder[gdsDi];
-          if (gdsDept.indexOf('GDS') !== 0) continue;
-          var gdsC = companies[gdsDept];
-          if (!gdsC || gdsC.count === 0) continue;
-          gdsScoreSum += gdsC.score || 0;
-          gdsScoreCnt++;
-        }
-        var gdsScore = gdsScoreCnt > 0 ? Math.round(gdsScoreSum / gdsScoreCnt) : 0;
+        var gdsScore = calcGroupScoreFromMembers(tqFiltered, function(dd) {
+          var gdsDept = dd.dept || '';
+          return gdsDept.indexOf('GDS') === 0 && !isTqExcludedDept(gdsDept);
+        });
         var gdsScoreColor = gdsScore >= 90 ? 'color:#16a34a;' : (gdsScore >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
         html += '<tr style="background:#e5e7eb;font-weight:bold;">';
         html += '<td class="p-2">GDS\u5408\u8A08</td>';

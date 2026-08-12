@@ -131,6 +131,8 @@ function buildDrivers(driverDB, ftdsRows, ccRows) {
       misdeliveryRate: db.misdeliveryRate || 0,
       deliveryRate: db.deliveryRate || 0,
       totalPackages: db.totalPackages || 0,
+      abilityPeriod: db.lastUpdated || 'W22-W31',
+      ftdsPeriodLabel: 'W28-W31',
       dnrCount: 0,
       ftdsCount: 0,
       ftdsWeekCount: 0,
@@ -200,30 +202,51 @@ function getEffectiveWeeklyFtds(d) {
   return weeks > 1 ? count / weeks : count;
 }
 
+function parseWeekRangeLabel(label) {
+  const s = String(label || '');
+  let m = s.match(/W(\d+)\s*[-\u2013~]\s*W(\d+)/i);
+  if (m) return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+  m = s.match(/W(\d+)/i);
+  if (m) {
+    const w = parseInt(m[1], 10);
+    return { start: w, end: w };
+  }
+  return null;
+}
+
+function isAbilityFtdsPeriodAligned(d) {
+  const ab = parseWeekRangeLabel(d.abilityPeriod);
+  const ft = parseWeekRangeLabel(d.ftdsPeriodLabel);
+  if (!ab || !ft) return false;
+  return ab.start === ft.start && ab.end === ft.end;
+}
+
+function calcFtdsTierPenalty(weeklyCount) {
+  if (weeklyCount <= 0) return 0;
+  if (weeklyCount <= 2) return 3;
+  if (weeklyCount <= 5) return 8;
+  if (weeklyCount <= 10) return 14;
+  if (weeklyCount <= 20) return 20;
+  if (weeklyCount <= 35) return 26;
+  return 32;
+}
+
 function calcFtdsScorePenalty(d) {
   const weekly = getEffectiveWeeklyFtds(d);
   if (weekly <= 0) return 0;
-  let tier = 0;
-  if (weekly <= 2) tier = 3;
-  else if (weekly <= 5) tier = 8;
-  else if (weekly <= 10) tier = 14;
-  else if (weekly <= 20) tier = 20;
-  else if (weekly <= 35) tier = 26;
-  else tier = 32;
-  let ratePen = 0;
-  if (d.totalPackages > 0) {
-    let pkgBase = d.totalPackages;
-    if ((d.ftdsWeekCount || 0) > 1) pkgBase = d.totalPackages / d.ftdsWeekCount;
-    if (pkgBase < weekly) pkgBase = weekly;
-    const rate = weekly / pkgBase * 1000;
+  const tier = calcFtdsTierPenalty(weekly);
+  if (isAbilityFtdsPeriodAligned(d) && d.totalPackages > 0) {
+    const rate = weekly / d.totalPackages * 1000;
+    let ratePen = 0;
     if (rate >= 80) ratePen = 40;
     else if (rate >= 50) ratePen = 32;
     else if (rate >= 30) ratePen = 24;
     else if (rate >= 15) ratePen = 16;
     else if (rate >= 8) ratePen = 10;
     else if (rate >= 4) ratePen = 6;
+    return Math.min(Math.max(tier, ratePen), 40);
   }
-  return Math.min(Math.max(tier, ratePen), 40);
+  return Math.min(tier, 40);
 }
 
 function tieredDnrPenalty(count) {
