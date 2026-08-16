@@ -43,8 +43,10 @@
     var signature = text.replace(/\s+/g, ' ').trim();
     if (!signature || signature === lastSignature) return;
     lastSignature = signature;
-    var countMatch = signature.match(/一致\s*(\d+)名\s*\/\s*不一致\s*0名/);
-    var message = countMatch ? 'AmazonスケジュールとDAシフト表：' + countMatch[1] + '名すべて一致しました' : 'AmazonスケジュールとDAシフト表のTransportIDは一致しています';
+    var countMatch = signature.match(/一致\s*(\d+)名\s*\/\s*不一致\s*0名\s*\/\s*Amazon側未確認\s*(\d+)名/);
+    var message = countMatch
+      ? 'Amazonスケジュールで確認できたシフト登録者のTransportIDはすべて一致しています（一致 ' + countMatch[1] + '名 / Amazon側未確認 ' + countMatch[2] + '名）'
+      : 'Amazonスケジュールで確認できたシフト登録者のTransportIDはすべて一致しています';
     showSuccessToast(message);
     mirrorToTenkoMatch(panel);
   }

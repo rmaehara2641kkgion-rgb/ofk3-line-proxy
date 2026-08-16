@@ -1,5 +1,5 @@
 // OFK3 点呼管理 - TransportID照合監査
-// Amazonスケジュールを正として、DAシフト表のTransport ID登録誤りを検知する。
+// Amazonスケジュールを正として、DAシフト表メイン在籍者のTransport ID登録誤りを検知する。
 (function() {
   'use strict';
 
@@ -8,6 +8,7 @@
   var auditAmazonFile = '';
   var auditShiftFile = '';
   var PANEL_ID = 'tenko-transport-audit-panel';
+  var lastAuditStats = null;
 
   function normalizeName(value) {
     var s = value == null ? '' : String(value);
@@ -32,6 +33,17 @@
     return out;
   }
 
+  function namesMatch(nameA, nameB) {
+    var variantsA = nameVariants(nameA);
+    var variantsB = nameVariants(nameB);
+    for (var i = 0; i < variantsA.length; i++) {
+      for (var j = 0; j < variantsB.length; j++) {
+        if (variantsA[i] === variantsB[j]) return true;
+      }
+    }
+    return false;
+  }
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -39,6 +51,10 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function displayShiftName(record) {
+    return record.japaneseName ? record.japaneseName + ' / ' + record.name : record.name;
   }
 
   function readWorkbook(file, done) {
@@ -170,6 +186,123 @@
     return { records: records, sheet: sheetName };
   }
 
+  function buildShiftAuditPopulation(records) {
+    var groups = [];
+
+    for (var i = 0; i < records.length; i++) {
+      var rec = records[i];
+      var groupIndex = -1;
+      for (var g = 0; g < groups.length; g++) {
+        if (namesMatch(rec.name, groups[g].records[0].name)) {
+          groupIndex = g;
+          break;
+        }
+      }
+      if (groupIndex >= 0) {
+        groups[groupIndex].records.push(rec);
+      } else {
+        groups.push({ records: [rec] });
+      }
+    }
+
+    var auditRecords = [];
+    var shiftTidDuplicates = [];
+    var exactDedupMerged = 0;
+
+    for (var gi = 0; gi < groups.length; gi++) {
+      var groupRecords = groups[gi].records;
+      var tidMap = {};
+      for (var j = 0; j < groupRecords.length; j++) {
+        var tid = groupRecords[j].transportId;
+        if (!tidMap[tid]) tidMap[tid] = [];
+        tidMap[tid].push(groupRecords[j]);
+      }
+
+      var tids = Object.keys(tidMap);
+      if (tids.length > 1) {
+        shiftTidDuplicates.push({
+          person: groupRecords[0],
+          records: groupRecords.slice(),
+          transportIds: tids.slice()
+        });
+      }
+
+      for (var ti = 0; ti < tids.length; ti++) {
+        var rows = tidMap[tids[ti]];
+        auditRecords.push(rows[0]);
+        if (rows.length > 1) exactDedupMerged += rows.length - 1;
+      }
+    }
+
+    return {
+      shiftMainTotal: records.length,
+      auditRecords: auditRecords,
+      shiftTidDuplicates: shiftTidDuplicates,
+      exactDedupMerged: exactDedupMerged,
+      auditTargetCount: auditRecords.length
+    };
+  }
+
+  function findAmazonRecord(shiftRecord, amazonLookup) {
+    var variants = nameVariants(shiftRecord.name);
+    for (var v = 0; v < variants.length; v++) {
+      if (amazonLookup[variants[v]]) return amazonLookup[variants[v]];
+    }
+    return null;
+  }
+
+  function runTransportAudit(amazonData, shiftData) {
+    var population = buildShiftAuditPopulation(shiftData.records);
+    var matched = [];
+    var mismatched = [];
+    var amazonUnconfirmed = [];
+    var usedAmazon = {};
+
+    for (var i = 0; i < population.auditRecords.length; i++) {
+      var shiftRecord = population.auditRecords[i];
+      var amazonRecord = findAmazonRecord(shiftRecord, amazonData.lookup);
+
+      if (!amazonRecord) {
+        amazonUnconfirmed.push(shiftRecord);
+        continue;
+      }
+
+      usedAmazon[normalizeName(amazonRecord.name)] = true;
+      if (shiftRecord.transportId === amazonRecord.transportId) {
+        matched.push({ shift: shiftRecord, amazon: amazonRecord });
+      } else {
+        mismatched.push({ shift: shiftRecord, amazon: amazonRecord });
+      }
+    }
+
+    var amazonOnlyExcluded = 0;
+    for (var a = 0; a < amazonData.records.length; a++) {
+      var amazonRecordItem = amazonData.records[a];
+      if (!usedAmazon[normalizeName(amazonRecordItem.name)]) amazonOnlyExcluded++;
+    }
+
+    var stats = {
+      shiftMainTotal: population.shiftMainTotal,
+      auditTargetCount: population.auditTargetCount,
+      amazonRecordCount: amazonData.records.length,
+      matchedCount: matched.length,
+      mismatchedCount: mismatched.length,
+      amazonUnconfirmedCount: amazonUnconfirmed.length,
+      amazonOnlyExcludedCount: amazonOnlyExcluded,
+      exactDedupMergedCount: population.exactDedupMerged,
+      shiftTidDuplicateCount: population.shiftTidDuplicates.length
+    };
+
+    return {
+      matched: matched,
+      mismatched: mismatched,
+      amazonUnconfirmed: amazonUnconfirmed,
+      shiftTidDuplicates: population.shiftTidDuplicates,
+      amazonConflicts: amazonData.conflicts || [],
+      stats: stats
+    };
+  }
+
   function getPanel() {
     var existing = document.getElementById(PANEL_ID);
     if (existing) return existing;
@@ -213,106 +346,101 @@
       return;
     }
 
-    var matched = [];
-    var mismatched = [];
-    var shiftOnly = [];
-    var usedAmazon = {};
-
-    for (var i = 0; i < auditShift.records.length; i++) {
-      var sr = auditShift.records[i];
-      var variants = nameVariants(sr.name);
-      var ar = null;
-      var matchedKey = '';
-      for (var v = 0; v < variants.length; v++) {
-        if (auditAmazon.lookup[variants[v]]) {
-          ar = auditAmazon.lookup[variants[v]];
-          matchedKey = normalizeName(ar.name);
-          break;
-        }
-      }
-
-      if (!ar) {
-        shiftOnly.push(sr);
-        continue;
-      }
-
-      usedAmazon[matchedKey] = true;
-      if (sr.transportId === ar.transportId) {
-        matched.push({ shift: sr, amazon: ar });
-      } else {
-        mismatched.push({ shift: sr, amazon: ar });
-      }
-    }
-
-    var amazonOnly = [];
-    for (var a = 0; a < auditAmazon.records.length; a++) {
-      var amz = auditAmazon.records[a];
-      if (!usedAmazon[normalizeName(amz.name)]) amazonOnly.push(amz);
-    }
-
-    renderResult(matched, mismatched, amazonOnly, shiftOnly, auditAmazon.conflicts || []);
+    var result = runTransportAudit(auditAmazon, auditShift);
+    lastAuditStats = result.stats;
+    window.__tenkoTransportAuditStats = result.stats;
+    renderResult(result);
   }
 
-  function renderResult(matched, mismatched, amazonOnly, shiftOnly, conflicts) {
+  function renderSummaryLine(stats) {
+    return '一致 ' + stats.matchedCount + '名 / 不一致 ' + stats.mismatchedCount + '名 / Amazon側未確認 ' + stats.amazonUnconfirmedCount + '名';
+  }
+
+  function renderResult(result) {
     var panel = getPanel();
-    var isOk = mismatched.length === 0 && conflicts.length === 0;
-    panel.className = isOk
-      ? 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50'
-      : 'card p-4 mb-4 border-2 border-red-500 bg-red-50';
+    var matched = result.matched;
+    var mismatched = result.mismatched;
+    var amazonUnconfirmed = result.amazonUnconfirmed;
+    var shiftTidDuplicates = result.shiftTidDuplicates;
+    var amazonConflicts = result.amazonConflicts;
+    var stats = result.stats;
+    var hasProblems = mismatched.length > 0 || shiftTidDuplicates.length > 0 || amazonConflicts.length > 0;
+    var summaryLine = renderSummaryLine(stats);
+
+    panel.className = hasProblems
+      ? 'card p-4 mb-4 border-2 border-red-500 bg-red-50'
+      : 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50';
 
     var html = '';
-    if (isOk) {
-      html += '<div class="text-base font-bold text-emerald-700">✅ TransportID照合：一致</div>';
-      html += '<div class="text-sm font-bold text-emerald-700 mt-1">一致 ' + matched.length + '名 / 不一致 0名</div>';
-      html += '<div class="text-xs text-emerald-700 mt-1">AmazonスケジュールのTransportIDとDAシフト表の登録内容は一致しています。</div>';
-    } else {
+    if (hasProblems) {
       html += '<div class="text-base font-bold text-red-700">🚨 TransportID照合：不一致あり</div>';
-      html += '<div class="text-sm font-bold text-red-700 mt-1">一致 ' + matched.length + '名 / 不一致 ' + mismatched.length + '名</div>';
-      html += '<div class="text-xs font-bold text-red-700 mt-1">Amazonスケジュールを正として確認してください。シフト側の誤登録は点呼・コンプライアンス判定へ影響する可能性があります。</div>';
+      html += '<div class="text-sm font-bold text-red-700 mt-1">' + escapeHtml(summaryLine) + '</div>';
+      html += '<div class="text-xs font-bold text-red-700 mt-1">Amazonスケジュールを正として確認してください。シフト側のTransportID誤登録は、点呼対象者の誤認識やコンプライアンス判定へ影響する可能性があります。</div>';
+    } else {
+      html += '<div class="text-base font-bold text-emerald-700">✅ TransportID照合：一致</div>';
+      html += '<div class="text-sm font-bold text-emerald-700 mt-1">' + escapeHtml(summaryLine) + '</div>';
+      html += '<div class="text-xs text-emerald-700 mt-1">Amazonスケジュールで確認できたシフト登録者のTransportIDはすべて一致しています。</div>';
+      html += '<div class="text-xs text-emerald-700 mt-1">一致：' + stats.matchedCount + '名</div>';
+      html += '<div class="text-xs text-emerald-700">Amazon側未確認：' + stats.amazonUnconfirmedCount + '名</div>';
+    }
+
+    if (matched.length > 0) {
+      html += '<details class="mt-3"><summary class="text-xs font-bold text-emerald-700 cursor-pointer">✅ TransportID一致（' + matched.length + '名）</summary>';
+      html += '<div class="mt-2 space-y-1">';
+      for (var m = 0; m < Math.min(matched.length, 50); m++) {
+        html += '<div class="text-xs text-emerald-700">✅ ' + escapeHtml(displayShiftName(matched[m].shift)) + ' / ' + escapeHtml(matched[m].shift.transportId) + '</div>';
+      }
+      if (matched.length > 50) html += '<div class="text-xs text-emerald-700">...他 ' + (matched.length - 50) + '名</div>';
+      html += '</div></details>';
     }
 
     if (mismatched.length > 0) {
       html += '<div class="mt-3 space-y-2">';
       for (var i = 0; i < mismatched.length; i++) {
-        var m = mismatched[i];
-        var displayName = m.shift.japaneseName ? m.shift.japaneseName + ' / ' + m.shift.name : m.shift.name;
+        var item = mismatched[i];
         html += '<div class="rounded-lg border border-red-300 bg-white p-3">' +
-          '<div class="font-bold text-red-700">❌ ' + escapeHtml(displayName) + '</div>' +
-          '<div class="text-xs text-red-700 mt-1">Amazon正：<span class="font-mono font-bold">' + escapeHtml(m.amazon.transportId) + '</span></div>' +
-          '<div class="text-xs text-red-700">シフト登録：<span class="font-mono font-bold">' + escapeHtml(m.shift.transportId) + '</span></div>' +
-          (m.shift.company ? '<div class="text-xs text-red-600 mt-1">所属：' + escapeHtml(m.shift.company) + '</div>' : '') +
+          '<div class="font-bold text-red-700">🚨 TransportID不一致</div>' +
+          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(item.shift)) + '</div>' +
+          '<div class="text-xs text-red-700 mt-1">Amazon正：<span class="font-mono font-bold">' + escapeHtml(item.amazon.transportId) + '</span></div>' +
+          '<div class="text-xs text-red-700">シフト登録：<span class="font-mono font-bold">' + escapeHtml(item.shift.transportId) + '</span></div>' +
+          (item.shift.company ? '<div class="text-xs text-red-600 mt-1">所属：' + escapeHtml(item.shift.company) + '</div>' : '') +
           '</div>';
       }
       html += '</div>';
     }
 
-    if (conflicts.length > 0) {
-      html += '<div class="mt-3 text-xs font-bold text-red-700">⚠ Amazonスケジュール内で同一名に複数TransportIDが存在します：' + conflicts.length + '件</div>';
+    if (amazonUnconfirmed.length > 0) {
+      html += '<div class="mt-3 space-y-2">';
+      for (var u = 0; u < amazonUnconfirmed.length; u++) {
+        var unconfirmed = amazonUnconfirmed[u];
+        html += '<div class="rounded-lg border border-amber-300 bg-amber-50 p-3">' +
+          '<div class="font-bold text-amber-800">⚠ Amazon側未確認</div>' +
+          '<div class="text-xs text-amber-800 mt-1">' + escapeHtml(displayShiftName(unconfirmed)) + '</div>' +
+          '<div class="text-xs text-amber-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(unconfirmed.transportId) + '</span></div>' +
+          (unconfirmed.company ? '<div class="text-xs text-amber-700 mt-1">所属：' + escapeHtml(unconfirmed.company) + '</div>' : '') +
+          '</div>';
+      }
+      html += '</div>';
     }
 
-    if (amazonOnly.length > 0 || shiftOnly.length > 0) {
-      html += '<details class="mt-3"><summary class="text-xs font-bold text-amber-700 cursor-pointer">⚠ 未照合：Amazonのみ ' + amazonOnly.length + '名 / シフトのみ ' + shiftOnly.length + '名</summary>';
-      html += '<div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">';
-      if (amazonOnly.length > 0) {
-        html += '<div class="rounded border border-amber-200 bg-amber-50 p-2"><div class="text-xs font-bold text-amber-800">Amazon側のみ</div><div class="text-xs text-amber-700 mt-1">';
-        for (var a = 0; a < Math.min(amazonOnly.length, 30); a++) html += escapeHtml(amazonOnly[a].name) + '<br>';
-        if (amazonOnly.length > 30) html += '...他 ' + (amazonOnly.length - 30) + '名';
-        html += '</div></div>';
+    if (shiftTidDuplicates.length > 0) {
+      html += '<div class="mt-3 space-y-2">';
+      for (var d = 0; d < shiftTidDuplicates.length; d++) {
+        var dup = shiftTidDuplicates[d];
+        html += '<div class="rounded-lg border border-red-300 bg-white p-3">' +
+          '<div class="font-bold text-red-700">🚨 シフト表内TransportID重複</div>' +
+          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(dup.person)) + '</div>' +
+          '<div class="text-xs text-red-700 mt-1">登録TransportID：' + escapeHtml(dup.transportIds.join(' / ')) + '</div>' +
+          '</div>';
       }
-      if (shiftOnly.length > 0) {
-        html += '<div class="rounded border border-amber-200 bg-amber-50 p-2"><div class="text-xs font-bold text-amber-800">シフト側のみ</div><div class="text-xs text-amber-700 mt-1">';
-        for (var s = 0; s < Math.min(shiftOnly.length, 30); s++) {
-          html += escapeHtml(shiftOnly[s].japaneseName || shiftOnly[s].name) + ' / ' + escapeHtml(shiftOnly[s].name) + '<br>';
-        }
-        if (shiftOnly.length > 30) html += '...他 ' + (shiftOnly.length - 30) + '名';
-        html += '</div></div>';
-      }
-      html += '</div></details>';
+      html += '</div>';
+    }
+
+    if (amazonConflicts.length > 0) {
+      html += '<div class="mt-3 text-xs font-bold text-red-700">⚠ Amazonスケジュール内で同一名に複数TransportIDが存在します：' + amazonConflicts.length + '件</div>';
     }
 
     panel.innerHTML = html;
-
-    // 点呼照合タブにもミラー表示
     mirrorToTenkoMatch(panel);
   }
 
@@ -361,7 +489,6 @@
     });
   }
 
-  // capture phaseでinline onchangeより先にFile参照を確保する。
   document.addEventListener('change', function(e) {
     var target = e.target;
     if (!target || !target.files || !target.files.length) return;
@@ -382,4 +509,16 @@
   } else {
     initPanel();
   }
+
+  window.__tenkoTransportAudit = {
+    normalizeName: normalizeName,
+    normalizeTid: normalizeTid,
+    nameVariants: nameVariants,
+    namesMatch: namesMatch,
+    parseAmazonSchedule: parseAmazonSchedule,
+    parseShiftMaster: parseShiftMaster,
+    buildShiftAuditPopulation: buildShiftAuditPopulation,
+    runTransportAudit: runTransportAudit,
+    getLastAuditStats: function() { return lastAuditStats; }
+  };
 })();
