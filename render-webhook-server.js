@@ -250,6 +250,7 @@ app.get('/static-map', async (req, res) => {
 const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
 const VOLUME_MASTER_GAS_URL = process.env.VOLUME_MASTER_GAS_URL || '';
 const TENKO_MASTER_GAS_URL = process.env.TENKO_MASTER_GAS_URL || '';
+const AREA_EXPERIENCE_MASTER_GAS_URL = process.env.AREA_EXPERIENCE_MASTER_GAS_URL || '';
 
 // 物量マスターGASプロキシ
 app.get('/volume-master', async (req, res) => {
@@ -724,6 +725,47 @@ async function wh60SendLine(to, text) {
 // 10分ごとに自動チェック
 setInterval(wh60AutoCheck, 10 * 60 * 1000);
 log('WH60 auto-alert started (every 10 min)');
+
+// ===== エリア経験マスタ GASプロキシ =====
+app.get('/area-experience-master', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?' + qs;
+    console.log('area-experience-master GET:', url);
+    var response = await axios.get(url, { maxRedirects: 5, timeout: 120000 });
+    if (typeof response.data === 'string' && response.data.indexOf('<!DOCTYPE') >= 0) {
+      return res.status(502).json({ status: 'error', message: 'GAS returned HTML' });
+    }
+    res.json(response.data);
+  } catch (e) {
+    console.error('area-experience-master GET error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.post('/area-experience-master', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var action = req.query.action || 'save';
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
+    console.log('area-experience-master POST:', url, 'records:', req.body && req.body.records ? req.body.records.length : 0);
+    var response = await axios.post(url, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5,
+      timeout: 120000,
+      validateStatus: function() { return true; }
+    });
+    res.status(response.status).json(response.data);
+  } catch (e) {
+    console.error('area-experience-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 // ===== 点呼マスタ＋ログ GASプロキシ =====
 app.get('/tenko-master', async (req, res) => {

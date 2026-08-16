@@ -319,6 +319,189 @@
     return set;
   }
 
+  /** フラット records から経験DBを再構築（GAS読込用） */
+  function buildExperienceDbFromRecords(records, options) {
+    options = options || {};
+    if (!records || !records.length) {
+      return { ok: false, error: 'records が空です' };
+    }
+    var knownTids = options.knownTransportIds || new Set();
+    var byTransportId = {};
+    var areaSet = {};
+    var unknownTids = [];
+    var unknownTidSet = {};
+    var lastDate = '';
+
+    for (var i = 0; i < records.length; i++) {
+      var rec = records[i];
+      if (!rec) continue;
+      var tid = String(rec.transportId || '').trim();
+      var area = String(rec.area || '').trim();
+      if (!tid || !area) continue;
+      var experienceDays = Number(rec.experienceDays);
+      if (!isFinite(experienceDays) || experienceDays < 0) continue;
+      var driverName = String(rec.driverName || '').trim();
+      var lastVisitDate = String(rec.lastVisitDate || '').trim();
+      if (lastVisitDate && (!lastDate || lastVisitDate > lastDate)) lastDate = lastVisitDate;
+
+      areaSet[area] = true;
+      if (!byTransportId[tid]) {
+        byTransportId[tid] = {
+          transportId: tid,
+          driverName: driverName,
+          areas: {},
+          areaCount: 0,
+        };
+      }
+      if (driverName && !byTransportId[tid].driverName) {
+        byTransportId[tid].driverName = driverName;
+      }
+      byTransportId[tid].areas[area] = rec;
+
+      if (knownTids.size > 0 && !knownTids.has(tid) && !unknownTidSet[tid]) {
+        unknownTidSet[tid] = true;
+        unknownTids.push({ transportId: tid, driverName: driverName, area: area });
+      }
+    }
+
+    var drivers = Object.keys(byTransportId);
+    for (var d = 0; d < drivers.length; d++) {
+      byTransportId[drivers[d]].areaCount = Object.keys(byTransportId[drivers[d]].areas).length;
+    }
+
+    return {
+      ok: true,
+      records: records,
+      byTransportId: byTransportId,
+      stats: {
+        drivers: drivers.length,
+        areas: Object.keys(areaSet).length,
+        records: records.length,
+        lastDate: lastDate,
+        unknownTids: unknownTids,
+        unknownTidCount: Object.keys(unknownTidSet).length,
+      },
+    };
+  }
+
+  var EXPERIENCE_STATUS_THRESHOLDS = {
+    shallow: 3,
+    experienced: 10,
+    skilled: 20,
+  };
+
+  function getExperienceStatusLabel(experienceDays, thresholds) {
+    thresholds = thresholds || EXPERIENCE_STATUS_THRESHOLDS;
+    var days = Number(experienceDays) || 0;
+    if (days <= 0) return '未経験';
+    if (days < thresholds.shallow) return '経験浅い';
+    if (days < thresholds.experienced) return '経験あり';
+    if (days < thresholds.skilled) return '経験あり';
+    return '熟練';
+  }
+
+  function resolveDriverNameByTransportId(transportId, transportIDs, resolveDriverKeyFn) {
+    if (!transportId || !transportIDs) return '';
+    var tid = String(transportId).trim();
+    var keys = Object.keys(transportIDs);
+    for (var i = 0; i < keys.length; i++) {
+      if (String(transportIDs[keys[i]] || '').trim() === tid) {
+        return resolveDriverKeyFn ? resolveDriverKeyFn(keys[i]) : keys[i];
+      }
+    }
+    return '';
+  }
+
+  function getPackagesPerHour(driverName, transportId, findDriverFn, transportIDs, resolveDriverKeyFn) {
+    if (typeof findDriverFn !== 'function') return null;
+    if (driverName) {
+      var info = findDriverFn(driverName);
+      if (info && info.packagesPerHour != null) return info.packagesPerHour;
+    }
+    var resolved = resolveDriverNameByTransportId(transportId, transportIDs, resolveDriverKeyFn);
+    if (resolved) {
+      var info2 = findDriverFn(resolved);
+      if (info2 && info2.packagesPerHour != null) return info2.packagesPerHour;
+    }
+    return null;
+  }
+
+  function formatShortDate(isoDate) {
+    if (!isoDate) return '-';
+    var m = String(isoDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return Number(m[2]) + '/' + Number(m[3]);
+    return String(isoDate).slice(0, 10);
+  }
+
+  function formatAreaSummary(entry, maxAreas) {
+    maxAreas = maxAreas || 3;
+    if (!entry || !entry.areas) return '-';
+    var keys = Object.keys(entry.areas).sort(function (a, b) {
+      return (entry.areas[b].experienceDays || 0) - (entry.areas[a].experienceDays || 0);
+    });
+    var parts = [];
+    for (var i = 0; i < Math.min(keys.length, maxAreas); i++) {
+      var ar = entry.areas[keys[i]];
+      parts.push(ar.area + ' ' + ar.experienceDays + '日');
+    }
+    if (keys.length > maxAreas) parts.push('…');
+    return parts.join(' / ');
+  }
+
+  function getDriverLatestVisit(entry) {
+    if (!entry || !entry.areas) return '';
+    var latest = '';
+    var keys = Object.keys(entry.areas);
+    for (var i = 0; i < keys.length; i++) {
+      var d = entry.areas[keys[i]].lastVisitDate || '';
+      if (d > latest) latest = d;
+    }
+    return latest;
+  }
+
+  function filterExperienceDrivers(experienceDb, query) {
+    if (!experienceDb || !experienceDb.byTransportId) return [];
+    query = String(query || '').trim().toLowerCase();
+    var tids = Object.keys(experienceDb.byTransportId).sort(function (a, b) {
+      var na = experienceDb.byTransportId[a].driverName || a;
+      var nb = experienceDb.byTransportId[b].driverName || b;
+      return na.localeCompare(nb, 'ja');
+    });
+    if (!query) {
+      return tids.map(function (tid) {
+        return experienceDb.byTransportId[tid];
+      });
+    }
+    var matched = [];
+    for (var i = 0; i < tids.length; i++) {
+      var tid = tids[i];
+      var entry = experienceDb.byTransportId[tid];
+      var name = (entry.driverName || '').toLowerCase();
+      if (name.indexOf(query) >= 0 || tid.toLowerCase().indexOf(query) >= 0) {
+        matched.push(entry);
+        continue;
+      }
+      var areaKeys = Object.keys(entry.areas || {});
+      for (var j = 0; j < areaKeys.length; j++) {
+        var areaName = areaKeys[j].toLowerCase();
+        if (areaName.indexOf(query) >= 0 || normalizeAreaToken(areaKeys[j]).toLowerCase().indexOf(query) >= 0) {
+          matched.push(entry);
+          break;
+        }
+      }
+    }
+    return matched;
+  }
+
+  function serializeExperienceForSave(experienceDb) {
+    if (!experienceDb || !experienceDb.records) return null;
+    return {
+      updatedAt: new Date().toISOString().slice(0, 10),
+      records: experienceDb.records,
+      stats: experienceDb.stats,
+    };
+  }
+
   function parseManifestWorkbook(workbook) {
     var routes = [];
     if (!workbook || !workbook.SheetNames) return routes;
@@ -412,6 +595,16 @@
     COLUMN_ALIASES: COLUMN_ALIASES,
     mapColumns: mapColumns,
     parseExperienceRows: parseExperienceRows,
+    buildExperienceDbFromRecords: buildExperienceDbFromRecords,
+    serializeExperienceForSave: serializeExperienceForSave,
+    getExperienceStatusLabel: getExperienceStatusLabel,
+    EXPERIENCE_STATUS_THRESHOLDS: EXPERIENCE_STATUS_THRESHOLDS,
+    resolveDriverNameByTransportId: resolveDriverNameByTransportId,
+    getPackagesPerHour: getPackagesPerHour,
+    formatShortDate: formatShortDate,
+    formatAreaSummary: formatAreaSummary,
+    getDriverLatestVisit: getDriverLatestVisit,
+    filterExperienceDrivers: filterExperienceDrivers,
     extractAreaLabelsFromAddresses: extractAreaLabelsFromAddresses,
     areasMatch: areasMatch,
     evaluateDriverForRoute: evaluateDriverForRoute,

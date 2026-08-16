@@ -66,6 +66,17 @@ function runTests() {
 
   assert(AssignSupportCore.areasMatch('早良区姪浜', '姪浜'), 'area fuzzy match');
 
+  var rebuilt = AssignSupportCore.buildExperienceDbFromRecords(parsed.records, { knownTransportIds: known });
+  assert(rebuilt.ok && rebuilt.stats.drivers === 3, 'rebuild from records');
+
+  assert(AssignSupportCore.getExperienceStatusLabel(0) === '未経験', 'status none');
+  assert(AssignSupportCore.getExperienceStatusLabel(18) === '熟練', 'status skilled');
+
+  var filtered = AssignSupportCore.filterExperienceDrivers(expDb, '姪浜');
+  assert(filtered.length >= 1, 'area search');
+
+  assert(AssignSupportCore.formatAreaSummary(expDb.byTransportId.A123).indexOf('姪浜') >= 0, 'area summary');
+
   console.log('assign-support tests passed');
 }
 
