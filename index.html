@@ -293,7 +293,7 @@
       <!-- Tabs -->
       <nav class="flex gap-6 mb-6 border-b border-border overflow-x-auto">
         <button class="tab-active pb-3 text-sm whitespace-nowrap" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">アサイン・最適化</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tw-extract')" id="tab-tw-extract">📦 時間指定</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
@@ -743,24 +743,84 @@
         </div>
       </div>
 
-      <!-- Optimization Tab -->
+      <!-- Optimization / Assign Support Tab -->
       <div id="panel-optimization" class="hidden">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-sm font-medium">コース割最適化提案</h2>
-            <p class="text-xs text-ink-lighter mt-1">ドライバー能力に基づいて、現在のAmazonアサインからの改善案を提示します</p>
+        <div class="mb-6 pb-4 border-b border-amber-200">
+          <h2 class="text-lg font-bold text-slate-800">アサイン・最適化</h2>
+          <p class="text-xs text-ink-lighter mt-1">エリア経験データに基づき、未経験エリアへの誤アサインを防ぐ判断支援（自動配車確定はしません）</p>
+        </div>
+
+        <!-- A. エリア経験データ -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">A. エリア経験データ</h3>
+          <p class="text-xs text-ink-lighter mb-3">外部で集計した CSV / XLSX をアップロード（TransportID 必須）</p>
+          <div id="as-exp-dropzone" class="text-center py-6 border-2 border-dashed border-amber-300 rounded-lg cursor-pointer hover:border-amber-500 hover:bg-amber-50/50 transition-colors">
+            <p class="text-sm font-medium">📂 エリア経験データをドロップ / クリック</p>
+            <p class="text-xs text-gray-400 mt-1">CSV, XLSX</p>
+            <input type="file" id="as-exp-input" accept=".csv,.xlsx,.xls" class="hidden">
           </div>
-          <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runOptimization()" id="optimize-btn">最適化を実行</button>
-        </div>
+          <div id="as-exp-summary" class="mt-3"></div>
+          <div id="as-exp-warnings"></div>
+          <div class="mt-3">
+            <input type="search" id="as-exp-search" placeholder="氏名または TransportID で検索" class="w-full text-sm border rounded px-3 py-2">
+          </div>
+          <div id="as-exp-list" class="mt-3 max-h-64 overflow-y-auto"></div>
+        </section>
 
-        <div id="optimization-results" class="hidden fade-in">
-          <!-- Will be populated dynamically -->
-        </div>
+        <!-- B. 今日のデータ -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">B. 今日のデータ</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <p class="text-xs font-medium mb-2">当日マニフェスト（サイクル xlsx）</p>
+              <div id="as-manifest-dropzone" class="text-center py-5 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/30">
+                <p class="text-xs">📦 マニフェストをドロップ</p>
+                <input type="file" id="as-manifest-input" accept=".xlsx,.xls,.zip" multiple class="hidden">
+              </div>
+              <div id="as-manifest-summary" class="mt-2"></div>
+            </div>
+            <div>
+              <p class="text-xs font-medium mb-2">当日シフト表（既存形式を再利用）</p>
+              <div id="as-shift-dropzone" class="text-center py-5 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/30">
+                <p class="text-xs">📅 シフト表をドロップ</p>
+                <input type="file" id="as-shift-input" accept=".xlsx,.xls" class="hidden">
+              </div>
+              <div id="as-shift-summary" class="mt-2"></div>
+            </div>
+          </div>
+        </section>
 
-        <div id="optimization-empty" class="text-center py-16">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
-          <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
-        </div>
+        <!-- C. アサイン支援 + D. レスキュー -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">C. アサイン支援</h3>
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <label class="text-xs font-medium">D. レスキュー要員
+              <input type="number" id="as-rescue-count" min="0" max="20" value="0" class="ml-2 w-16 text-sm border rounded px-2 py-1"> 名
+            </label>
+            <span class="text-xs text-ink-lighter">（Phase 1: 人数記録のみ。将来、候補から確保）</span>
+          </div>
+          <div id="as-suggest-results"></div>
+        </section>
+
+        <!-- E. 既存コース最適化（変更なし） -->
+        <section class="card p-4 mb-4 border-t-4 border-slate-300">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-sm font-medium">E. コース割最適化提案（既存）</h3>
+              <p class="text-xs text-ink-lighter mt-1">ドライバー能力に基づいて、現在のAmazonアサインからの改善案を提示します</p>
+            </div>
+            <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runOptimization()" id="optimize-btn">最適化を実行</button>
+          </div>
+
+          <div id="optimization-results" class="hidden fade-in">
+            <!-- Will be populated dynamically -->
+          </div>
+
+          <div id="optimization-empty" class="text-center py-16">
+            <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
+            <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
+          </div>
+        </section>
       </div>
 
       <!-- Tenko (Roll Call) Management Tab -->
@@ -18974,6 +19034,8 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
+  <script src="/assign-support-core.js?v=20260816-1"></script>
+  <script src="/assign-support.js?v=20260816-1"></script>
   <script src="/tenko-transport-audit.js?v=20260812-3"></script>
   <script src="/tenko-transport-audit-success.js?v=20260812-3"></script>
 </body>
