@@ -893,6 +893,235 @@
     return n;
   }
 
+  function countEligibleTierAtLeast(scored, minTier, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var minRank = tierRank(minTier);
+    var n = 0;
+    for (var i = 0; i < scored.length; i++) {
+      if (
+        isEligibleForFirstRecommendation(scored[i], config) &&
+        tierRank(scored[i].primaryTier) >= minRank
+      ) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  function countPrimaryExperiencedEligible(scored, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var n = 0;
+    for (var i = 0; i < scored.length; i++) {
+      if (
+        isEligibleForFirstRecommendation(scored[i], config) &&
+        (Number(scored[i].primaryExperienceDays) || 0) >= config.TIER_D_MIN_DAYS
+      ) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** Cycle3 全体配車: コースの配車難易度（候補希少性中心） */
+  function buildRouteDifficultyStats(scored, route, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var secondaryExp = 0;
+    for (var i = 0; i < scored.length; i++) {
+      if (
+        isEligibleForFirstRecommendation(scored[i], config) &&
+        (Number(scored[i].secondaryExperiencedCount) || 0) > 0
+      ) {
+        secondaryExp++;
+      }
+    }
+    return {
+      tierACount: countScarceTierCandidates(scored, 'A'),
+      tierBPlusCount: countEligibleTierAtLeast(scored, 'B', config),
+      primaryExperiencedCount: countPrimaryExperiencedEligible(scored, config),
+      secondaryExperiencedCount: secondaryExp,
+      packages: Number(route.packages) || 0,
+      eligibleCount: scored.filter(function (s) {
+        return isEligibleForFirstRecommendation(s, config);
+      }).length,
+    };
+  }
+
+  function compareRouteAssignmentPriority(a, b) {
+    var da = a.difficulty || {};
+    var db = b.difficulty || {};
+    if (da.tierACount !== db.tierACount) return da.tierACount - db.tierACount;
+    if (da.tierBPlusCount !== db.tierBPlusCount) return da.tierBPlusCount - db.tierBPlusCount;
+    if (da.primaryExperiencedCount !== db.primaryExperiencedCount) {
+      return da.primaryExperiencedCount - db.primaryExperiencedCount;
+    }
+    if (da.packages !== db.packages) return db.packages - da.packages;
+    return String(a.route.routeCode).localeCompare(String(b.route.routeCode));
+  }
+
+  function compareDriverRouteScoresWithTieBreak(a, b, route) {
+    var cmp = compareDriverRouteScores(a, b);
+    if (cmp !== 0) return cmp;
+    var pkgs = route ? Number(route.packages) || 0 : 0;
+    if (
+      pkgs >= 70 &&
+      a.capabilityKnown &&
+      b.capabilityKnown &&
+      a.estimatedDeliveryHours != null &&
+      b.estimatedDeliveryHours != null &&
+      a.estimatedDeliveryHours !== b.estimatedDeliveryHours
+    ) {
+      return a.estimatedDeliveryHours - b.estimatedDeliveryHours;
+    }
+    return String(a.transportId || '').localeCompare(String(b.transportId || ''));
+  }
+
+  function getUnassignedEligibleCandidates(scored, assignedTids, config) {
+    return (scored || []).filter(function (c) {
+      return (
+        c.transportId &&
+        !assignedTids[c.transportId] &&
+        isEligibleForFirstRecommendation(c, config)
+      );
+    });
+  }
+
+  function findScarceReservationForCandidate(cand, currentRouteCode, pendingRouteWork, assignedTids, config) {
+    if (!cand || !cand.transportId) return null;
+    for (var i = 0; i < pendingRouteWork.length; i++) {
+      var other = pendingRouteWork[i];
+      if (other.vehicleUnknown) continue;
+      if (other.route.routeCode === currentRouteCode) continue;
+      var candOnOther = null;
+      for (var j = 0; j < other.scored.length; j++) {
+        if (other.scored[j].transportId === cand.transportId) candOnOther = other.scored[j];
+      }
+      if (!candOnOther || !isEligibleForFirstRecommendation(candOnOther, config)) continue;
+
+      var pool = getUnassignedEligibleCandidates(other.scored, assignedTids, config);
+      var tierAOnOther = pool.filter(function (c) {
+        return c.primaryTier === 'A';
+      });
+      var tierBPlusOnOther = pool.filter(function (c) {
+        return tierRank(c.primaryTier) >= tierRank('B');
+      });
+
+      if (candOnOther.primaryTier === 'A' && tierAOnOther.length === 1) {
+        return {
+          routeCode: other.route.routeCode,
+          primaryArea: candOnOther.primaryArea || '',
+          kind: 'only_tier_a',
+        };
+      }
+      if (
+        tierRank(candOnOther.primaryTier) >= tierRank('B') &&
+        tierBPlusOnOther.length <= 2 &&
+        (other.difficulty || {}).tierACount <= 2
+      ) {
+        return {
+          routeCode: other.route.routeCode,
+          primaryArea: candOnOther.primaryArea || '',
+          kind: 'scarce_tier_b_plus',
+        };
+      }
+    }
+    return null;
+  }
+
+  function isViableLookaheadAlternative(top, alt, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    if (!alt || !top) return false;
+    var tierGap = tierRank(top.primaryTier) - tierRank(alt.primaryTier);
+    if (tierGap >= 2) return false;
+    var dayGap = (Number(top.primaryExperienceDays) || 0) - (Number(alt.primaryExperienceDays) || 0);
+    if (tierGap === 1 && dayGap > 10) return false;
+    if (tierGap === 0 && dayGap > 6) return false;
+    return tierRank(alt.primaryTier) >= tierRank('B') || (Number(alt.primaryExperienceDays) || 0) >= config.TIER_C_MIN_DAYS;
+  }
+
+  function selectFirstPickCycle3(rw, pendingRouteWork, assignedTids, config) {
+    var pool = getUnassignedEligibleCandidates(rw.scored, assignedTids, config);
+    pool.sort(function (a, b) {
+      return compareDriverRouteScoresWithTieBreak(a, b, rw.route);
+    });
+    if (!pool.length) {
+      return { pick: null, displacedCandidate: null, selectionReason: '', reservationReason: null };
+    }
+
+    var top = pool[0];
+    var reservation = findScarceReservationForCandidate(
+      top,
+      rw.route.routeCode,
+      pendingRouteWork,
+      assignedTids,
+      config
+    );
+
+    if (reservation) {
+      for (var i = 1; i < pool.length; i++) {
+        if (isViableLookaheadAlternative(top, pool[i], config)) {
+          return {
+            pick: pool[i],
+            displacedCandidate: top,
+            selectionReason:
+              '上位候補' +
+              top.driverName +
+              'は' +
+              reservation.routeCode +
+              (reservation.primaryArea ? '（' + reservation.primaryArea + '）' : '') +
+              'の希少熟練候補のため温存し、十分な経験を持つ本候補を推奨',
+            reservationReason: reservation,
+          };
+        }
+      }
+    }
+
+    var diff = rw.difficulty || {};
+    var selectionReason =
+      diff.tierACount <= 2
+        ? 'このコースはTier A候補が' + diff.tierACount + '名のみのため優先確定'
+        : '全体配車上、経験適合の最良候補を配置';
+
+    return {
+      pick: top,
+      displacedCandidate: null,
+      selectionReason: selectionReason,
+      reservationReason: null,
+    };
+  }
+
+  function buildUnusedWorkerDetails(eligibleWorkers, assignedTids, experienceDb, config, getPackagesPerHour) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var details = [];
+    for (var i = 0; i < (eligibleWorkers || []).length; i++) {
+      var w = eligibleWorkers[i];
+      if (!w.transportId || assignedTids[w.transportId]) continue;
+      var expEntry = experienceDb.byTransportId[w.transportId];
+      var tierAAreas = [];
+      if (expEntry && expEntry.areas) {
+        var keys = Object.keys(expEntry.areas);
+        for (var k = 0; k < keys.length; k++) {
+          var rec = expEntry.areas[keys[k]];
+          var days = Number(rec.experienceDays) || 0;
+          if (days >= config.EXPERT_EXPERIENCE_DAYS) tierAAreas.push(rec.area);
+        }
+      }
+      var pph = null;
+      if (typeof getPackagesPerHour === 'function') {
+        pph = getPackagesPerHour(w.driverName || w.name, w.transportId);
+      }
+      details.push({
+        driverName: w.driverName || w.name,
+        transportId: w.transportId,
+        tierAAreas: tierAAreas.slice(0, 4),
+        packagesPerHour: pph,
+      });
+    }
+    details.sort(function (a, b) {
+      return String(a.transportId).localeCompare(String(b.transportId));
+    });
+    return details;
+  }
+
   function buildFirstRecommendationReasons(pick, route, config, cycleOptions) {
     config = config || ASSIGN_EXPERIENCE_CONFIG;
     cycleOptions = cycleOptions || {};
@@ -948,6 +1177,12 @@
     if (pick.capabilityKnown) judgment.push('物量に対する能力適合（参考）');
 
     reasons.push('判定：' + (judgment.length ? judgment.join('＋') : '経験・能力から適合'));
+    if (cycleOptions.selectionReason) {
+      reasons.push('全体配車判断：' + cycleOptions.selectionReason);
+    }
+    if (cycleOptions.displacedCandidate && cycleOptions.displacedCandidate.driverName) {
+      reasons.push('通常1位候補：' + cycleOptions.displacedCandidate.driverName + '（温存）');
+    }
     return reasons;
   }
 
@@ -1023,19 +1258,24 @@
         var expEntry = experienceDb.byTransportId[worker.transportId];
         scored.push(buildDriverRouteScore(worker, route, expEntry, planOptions));
       }
-      scored.sort(compareDriverRouteScores);
+      scored.sort(function (a, b) {
+        return compareDriverRouteScoresWithTieBreak(a, b, route);
+      });
+      var difficulty =
+        cycle === 3 ? buildRouteDifficultyStats(scored, route, config) : buildRouteDifficultyStats(scored, route, config);
       routeWork.push({
         route: route,
         scored: scored,
-        tierACount: countScarceTierCandidates(scored, 'A'),
+        difficulty: difficulty,
+        tierACount: difficulty.tierACount,
         tierBCount: countScarceTierCandidates(scored, 'B'),
-        eligibleCount: scored.filter(function (s) {
-          return isEligibleForFirstRecommendation(s, config);
-        }).length,
+        tierBPlusCount: difficulty.tierBPlusCount,
+        eligibleCount: difficulty.eligibleCount,
       });
     }
 
     routeWork.sort(function (a, b) {
+      if (cycle === 3) return compareRouteAssignmentPriority(a, b);
       if (a.tierACount !== b.tierACount) return a.tierACount - b.tierACount;
       if (a.tierBCount !== b.tierBCount) return a.tierBCount - b.tierBCount;
       if (a.eligibleCount !== b.eligibleCount) return a.eligibleCount - b.eligibleCount;
@@ -1046,6 +1286,9 @@
     var routesOut = [];
     var confirmedCount = 0;
     var adminReviewCount = 0;
+    var tierAssignmentCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+    var unexperiencedPlacements = 0;
+    var sharedConfidenceOnly = 0;
 
     for (var rwi = 0; rwi < routeWork.length; rwi++) {
       var rw = routeWork[rwi];
@@ -1062,21 +1305,49 @@
       };
 
       var firstPick = null;
+      var selectionMeta = {
+        displacedCandidate: null,
+        selectionReason: '',
+        reservationReason: null,
+      };
       var needsAdminReview = !!rw.vehicleUnknown;
+      var adminReviewReason = rw.vehicleUnknown ? 'Bike/Standard判定不能' : '';
+
       if (!rw.vehicleUnknown) {
-        for (var pi = 0; pi < rw.scored.length; pi++) {
-          var cand = rw.scored[pi];
-          if (assignedTids[cand.transportId]) continue;
-          if (!isEligibleForFirstRecommendation(cand, config)) continue;
-          firstPick = cand;
-          assignedTids[cand.transportId] = true;
-          break;
+        if (cycle === 3) {
+          var pendingRoutes = routeWork.slice(rwi + 1);
+          var picked = selectFirstPickCycle3(rw, pendingRoutes, assignedTids, config);
+          firstPick = picked.pick;
+          selectionMeta = picked;
+          if (!firstPick) {
+            needsAdminReview = true;
+            adminReviewReason = '安全な候補を特定できない';
+          }
+        } else {
+          for (var pi = 0; pi < rw.scored.length; pi++) {
+            var cand = rw.scored[pi];
+            if (assignedTids[cand.transportId]) continue;
+            if (!isEligibleForFirstRecommendation(cand, config)) continue;
+            firstPick = cand;
+            break;
+          }
+          if (!firstPick) {
+            needsAdminReview = true;
+            adminReviewReason = '主エリア経験者なし';
+          }
         }
-        if (!firstPick) needsAdminReview = true;
+        if (firstPick) assignedTids[firstPick.transportId] = true;
       }
 
       if (firstPick) confirmedCount++;
       else adminReviewCount++;
+
+      if (firstPick) {
+        var pt = firstPick.primaryTier || 'E';
+        if (tierAssignmentCounts[pt] !== undefined) tierAssignmentCounts[pt]++;
+        if ((Number(firstPick.primaryExperienceDays) || 0) < config.TIER_D_MIN_DAYS) unexperiencedPlacements++;
+        if (firstPick.primaryConfidence === 'shared') sharedConfidenceOnly++;
+      }
 
       var otherCandidates = [];
       for (var oi = 0; oi < rw.scored.length; oi++) {
@@ -1098,6 +1369,7 @@
         stops: base.stops,
         areas: base.areas,
         routeVehicleType: rw.route.routeVehicleType || 'unknown',
+        routeDifficulty: rw.difficulty || null,
         recommended: base.recommended,
         partial: base.partial,
         unexperienced: base.unexperienced,
@@ -1115,12 +1387,28 @@
               packagesPerHour: firstPick.packagesPerHour,
               estimatedDeliveryHours: firstPick.estimatedDeliveryHours,
               secondaryDetails: firstPick.secondaryDetails,
-              reasons: buildFirstRecommendationReasons(firstPick, rw.route, config, { cycle: cycle }),
+              displacedCandidate: selectionMeta.displacedCandidate
+                ? {
+                    transportId: selectionMeta.displacedCandidate.transportId,
+                    driverName: selectionMeta.displacedCandidate.driverName,
+                    primaryTier: selectionMeta.displacedCandidate.primaryTier,
+                    primaryExperienceDays: selectionMeta.displacedCandidate.primaryExperienceDays,
+                  }
+                : null,
+              selectionReason: selectionMeta.selectionReason || '',
+              reservationReason: selectionMeta.reservationReason,
+              reasons: buildFirstRecommendationReasons(firstPick, rw.route, config, {
+                cycle: cycle,
+                selectionReason: selectionMeta.selectionReason,
+                displacedCandidate: selectionMeta.displacedCandidate,
+              }),
             }
           : null,
         needsAdminReview: needsAdminReview,
+        adminReviewReason: needsAdminReview ? adminReviewReason : '',
         vehicleUnknown: !!rw.vehicleUnknown,
         otherCandidates: otherCandidates,
+        candidateCount: rw.difficulty ? rw.difficulty.eligibleCount : rw.eligibleCount,
         processingOrder: rwi + 1,
       });
     }
@@ -1129,14 +1417,13 @@
       return String(a.routeCode).localeCompare(b.routeCode);
     });
 
-    var unusedWorkers = [];
-    for (var uwi = 0; uwi < eligibleWorkers.length; uwi++) {
-      var w = eligibleWorkers[uwi];
-      if (!w.transportId) continue;
-      if (!assignedTids[w.transportId]) {
-        unusedWorkers.push(w.driverName || w.name);
-      }
-    }
+    var unusedWorkerDetails = buildUnusedWorkerDetails(
+      eligibleWorkers,
+      assignedTids,
+      experienceDb,
+      config,
+      planOptions.getPackagesPerHour
+    );
 
     return {
       mode: 'first_pick',
@@ -1144,9 +1431,18 @@
       summary: {
         confirmedCount: confirmedCount,
         adminReviewCount: adminReviewCount,
-        unusedWorkerCount: unusedWorkers.length,
-        unusedWorkers: unusedWorkers,
+        unusedWorkerCount: unusedWorkerDetails.length,
+        unusedWorkers: unusedWorkerDetails.map(function (u) {
+          return u.driverName;
+        }),
+        unusedWorkerDetails: unusedWorkerDetails,
         totalRoutes: routesOut.length,
+        tierAAssignments: tierAssignmentCounts.A,
+        tierBAssignments: tierAssignmentCounts.B,
+        tierCOrLowerAssignments:
+          tierAssignmentCounts.C + tierAssignmentCounts.D + tierAssignmentCounts.E,
+        unexperiencedPlacements: unexperiencedPlacements,
+        sharedConfidenceOnly: sharedConfidenceOnly,
       },
       cycle: cycle,
       cycleEligibility: cycleFilter.stats,
@@ -1973,7 +2269,10 @@
     filterWorkersByVehicleType: filterWorkersByVehicleType,
     mergeScheduleIntoShiftWorkers: mergeScheduleIntoShiftWorkers,
     enrichManifestRoutesWithAssignment: enrichManifestRoutesWithAssignment,
-    applyCycle3StandardRouteTypes: applyCycle3StandardRouteTypes,
+    buildRouteDifficultyStats: buildRouteDifficultyStats,
+    compareRouteAssignmentPriority: compareRouteAssignmentPriority,
+    selectFirstPickCycle3: selectFirstPickCycle3,
+    compareDriverRouteScoresWithTieBreak: compareDriverRouteScoresWithTieBreak,
     parseScheduleCellWorkHint: parseScheduleCellWorkHint,
     evaluateAmazonAssignmentStatus: evaluateAmazonAssignmentStatus,
     buildDriverRouteScore: buildDriverRouteScore,

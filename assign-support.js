@@ -978,20 +978,46 @@
       }
     } else {
       html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
-      html += '<p class="font-bold text-slate-800 mb-1">Cycle3 第一推奨アサイン</p>';
+      html += '<p class="font-bold text-slate-800 mb-1">Cycle3 推奨アサイン</p>';
       html +=
         '<p class="text-xs text-ink-lighter">推奨確定：<strong>' +
         plan.summary.confirmedCount +
-        '</strong>コース　管理者判断：<strong>' +
+        '</strong> / ' +
+        plan.summary.totalRoutes +
+        '　管理者判断：<strong>' +
         plan.summary.adminReviewCount +
-        '</strong>コース　未使用出勤者：<strong>' +
+        '</strong>　Tier A：<strong>' +
+        (plan.summary.tierAAssignments || 0) +
+        '</strong>　Tier B：<strong>' +
+        (plan.summary.tierBAssignments || 0) +
+        '</strong>　Tier C以下：<strong>' +
+        (plan.summary.tierCOrLowerAssignments || 0) +
+        '</strong></p>';
+      html +=
+        '<p class="text-xs text-ink-lighter mt-1">未使用出勤者：<strong>' +
         plan.summary.unusedWorkerCount +
-        '</strong>名</p>';
-      if (plan.summary.unusedWorkers.length && plan.summary.unusedWorkers.length <= 15) {
-        html +=
-          '<p class="text-xs text-ink-lighter mt-1">未使用：' +
-          escapeHtml(plan.summary.unusedWorkers.join('、')) +
-          '</p>';
+        '</strong>名';
+      if (plan.summary.unexperiencedPlacements > 0) {
+        html += '　⚠ 未経験配置：<strong>' + plan.summary.unexperiencedPlacements + '</strong>';
+      }
+      if (plan.summary.sharedConfidenceOnly > 0) {
+        html += '　⚠ confidence sharedのみ：<strong>' + plan.summary.sharedConfidenceOnly + '</strong>';
+      }
+      html += '</p>';
+      if (plan.summary.unusedWorkerDetails && plan.summary.unusedWorkerDetails.length) {
+        html += '<details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">未使用出勤者詳細</summary><ul class="mt-1 space-y-1">';
+        for (var ui = 0; ui < Math.min(plan.summary.unusedWorkerDetails.length, 12); ui++) {
+          var uw = plan.summary.unusedWorkerDetails[ui];
+          html += '<li>' + escapeHtml(uw.driverName);
+          if (uw.tierAAreas && uw.tierAAreas.length) {
+            html += ' <span class="text-ink-lighter">Tier A経験：' + escapeHtml(uw.tierAAreas.join(' / ')) + '</span>';
+          }
+          if (uw.packagesPerHour != null) {
+            html += ' <span class="text-ink-lighter">能力：' + Number(uw.packagesPerHour).toFixed(1) + '個/h</span>';
+          }
+          html += '</li>';
+        }
+        html += '</ul></details>';
       }
       html += '</div>';
 

@@ -333,6 +333,136 @@ function runTests() {
   );
   assert(okEval.routes[0].evaluationStatus === 'ok', 'ok when amazon assign tier A');
 
+  var globalExpRows = [
+    headers,
+    ['A789', '山田', '原', '30', '2026-08-15', '10', '0', 'high'],
+    ['A789', '山田', '今宿', '20', '2026-08-14', '5', '0', 'high'],
+    ['A999', '佐藤', '原', '25', '2026-08-14', '8', '0', 'high'],
+  ];
+  var globalWorkers = [
+    { name: '山田', driverName: '山田', transportId: 'A789', shiftCode: '〇' },
+    { name: '佐藤', driverName: '佐藤', transportId: 'A999', shiftCode: '〇' },
+  ];
+  var globalExp = AssignSupportCore.parseExperienceRows(globalExpRows, { knownTransportIds: known });
+  var routeEasy = {
+    routeCode: 'DSX01',
+    packages: 80,
+    stops: 60,
+    areas: [{ label: '原', role: 'primary' }],
+  };
+  var routeScarce = {
+    routeCode: 'DSX02',
+    packages: 60,
+    stops: 50,
+    areas: [{ label: '今宿', role: 'primary' }],
+  };
+  var scarceFirstPlan = AssignSupportCore.buildFirstAssignPlan(
+    [routeEasy, routeScarce],
+    globalWorkers,
+    globalExp,
+    { cycle: 3 }
+  );
+  var byCode = {};
+  for (var gi = 0; gi < scarceFirstPlan.routes.length; gi++) {
+    var gr = scarceFirstPlan.routes[gi];
+    byCode[gr.routeCode] = gr;
+  }
+  assert(
+    byCode.DSX02 && byCode.DSX02.firstRecommendation.transportId === 'A789',
+    'scarce 今宿 route keeps unique experienced driver'
+  );
+  assert(
+    byCode.DSX01 && byCode.DSX01.firstRecommendation.transportId === 'A999',
+    'easy route does not consume scarce driver'
+  );
+  var processing = scarceFirstPlan.routes
+    .slice()
+    .sort(function (a, b) {
+      return a.processingOrder - b.processingOrder;
+    });
+  assert(processing[0].routeCode === 'DSX02', 'scarce route processed first');
+
+  var lookaheadExp = AssignSupportCore.parseExperienceRows(
+    [
+      headers,
+      ['A789', '山田', '原', '30', '2026-08-15', '10', '0', 'high'],
+      ['A789', '山田', '今宿', '20', '2026-08-14', '5', '0', 'high'],
+      ['A999', '佐藤', '原', '25', '2026-08-14', '8', '0', 'high'],
+      ['A888', '鈴木', '今宿', '20', '2026-08-12', '6', '0', 'high'],
+    ],
+    { knownTransportIds: known }
+  );
+  var lookaheadWorkers = [
+    { name: '山田', driverName: '山田', transportId: 'A789', shiftCode: '〇' },
+    { name: '佐藤', driverName: '佐藤', transportId: 'A999', shiftCode: '〇' },
+    { name: '鈴木', driverName: '鈴木', transportId: 'A888', shiftCode: 'C3' },
+  ];
+  var lookaheadRoutes = [
+    { routeCode: 'DSX01', packages: 110, stops: 70, areas: [{ label: '原', role: 'primary' }] },
+    { routeCode: 'DSX02', packages: 80, stops: 70, areas: [{ label: '今宿', role: 'primary' }] },
+  ];
+  var lookaheadPlan = AssignSupportCore.buildFirstAssignPlan(
+    lookaheadRoutes,
+    lookaheadWorkers,
+    lookaheadExp,
+    {
+      cycle: 3,
+    }
+  );
+  var lk = {};
+  for (var li = 0; li < lookaheadPlan.routes.length; li++) {
+    lk[lookaheadPlan.routes[li].routeCode] = lookaheadPlan.routes[li];
+  }
+  assert(
+    lk.DSX01.firstRecommendation.transportId === 'A999',
+    'look-ahead preserves scarce driver for other route'
+  );
+  assert(lk.DSX01.firstRecommendation.displacedCandidate, 'displaced top candidate recorded');
+  assert(
+    lk.DSX02.firstRecommendation.transportId === 'A789',
+    'scarce driver assigned to route that needs them'
+  );
+
+  var highPkgPlan = AssignSupportCore.buildFirstAssignPlan(
+    [{ routeCode: 'DSX90', packages: 90, stops: 70, areas: [{ label: '原', role: 'primary' }] }],
+    [
+      { name: 'A', driverName: 'A', transportId: 'A789', shiftCode: '〇' },
+      { name: 'B', driverName: 'B', transportId: 'A999', shiftCode: '〇' },
+    ],
+    AssignSupportCore.parseExperienceRows(
+      [
+        headers,
+        ['A789', 'A', '原', '20', '2026-08-15', '8', '0', 'high'],
+        ['A999', 'B', '原', '20', '2026-08-14', '8', '0', 'high'],
+      ],
+      { knownTransportIds: known }
+    ),
+    {
+      cycle: 3,
+      getPackagesPerHour: function (_n, tid) {
+        return tid === 'A999' ? 25 : 18;
+      },
+    }
+  );
+  assert(
+    highPkgPlan.routes[0].firstRecommendation.transportId === 'A789',
+    'tier A not beaten by higher capability alone'
+  );
+
+  var det1 = AssignSupportCore.buildFirstAssignPlan(lookaheadRoutes, globalWorkers, globalExp, { cycle: 3 });
+  var det2 = AssignSupportCore.buildFirstAssignPlan(lookaheadRoutes, globalWorkers, globalExp, { cycle: 3 });
+  assert(
+    det1.routes.map(function (r) {
+      return r.firstRecommendation && r.firstRecommendation.transportId;
+    }).join(',') ===
+      det2.routes
+        .map(function (r) {
+          return r.firstRecommendation && r.firstRecommendation.transportId;
+        })
+        .join(','),
+    'deterministic plan on repeated runs'
+  );
+
   console.log('assign-support tests passed');
 }
 
