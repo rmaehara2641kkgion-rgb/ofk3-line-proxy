@@ -600,6 +600,16 @@
     return merged;
   }
 
+  /** Cycle3 は OFK3 運用ルールにより Standard のみ（assignmentData 不要） */
+  function applyCycle3StandardRouteTypes(manifestRoutes) {
+    return (manifestRoutes || []).map(function (route) {
+      return Object.assign({}, route, {
+        routeVehicleType: 'standard',
+        amazonAssignment: null,
+      });
+    });
+  }
+
   function enrichManifestRoutesWithAssignment(manifestRoutes, amazonAssignments) {
     var byRoute = {};
     for (var i = 0; i < (amazonAssignments || []).length; i++) {
@@ -968,9 +978,12 @@
     var workers = filterShiftWorkers(shiftWorkers);
     var cycleFilter = filterWorkersByCycleEligibility(workers, cycle);
     var eligibleWorkers = cycleFilter.eligible;
-    var enrichedRoutes = options.amazonAssignments
-      ? enrichManifestRoutesWithAssignment(manifestRoutes, options.amazonAssignments)
-      : manifestRoutes;
+    var enrichedRoutes =
+      cycle === 3
+        ? applyCycle3StandardRouteTypes(manifestRoutes)
+        : options.amazonAssignments && options.amazonAssignments.length
+          ? enrichManifestRoutesWithAssignment(manifestRoutes, options.amazonAssignments)
+          : manifestRoutes;
     var planOptions = {
       rescueReserveCount: options.rescueReserveCount,
       experienceConfig: config,
@@ -1960,6 +1973,7 @@
     filterWorkersByVehicleType: filterWorkersByVehicleType,
     mergeScheduleIntoShiftWorkers: mergeScheduleIntoShiftWorkers,
     enrichManifestRoutesWithAssignment: enrichManifestRoutesWithAssignment,
+    applyCycle3StandardRouteTypes: applyCycle3StandardRouteTypes,
     parseScheduleCellWorkHint: parseScheduleCellWorkHint,
     evaluateAmazonAssignmentStatus: evaluateAmazonAssignmentStatus,
     buildDriverRouteScore: buildDriverRouteScore,

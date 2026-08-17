@@ -97,7 +97,6 @@ function runTests() {
   ];
   var tierPlan = AssignSupportCore.buildFirstAssignPlan(tierRoute, tierWorkersC3, tierExp, {
     cycle: 3,
-    amazonAssignments: [stdAmazon('DSX10', '山田', 'A789')],
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -110,7 +109,6 @@ function runTests() {
   ];
   var multiPlan = AssignSupportCore.buildFirstAssignPlan(multiRoutes, tierWorkersC3, tierExp, {
     cycle: 3,
-    amazonAssignments: [stdAmazon('DSX10', 'x', 'A789'), stdAmazon('DSX11', 'y', 'A999')],
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -131,7 +129,6 @@ function runTests() {
   ];
   var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkersC3, tierExp, {
     cycle: 3,
-    amazonAssignments: [stdAmazon('DCX99', '山田', 'A789')],
   });
   assert(adminPlan.routes[0].needsAdminReview, 'admin review when no eligible');
 
@@ -264,12 +261,20 @@ function runTests() {
     [{ routeCode: 'DSX1', packages: 50, stops: 40, areas: [{ label: '原', role: 'primary' }] }],
     mixedWorkers,
     tierExp,
-    { cycle: 3, amazonAssignments: [stdAmazon('DSX1', 'Std', 'A999')] }
+    { cycle: 3 }
   );
   assert(
     c3StdPlan.routes[0].firstRecommendation.transportId === 'A999',
     'cycle3 standard route picks maru not bike'
   );
+  assert(c3StdPlan.routes[0].routeVehicleType === 'standard', 'cycle3 route is standard by OFK3 rule');
+  assert(c3StdPlan.routes[0].firstRecommendation, 'cycle3 first pick without assignmentData');
+
+  var c3BikeOnly = AssignSupportCore.filterWorkersByCycleEligibility(
+    [{ name: 'Bike', driverName: 'Bike', transportId: 'A789', shiftCode: 'bike' }],
+    3
+  );
+  assert(c3BikeOnly.eligible.length === 0, 'bike driver not cycle3 eligible');
 
   assert(AssignSupportCore.getAssignModeForCycle(1) === 'evaluate', 'cycle1 evaluate mode');
   assert(AssignSupportCore.getAssignModeForCycle(3) === 'first_pick', 'cycle3 first pick mode');
