@@ -558,6 +558,98 @@
     return routes;
   }
 
+  /** 既存 transportIDs + resolveDriverKey と同じ名寄せで TransportID を解決 */
+  function resolveTransportIdForName(name, transportIDs, resolveDriverKeyFn) {
+    if (!name || !transportIDs) return '';
+    var raw = String(name).trim();
+    if (!raw) return '';
+
+    var keysToTry = [];
+    if (resolveDriverKeyFn) {
+      try {
+        keysToTry.push(resolveDriverKeyFn(raw));
+      } catch (e) {
+        /* resolveDriverKey 未初期化時 */
+      }
+    }
+    keysToTry.push(raw);
+
+    var norm = raw.replace(/\s+/g, ' ').trim();
+    if (norm !== raw) keysToTry.push(norm);
+
+    var noSpace = raw.replace(/[\s\u3000]/g, '');
+    keysToTry.push(noSpace);
+
+    var parts = norm.split(/\s+/);
+    if (parts.length === 2) {
+      keysToTry.push(parts[1] + ' ' + parts[0]);
+      keysToTry.push(parts[1] + parts[0]);
+    }
+
+    var seen = {};
+    for (var i = 0; i < keysToTry.length; i++) {
+      var k = keysToTry[i];
+      if (!k || seen[k]) continue;
+      seen[k] = true;
+      if (transportIDs[k]) return String(transportIDs[k]).trim();
+      if (resolveDriverKeyFn) {
+        var resolved = resolveDriverKeyFn(k);
+        if (resolved && resolved !== k && transportIDs[resolved]) {
+          return String(transportIDs[resolved]).trim();
+        }
+      }
+    }
+
+    if (resolveDriverKeyFn) {
+      var canonical = resolveDriverKeyFn(raw);
+      var canonicalNoSpace = canonical.replace(/[\s\u3000]/g, '');
+      for (var tidKey in transportIDs) {
+        if (!transportIDs[tidKey]) continue;
+        if (resolveDriverKeyFn(tidKey) === canonical) return String(transportIDs[tidKey]).trim();
+        if (tidKey.replace(/[\s\u3000]/g, '') === canonicalNoSpace) {
+          return String(transportIDs[tidKey]).trim();
+        }
+        if (resolveDriverKeyFn(tidKey).replace(/[\s\u3000]/g, '') === canonicalNoSpace) {
+          return String(transportIDs[tidKey]).trim();
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function enrichShiftWorkersWithTransportIds(workers, transportIDs, resolveDriverKeyFn) {
+    if (!workers || !workers.length) {
+      return { workers: [], mappedCount: 0, unmappedNames: [] };
+    }
+    var mappedCount = 0;
+    var unmappedNames = [];
+    for (var i = 0; i < workers.length; i++) {
+      var w = workers[i];
+      var displayName = w.name || w.driverName || '';
+      var tid = w.transportId ? String(w.transportId).trim() : '';
+      if (!tid) {
+        tid = resolveTransportIdForName(displayName, transportIDs, resolveDriverKeyFn);
+      }
+      if (!tid && w.rawName) {
+        tid = resolveTransportIdForName(w.rawName, transportIDs, resolveDriverKeyFn);
+      }
+      w.transportId = tid;
+      if (resolveDriverKeyFn) {
+        try {
+          w.driverName = resolveDriverKeyFn(displayName) || displayName;
+        } catch (e2) {
+          w.driverName = displayName;
+        }
+      } else {
+        w.driverName = displayName;
+      }
+      if (tid) mappedCount++;
+      else unmappedNames.push(w.driverName || displayName);
+    }
+    return { workers: workers, mappedCount: mappedCount, unmappedNames: unmappedNames };
+  }
+
   function extractShiftWorkersFromExecData(execShiftData, targetDay, resolveNameFn, transportIDs) {
     if (!execShiftData || !execShiftData.days) return [];
     var entries = execShiftData.days[targetDay] || [];
@@ -565,11 +657,12 @@
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
       var name = e.name;
-      var key = resolveNameFn ? resolveNameFn(name) : name;
-      var tid = (transportIDs && transportIDs[key]) || '';
+      var driverName = resolveNameFn ? resolveNameFn(name) : name;
+      var tid = resolveTransportIdForName(name, transportIDs, resolveNameFn);
       workers.push({
         name: name,
-        driverName: name,
+        rawName: name,
+        driverName: driverName,
         transportId: tid,
         shiftCode: e.type || '',
         dept: e.dept || '',
@@ -578,13 +671,22 @@
     return workers;
   }
 
-  function extractShiftWorkersFromMaster(shiftMasterData) {
+  function extractShiftWorkersFromMaster(shiftMasterData, transportIDs, resolveDriverKeyFn) {
     if (!shiftMasterData || !shiftMasterData.length) return [];
     return shiftMasterData.map(function (s) {
+      var tid = s.transportId ? String(s.transportId).trim() : '';
+      if (!tid) {
+        tid = resolveTransportIdForName(s.name, transportIDs, resolveDriverKeyFn);
+      }
+      if (!tid && s.rawName) {
+        tid = resolveTransportIdForName(s.rawName, transportIDs, resolveDriverKeyFn);
+      }
+      var driverName = resolveDriverKeyFn ? resolveDriverKeyFn(s.name) : s.name;
       return {
         name: s.name,
-        driverName: s.name,
-        transportId: s.transportId || '',
+        rawName: s.rawName || s.name,
+        driverName: driverName,
+        transportId: tid,
         shiftCode: s.shiftCode || '',
         company: s.company || '',
       };
@@ -611,6 +713,8 @@
     buildAssignSuggestions: buildAssignSuggestions,
     buildKnownTransportIdSet: buildKnownTransportIdSet,
     parseManifestWorkbook: parseManifestWorkbook,
+    resolveTransportIdForName: resolveTransportIdForName,
+    enrichShiftWorkersWithTransportIds: enrichShiftWorkersWithTransportIds,
     extractShiftWorkersFromExecData: extractShiftWorkersFromExecData,
     extractShiftWorkersFromMaster: extractShiftWorkersFromMaster,
   };

@@ -70,7 +70,37 @@ function runTests() {
   assert(rebuilt.ok && rebuilt.stats.drivers === 3, 'rebuild from records');
 
   assert(AssignSupportCore.getExperienceStatusLabel(0) === '未経験', 'status none');
-  assert(AssignSupportCore.getExperienceStatusLabel(18) === '熟練', 'status skilled');
+  assert(AssignSupportCore.getExperienceStatusLabel(20) === '熟練', 'status skilled');
+
+  var mockResolve = function (name) {
+    var aliases = { 'Taro Yamada': '山田 太郎', 'JIRO SATO': '佐藤 次郎' };
+    if (aliases[name]) return aliases[name];
+    return name;
+  };
+  var mockTids = {
+    '山田 太郎': 'A123',
+    '山田太郎': 'A123',
+    '佐藤 次郎': 'A456',
+    'JIRO SATO': 'A456',
+  };
+  assert(
+    AssignSupportCore.resolveTransportIdForName('Taro Yamada', mockTids, mockResolve) === 'A123',
+    'roman alias via resolveDriverKey'
+  );
+  assert(
+    AssignSupportCore.resolveTransportIdForName('次郎 佐藤', mockTids, mockResolve) === 'A456',
+    'name order reversal'
+  );
+  assert(
+    AssignSupportCore.resolveTransportIdForName('山田　太郎', mockTids, mockResolve) === 'A123',
+    'fullwidth space normalized'
+  );
+
+  var rawWorkers = [{ name: 'Taro Yamada', rawName: 'Taro Yamada', shiftCode: 'C1' }];
+  var enriched = AssignSupportCore.enrichShiftWorkersWithTransportIds(rawWorkers, mockTids, mockResolve);
+  assert(enriched.mappedCount === 1, 'enrich mapped count');
+  assert(enriched.workers[0].transportId === 'A123', 'enrich assigns tid');
+  assert(enriched.unmappedNames.length === 0, 'enrich no unmapped');
 
   var filtered = AssignSupportCore.filterExperienceDrivers(expDb, '姪浜');
   assert(filtered.length >= 1, 'area search');

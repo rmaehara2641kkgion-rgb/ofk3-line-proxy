@@ -15,6 +15,8 @@
     manifestRoutes: [],
     shiftWorkers: [],
     shiftSource: '',
+    shiftLinkStats: { mappedCount: 0, unmappedNames: [] },
+    suggestionsGenerated: false,
     rescueCount: 0,
   };
 
@@ -309,6 +311,7 @@
         renderExperienceDashboard();
         return;
       }
+      markSuggestionsStale();
       renderAll();
       alert(state.experience ? 'エリア経験マスタを更新しました' : 'エリア経験マスタを登録しました');
     });
@@ -496,18 +499,50 @@
       box.innerHTML = '<p class="text-sm text-ink-lighter">シフト未読込</p>';
       return;
     }
-    var withTid = state.shiftWorkers.filter(function (w) {
-      return w.transportId;
-    }).length;
-    box.innerHTML =
+    var stats = state.shiftLinkStats || { mappedCount: 0, unmappedNames: [] };
+    var mapped = stats.mappedCount || 0;
+    var unmapped = stats.unmappedNames || [];
+    var html =
       '<p class="text-sm font-bold text-emerald-700">✅ 出勤者 ' +
       state.shiftWorkers.length +
-      '名（TransportID紐付 ' +
-      withTid +
-      '名）</p>' +
-      '<p class="text-xs text-ink-lighter mt-1">ソース: ' +
+      '名</p>' +
+      '<div class="mt-2 text-xs space-y-1">' +
+      '<div>TransportID紐付成功: <strong>' +
+      mapped +
+      '名</strong></div>' +
+      '<div>未紐付: <strong class="' +
+      (unmapped.length ? 'text-amber-800' : '') +
+      '">' +
+      unmapped.length +
+      '名</strong></div>' +
+      '</div>' +
+      '<p class="text-xs text-ink-lighter mt-2">ソース: ' +
       escapeHtml(state.shiftSource) +
       '</p>';
+    if (unmapped.length) {
+      html +=
+        '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-xs">' +
+        '<p class="font-medium text-amber-900">未紐付氏名（マスタ管理で TransportID を確認してください）</p>' +
+        '<p class="mt-1 text-amber-800 break-all">' +
+        escapeHtml(unmapped.slice(0, 20).join('、')) +
+        (unmapped.length > 20 ? ' …他' + (unmapped.length - 20) + '名' : '') +
+        '</p></div>';
+    }
+    box.innerHTML = html;
+  }
+
+  function renderSuggestionsIdle() {
+    var box = el('as-suggest-results');
+    if (!box || state.suggestionsGenerated) return;
+    var ready =
+      state.experience && state.manifestRoutes.length && state.shiftWorkers.length;
+    if (!ready) {
+      box.innerHTML =
+        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・シフトの3つが揃うと候補を生成できます</p>';
+      return;
+    }
+    box.innerHTML =
+      '<p class="text-sm text-ink-lighter py-4 text-center">準備完了。「⚡ オートアサイン提案を生成」を押してください</p>';
   }
 
   function formatAreaResults(areaResults) {
@@ -602,6 +637,11 @@
     }
 
     box.innerHTML = html || '<p class="text-sm text-ink-lighter">候補を生成できませんでした</p>';
+    state.suggestionsGenerated = true;
+  }
+
+  function markSuggestionsStale() {
+    state.suggestionsGenerated = false;
   }
 
   function renderAll() {
@@ -610,7 +650,11 @@
     renderExperienceTable();
     renderManifestSummary();
     renderShiftSummary();
-    renderSuggestions();
+    if (state.suggestionsGenerated) {
+      renderSuggestions();
+    } else {
+      renderSuggestionsIdle();
+    }
   }
 
   function loadExperienceFile(file) {
@@ -649,6 +693,7 @@
         pending--;
         if (pending === 0) {
           state.manifestRoutes = routes;
+          markSuggestionsStale();
           renderAll();
           if (!routes.length) alert('マニフェストからコースを検出できませんでした');
         }
@@ -660,23 +705,31 @@
   function syncShiftFromGlobals() {
     var workers = [];
     var source = '';
+    var resolveFn = getResolveDriverKeyFn();
+    var tidMap = getTransportIDsMap();
 
     if (typeof shiftMasterData !== 'undefined' && shiftMasterData && shiftMasterData.length) {
-      workers = AssignSupportCore.extractShiftWorkersFromMaster(shiftMasterData);
+      workers = AssignSupportCore.extractShiftWorkersFromMaster(shiftMasterData, tidMap, resolveFn);
       source = 'DAシフト表（点呼照合と同形式）';
     } else if (typeof execShiftData !== 'undefined' && execShiftData) {
       var day = new Date().getDate();
       workers = AssignSupportCore.extractShiftWorkersFromExecData(
         execShiftData,
         day,
-        getResolveDriverKeyFn(),
-        getTransportIDsMap()
+        resolveFn,
+        tidMap
       );
       source = '経営シフト表（execShiftData・本日=' + day + '日）';
     }
 
-    state.shiftWorkers = workers;
+    var enriched = AssignSupportCore.enrichShiftWorkersWithTransportIds(workers, tidMap, resolveFn);
+    state.shiftWorkers = enriched.workers;
+    state.shiftLinkStats = {
+      mappedCount: enriched.mappedCount,
+      unmappedNames: enriched.unmappedNames,
+    };
     state.shiftSource = source || '未検出';
+    markSuggestionsStale();
     renderAll();
   }
 
@@ -752,6 +805,25 @@
       loadShiftFile(files[0]);
     });
 
+    var genBtn = el('as-generate-suggestions-btn');
+    if (genBtn) {
+      genBtn.addEventListener('click', function () {
+        if (!state.experience) {
+          alert('エリア経験DBを先に登録してください');
+          return;
+        }
+        if (!state.manifestRoutes.length) {
+          alert('マニフェストを先に読み込んでください');
+          return;
+        }
+        if (!state.shiftWorkers.length) {
+          alert('シフトを先に読み込んでください');
+          return;
+        }
+        renderSuggestions();
+      });
+    }
+
     var search = el('as-exp-search');
     if (search) search.addEventListener('input', renderExperienceTable);
 
@@ -759,7 +831,9 @@
     if (rescue) {
       rescue.addEventListener('change', function () {
         state.rescueCount = Number(rescue.value) || 0;
-        renderSuggestions();
+        if (state.suggestionsGenerated) {
+          renderSuggestions();
+        }
       });
     }
 

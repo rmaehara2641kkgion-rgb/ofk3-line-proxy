@@ -828,6 +828,9 @@
               <input type="number" id="as-rescue-count" min="0" max="20" value="0" class="ml-2 w-16 text-sm border rounded px-2 py-1"> 名
             </label>
             <span class="text-xs text-ink-lighter">（Phase 1: 人数記録のみ）</span>
+            <button type="button" id="as-generate-suggestions-btn" class="btn-primary text-xs px-4 py-1.5 rounded">
+              ⚡ オートアサイン提案を生成
+            </button>
           </div>
           <div id="as-suggest-results"></div>
         </section>
@@ -8870,11 +8873,21 @@ var driverDB = {
         var dispName = driverJapaneseNames[name] || name;
         dispName = normalizeDriverNameOrder(dispName);
 
-        // Transport ID がマスタに登録されていれば保持
-        var transportId = transportIDs[name] || '';
+        // Transport ID — 既存 resolveDriverKey / transportIDs マスタを再利用
+        var transportId = '';
+        if (typeof AssignSupportCore !== 'undefined' && AssignSupportCore.resolveTransportIdForName) {
+          transportId =
+            AssignSupportCore.resolveTransportIdForName(name, transportIDs, resolveDriverKey) ||
+            AssignSupportCore.resolveTransportIdForName(dispName, transportIDs, resolveDriverKey);
+        } else {
+          var resolvedKey = resolveDriverKey(name);
+          transportId =
+            transportIDs[resolvedKey] || transportIDs[name] || transportIDs[dispName] || '';
+        }
 
         shiftMasterData.push({
           name: dispName,
+          rawName: name,
           transportId: transportId,
           shiftCode: normalizedCode || shiftCode,
           company: company
