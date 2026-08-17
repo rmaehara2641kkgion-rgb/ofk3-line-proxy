@@ -822,7 +822,8 @@
 
         <!-- 5. レスキュー人数 + 6. アサイン提案 -->
         <section class="card p-4 mb-4">
-          <h3 class="text-sm font-bold mb-2">アサイン提案</h3>
+          <h3 class="text-sm font-bold mb-2" id="as-assign-section-title">アサイン提案</h3>
+          <p class="text-xs text-ink-lighter mb-2" id="as-assign-section-desc">ManifestのCycleに応じて処理モードが切り替わります</p>
           <div class="flex flex-wrap items-center gap-3 mb-3">
             <label class="text-xs font-medium">レスキュー要員
               <input type="number" id="as-rescue-count" min="0" max="20" value="0" class="ml-2 w-16 text-sm border rounded px-2 py-1"> 名
@@ -4777,6 +4778,10 @@ var driverDB = {
 
         // Transport ID がマスタに登録されていれば保持
         var transportId = transportIDs[name] || '';
+        var cellHints =
+          typeof AssignSupportCore !== 'undefined' && AssignSupportCore.parseScheduleCellWorkHint
+            ? AssignSupportCore.parseScheduleCellWorkHint(cellValue)
+            : {};
 
         tenkoSchedule.push({
           name: dispName,
@@ -4784,6 +4789,9 @@ var driverDB = {
           shiftCode: autoShiftCode,
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
+          scheduleCellText: cellValue,
+          assignRole: cellHints.assignRole || 'regular',
+          vehicleHint: cellHints.vehicleHint || '',
           licenseAuth: false,
           mentorAuth: false,
           temporary: false
@@ -19103,8 +19111,8 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260818-4"></script>
-  <script src="/assign-support.js?v=20260818-4"></script>
+  <script src="/assign-support-core.js?v=20260818-5"></script>
+  <script src="/assign-support.js?v=20260818-5"></script>
   <script src="/tenko-transport-audit.js?v=20260812-3"></script>
   <script src="/tenko-transport-audit-success.js?v=20260812-3"></script>
 </body>

@@ -83,8 +83,21 @@ function runTests() {
     ['A999', '佐藤', '原', '8', '2026-08-14', '2', '0', 'shared'],
   ];
   var tierExp = AssignSupportCore.parseExperienceRows(tierExpRows, { knownTransportIds: known });
-  var tierPlan = AssignSupportCore.buildFirstAssignPlan(tierRoute, tierWorkers, tierExp, {
-    cycle: 1,
+  var stdAmazon = function (routeCode, driverName, tid) {
+    return {
+      routeCode: routeCode,
+      driverName: driverName,
+      serviceType: 'Standard Parcel',
+      transportId: tid,
+    };
+  };
+  var tierWorkersC3 = [
+    { name: '山田', driverName: '山田', transportId: 'A789', shiftCode: '〇' },
+    { name: '佐藤', driverName: '佐藤', transportId: 'A999', shiftCode: '〇' },
+  ];
+  var tierPlan = AssignSupportCore.buildFirstAssignPlan(tierRoute, tierWorkersC3, tierExp, {
+    cycle: 3,
+    amazonAssignments: [stdAmazon('DSX10', '山田', 'A789')],
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -95,8 +108,9 @@ function runTests() {
     { routeCode: 'DSX10', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
     { routeCode: 'DSX11', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
   ];
-  var multiPlan = AssignSupportCore.buildFirstAssignPlan(multiRoutes, tierWorkers, tierExp, {
-    cycle: 1,
+  var multiPlan = AssignSupportCore.buildFirstAssignPlan(multiRoutes, tierWorkersC3, tierExp, {
+    cycle: 3,
+    amazonAssignments: [stdAmazon('DSX10', 'x', 'A789'), stdAmazon('DSX11', 'y', 'A999')],
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -115,7 +129,10 @@ function runTests() {
       areas: [{ label: '存在しないエリア', role: 'primary' }],
     },
   ];
-  var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkers, tierExp, { cycle: 1 });
+  var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkersC3, tierExp, {
+    cycle: 3,
+    amazonAssignments: [stdAmazon('DCX99', '山田', 'A789')],
+  });
   assert(adminPlan.routes[0].needsAdminReview, 'admin review when no eligible');
 
   assert(AssignSupportCore.getPrimaryExperienceTier(20) === 'A', 'tier A at 20');
@@ -188,15 +205,21 @@ function runTests() {
   assert(c1Filter.stats.nonAssignableCount === 1, 'cycle1 excludes training');
 
   var c2Filter = AssignSupportCore.filterWorkersByCycleEligibility(cycleWorkers, 2);
-  assert(c2Filter.eligible.length === 1 && c2Filter.eligible[0].transportId === 'T2', 'cycle2 only hachi');
+  assert(c2Filter.eligible.length === 3, 'cycle2 eligible count');
+  assert(
+    c2Filter.eligible.every(function (w) {
+      return ['T2', 'T4', 'T5'].indexOf(w.transportId) >= 0;
+    }),
+    'cycle2 hachi b2 bike'
+  );
 
   var c3Filter = AssignSupportCore.filterWorkersByCycleEligibility(cycleWorkers, 3);
-  assert(c3Filter.eligible.length === 4, 'cycle3 eligible count');
+  assert(c3Filter.eligible.length === 2, 'cycle3 eligible count');
   assert(
     c3Filter.eligible.every(function (w) {
-      return ['T1', 'T4', 'T5', 'T7'].indexOf(w.transportId) >= 0;
+      return ['T1', 'T7'].indexOf(w.transportId) >= 0;
     }),
-    'cycle3 eligible shifts'
+    'cycle3 maru c3 only'
   );
 
   var cycle2Route = [
@@ -206,39 +229,104 @@ function runTests() {
     { name: '高経験', driverName: '高経験', transportId: 'A789', shiftCode: 'C1' },
     { name: '低経験', driverName: '低経験', transportId: 'A999', shiftCode: '❽' },
   ];
-  var cycle2Plan = AssignSupportCore.buildFirstAssignPlan(cycle2Route, cycle2Workers, tierExp, {
+  var cycle2Eval = AssignSupportCore.buildAmazonAssignEvaluationPlan(cycle2Route, cycle2Workers, tierExp, {
     cycle: 2,
+    amazonAssignments: [stdAmazon('DSX20', '低経験', 'A999')],
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
   });
-  assert(
-    cycle2Plan.routes[0].firstRecommendation.transportId === 'A999',
-    'cycle2 picks hachi shift over high-exp wrong shift'
-  );
-  assert(cycle2Plan.routes[0].recommended.length <= 1, 'cycle2 other lists exclude wrong shift');
+  assert(cycle2Eval.mode === 'evaluate', 'cycle2 evaluate mode');
+  assert(cycle2Eval.routes[0].evaluationStatus === 'ok', 'cycle2 amazon assign ok when experienced');
 
-  var noCyclePlan = AssignSupportCore.buildFirstAssignPlan(cycle2Route, cycle2Workers, tierExp, {});
+  var noCyclePlan = AssignSupportCore.buildAssignPlan(cycle2Route, cycle2Workers, tierExp, {});
   assert(noCyclePlan.cycleError === 'CYCLE_UNKNOWN', 'no cycle stops plan');
 
-  var reuseWorkers = [
+  var bikeAssign = [
+    { routeCode: 'DSX1', driverName: 'Bike', serviceType: 'Biker', transportId: 'A789' },
+  ];
+  var mixedWorkers = [
     { name: 'Bike', driverName: 'Bike', transportId: 'A789', shiftCode: 'bike' },
-    { name: 'Maru', driverName: 'Maru', transportId: 'A999', shiftCode: '〇' },
+    { name: 'Std', driverName: 'Std', transportId: 'A999', shiftCode: '〇' },
   ];
   var c1BikePlan = AssignSupportCore.buildFirstAssignPlan(
     [{ routeCode: 'DSX1', packages: 50, stops: 40, areas: [{ label: '原', role: 'primary' }] }],
-    reuseWorkers,
+    mixedWorkers,
     tierExp,
-    { cycle: 1 }
+    { cycle: 1, amazonAssignments: bikeAssign }
   );
-  var c3BikePlan = AssignSupportCore.buildFirstAssignPlan(
+  assert(
+    c1BikePlan.routes[0].firstRecommendation.transportId === 'A789',
+    'bike route never picks standard worker'
+  );
+
+  var c3StdPlan = AssignSupportCore.buildFirstAssignPlan(
     [{ routeCode: 'DSX1', packages: 50, stops: 40, areas: [{ label: '原', role: 'primary' }] }],
-    reuseWorkers,
+    mixedWorkers,
     tierExp,
-    { cycle: 3 }
+    { cycle: 3, amazonAssignments: [stdAmazon('DSX1', 'Std', 'A999')] }
   );
-  assert(c1BikePlan.routes[0].firstRecommendation, 'cycle1 bike/maru usable');
-  assert(c3BikePlan.routes[0].firstRecommendation, 'cycle3 bike/maru reusable across uploads');
+  assert(
+    c3StdPlan.routes[0].firstRecommendation.transportId === 'A999',
+    'cycle3 standard route picks maru not bike'
+  );
+
+  assert(AssignSupportCore.getAssignModeForCycle(1) === 'evaluate', 'cycle1 evaluate mode');
+  assert(AssignSupportCore.getAssignModeForCycle(3) === 'first_pick', 'cycle3 first pick mode');
+  assert(AssignSupportCore.classifyRouteVehicleType('Biker') === 'bike', 'biker route type');
+  assert(AssignSupportCore.classifyRouteVehicleType('Nursery Route') === 'nursery', 'nursery route type');
+
+  var nurseryWorkers = [
+    { name: 'NurseryDriver', driverName: 'NurseryDriver', transportId: 'A999', shiftCode: '〇' },
+  ];
+  var nurseryEval = AssignSupportCore.buildAmazonAssignEvaluationPlan(
+    [{ routeCode: 'NSX1', packages: 40, stops: 30, areas: [{ label: '原', role: 'primary' }] }],
+    nurseryWorkers,
+    tierExp,
+    {
+      cycle: 1,
+      amazonAssignments: [
+        {
+          routeCode: 'NSX1',
+          driverName: 'NurseryDriver',
+          serviceType: 'Nursery Route Level 1',
+          transportId: 'A999',
+        },
+      ],
+    }
+  );
+  assert(nurseryEval.routes[0].routeVehicleType === 'nursery', 'nursery route not excluded');
+
+  var changeExpRows = [
+    headers,
+    ['A789', '山田', '七隈', '18', '2026-08-15', '10', '0', 'high'],
+    ['A999', '佐藤', '原', '8', '2026-08-14', '2', '0', 'shared'],
+  ];
+  var changeExp = AssignSupportCore.parseExperienceRows(changeExpRows, { knownTransportIds: known });
+  var changeEval = AssignSupportCore.buildAmazonAssignEvaluationPlan(
+    [{ routeCode: 'DSX30', packages: 80, stops: 60, areas: [{ label: '七隈', role: 'primary' }] }],
+    [
+      { name: '山田', driverName: '山田', transportId: 'A789', shiftCode: '〇' },
+      { name: '佐藤', driverName: '佐藤', transportId: 'A999', shiftCode: '〇' },
+    ],
+    changeExp,
+    {
+      cycle: 1,
+      amazonAssignments: [stdAmazon('DSX30', '佐藤', 'A999')],
+    }
+  );
+  assert(changeEval.routes[0].evaluationStatus === 'change_candidate', 'change candidate on clear exp gap');
+
+  var okEval = AssignSupportCore.buildAmazonAssignEvaluationPlan(
+    [{ routeCode: 'DSX10', packages: 84, stops: 70, areas: [{ label: '原', role: 'primary' }] }],
+    tierWorkersC3,
+    tierExp,
+    {
+      cycle: 1,
+      amazonAssignments: [stdAmazon('DSX10', '山田', 'A789')],
+    }
+  );
+  assert(okEval.routes[0].evaluationStatus === 'ok', 'ok when amazon assign tier A');
 
   console.log('assign-support tests passed');
 }

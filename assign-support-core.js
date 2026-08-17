@@ -269,6 +269,11 @@
       for (var wi = 0; wi < shiftWorkers.length; wi++) {
         var worker = shiftWorkers[wi];
         if (!worker.transportId) continue;
+        if (worker.assignRole === 'reserve') continue;
+        if (route.routeVehicleType && route.routeVehicleType !== 'unknown') {
+          var pool = filterWorkersByVehicleType([worker], route.routeVehicleType);
+          if (!pool.length) continue;
+        }
         var expEntry = experienceDb.byTransportId[worker.transportId];
         var evalResult = evaluateDriverForRoute(worker, routeAreas, expEntry);
 
@@ -327,12 +332,15 @@
     });
   }
 
-  /** Cycle × シフト適格性（Phase 1.6・1か所で変更） */
+  /** Cycle × シフト適格性（Phase 1.7 運用モデル） */
   var CYCLE_SHIFT_ELIGIBILITY = {
     1: ['maru', 'b1', 'bike', 'c1'],
-    2: ['hachi'],
-    3: ['maru', 'b2', 'bike', 'c3'],
+    2: ['hachi', 'b2', 'bike'],
+    3: ['maru', 'c3'],
   };
+
+  /** DSP Initiated Work 等・予備枠判定（serviceType / Schedule cell 文字列） */
+  var RESERVE_ASSIGN_PATTERNS = [/DSP\s*Initiated/i, /Initiated\s*Work/i];
 
   /** 通常アサイン候補から除外するシフト記号 */
   var NON_ASSIGNABLE_SHIFT_TYPES = ['研修'];
@@ -490,6 +498,202 @@
       n.match(/OFK3[_\-\s]*CYCLE[_\-\s]*([123])/i) || n.match(/CYCLE[_\-\s]*([123])/i);
     if (m) return Number(m[1]);
     return null;
+  }
+
+  function getAssignModeForCycle(cycle) {
+    var c = Number(cycle);
+    if (c === 3) return 'first_pick';
+    if (c === 1 || c === 2) return 'evaluate';
+    return null;
+  }
+
+  function parseScheduleCellWorkHint(cellText) {
+    var t = String(cellText || '');
+    if (!t) return {};
+    var hints = {};
+    if (/DSP\s*Initiated|Initiated\s*Work/i.test(t)) hints.assignRole = 'reserve';
+    if (/Nursery/i.test(t)) hints.workTypeHint = 'nursery';
+    if (/Bike|Biker|バイク|ﾊﾞｲｸ/i.test(t)) hints.vehicleHint = 'bike';
+    if (/Standard/i.test(t)) hints.vehicleHint = 'standard';
+    return hints;
+  }
+
+  function isReserveServiceType(serviceType) {
+    var st = String(serviceType || '');
+    for (var i = 0; i < RESERVE_ASSIGN_PATTERNS.length; i++) {
+      if (RESERVE_ASSIGN_PATTERNS[i].test(st)) return true;
+    }
+    return false;
+  }
+
+  /** Amazon assignment の serviceType から route vehicle type（routeCode 推測禁止） */
+  function classifyRouteVehicleType(serviceType) {
+    var st = String(serviceType || '');
+    if (!st) return 'unknown';
+    if (st.indexOf('Biker') >= 0) return 'bike';
+    if (st.indexOf('Nursery') >= 0) return 'nursery';
+    if (st.indexOf('Standard') >= 0) return 'standard';
+    return 'unknown';
+  }
+
+  function filterWorkersByVehicleType(workers, routeVehicleType) {
+    if (!routeVehicleType || routeVehicleType === 'unknown') return [];
+    return (workers || []).filter(function (w) {
+      var token = w.normalizedShiftToken || normalizeAssignShiftToken(w.shiftCode || '');
+      if (routeVehicleType === 'bike') return token === 'bike';
+      if (routeVehicleType === 'standard' || routeVehicleType === 'nursery') return token !== 'bike';
+      return false;
+    });
+  }
+
+  function mergeScheduleIntoShiftWorkers(shiftWorkers, scheduleEntries, transportIDs, resolveDriverKeyFn) {
+    shiftWorkers = shiftWorkers || [];
+    scheduleEntries = scheduleEntries || [];
+    if (!scheduleEntries.length) return shiftWorkers.slice();
+
+    var byName = {};
+    for (var si = 0; si < scheduleEntries.length; si++) {
+      var se = scheduleEntries[si];
+      var key = String(se.name || '').trim();
+      if (!key) continue;
+      byName[key] = se;
+    }
+
+    var merged = [];
+    var seen = {};
+    for (var wi = 0; wi < shiftWorkers.length; wi++) {
+      var w = shiftWorkers[wi];
+      var name = String(w.driverName || w.name || '').trim();
+      var sched = byName[name];
+      var out = Object.assign({}, w);
+      if (sched) {
+        if (sched.shiftCode) out.shiftCode = sched.shiftCode;
+        if (sched.transportId) out.transportId = sched.transportId;
+        if (sched.arrivalTime) out.arrivalTime = sched.arrivalTime;
+        if (sched.assignRole) out.assignRole = sched.assignRole;
+        if (sched.vehicleHint) out.vehicleHint = sched.vehicleHint;
+        out.workerSource = 'schedule+shift';
+        seen[name] = true;
+      } else {
+        out.workerSource = out.workerSource || 'shift';
+      }
+      merged.push(out);
+    }
+
+    for (var sj = 0; sj < scheduleEntries.length; sj++) {
+      var se2 = scheduleEntries[sj];
+      var n2 = String(se2.name || '').trim();
+      if (!n2 || seen[n2]) continue;
+      var tid = se2.transportId || resolveTransportIdForName(n2, transportIDs || {}, resolveDriverKeyFn);
+      merged.push({
+        name: n2,
+        driverName: n2,
+        rawName: n2,
+        transportId: tid,
+        shiftCode: se2.shiftCode || '',
+        arrivalTime: se2.arrivalTime || '',
+        assignRole: se2.assignRole || 'regular',
+        vehicleHint: se2.vehicleHint || '',
+        workerSource: 'schedule',
+      });
+    }
+    return merged;
+  }
+
+  function enrichManifestRoutesWithAssignment(manifestRoutes, amazonAssignments) {
+    var byRoute = {};
+    for (var i = 0; i < (amazonAssignments || []).length; i++) {
+      var a = amazonAssignments[i];
+      if (a && a.routeCode) byRoute[a.routeCode] = a;
+    }
+    return (manifestRoutes || []).map(function (route) {
+      var amz = byRoute[route.routeCode];
+      var vehicleType = amz ? classifyRouteVehicleType(amz.serviceType) : 'unknown';
+      return Object.assign({}, route, {
+        routeVehicleType: vehicleType,
+        amazonAssignment: amz
+          ? {
+              driverName: amz.driverName || '',
+              serviceType: amz.serviceType || '',
+              transportId: amz.transportId || '',
+              isReserve: !!amz.isReserve,
+            }
+          : null,
+      });
+    });
+  }
+
+  function evaluateAmazonAssignmentStatus(currentScore, bestAlternative, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    if (!currentScore || !currentScore.transportId) return 'admin_review';
+
+    var currentTier = tierRank(currentScore.primaryTier);
+    var currentDays = Number(currentScore.primaryExperienceDays) || 0;
+
+    if (currentTier >= tierRank('B')) return 'ok';
+    if (currentTier >= tierRank('C') && currentScore.primaryConfidence === 'high') return 'ok';
+    if (
+      currentDays >= config.TIER_D_MIN_DAYS &&
+      currentScore.primaryConfidence === 'high' &&
+      (!bestAlternative || tierRank(bestAlternative.primaryTier) < tierRank('B'))
+    ) {
+      return 'ok';
+    }
+
+    if (bestAlternative && isEligibleForFirstRecommendation(bestAlternative, config)) {
+      var altTier = tierRank(bestAlternative.primaryTier);
+      var altDays = Number(bestAlternative.primaryExperienceDays) || 0;
+      if (currentDays === 0 && altDays >= config.TIER_B_MIN_DAYS) return 'change_candidate';
+      if (currentTier <= tierRank('D') && altTier >= tierRank('B') && altDays - currentDays >= 10) {
+        return 'change_candidate';
+      }
+      if (currentTier <= tierRank('C') && altTier >= tierRank('A') && altDays >= config.EXPERT_EXPERIENCE_DAYS) {
+        return 'change_candidate';
+      }
+    }
+
+    if (currentDays >= config.TIER_D_MIN_DAYS) return 'ok';
+    if (!bestAlternative) return 'admin_review';
+    return 'ok';
+  }
+
+  function buildAmazonEvaluationReasons(currentScore, suggested, status, route, config, cycle) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var reasons = [];
+    reasons.push('Cycle：Cycle ' + cycle);
+    if (route.routeVehicleType && route.routeVehicleType !== 'unknown') {
+      reasons.push('Route種別：' + route.routeVehicleType);
+    }
+    if (route.amazonAssignment && route.amazonAssignment.driverName) {
+      reasons.push('Amazonアサイン：' + route.amazonAssignment.driverName);
+    }
+    if (currentScore && currentScore.primaryArea) {
+      reasons.push(
+        '現在担当 主エリア：' +
+          currentScore.primaryArea +
+          ' ' +
+          (currentScore.primaryExperienceDays || 0) +
+          '日'
+      );
+      if (currentScore.primaryConfidence) reasons.push('confidence：' + currentScore.primaryConfidence);
+    }
+    if (status === 'change_candidate' && suggested) {
+      reasons.push(
+        '推奨変更：' +
+          suggested.driverName +
+          '（主' +
+          (suggested.primaryExperienceDays || 0) +
+          '日/Tier' +
+          suggested.primaryTier +
+          '）'
+      );
+      reasons.push('理由：主エリア経験差が明確');
+    } else if (status === 'ok') {
+      reasons.push('判定：Amazonアサイン良好・変更不要');
+    } else {
+      reasons.push('判定：管理者確認（適性評価不能または候補不足）');
+    }
+    return reasons;
   }
 
   function detectManifestCycleFromSources(sources) {
@@ -738,13 +942,14 @@
   }
 
   /**
-   * Phase 1.5: 経験優先 + greedy 全体配分で第一推奨を1名ずつ決定
+   * Phase 1.5: 経験優先 + greedy 全体配分で第一推奨を1名ずつ決定（Cycle 3）
    */
   function buildFirstAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
     options = options || {};
     var cycle = Number(options.cycle);
     if (!cycle || cycle < 1 || cycle > 3) {
       return {
+        mode: 'first_pick',
         cycleError: 'CYCLE_UNKNOWN',
         routes: [],
         summary: {
@@ -763,6 +968,9 @@
     var workers = filterShiftWorkers(shiftWorkers);
     var cycleFilter = filterWorkersByCycleEligibility(workers, cycle);
     var eligibleWorkers = cycleFilter.eligible;
+    var enrichedRoutes = options.amazonAssignments
+      ? enrichManifestRoutesWithAssignment(manifestRoutes, options.amazonAssignments)
+      : manifestRoutes;
     var planOptions = {
       rescueReserveCount: options.rescueReserveCount,
       experienceConfig: config,
@@ -770,19 +978,34 @@
       cycle: cycle,
     };
 
-    var suggestions = buildAssignSuggestions(manifestRoutes, eligibleWorkers, experienceDb, planOptions);
+    var suggestions = buildAssignSuggestions(enrichedRoutes, eligibleWorkers, experienceDb, planOptions);
     var suggestionByRoute = {};
     for (var si = 0; si < suggestions.length; si++) {
       suggestionByRoute[suggestions[si].routeCode] = suggestions[si];
     }
 
     var routeWork = [];
-    for (var ri = 0; ri < manifestRoutes.length; ri++) {
-      var route = manifestRoutes[ri];
+    for (var ri = 0; ri < enrichedRoutes.length; ri++) {
+      var route = enrichedRoutes[ri];
       if (!route.areas || !route.areas.length) continue;
+      var routeVehicleType = route.routeVehicleType || 'unknown';
+      if (routeVehicleType === 'unknown') {
+        routeWork.push({
+          route: route,
+          scored: [],
+          vehicleUnknown: true,
+          tierACount: 0,
+          tierBCount: 0,
+          eligibleCount: 0,
+        });
+        continue;
+      }
+      var vehicleWorkers = filterWorkersByVehicleType(eligibleWorkers, routeVehicleType).filter(function (w) {
+        return w.assignRole !== 'reserve';
+      });
       var scored = [];
-      for (var wi = 0; wi < eligibleWorkers.length; wi++) {
-        var worker = eligibleWorkers[wi];
+      for (var wi = 0; wi < vehicleWorkers.length; wi++) {
+        var worker = vehicleWorkers[wi];
         if (!worker.transportId) continue;
         var expEntry = experienceDb.byTransportId[worker.transportId];
         scored.push(buildDriverRouteScore(worker, route, expEntry, planOptions));
@@ -826,16 +1049,19 @@
       };
 
       var firstPick = null;
-      for (var pi = 0; pi < rw.scored.length; pi++) {
-        var cand = rw.scored[pi];
-        if (assignedTids[cand.transportId]) continue;
-        if (!isEligibleForFirstRecommendation(cand, config)) continue;
-        firstPick = cand;
-        assignedTids[cand.transportId] = true;
-        break;
+      var needsAdminReview = !!rw.vehicleUnknown;
+      if (!rw.vehicleUnknown) {
+        for (var pi = 0; pi < rw.scored.length; pi++) {
+          var cand = rw.scored[pi];
+          if (assignedTids[cand.transportId]) continue;
+          if (!isEligibleForFirstRecommendation(cand, config)) continue;
+          firstPick = cand;
+          assignedTids[cand.transportId] = true;
+          break;
+        }
+        if (!firstPick) needsAdminReview = true;
       }
 
-      var needsAdminReview = !firstPick;
       if (firstPick) confirmedCount++;
       else adminReviewCount++;
 
@@ -858,6 +1084,7 @@
         packages: base.packages,
         stops: base.stops,
         areas: base.areas,
+        routeVehicleType: rw.route.routeVehicleType || 'unknown',
         recommended: base.recommended,
         partial: base.partial,
         unexperienced: base.unexperienced,
@@ -879,6 +1106,7 @@
             }
           : null,
         needsAdminReview: needsAdminReview,
+        vehicleUnknown: !!rw.vehicleUnknown,
         otherCandidates: otherCandidates,
         processingOrder: rwi + 1,
       });
@@ -898,6 +1126,7 @@
     }
 
     return {
+      mode: 'first_pick',
       routes: routesOut,
       summary: {
         confirmedCount: confirmedCount,
@@ -910,6 +1139,168 @@
       cycleEligibility: cycleFilter.stats,
       experienceConfig: config,
     };
+  }
+
+  /**
+   * Phase 1.7: Cycle 1/2 — Amazon既存アサインを経験DBで評価し変更提案
+   */
+  function buildAmazonAssignEvaluationPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
+    options = options || {};
+    var cycle = Number(options.cycle);
+    if (cycle !== 1 && cycle !== 2) {
+      return {
+        mode: 'evaluate',
+        cycleError: 'INVALID_CYCLE_FOR_EVAL',
+        routes: [],
+        summary: { okCount: 0, changeCandidateCount: 0, adminReviewCount: 0, totalRoutes: 0 },
+      };
+    }
+    if (!options.amazonAssignments || !options.amazonAssignments.length) {
+      return {
+        mode: 'evaluate',
+        assignmentError: 'AMAZON_ASSIGNMENT_REQUIRED',
+        routes: [],
+        summary: { okCount: 0, changeCandidateCount: 0, adminReviewCount: 0, totalRoutes: 0 },
+        cycle: cycle,
+      };
+    }
+
+    var config = Object.assign({}, ASSIGN_EXPERIENCE_CONFIG, options.experienceConfig || {});
+    var workers = filterShiftWorkers(shiftWorkers);
+    var cycleFilter = filterWorkersByCycleEligibility(workers, cycle);
+    var cycleEligibleWorkers = cycleFilter.eligible;
+    var enrichedRoutes = enrichManifestRoutesWithAssignment(manifestRoutes, options.amazonAssignments);
+    var planOptions = {
+      experienceConfig: config,
+      getPackagesPerHour: options.getPackagesPerHour,
+      cycle: cycle,
+    };
+
+    var routesOut = [];
+    var okCount = 0;
+    var changeCount = 0;
+    var adminCount = 0;
+
+    for (var ri = 0; ri < enrichedRoutes.length; ri++) {
+      var route = enrichedRoutes[ri];
+      if (!route.areas || !route.areas.length) continue;
+
+      var vehicleType = route.routeVehicleType || 'unknown';
+      if (vehicleType === 'unknown') {
+        routesOut.push({
+          routeCode: route.routeCode,
+          packages: route.packages,
+          stops: route.stops,
+          areas: route.areas,
+          routeVehicleType: vehicleType,
+          amazonAssignment: route.amazonAssignment,
+          evaluationStatus: 'admin_review',
+          evaluationReasons: buildAmazonEvaluationReasons(null, null, 'admin_review', route, config, cycle),
+        });
+        adminCount++;
+        continue;
+      }
+
+      var vehicleWorkers = filterWorkersByVehicleType(cycleEligibleWorkers, vehicleType);
+      var regularWorkers = vehicleWorkers.filter(function (w) {
+        return w.assignRole !== 'reserve';
+      });
+
+      var scored = [];
+      for (var wi = 0; wi < regularWorkers.length; wi++) {
+        var worker = regularWorkers[wi];
+        if (!worker.transportId) continue;
+        scored.push(
+          buildDriverRouteScore(worker, route, experienceDb.byTransportId[worker.transportId], planOptions)
+        );
+      }
+      scored.sort(compareDriverRouteScores);
+
+      var amz = route.amazonAssignment;
+      var currentScore = null;
+      if (amz && amz.driverName) {
+        for (var ci = 0; ci < vehicleWorkers.length; ci++) {
+          var cw = vehicleWorkers[ci];
+          if (!cw.transportId) continue;
+          if ((cw.driverName || cw.name) === amz.driverName || cw.transportId === amz.transportId) {
+            currentScore = buildDriverRouteScore(
+              cw,
+              route,
+              experienceDb.byTransportId[cw.transportId],
+              planOptions
+            );
+            break;
+          }
+        }
+        if (!currentScore && amz.transportId) {
+          currentScore = buildDriverRouteScore(
+            { driverName: amz.driverName, transportId: amz.transportId, shiftCode: '' },
+            route,
+            experienceDb.byTransportId[amz.transportId],
+            planOptions
+          );
+        }
+      }
+
+      var bestAlt = null;
+      for (var bi = 0; bi < scored.length; bi++) {
+        if (!isEligibleForFirstRecommendation(scored[bi], config)) continue;
+        if (currentScore && scored[bi].transportId === currentScore.transportId) continue;
+        bestAlt = scored[bi];
+        break;
+      }
+
+      var evalStatus = evaluateAmazonAssignmentStatus(currentScore, bestAlt, config);
+      if (evalStatus === 'ok') okCount++;
+      else if (evalStatus === 'change_candidate') changeCount++;
+      else adminCount++;
+
+      routesOut.push({
+        routeCode: route.routeCode,
+        packages: route.packages,
+        stops: route.stops,
+        areas: route.areas,
+        routeVehicleType: vehicleType,
+        amazonAssignment: amz,
+        evaluationStatus: evalStatus,
+        currentEvaluation: currentScore,
+        suggestedChange: evalStatus === 'change_candidate' ? bestAlt : null,
+        alternativeCandidates: scored.slice(0, 8),
+        evaluationReasons: buildAmazonEvaluationReasons(currentScore, bestAlt, evalStatus, route, config, cycle),
+      });
+    }
+
+    routesOut.sort(function (a, b) {
+      return String(a.routeCode).localeCompare(b.routeCode);
+    });
+
+    return {
+      mode: 'evaluate',
+      cycle: cycle,
+      routes: routesOut,
+      summary: {
+        okCount: okCount,
+        changeCandidateCount: changeCount,
+        adminReviewCount: adminCount,
+        totalRoutes: routesOut.length,
+      },
+      cycleEligibility: cycleFilter.stats,
+      experienceConfig: config,
+    };
+  }
+
+  /** Cycle に応じて evaluate / first_pick を切替 */
+  function buildAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
+    options = options || {};
+    var cycle = Number(options.cycle);
+    var mode = getAssignModeForCycle(cycle);
+    if (mode === 'evaluate') {
+      return buildAmazonAssignEvaluationPlan(manifestRoutes, shiftWorkers, experienceDb, options);
+    }
+    if (mode === 'first_pick') {
+      return buildFirstAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options);
+    }
+    return buildFirstAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options);
   }
 
   function buildKnownTransportIdSet(transportIDs) {
@@ -1562,6 +1953,15 @@
     evaluateDriverForRoute: evaluateDriverForRoute,
     buildAssignSuggestions: buildAssignSuggestions,
     buildFirstAssignPlan: buildFirstAssignPlan,
+    buildAmazonAssignEvaluationPlan: buildAmazonAssignEvaluationPlan,
+    buildAssignPlan: buildAssignPlan,
+    getAssignModeForCycle: getAssignModeForCycle,
+    classifyRouteVehicleType: classifyRouteVehicleType,
+    filterWorkersByVehicleType: filterWorkersByVehicleType,
+    mergeScheduleIntoShiftWorkers: mergeScheduleIntoShiftWorkers,
+    enrichManifestRoutesWithAssignment: enrichManifestRoutesWithAssignment,
+    parseScheduleCellWorkHint: parseScheduleCellWorkHint,
+    evaluateAmazonAssignmentStatus: evaluateAmazonAssignmentStatus,
     buildDriverRouteScore: buildDriverRouteScore,
     compareDriverRouteScores: compareDriverRouteScores,
     isShiftNonDriverRow: isShiftNonDriverRow,
@@ -1570,6 +1970,7 @@
     NON_ASSIGNABLE_SHIFT_TYPES: NON_ASSIGNABLE_SHIFT_TYPES,
     normalizeAssignShiftToken: normalizeAssignShiftToken,
     isNonAssignableShift: isNonAssignableShift,
+    isReserveServiceType: isReserveServiceType,
     isShiftEligibleForCycle: isShiftEligibleForCycle,
     filterWorkersByCycleEligibility: filterWorkersByCycleEligibility,
     detectManifestCycleFromSources: detectManifestCycleFromSources,
