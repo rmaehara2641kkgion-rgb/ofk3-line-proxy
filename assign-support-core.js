@@ -657,7 +657,8 @@
     var transportIDs = options.transportIDs || {};
     var resolveDriverKeyFn = options.resolveDriverKeyFn;
     var driverDB = options.driverDB || {};
-    var sampleLimit = options.sampleLimit || 15;
+    var driverJapaneseNames = options.driverJapaneseNames || {};
+    var sampleLimit = options.sampleLimit || 10;
 
     var keys = Object.keys(transportIDs);
     var nonEmptyKeys = keys.filter(function (k) {
@@ -671,6 +672,38 @@
         out.push({ key: mapKeys[i], value: map[mapKeys[i]] });
       }
       return out;
+    }
+
+    function fmtDirectMatches(matches) {
+      if (!matches || !matches.length) return '(なし)';
+      return matches
+        .map(function (m) {
+          return m.key + '=' + m.value;
+        })
+        .join('; ');
+    }
+
+    function fmtReverseCandidates(list) {
+      if (!list || !list.length) return '(なし)';
+      return list
+        .map(function (m) {
+          return m.key + '=' + m.value;
+        })
+        .join('; ');
+    }
+
+    function fmtJapaneseCandidates(list) {
+      if (!list || !list.length) return '(なし)';
+      return list
+        .map(function (m) {
+          return m.masterKey + '(' + m.japaneseName + ')=' + (m.transportId || '-');
+        })
+        .join('; ');
+    }
+
+    function fmtDriverDbMatches(list) {
+      if (!list || !list.length) return '(なし)';
+      return list.join('; ');
     }
 
     function inspectName(rawName, displayName) {
@@ -700,12 +733,6 @@
         uniqueCandidates.push(ck);
       }
 
-      var transportIdLookups = {};
-      for (var li = 0; li < uniqueCandidates.length; li++) {
-        var lookupKey = uniqueCandidates[li];
-        transportIdLookups[lookupKey] = transportIDs[lookupKey] || null;
-      }
-
       var exactKeyMatches = [];
       for (var ei = 0; ei < keys.length; ei++) {
         var ek = keys[ei];
@@ -714,14 +741,31 @@
         }
       }
 
-      var partialKeyMatches = [];
-      var rawLower = noSpace.toLowerCase();
-      for (var pi = 0; pi < keys.length && partialKeyMatches.length < 8; pi++) {
-        var pk = keys[pi];
-        var pkNoSpace = pk.replace(/[\s\u3000]/g, '').toLowerCase();
-        if (!pkNoSpace || pkNoSpace === rawLower) continue;
-        if (pkNoSpace.indexOf(rawLower) >= 0 || rawLower.indexOf(pkNoSpace) >= 0) {
-          partialKeyMatches.push({ key: pk, value: transportIDs[pk] });
+      var japaneseNameCandidates = [];
+      for (var jpKey in driverJapaneseNames) {
+        var jpVal = String(driverJapaneseNames[jpKey] || '').trim();
+        if (!jpVal) continue;
+        var jpValNoSpace = jpVal.replace(/[\s\u3000]/g, '');
+        if (jpVal === raw || jpVal === norm || jpValNoSpace === noSpace || jpVal === resolved) {
+          japaneseNameCandidates.push({
+            masterKey: jpKey,
+            japaneseName: jpVal,
+            transportId: transportIDs[jpKey] || null,
+          });
+        }
+      }
+
+      var reverseCandidates = [];
+      if (resolveDriverKeyFn && resolved && resolved.indexOf('error:') < 0) {
+        for (var ri = 0; ri < keys.length && reverseCandidates.length < 8; ri++) {
+          var rk = keys[ri];
+          try {
+            if (resolveDriverKeyFn(rk) === resolved) {
+              reverseCandidates.push({ key: rk, value: transportIDs[rk] });
+            }
+          } catch (e2) {
+            /* skip */
+          }
         }
       }
 
@@ -733,19 +777,30 @@
         driverDbMatches.push(resolved);
       }
 
+      var finalTransportId = resolveTransportIdForName(raw, transportIDs, resolveDriverKeyFn) || null;
+
       return {
         rawName: raw,
         displayName: displayName || raw,
+        normalized: norm,
         resolveDriverKey: resolved,
-        whitespaceNormalized: norm,
-        noSpace: noSpace,
-        reversedCandidate: reversed,
-        reversedNoSpace: reversedNoSpace,
-        transportIdLookups: transportIdLookups,
-        exactKeyMatches: exactKeyMatches,
-        partialKeyMatches: partialKeyMatches,
+        reversedCandidate: reversed || reversedNoSpace || '(なし)',
+        japaneseNameCandidates: japaneseNameCandidates,
+        transportIdsDirectMatch: exactKeyMatches,
+        transportIdsReverseCandidates: reverseCandidates,
         driverDbMatches: driverDbMatches,
-        resolvedTransportId: resolveTransportIdForName(raw, transportIDs, resolveDriverKeyFn) || null,
+        finalTransportId: finalTransportId,
+        tableRow: {
+          rawName: raw,
+          normalize後: norm,
+          resolveDriverKey: resolved,
+          姓名反転候補: reversed || reversedNoSpace || '(なし)',
+          japaneseName候補: fmtJapaneseCandidates(japaneseNameCandidates),
+          transportIDs直接一致結果: fmtDirectMatches(exactKeyMatches),
+          transportIDs逆引き一致候補: fmtReverseCandidates(reverseCandidates),
+          driverDB一致候補: fmtDriverDbMatches(driverDbMatches),
+          finalTransportId: finalTransportId || '(未紐付)',
+        },
       };
     }
 
@@ -755,28 +810,84 @@
       samples.push(inspectName(w.rawName || w.name, w.name || w.driverName));
     }
 
+    var totalKeys = keys.length;
+    var localStorageCount = options.localStorageCount || 0;
+    var globalCount = options.globalTransportIDsCount || 0;
+    var windowCount = options.windowTransportIDsCount || 0;
+    var inferredCase = 'unknown';
+
+    if (totalKeys === 0 && localStorageCount === 0 && windowCount === 0) {
+      inferredCase = 'A';
+    } else if (totalKeys === 0 && (localStorageCount >= 80 || windowCount >= 80)) {
+      inferredCase = 'B';
+    } else if (totalKeys >= 1 && samples.length > 0) {
+      var allNull = true;
+      for (var si = 0; si < samples.length; si++) {
+        if (samples[si].finalTransportId) {
+          allNull = false;
+          break;
+        }
+      }
+      if (allNull) inferredCase = 'C';
+    }
+
     return {
       at: new Date().toISOString(),
+      inferredCase: inferredCase,
+      inferredCaseLabel:
+        inferredCase === 'A'
+          ? 'ケースA: マスタロード順・GAS未完了'
+          : inferredCase === 'B'
+            ? 'ケースB: 外部JSスコープ参照問題'
+            : inferredCase === 'C'
+              ? 'ケースC: キー形式名寄せ問題'
+              : '判定不能（要Console確認）',
       meta: {
         transportIDsSource: options.transportIDsSource || 'unknown',
         globalTransportIDsDefined: !!options.globalTransportIDsDefined,
-        globalTransportIDsCount: options.globalTransportIDsCount || 0,
+        globalTransportIDsCount: globalCount,
         globalTransportIDsSample: options.globalTransportIDsSample || [],
-        localStorageCount: options.localStorageCount || 0,
+        windowTransportIDsDefined: !!options.windowTransportIDsDefined,
+        windowTransportIDsCount: windowCount,
+        windowTransportIDsSample: options.windowTransportIDsSample || [],
+        localStorageCount: localStorageCount,
         localStorageSample: options.localStorageSample || [],
-        mapUsedCount: keys.length,
+        mapUsedCount: totalKeys,
         resolveDriverKeyAvailable: typeof resolveDriverKeyFn === 'function',
         driverDBCount: Object.keys(driverDB).length,
+        driverJapaneseNamesCount: Object.keys(driverJapaneseNames).length,
         masterLoadStatus: options.masterLoadStatus || null,
         shiftProcessedAt: options.shiftProcessedAt || null,
       },
       transportIDs: {
-        totalKeys: keys.length,
+        totalKeys: totalKeys,
         nonEmptyValues: nonEmptyKeys.length,
         first10: firstEntries(transportIDs, 10),
       },
+      shift: {
+        attendanceCount: options.attendanceCount || workers.length,
+        mappedCount: options.mappedCount || 0,
+        unmappedCount: options.unmappedCount || 0,
+        unmappedNames: options.unmappedNames || [],
+      },
       workerCount: workers.length,
       samples: samples,
+      representativeTable: samples.map(function (s) {
+        return s.tableRow;
+      }),
+      representative3: samples.slice(0, 3).map(function (s) {
+        var tidKey =
+          (s.transportIdsDirectMatch[0] && s.transportIdsDirectMatch[0].key) ||
+          (s.transportIdsReverseCandidates[0] && s.transportIdsReverseCandidates[0].key) ||
+          (s.japaneseNameCandidates[0] && s.japaneseNameCandidates[0].masterKey) ||
+          '-';
+        return {
+          シフト氏名: s.rawName,
+          resolveDriverKey: s.resolveDriverKey,
+          transportIDsキー: tidKey,
+          TransportID: s.finalTransportId || '(未紐付)',
+        };
+      }),
     };
   }
 

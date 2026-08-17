@@ -48,12 +48,21 @@
     return typeof transportIDs !== 'undefined' ? transportIDs : {};
   }
 
-  function readTransportIdsFromLocalStorage() {
+  function readJsonFromLocalStorage(key) {
     try {
-      return JSON.parse(localStorage.getItem('transportIDs') || '{}');
+      return JSON.parse(localStorage.getItem(key) || '{}');
     } catch (e) {
       return {};
     }
+  }
+
+  function readTransportIdsFromLocalStorage() {
+    return readJsonFromLocalStorage('transportIDs');
+  }
+
+  function readDriverJapaneseNamesForDiagnosis() {
+    if (typeof driverJapaneseNames !== 'undefined') return driverJapaneseNames;
+    return readJsonFromLocalStorage('driverJapaneseNames');
   }
 
   function gatherTransportIdsForDiagnosis() {
@@ -62,14 +71,26 @@
     var globalDefined = typeof transportIDs !== 'undefined';
     var globalMap = globalDefined ? transportIDs : {};
     var globalKeys = globalDefined ? Object.keys(globalMap) : [];
-    var usedMap = globalDefined ? globalMap : lsMap;
-    var usedSource = globalDefined ? 'global transportIDs (inline script)' : 'localStorage only (global transportIDs undefined)';
+    var windowDefined = typeof window !== 'undefined' && typeof window.transportIDs !== 'undefined';
+    var windowMap = windowDefined ? window.transportIDs : {};
+    var windowKeys = windowDefined ? Object.keys(windowMap) : [];
+    var usedMap = globalDefined ? globalMap : windowDefined ? windowMap : lsMap;
+    var usedSource = globalDefined
+      ? 'global transportIDs (inline script let)'
+      : windowDefined
+        ? 'window.transportIDs'
+        : 'localStorage only (global/window transportIDs undefined)';
 
     return {
       globalDefined: globalDefined,
       globalCount: globalKeys.length,
       globalSample: globalKeys.slice(0, 10).map(function (k) {
         return { key: k, value: globalMap[k] };
+      }),
+      windowDefined: windowDefined,
+      windowCount: windowKeys.length,
+      windowSample: windowKeys.slice(0, 10).map(function (k) {
+        return { key: k, value: windowMap[k] };
       }),
       localStorageCount: lsKeys.length,
       localStorageSample: lsKeys.slice(0, 10).map(function (k) {
@@ -81,88 +102,93 @@
     };
   }
 
-  function logShiftTransportIdDiagnosis(workers) {
+  function logShiftTransportIdDiagnosis(workers, linkStats) {
     if (!workers || !workers.length || typeof AssignSupportCore.diagnoseTransportIdLinking !== 'function') {
       return null;
     }
 
+    linkStats = linkStats || {};
     var tidSources = gatherTransportIdsForDiagnosis();
+    var driverDbMap = typeof driverDB !== 'undefined' ? driverDB : {};
+    var driverDbCount = Object.keys(driverDbMap).length;
+    var jpNames = readDriverJapaneseNamesForDiagnosis();
+
     var report = AssignSupportCore.diagnoseTransportIdLinking({
       workers: workers,
       transportIDs: tidSources.map,
       resolveDriverKeyFn: getResolveDriverKeyFn(),
-      driverDB: typeof driverDB !== 'undefined' ? driverDB : {},
-      sampleLimit: 20,
+      driverDB: driverDbMap,
+      driverJapaneseNames: jpNames,
+      sampleLimit: 10,
       transportIDsSource: tidSources.usedSource,
       globalTransportIDsDefined: tidSources.globalDefined,
       globalTransportIDsCount: tidSources.globalCount,
       globalTransportIDsSample: tidSources.globalSample,
+      windowTransportIDsDefined: tidSources.windowDefined,
+      windowTransportIDsCount: tidSources.windowCount,
+      windowTransportIDsSample: tidSources.windowSample,
       localStorageCount: tidSources.localStorageCount,
       localStorageSample: tidSources.localStorageSample,
       masterLoadStatus: typeof window !== 'undefined' ? window.__ofk3MasterLoadStatus || null : null,
       shiftProcessedAt: Date.now(),
+      attendanceCount: workers.length,
+      mappedCount: linkStats.mappedCount || 0,
+      unmappedCount: (linkStats.unmappedNames || []).length,
+      unmappedNames: linkStats.unmappedNames || [],
     });
 
     console.group('[AssignSupport] TransportID 紐付診断');
     console.log('診断時刻:', report.at);
+    console.log('自動判定:', report.inferredCase, '-', report.inferredCaseLabel);
+
+    console.log('=== マスタ状態 ===');
+    console.table([
+      {
+        'transportIDs.totalKeys': report.transportIDs.totalKeys,
+        'localStorage件数': report.meta.localStorageCount,
+        'global参照可能': report.meta.globalTransportIDsDefined,
+        'global件数': report.meta.globalTransportIDsCount,
+        'window.transportIDs有無': report.meta.windowTransportIDsDefined,
+        'window件数': report.meta.windowTransportIDsCount,
+        driverJapaneseNames件数: report.meta.driverJapaneseNamesCount,
+        driverDB件数: report.meta.driverDBCount,
+      },
+    ]);
     console.log('transportIDs 参照ソース:', report.meta.transportIDsSource);
-    console.log('global transportIDs 参照可能:', report.meta.globalTransportIDsDefined);
-    console.log('global transportIDs 件数:', report.meta.globalTransportIDsCount);
-    console.log('localStorage transportIDs 件数:', report.meta.localStorageCount);
+    console.log('__ofk3MasterLoadStatus:', report.meta.masterLoadStatus || '(未設定)');
     if (tidSources.mismatch) {
       console.warn(
-        'global と localStorage の件数が一致しません:',
+        'global と localStorage の件数不一致:',
         report.meta.globalTransportIDsCount,
         'vs',
         report.meta.localStorageCount
       );
     }
-    if (report.meta.masterLoadStatus) {
-      console.log('マスタGAS読込状態:', report.meta.masterLoadStatus);
-    } else {
-      console.warn('マスタGAS読込未完了の可能性（window.__ofk3MasterLoadStatus なし）');
-    }
-    console.log('診断に使用した transportIDs:', report.transportIDs);
+    console.log('transportIDs 先頭10件:');
     console.table(report.transportIDs.first10);
     if (report.meta.localStorageSample.length) {
-      console.log('localStorage 先頭10件:', report.meta.localStorageSample);
-    }
-    if (report.meta.globalTransportIDsSample.length) {
-      console.log('global 先頭10件:', report.meta.globalTransportIDsSample);
+      console.log('localStorage transportIDs 先頭10件:', report.meta.localStorageSample);
     }
 
-    for (var i = 0; i < report.samples.length; i++) {
-      var s = report.samples[i];
-      console.group('[' + (i + 1) + '] ' + s.rawName);
-      console.log('rawName（シフト元氏名）:', s.rawName);
-      console.log('displayName（UI表示名）:', s.displayName);
-      console.log('resolveDriverKey(rawName):', s.resolveDriverKey);
-      console.log('空白正規化後:', s.whitespaceNormalized);
-      console.log('空白除去:', s.noSpace);
-      console.log('姓名反転候補:', s.reversedCandidate, '/', s.reversedNoSpace);
-      console.log('transportIDs[候補キー]:', s.transportIdLookups);
-      console.log('transportIDs 完全一致キー:', s.exactKeyMatches);
-      console.log('transportIDs 部分一致キー（診断用）:', s.partialKeyMatches);
-      console.log('driverDB 一致:', s.driverDbMatches);
-      console.log('resolveTransportIdForName 結果:', s.resolvedTransportId);
-      console.groupEnd();
+    console.log('=== シフト側 ===');
+    console.table([
+      {
+        出勤者数: report.shift.attendanceCount,
+        TransportID紐付成功数: report.shift.mappedCount,
+        未紐付人数: report.shift.unmappedCount,
+      },
+    ]);
+    if (report.shift.unmappedNames.length) {
+      console.log('未紐付氏名:', report.shift.unmappedNames.join('、'));
     }
 
-    var summaryTable = report.samples.slice(0, 3).map(function (s) {
-      var matchedKey =
-        (s.exactKeyMatches[0] && s.exactKeyMatches[0].key) ||
-        (s.partialKeyMatches[0] && s.partialKeyMatches[0].key) ||
-        s.resolveDriverKey ||
-        '-';
-      return {
-        シフト氏名: s.rawName,
-        正規化結果: s.resolveDriverKey,
-        transportIDsキー: matchedKey,
-        TransportID: s.resolvedTransportId || '(未紐付)',
-      };
-    });
-    console.log('代表3名 対応表（Console.table）:');
-    console.table(summaryTable);
+    console.log('=== 代表10名 ===');
+    console.table(report.representativeTable);
+
+    console.log('=== 代表3名 対応表 ===');
+    console.table(report.representative3);
+
+    console.log('JSON確認: copy(JSON.stringify(window.__lastShiftTidDiagnosis, null, 2))');
     console.groupEnd();
 
     if (typeof window !== 'undefined') {
@@ -852,7 +878,7 @@
       unmappedNames: enriched.unmappedNames,
     };
     state.shiftSource = source || '未検出';
-    logShiftTransportIdDiagnosis(state.shiftWorkers);
+    logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
     markSuggestionsStale();
     renderAll();
   }
@@ -988,7 +1014,7 @@
     renderAll: renderAll,
     reloadExperienceFromServer: loadExperienceFromServer,
     debugTransportIdLink: function () {
-      return logShiftTransportIdDiagnosis(state.shiftWorkers);
+      return logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
     },
     gatherTransportIdsForDiagnosis: gatherTransportIdsForDiagnosis,
   };
