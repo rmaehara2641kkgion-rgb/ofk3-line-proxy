@@ -5080,8 +5080,29 @@ var driverDB = {
                 console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
                 renderMasterTable();
               }
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: serverDrivers.length,
+                updated: updated,
+              };
             } else if (forceOverwrite) {
               console.log('サーバーにマスタデータが空です');
+            }
+            if (!window.__ofk3MasterLoadStatus) {
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: res.drivers ? res.drivers.length : 0,
+                updated: false,
+                note: 'server response ok but no merge',
+              };
             }
             // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ（updated有無に関わらず）
             if (!forceOverwrite) {
@@ -19077,8 +19098,8 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260816-2"></script>
-  <script src="/assign-support.js?v=20260816-2"></script>
+  <script src="/assign-support-core.js?v=20260818-1"></script>
+  <script src="/assign-support.js?v=20260818-1"></script>
   <script src="/tenko-transport-audit.js?v=20260812-3"></script>
   <script src="/tenko-transport-audit-success.js?v=20260812-3"></script>
 </body>

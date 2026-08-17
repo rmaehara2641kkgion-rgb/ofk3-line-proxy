@@ -650,6 +650,136 @@
     return { workers: workers, mappedCount: mappedCount, unmappedNames: unmappedNames };
   }
 
+  /** シフト TransportID 紐付の原因調査用（fuzzy match 追加なし・ログ専用） */
+  function diagnoseTransportIdLinking(options) {
+    options = options || {};
+    var workers = options.workers || [];
+    var transportIDs = options.transportIDs || {};
+    var resolveDriverKeyFn = options.resolveDriverKeyFn;
+    var driverDB = options.driverDB || {};
+    var sampleLimit = options.sampleLimit || 15;
+
+    var keys = Object.keys(transportIDs);
+    var nonEmptyKeys = keys.filter(function (k) {
+      return String(transportIDs[k] || '').trim();
+    });
+
+    function firstEntries(map, limit) {
+      var out = [];
+      var mapKeys = Object.keys(map);
+      for (var i = 0; i < mapKeys.length && i < limit; i++) {
+        out.push({ key: mapKeys[i], value: map[mapKeys[i]] });
+      }
+      return out;
+    }
+
+    function inspectName(rawName, displayName) {
+      var raw = String(rawName || '').trim();
+      var resolved = raw;
+      if (resolveDriverKeyFn) {
+        try {
+          resolved = resolveDriverKeyFn(raw);
+        } catch (e1) {
+          resolved = '[resolveDriverKey error: ' + e1.message + ']';
+        }
+      }
+
+      var norm = raw.replace(/\s+/g, ' ').trim();
+      var noSpace = raw.replace(/[\s\u3000]/g, '');
+      var parts = norm.split(/\s+/);
+      var reversed = parts.length === 2 ? parts[1] + ' ' + parts[0] : '';
+      var reversedNoSpace = parts.length === 2 ? parts[1] + parts[0] : '';
+
+      var candidateKeys = [resolved, raw, norm, noSpace, reversed, reversedNoSpace];
+      var uniqueCandidates = [];
+      var seenCand = {};
+      for (var ci = 0; ci < candidateKeys.length; ci++) {
+        var ck = candidateKeys[ci];
+        if (!ck || seenCand[ck]) continue;
+        seenCand[ck] = true;
+        uniqueCandidates.push(ck);
+      }
+
+      var transportIdLookups = {};
+      for (var li = 0; li < uniqueCandidates.length; li++) {
+        var lookupKey = uniqueCandidates[li];
+        transportIdLookups[lookupKey] = transportIDs[lookupKey] || null;
+      }
+
+      var exactKeyMatches = [];
+      for (var ei = 0; ei < keys.length; ei++) {
+        var ek = keys[ei];
+        if (ek === raw || ek === resolved || ek === norm || ek === noSpace || ek === reversed) {
+          exactKeyMatches.push({ key: ek, value: transportIDs[ek] });
+        }
+      }
+
+      var partialKeyMatches = [];
+      var rawLower = noSpace.toLowerCase();
+      for (var pi = 0; pi < keys.length && partialKeyMatches.length < 8; pi++) {
+        var pk = keys[pi];
+        var pkNoSpace = pk.replace(/[\s\u3000]/g, '').toLowerCase();
+        if (!pkNoSpace || pkNoSpace === rawLower) continue;
+        if (pkNoSpace.indexOf(rawLower) >= 0 || rawLower.indexOf(pkNoSpace) >= 0) {
+          partialKeyMatches.push({ key: pk, value: transportIDs[pk] });
+        }
+      }
+
+      var driverDbMatches = [];
+      for (var di = 0; di < uniqueCandidates.length; di++) {
+        if (driverDB[uniqueCandidates[di]]) driverDbMatches.push(uniqueCandidates[di]);
+      }
+      if (!driverDbMatches.length && resolved && driverDB[resolved]) {
+        driverDbMatches.push(resolved);
+      }
+
+      return {
+        rawName: raw,
+        displayName: displayName || raw,
+        resolveDriverKey: resolved,
+        whitespaceNormalized: norm,
+        noSpace: noSpace,
+        reversedCandidate: reversed,
+        reversedNoSpace: reversedNoSpace,
+        transportIdLookups: transportIdLookups,
+        exactKeyMatches: exactKeyMatches,
+        partialKeyMatches: partialKeyMatches,
+        driverDbMatches: driverDbMatches,
+        resolvedTransportId: resolveTransportIdForName(raw, transportIDs, resolveDriverKeyFn) || null,
+      };
+    }
+
+    var samples = [];
+    for (var wi = 0; wi < workers.length && wi < sampleLimit; wi++) {
+      var w = workers[wi];
+      samples.push(inspectName(w.rawName || w.name, w.name || w.driverName));
+    }
+
+    return {
+      at: new Date().toISOString(),
+      meta: {
+        transportIDsSource: options.transportIDsSource || 'unknown',
+        globalTransportIDsDefined: !!options.globalTransportIDsDefined,
+        globalTransportIDsCount: options.globalTransportIDsCount || 0,
+        globalTransportIDsSample: options.globalTransportIDsSample || [],
+        localStorageCount: options.localStorageCount || 0,
+        localStorageSample: options.localStorageSample || [],
+        mapUsedCount: keys.length,
+        resolveDriverKeyAvailable: typeof resolveDriverKeyFn === 'function',
+        driverDBCount: Object.keys(driverDB).length,
+        masterLoadStatus: options.masterLoadStatus || null,
+        shiftProcessedAt: options.shiftProcessedAt || null,
+      },
+      transportIDs: {
+        totalKeys: keys.length,
+        nonEmptyValues: nonEmptyKeys.length,
+        first10: firstEntries(transportIDs, 10),
+      },
+      workerCount: workers.length,
+      samples: samples,
+    };
+  }
+
   function extractShiftWorkersFromExecData(execShiftData, targetDay, resolveNameFn, transportIDs) {
     if (!execShiftData || !execShiftData.days) return [];
     var entries = execShiftData.days[targetDay] || [];
@@ -715,6 +845,7 @@
     parseManifestWorkbook: parseManifestWorkbook,
     resolveTransportIdForName: resolveTransportIdForName,
     enrichShiftWorkersWithTransportIds: enrichShiftWorkersWithTransportIds,
+    diagnoseTransportIdLinking: diagnoseTransportIdLinking,
     extractShiftWorkersFromExecData: extractShiftWorkersFromExecData,
     extractShiftWorkersFromMaster: extractShiftWorkersFromMaster,
   };
