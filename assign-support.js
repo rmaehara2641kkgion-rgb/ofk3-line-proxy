@@ -715,16 +715,39 @@
       return;
     }
 
-    var suggestions = AssignSupportCore.buildAssignSuggestions(
+    var plan = AssignSupportCore.buildFirstAssignPlan(
       state.manifestRoutes,
       state.shiftWorkers,
       state.experience,
-      { rescueReserveCount: state.rescueCount }
+      {
+        rescueReserveCount: state.rescueCount,
+        getPackagesPerHour: function (driverName, transportId) {
+          return getCapability(driverName, transportId);
+        },
+      }
     );
 
     var html = '';
-    for (var i = 0; i < suggestions.length; i++) {
-      var s = suggestions[i];
+    html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
+    html += '<p class="font-bold text-slate-800 mb-1">推奨アサイン一覧</p>';
+    html +=
+      '<p class="text-xs text-ink-lighter">推奨確定：<strong>' +
+      plan.summary.confirmedCount +
+      '</strong>コース　管理者判断：<strong>' +
+      plan.summary.adminReviewCount +
+      '</strong>コース　未使用出勤者：<strong>' +
+      plan.summary.unusedWorkerCount +
+      '</strong>名</p>';
+    if (plan.summary.unusedWorkers.length && plan.summary.unusedWorkers.length <= 15) {
+      html +=
+        '<p class="text-xs text-ink-lighter mt-1">未使用：' +
+        escapeHtml(plan.summary.unusedWorkers.join('、')) +
+        '</p>';
+    }
+    html += '</div>';
+
+    for (var i = 0; i < plan.routes.length; i++) {
+      var s = plan.routes[i];
       var areaLabels = (s.areas || [])
         .map(function (a) {
           return a.label + (a.role === 'primary' ? '(主)' : '(副)');
@@ -735,32 +758,70 @@
       html += '<div class="font-mono font-bold text-base">' + escapeHtml(s.routeCode) + '</div>';
       html += '<div class="text-xs text-ink-lighter mt-1">エリア：' + escapeHtml(areaLabels) + '</div>';
 
-      if (s.noExperiencedDriver) {
+      if (s.needsAdminReview || !s.firstRecommendation) {
         html +=
           '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
-          '<p class="font-bold">🚨 経験者なし</p>' +
-          '<p>このコースを十分経験している出勤者がいません。管理者判断が必要です。</p></div>';
+          '<p class="font-bold">🚨 管理者判断</p>' +
+          '<p>適任者を安全に特定できません。主エリア経験・副エリア・能力から第一推奨を決められませんでした。</p></div>';
       } else {
-        html += '<div class="mt-3"><p class="text-xs font-bold text-emerald-700">推奨候補</p><ol class="mt-1 space-y-1 text-sm">';
-        for (var r = 0; r < Math.min(s.recommended.length, 5); r++) {
+        var fr = s.firstRecommendation;
+        var cap = fr.packagesPerHour != null ? Number(fr.packagesPerHour).toFixed(1) + '個/h' : '-';
+        html += '<div class="mt-3 p-3 rounded bg-emerald-50 border border-emerald-300">';
+        html +=
+          '<p class="text-sm font-bold text-emerald-800">⚡ 第一推奨：' +
+          escapeHtml(fr.driverName) +
+          '</p>';
+        html += '<ul class="mt-2 text-xs text-emerald-900 space-y-0.5 list-disc list-inside">';
+        for (var ri = 0; ri < fr.reasons.length; ri++) {
+          html += '<li>' + escapeHtml(fr.reasons[ri]) + '</li>';
+        }
+        html += '</ul>';
+        html +=
+          '<p class="text-xs text-emerald-700 mt-2">能力 ' +
+          escapeHtml(cap) +
+          ' / 物量 ' +
+          (s.packages || 0) +
+          '個</p>';
+        html += '</div>';
+      }
+
+      if (s.otherCandidates.length > 0) {
+        html += '<div class="mt-3"><p class="text-xs font-bold text-slate-600">その他候補</p><ul class="mt-1 text-sm space-y-0.5">';
+        for (var oc = 0; oc < Math.min(s.otherCandidates.length, 8); oc++) {
+          var other = s.otherCandidates[oc];
+          html +=
+            '<li class="text-slate-700">' +
+            escapeHtml(other.driverName) +
+            ' <span class="text-xs text-ink-lighter">(主' +
+            other.primaryExperienceDays +
+            '日/Tier' +
+            other.primaryTier +
+            ')</span></li>';
+        }
+        html += '</ul></div>';
+      }
+
+      if (s.recommended.length > 0) {
+        html += '<details class="mt-3"><summary class="text-xs font-bold text-emerald-700 cursor-pointer">経験者候補一覧（' + s.recommended.length + '名）</summary><ol class="mt-1 space-y-1 text-sm">';
+        for (var r = 0; r < Math.min(s.recommended.length, 8); r++) {
           var c = s.recommended[r];
-          var cap = getCapability(c.driverName, c.transportId);
+          var cap2 = getCapability(c.driverName, c.transportId);
           html +=
             '<li><span class="font-medium">' +
             (r + 1) +
             '. ' +
             escapeHtml(c.driverName) +
             '</span> <span class="text-xs font-mono text-ink-lighter">' +
-            escapeHtml(formatCapability(cap)) +
+            escapeHtml(formatCapability(cap2)) +
             '</span><br><span class="text-xs text-ink-lighter">' +
             escapeHtml(formatAreaResults(c.areaResults)) +
             '</span></li>';
         }
-        html += '</ol></div>';
+        html += '</ol></details>';
       }
 
       if (s.partial.length > 0) {
-        html += '<div class="mt-3"><p class="text-xs font-bold text-amber-700">⚠ 経験浅い / 一部未経験</p><ul class="mt-1 space-y-1 text-sm">';
+        html += '<details class="mt-2"><summary class="text-xs font-bold text-amber-700 cursor-pointer">⚠ 経験浅い / 一部未経験（' + s.partial.length + '名）</summary><ul class="mt-1 space-y-1 text-sm">';
         for (var p = 0; p < Math.min(s.partial.length, 5); p++) {
           var pc = s.partial[p];
           html +=
@@ -770,16 +831,7 @@
             escapeHtml(formatAreaResults(pc.areaResults)) +
             '</span></li>';
         }
-        html += '</ul></div>';
-      }
-
-      if (s.unexperienced.length > 0 && s.unexperienced.length <= 8) {
-        html += '<div class="mt-2"><p class="text-xs font-bold text-red-600">🚫 未経験（通常候補外）</p><ul class="mt-1 text-xs text-red-700">';
-        for (var u = 0; u < s.unexperienced.length; u++) {
-          var uc = s.unexperienced[u];
-          html += '<li>🚫 ' + escapeHtml(uc.driverName) + ' — ' + escapeHtml(formatAreaResults(uc.areaResults)) + '</li>';
-        }
-        html += '</ul></div>';
+        html += '</ul></details>';
       }
 
       html += '</div>';
@@ -787,6 +839,7 @@
 
     box.innerHTML = html || '<p class="text-sm text-ink-lighter">候補を生成できませんでした</p>';
     state.suggestionsGenerated = true;
+    state.lastAssignPlan = plan;
   }
 
   function markSuggestionsStale() {

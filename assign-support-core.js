@@ -308,6 +308,383 @@
     return suggestions;
   }
 
+  /** DAシフト表の非ドライバー行（集計行など） */
+  var SHIFT_NON_DRIVER_NAME_EXACT = ['必要台数', '合計', '計', '小計'];
+
+  function isShiftNonDriverRow(name) {
+    var n = String(name || '').trim();
+    if (!n) return true;
+    for (var i = 0; i < SHIFT_NON_DRIVER_NAME_EXACT.length; i++) {
+      if (n === SHIFT_NON_DRIVER_NAME_EXACT[i]) return true;
+    }
+    return false;
+  }
+
+  function filterShiftWorkers(workers) {
+    if (!workers || !workers.length) return [];
+    return workers.filter(function (w) {
+      return !isShiftNonDriverRow(w.rawName || w.name || w.driverName);
+    });
+  }
+
+  /** 第一推奨アサイン用・経験Tier閾値（1か所で調整） */
+  var ASSIGN_EXPERIENCE_CONFIG = {
+    EXPERT_EXPERIENCE_DAYS: 20,
+    TIER_B_MIN_DAYS: 10,
+    TIER_C_MIN_DAYS: 5,
+    TIER_D_MIN_DAYS: 1,
+    MIN_SECONDARY_DAYS_FOR_WEAK_PRIMARY: 5,
+  };
+
+  function getPrimaryExperienceTier(days, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var d = Number(days) || 0;
+    if (d >= config.EXPERT_EXPERIENCE_DAYS) return 'A';
+    if (d >= config.TIER_B_MIN_DAYS) return 'B';
+    if (d >= config.TIER_C_MIN_DAYS) return 'C';
+    if (d >= config.TIER_D_MIN_DAYS) return 'D';
+    return 'E';
+  }
+
+  function tierRank(tier) {
+    var ranks = { A: 5, B: 4, C: 3, D: 2, E: 1 };
+    return ranks[tier] || 0;
+  }
+
+  function confidenceRank(conf) {
+    if (conf === 'high') return 2;
+    if (conf === 'shared') return 1;
+    return 0;
+  }
+
+  function resolveRouteAreaRoles(routeAreas) {
+    var areas = routeAreas || [];
+    var primary = null;
+    var secondary = [];
+    for (var i = 0; i < areas.length; i++) {
+      if (areas[i].role === 'primary' && !primary) primary = areas[i];
+      else secondary.push(areas[i]);
+    }
+    if (!primary && areas.length) primary = areas[0];
+    if (primary && secondary.length === 0) {
+      secondary = areas.filter(function (a) {
+        return a !== primary;
+      });
+    }
+    return { primary: primary, secondary: secondary };
+  }
+
+  function buildDriverRouteScore(worker, route, experienceEntry, options) {
+    options = options || {};
+    var config = options.experienceConfig || ASSIGN_EXPERIENCE_CONFIG;
+    var routeAreas = route.areas || [];
+    var roles = resolveRouteAreaRoles(routeAreas);
+    var primaryLabel = roles.primary ? roles.primary.label : '';
+    var primaryExp = primaryLabel && experienceEntry ? findExperienceForArea(experienceEntry, primaryLabel) : null;
+    var primaryDays = primaryExp ? Number(primaryExp.experienceDays) || 0 : 0;
+    var primaryTier = getPrimaryExperienceTier(primaryDays, config);
+    var primaryConf = primaryExp ? String(primaryExp.confidence || '').trim() : '';
+    if (!primaryConf && primaryExp) {
+      if ((primaryExp.primaryCount || 0) > 0) primaryConf = 'high';
+      else if ((primaryExp.splitCount || 0) > 0) primaryConf = 'shared';
+    }
+
+    var secondaryDetails = [];
+    var secondaryDaysSum = 0;
+    var secondaryExperiencedCount = 0;
+    for (var si = 0; si < roles.secondary.length; si++) {
+      var secLabel = roles.secondary[si].label;
+      var secExp = experienceEntry ? findExperienceForArea(experienceEntry, secLabel) : null;
+      var secDays = secExp ? Number(secExp.experienceDays) || 0 : 0;
+      var secConf = secExp ? String(secExp.confidence || '').trim() : '';
+      if (!secConf && secExp) {
+        if ((secExp.primaryCount || 0) > 0) secConf = 'high';
+        else if ((secExp.splitCount || 0) > 0) secConf = 'shared';
+      }
+      if (secDays > 0) {
+        secondaryExperiencedCount++;
+        secondaryDaysSum += secDays;
+      }
+      secondaryDetails.push({
+        area: secLabel,
+        experienceDays: secDays,
+        confidence: secConf,
+        lastVisitDate: secExp ? secExp.lastVisitDate || '' : '',
+      });
+    }
+
+    var evalResult = evaluateDriverForRoute(worker, routeAreas, experienceEntry);
+    var packages = Number(route.packages) || 0;
+    var pph = null;
+    if (typeof options.getPackagesPerHour === 'function') {
+      pph = options.getPackagesPerHour(worker.driverName || worker.name, worker.transportId);
+    }
+    var estimatedDeliveryHours =
+      pph != null && pph > 0 && packages > 0 ? packages / pph : null;
+
+    return {
+      transportId: worker.transportId,
+      driverName: worker.driverName || worker.name,
+      shiftCode: worker.shiftCode || '',
+      primaryArea: primaryLabel,
+      primaryExperienceDays: primaryDays,
+      primaryTier: primaryTier,
+      primaryConfidence: primaryConf,
+      primaryLastVisit: primaryExp ? primaryExp.lastVisitDate || '' : '',
+      secondaryDetails: secondaryDetails,
+      secondaryExperienceDays: secondaryDaysSum,
+      secondaryExperiencedCount: secondaryExperiencedCount,
+      packagesPerHour: pph,
+      estimatedDeliveryHours: estimatedDeliveryHours,
+      capabilityKnown: pph != null && isFinite(pph),
+      areaResults: evalResult.areaResults,
+      evalStatus: evalResult.status,
+      latestVisitDate: evalResult.latestVisitDate || '',
+    };
+  }
+
+  function isEligibleForFirstRecommendation(score, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    if (!score || !score.transportId) return false;
+    if (tierRank(score.primaryTier) >= tierRank('D')) return true;
+    if (score.secondaryExperienceDays >= config.MIN_SECONDARY_DAYS_FOR_WEAK_PRIMARY) return true;
+    if (score.evalStatus === 'partial' && score.secondaryExperiencedCount > 0) return true;
+    return false;
+  }
+
+  function compareDriverRouteScores(a, b) {
+    var tierDiff = tierRank(b.primaryTier) - tierRank(a.primaryTier);
+    if (tierDiff !== 0) return tierDiff;
+
+    if (b.primaryExperienceDays !== a.primaryExperienceDays) {
+      return b.primaryExperienceDays - a.primaryExperienceDays;
+    }
+
+    var confDiff = confidenceRank(b.primaryConfidence) - confidenceRank(a.primaryConfidence);
+    if (confDiff !== 0) return confDiff;
+
+    if (b.secondaryExperienceDays !== a.secondaryExperienceDays) {
+      return b.secondaryExperienceDays - a.secondaryExperienceDays;
+    }
+
+    var visitCmp = (b.latestVisitDate || '').localeCompare(a.latestVisitDate || '');
+    if (visitCmp !== 0) return visitCmp;
+
+    var aCap = a.capabilityKnown ? 1 : 0;
+    var bCap = b.capabilityKnown ? 1 : 0;
+    if (bCap !== aCap) return bCap - aCap;
+
+    if (a.capabilityKnown && b.capabilityKnown && b.packagesPerHour !== a.packagesPerHour) {
+      return b.packagesPerHour - a.packagesPerHour;
+    }
+    return 0;
+  }
+
+  function countScarceTierCandidates(scored, tier) {
+    var n = 0;
+    for (var i = 0; i < scored.length; i++) {
+      if (isEligibleForFirstRecommendation(scored[i]) && scored[i].primaryTier === tier) n++;
+    }
+    return n;
+  }
+
+  function buildFirstRecommendationReasons(pick, route, config) {
+    config = config || ASSIGN_EXPERIENCE_CONFIG;
+    var reasons = [];
+    var judgment = [];
+
+    if (pick.primaryArea) {
+      reasons.push('主エリア：' + pick.primaryArea + ' ' + pick.primaryExperienceDays + '日');
+    }
+    if (pick.primaryConfidence) {
+      reasons.push('confidence：' + pick.primaryConfidence);
+    }
+    if (pick.capabilityKnown) {
+      reasons.push('能力：' + Number(pick.packagesPerHour).toFixed(1) + '個/h');
+    }
+    reasons.push('物量：' + (Number(route.packages) || 0) + '個');
+    if (pick.estimatedDeliveryHours != null) {
+      reasons.push('単純配送時間目安：約' + Number(pick.estimatedDeliveryHours).toFixed(1) + '時間');
+    }
+
+    var secParts = [];
+    for (var i = 0; i < pick.secondaryDetails.length; i++) {
+      var sd = pick.secondaryDetails[i];
+      if (sd.experienceDays > 0) {
+        secParts.push(sd.area + ' ' + sd.experienceDays + '日');
+      }
+    }
+    if (secParts.length) {
+      reasons.push('副エリア経験：' + secParts.join(' / '));
+    }
+
+    if (pick.primaryExperienceDays >= config.EXPERT_EXPERIENCE_DAYS) {
+      judgment.push('主エリア熟練（' + config.EXPERT_EXPERIENCE_DAYS + '日以上）');
+    } else if (pick.primaryExperienceDays >= config.TIER_B_MIN_DAYS) {
+      judgment.push('主エリア経験あり（' + config.TIER_B_MIN_DAYS + '日以上）');
+    } else if (pick.primaryExperienceDays >= config.TIER_D_MIN_DAYS) {
+      judgment.push('主エリア経験浅い');
+    }
+    if (secParts.length) judgment.push('主要副エリア経験あり');
+    if (pick.capabilityKnown) judgment.push('物量に対する能力適合（参考）');
+
+    reasons.push('判定：' + (judgment.length ? judgment.join('＋') : '経験・能力から適合'));
+    return reasons;
+  }
+
+  /**
+   * Phase 1.5: 経験優先 + greedy 全体配分で第一推奨を1名ずつ決定
+   */
+  function buildFirstAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
+    options = options || {};
+    var config = Object.assign({}, ASSIGN_EXPERIENCE_CONFIG, options.experienceConfig || {});
+    var workers = filterShiftWorkers(shiftWorkers);
+    var planOptions = {
+      rescueReserveCount: options.rescueReserveCount,
+      experienceConfig: config,
+      getPackagesPerHour: options.getPackagesPerHour,
+    };
+
+    var suggestions = buildAssignSuggestions(manifestRoutes, workers, experienceDb, planOptions);
+    var suggestionByRoute = {};
+    for (var si = 0; si < suggestions.length; si++) {
+      suggestionByRoute[suggestions[si].routeCode] = suggestions[si];
+    }
+
+    var routeWork = [];
+    for (var ri = 0; ri < manifestRoutes.length; ri++) {
+      var route = manifestRoutes[ri];
+      if (!route.areas || !route.areas.length) continue;
+      var scored = [];
+      for (var wi = 0; wi < workers.length; wi++) {
+        var worker = workers[wi];
+        if (!worker.transportId) continue;
+        var expEntry = experienceDb.byTransportId[worker.transportId];
+        scored.push(buildDriverRouteScore(worker, route, expEntry, planOptions));
+      }
+      scored.sort(compareDriverRouteScores);
+      routeWork.push({
+        route: route,
+        scored: scored,
+        tierACount: countScarceTierCandidates(scored, 'A'),
+        tierBCount: countScarceTierCandidates(scored, 'B'),
+        eligibleCount: scored.filter(function (s) {
+          return isEligibleForFirstRecommendation(s, config);
+        }).length,
+      });
+    }
+
+    routeWork.sort(function (a, b) {
+      if (a.tierACount !== b.tierACount) return a.tierACount - b.tierACount;
+      if (a.tierBCount !== b.tierBCount) return a.tierBCount - b.tierBCount;
+      if (a.eligibleCount !== b.eligibleCount) return a.eligibleCount - b.eligibleCount;
+      return String(a.route.routeCode).localeCompare(b.route.routeCode);
+    });
+
+    var assignedTids = {};
+    var routesOut = [];
+    var confirmedCount = 0;
+    var adminReviewCount = 0;
+
+    for (var rwi = 0; rwi < routeWork.length; rwi++) {
+      var rw = routeWork[rwi];
+      var routeCode = rw.route.routeCode;
+      var base = suggestionByRoute[routeCode] || {
+        routeCode: routeCode,
+        packages: rw.route.packages,
+        stops: rw.route.stops,
+        areas: rw.route.areas,
+        recommended: [],
+        partial: [],
+        unexperienced: [],
+        noExperiencedDriver: true,
+      };
+
+      var firstPick = null;
+      for (var pi = 0; pi < rw.scored.length; pi++) {
+        var cand = rw.scored[pi];
+        if (assignedTids[cand.transportId]) continue;
+        if (!isEligibleForFirstRecommendation(cand, config)) continue;
+        firstPick = cand;
+        assignedTids[cand.transportId] = true;
+        break;
+      }
+
+      var needsAdminReview = !firstPick;
+      if (firstPick) confirmedCount++;
+      else adminReviewCount++;
+
+      var otherCandidates = [];
+      for (var oi = 0; oi < rw.scored.length; oi++) {
+        var oc = rw.scored[oi];
+        if (firstPick && oc.transportId === firstPick.transportId) continue;
+        if (oc.evalStatus === 'recommended' || oc.evalStatus === 'partial') {
+          otherCandidates.push({
+            transportId: oc.transportId,
+            driverName: oc.driverName,
+            primaryTier: oc.primaryTier,
+            primaryExperienceDays: oc.primaryExperienceDays,
+          });
+        }
+      }
+
+      routesOut.push({
+        routeCode: base.routeCode,
+        packages: base.packages,
+        stops: base.stops,
+        areas: base.areas,
+        recommended: base.recommended,
+        partial: base.partial,
+        unexperienced: base.unexperienced,
+        noExperiencedDriver: base.noExperiencedDriver,
+        rescueReserveCount: base.rescueReserveCount,
+        firstRecommendation: firstPick
+          ? {
+              transportId: firstPick.transportId,
+              driverName: firstPick.driverName,
+              shiftCode: firstPick.shiftCode,
+              primaryArea: firstPick.primaryArea,
+              primaryExperienceDays: firstPick.primaryExperienceDays,
+              primaryTier: firstPick.primaryTier,
+              primaryConfidence: firstPick.primaryConfidence,
+              packagesPerHour: firstPick.packagesPerHour,
+              estimatedDeliveryHours: firstPick.estimatedDeliveryHours,
+              secondaryDetails: firstPick.secondaryDetails,
+              reasons: buildFirstRecommendationReasons(firstPick, rw.route, config),
+            }
+          : null,
+        needsAdminReview: needsAdminReview,
+        otherCandidates: otherCandidates,
+        processingOrder: rwi + 1,
+      });
+    }
+
+    routesOut.sort(function (a, b) {
+      return String(a.routeCode).localeCompare(b.routeCode);
+    });
+
+    var unusedWorkers = [];
+    for (var uwi = 0; uwi < workers.length; uwi++) {
+      var w = workers[uwi];
+      if (!w.transportId) continue;
+      if (!assignedTids[w.transportId]) {
+        unusedWorkers.push(w.driverName || w.name);
+      }
+    }
+
+    return {
+      routes: routesOut,
+      summary: {
+        confirmedCount: confirmedCount,
+        adminReviewCount: adminReviewCount,
+        unusedWorkerCount: unusedWorkers.length,
+        unusedWorkers: unusedWorkers,
+        totalRoutes: routesOut.length,
+      },
+      experienceConfig: config,
+    };
+  }
+
   function buildKnownTransportIdSet(transportIDs) {
     var set = new Set();
     if (!transportIDs) return set;
@@ -898,6 +1275,7 @@
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
       var name = e.name;
+      if (isShiftNonDriverRow(name)) continue;
       var driverName = resolveNameFn ? resolveNameFn(name) : name;
       var tid = resolveTransportIdForName(name, transportIDs, resolveNameFn);
       workers.push({
@@ -914,7 +1292,11 @@
 
   function extractShiftWorkersFromMaster(shiftMasterData, transportIDs, resolveDriverKeyFn) {
     if (!shiftMasterData || !shiftMasterData.length) return [];
-    return shiftMasterData.map(function (s) {
+    return shiftMasterData
+      .filter(function (s) {
+        return !isShiftNonDriverRow(s.rawName || s.name);
+      })
+      .map(function (s) {
       var tid = s.transportId ? String(s.transportId).trim() : '';
       if (!tid) {
         tid = resolveTransportIdForName(s.name, transportIDs, resolveDriverKeyFn);
@@ -952,6 +1334,14 @@
     areasMatch: areasMatch,
     evaluateDriverForRoute: evaluateDriverForRoute,
     buildAssignSuggestions: buildAssignSuggestions,
+    buildFirstAssignPlan: buildFirstAssignPlan,
+    buildDriverRouteScore: buildDriverRouteScore,
+    compareDriverRouteScores: compareDriverRouteScores,
+    isShiftNonDriverRow: isShiftNonDriverRow,
+    filterShiftWorkers: filterShiftWorkers,
+    getPrimaryExperienceTier: getPrimaryExperienceTier,
+    isEligibleForFirstRecommendation: isEligibleForFirstRecommendation,
+    ASSIGN_EXPERIENCE_CONFIG: ASSIGN_EXPERIENCE_CONFIG,
     buildKnownTransportIdSet: buildKnownTransportIdSet,
     parseManifestWorkbook: parseManifestWorkbook,
     resolveTransportIdForName: resolveTransportIdForName,

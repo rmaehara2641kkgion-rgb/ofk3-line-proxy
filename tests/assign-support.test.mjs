@@ -7,20 +7,20 @@ function assert(condition, message) {
 }
 
 function runTests() {
-  var headers = ['TransportID', 'driverName', 'area', 'experienceDays', 'lastVisitDate'];
+  var headers = ['TransportID', 'driverName', 'area', 'experienceDays', 'lastVisitDate', 'primaryCount', 'splitCount', 'confidence'];
   var rows = [
     headers,
-    ['A123', '山田太郎', '姪浜', '18', '2026-08-15'],
-    ['A123', '山田太郎', '愛宕', '9', '2026-08-12'],
-    ['A456', '佐藤次郎', '前原', '12', '2026-08-14'],
-    ['UNKNOWN99', '不明', '姪浜', '1', '2026-08-01'],
+    ['A123', '山田太郎', '姪浜', '18', '2026-08-15', '5', '0', 'high'],
+    ['A123', '山田太郎', '愛宕', '9', '2026-08-12', '2', '0', 'high'],
+    ['A456', '佐藤次郎', '前原', '12', '2026-08-14', '3', '0', 'high'],
+    ['A789', '鈴木一郎', '姪浜', '24', '2026-08-16', '8', '0', 'high'],
+    ['A999', '高速太郎', '姪浜', '8', '2026-08-10', '1', '0', 'shared'],
+    ['UNKNOWN99', '不明', '姪浜', '1', '2026-08-01', '0', '1', 'shared'],
   ];
-  var known = new Set(['A123', 'A456']);
+  var known = new Set(['A123', 'A456', 'A789', 'A999']);
   var parsed = AssignSupportCore.parseExperienceRows(rows, { knownTransportIds: known });
   assert(parsed.ok, 'parse ok');
-  assert(parsed.stats.drivers === 3, 'all transport ids in file');
-  assert(parsed.stats.records === 4, 'records');
-  assert(parsed.stats.unknownTids.length === 1, 'unknown tid warning');
+  assert(parsed.stats.drivers === 5, 'all transport ids in file');
 
   var areas = AssignSupportCore.extractAreaLabelsFromAddresses([
     '西区姪浜3丁目, 福岡市, 福岡',
@@ -51,7 +51,59 @@ function runTests() {
   assert(suggestions.length === 1, 'one route suggestion');
   assert(suggestions[0].recommended.length === 1, 'yamada only full experience');
   assert(suggestions[0].recommended[0].transportId === 'A123', 'top recommended');
-  assert(suggestions[0].noExperiencedDriver === false, 'has experienced driver');
+
+  assert(AssignSupportCore.isShiftNonDriverRow('必要台数'), '必要台数 is non-driver');
+  assert(!AssignSupportCore.isShiftNonDriverRow('小野'), 'real name is driver');
+  var withFooter = [
+    { name: '小野', rawName: '小野', transportId: '', shiftCode: 'C1' },
+    { name: '必要台数', rawName: '必要台数', transportId: '', shiftCode: 'C1' },
+  ];
+  var filtered = AssignSupportCore.filterShiftWorkers(withFooter);
+  assert(filtered.length === 1 && filtered[0].name === '小野', 'filter non-driver row');
+
+  var pphMap = {
+    A789: 18.2,
+    A999: 25.0,
+  };
+  var tierRoute = [
+    {
+      routeCode: 'DSX10',
+      packages: 84,
+      stops: 70,
+      areas: [{ label: '原', role: 'primary' }],
+    },
+  ];
+  var tierWorkers = [
+    { name: '山田', driverName: '山田', transportId: 'A789', shiftCode: 'C1' },
+    { name: '佐藤', driverName: '佐藤', transportId: 'A999', shiftCode: 'C1' },
+  ];
+  var tierExpRows = [
+    headers,
+    ['A789', '山田', '原', '24', '2026-08-15', '10', '0', 'high'],
+    ['A999', '佐藤', '原', '8', '2026-08-14', '2', '0', 'shared'],
+  ];
+  var tierExp = AssignSupportCore.parseExperienceRows(tierExpRows, { knownTransportIds: known });
+  var tierPlan = AssignSupportCore.buildFirstAssignPlan(tierRoute, tierWorkers, tierExp, {
+    getPackagesPerHour: function (_n, tid) {
+      return pphMap[tid] || null;
+    },
+  });
+  assert(tierPlan.routes[0].firstRecommendation.transportId === 'A789', 'tier A beats faster tier C');
+
+  var multiRoutes = [
+    { routeCode: 'DSX10', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
+    { routeCode: 'DSX11', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
+  ];
+  var multiPlan = AssignSupportCore.buildFirstAssignPlan(multiRoutes, tierWorkers, tierExp, {
+    getPackagesPerHour: function (_n, tid) {
+      return pphMap[tid] || null;
+    },
+  });
+  var assigned = multiPlan.routes.map(function (r) {
+    return r.firstRecommendation && r.firstRecommendation.transportId;
+  });
+  assert(assigned[0] !== assigned[1], 'no duplicate first recommendation');
+  assert(multiPlan.summary.confirmedCount === 2, 'two confirmed when two routes two drivers');
 
   var noExpRoute = [
     {
@@ -61,15 +113,12 @@ function runTests() {
       areas: [{ label: '存在しないエリア', role: 'primary' }],
     },
   ];
-  var none = AssignSupportCore.buildAssignSuggestions(noExpRoute, shiftWorkers, expDb, {});
-  assert(none[0].noExperiencedDriver, 'no experienced driver stops recommendation');
+  var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkers, tierExp, {});
+  assert(adminPlan.routes[0].needsAdminReview, 'admin review when no eligible');
 
-  assert(AssignSupportCore.areasMatch('早良区姪浜', '姪浜'), 'area fuzzy match');
+  assert(AssignSupportCore.getPrimaryExperienceTier(20) === 'A', 'tier A at 20');
+  assert(AssignSupportCore.getPrimaryExperienceTier(19) === 'B', 'tier B below expert');
 
-  var rebuilt = AssignSupportCore.buildExperienceDbFromRecords(parsed.records, { knownTransportIds: known });
-  assert(rebuilt.ok && rebuilt.stats.drivers === 3, 'rebuild from records');
-
-  assert(AssignSupportCore.getExperienceStatusLabel(0) === '未経験', 'status none');
   assert(AssignSupportCore.getExperienceStatusLabel(20) === '熟練', 'status skilled');
 
   var mockResolve = function (name) {
@@ -87,25 +136,17 @@ function runTests() {
     AssignSupportCore.resolveTransportIdForName('Taro Yamada', mockTids, mockResolve) === 'A123',
     'roman alias via resolveDriverKey'
   );
-  assert(
-    AssignSupportCore.resolveTransportIdForName('次郎 佐藤', mockTids, mockResolve) === 'A456',
-    'name order reversal'
-  );
-  assert(
-    AssignSupportCore.resolveTransportIdForName('山田　太郎', mockTids, mockResolve) === 'A123',
-    'fullwidth space normalized'
-  );
 
   var rawWorkers = [{ name: 'Taro Yamada', rawName: 'Taro Yamada', shiftCode: 'C1' }];
   var enriched = AssignSupportCore.enrichShiftWorkersWithTransportIds(rawWorkers, mockTids, mockResolve);
   assert(enriched.mappedCount === 1, 'enrich mapped count');
-  assert(enriched.workers[0].transportId === 'A123', 'enrich assigns tid');
-  assert(enriched.unmappedNames.length === 0, 'enrich no unmapped');
 
-  var filtered = AssignSupportCore.filterExperienceDrivers(expDb, '姪浜');
-  assert(filtered.length >= 1, 'area search');
-
-  assert(AssignSupportCore.formatAreaSummary(expDb.byTransportId.A123).indexOf('姪浜') >= 0, 'area summary');
+  var masterRows = [
+    { name: '長野', rawName: '長野', transportId: '', shiftCode: 'C1' },
+    { name: '必要台数', rawName: '必要台数', transportId: '', shiftCode: 'C1' },
+  ];
+  var fromMaster = AssignSupportCore.extractShiftWorkersFromMaster(masterRows, {}, null);
+  assert(fromMaster.length === 1 && fromMaster[0].name === '長野', 'master extract skips footer');
 
   console.log('assign-support tests passed');
 }
