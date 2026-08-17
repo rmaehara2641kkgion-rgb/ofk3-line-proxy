@@ -84,6 +84,7 @@ function runTests() {
   ];
   var tierExp = AssignSupportCore.parseExperienceRows(tierExpRows, { knownTransportIds: known });
   var tierPlan = AssignSupportCore.buildFirstAssignPlan(tierRoute, tierWorkers, tierExp, {
+    cycle: 1,
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -95,6 +96,7 @@ function runTests() {
     { routeCode: 'DSX11', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
   ];
   var multiPlan = AssignSupportCore.buildFirstAssignPlan(multiRoutes, tierWorkers, tierExp, {
+    cycle: 1,
     getPackagesPerHour: function (_n, tid) {
       return pphMap[tid] || null;
     },
@@ -113,7 +115,7 @@ function runTests() {
       areas: [{ label: '存在しないエリア', role: 'primary' }],
     },
   ];
-  var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkers, tierExp, {});
+  var adminPlan = AssignSupportCore.buildFirstAssignPlan(noExpRoute, tierWorkers, tierExp, { cycle: 1 });
   assert(adminPlan.routes[0].needsAdminReview, 'admin review when no eligible');
 
   assert(AssignSupportCore.getPrimaryExperienceTier(20) === 'A', 'tier A at 20');
@@ -147,6 +149,96 @@ function runTests() {
   ];
   var fromMaster = AssignSupportCore.extractShiftWorkersFromMaster(masterRows, {}, null);
   assert(fromMaster.length === 1 && fromMaster[0].name === '長野', 'master extract skips footer');
+
+  assert(AssignSupportCore.normalizeAssignShiftToken('11B') === 'maru', '11B -> maru');
+  assert(AssignSupportCore.normalizeAssignShiftToken('8B') === 'hachi', '8B -> hachi');
+  assert(AssignSupportCore.normalizeAssignShiftToken('B1') === 'b1', 'B1 -> b1');
+  assert(AssignSupportCore.normalizeAssignShiftToken('biker') === 'bike', 'biker -> bike');
+
+  var cycleDetect = AssignSupportCore.detectManifestCycleFromSources([
+    { fileName: 'OFK3_CYCLE_2_2026-08-18.xlsx' },
+  ]);
+  assert(cycleDetect.cycle === 2, 'detect cycle 2 from filename');
+
+  var cycleAmbiguous = AssignSupportCore.detectManifestCycleFromSources([
+    { fileName: 'OFK3_CYCLE_1_a.xlsx' },
+    { fileName: 'OFK3_CYCLE_3_b.xlsx' },
+  ]);
+  assert(cycleAmbiguous.cycle === null && cycleAmbiguous.ambiguous, 'ambiguous cycle files');
+
+  var cycleWorkers = [
+    { name: 'A', driverName: 'A', transportId: 'T1', shiftCode: '〇' },
+    { name: 'B', driverName: 'B', transportId: 'T2', shiftCode: '❽' },
+    { name: 'C', driverName: 'C', transportId: 'T3', shiftCode: 'b1' },
+    { name: 'D', driverName: 'D', transportId: 'T4', shiftCode: 'b2' },
+    { name: 'E', driverName: 'E', transportId: 'T5', shiftCode: 'bike' },
+    { name: 'F', driverName: 'F', transportId: 'T6', shiftCode: 'C1' },
+    { name: 'G', driverName: 'G', transportId: 'T7', shiftCode: 'C3' },
+    { name: 'H', driverName: 'H', transportId: 'T8', shiftCode: '研修' },
+  ];
+
+  var c1Filter = AssignSupportCore.filterWorkersByCycleEligibility(cycleWorkers, 1);
+  assert(c1Filter.eligible.length === 4, 'cycle1 eligible count');
+  assert(
+    c1Filter.eligible.every(function (w) {
+      return ['T1', 'T3', 'T5', 'T6'].indexOf(w.transportId) >= 0;
+    }),
+    'cycle1 eligible shifts'
+  );
+  assert(c1Filter.stats.nonAssignableCount === 1, 'cycle1 excludes training');
+
+  var c2Filter = AssignSupportCore.filterWorkersByCycleEligibility(cycleWorkers, 2);
+  assert(c2Filter.eligible.length === 1 && c2Filter.eligible[0].transportId === 'T2', 'cycle2 only hachi');
+
+  var c3Filter = AssignSupportCore.filterWorkersByCycleEligibility(cycleWorkers, 3);
+  assert(c3Filter.eligible.length === 4, 'cycle3 eligible count');
+  assert(
+    c3Filter.eligible.every(function (w) {
+      return ['T1', 'T4', 'T5', 'T7'].indexOf(w.transportId) >= 0;
+    }),
+    'cycle3 eligible shifts'
+  );
+
+  var cycle2Route = [
+    { routeCode: 'DSX20', packages: 80, stops: 60, areas: [{ label: '原', role: 'primary' }] },
+  ];
+  var cycle2Workers = [
+    { name: '高経験', driverName: '高経験', transportId: 'A789', shiftCode: 'C1' },
+    { name: '低経験', driverName: '低経験', transportId: 'A999', shiftCode: '❽' },
+  ];
+  var cycle2Plan = AssignSupportCore.buildFirstAssignPlan(cycle2Route, cycle2Workers, tierExp, {
+    cycle: 2,
+    getPackagesPerHour: function (_n, tid) {
+      return pphMap[tid] || null;
+    },
+  });
+  assert(
+    cycle2Plan.routes[0].firstRecommendation.transportId === 'A999',
+    'cycle2 picks hachi shift over high-exp wrong shift'
+  );
+  assert(cycle2Plan.routes[0].recommended.length <= 1, 'cycle2 other lists exclude wrong shift');
+
+  var noCyclePlan = AssignSupportCore.buildFirstAssignPlan(cycle2Route, cycle2Workers, tierExp, {});
+  assert(noCyclePlan.cycleError === 'CYCLE_UNKNOWN', 'no cycle stops plan');
+
+  var reuseWorkers = [
+    { name: 'Bike', driverName: 'Bike', transportId: 'A789', shiftCode: 'bike' },
+    { name: 'Maru', driverName: 'Maru', transportId: 'A999', shiftCode: '〇' },
+  ];
+  var c1BikePlan = AssignSupportCore.buildFirstAssignPlan(
+    [{ routeCode: 'DSX1', packages: 50, stops: 40, areas: [{ label: '原', role: 'primary' }] }],
+    reuseWorkers,
+    tierExp,
+    { cycle: 1 }
+  );
+  var c3BikePlan = AssignSupportCore.buildFirstAssignPlan(
+    [{ routeCode: 'DSX1', packages: 50, stops: 40, areas: [{ label: '原', role: 'primary' }] }],
+    reuseWorkers,
+    tierExp,
+    { cycle: 3 }
+  );
+  assert(c1BikePlan.routes[0].firstRecommendation, 'cycle1 bike/maru usable');
+  assert(c3BikePlan.routes[0].firstRecommendation, 'cycle3 bike/maru reusable across uploads');
 
   console.log('assign-support tests passed');
 }

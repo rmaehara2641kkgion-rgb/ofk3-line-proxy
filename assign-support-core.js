@@ -327,6 +327,192 @@
     });
   }
 
+  /** Cycle × シフト適格性（Phase 1.6・1か所で変更） */
+  var CYCLE_SHIFT_ELIGIBILITY = {
+    1: ['maru', 'b1', 'bike', 'c1'],
+    2: ['hachi'],
+    3: ['maru', 'b2', 'bike', 'c3'],
+  };
+
+  /** 通常アサイン候補から除外するシフト記号 */
+  var NON_ASSIGNABLE_SHIFT_TYPES = ['研修'];
+
+  var SHIFT_TOKEN_LABELS = {
+    maru: '〇',
+    hachi: '❽',
+    b1: 'b1',
+    b2: 'b2',
+    bike: 'bike',
+    c1: 'C1',
+    c3: 'C3',
+  };
+
+  /**
+   * シフト記号正規化（index.html の normalizeShiftCode + normalizeExecCourseType + 11B/8B 表記）
+   * 戻り値は CYCLE_SHIFT_ELIGIBILITY 用トークン、または「研修」等
+   */
+  function normalizeAssignShiftToken(rawCode) {
+    if (rawCode === undefined || rawCode === null) return '';
+    var s = String(rawCode).trim();
+    if (!s) return '';
+
+    s = s
+      .replace(/ｂ/g, 'b')
+      .replace(/Ｃ/g, 'C')
+      .replace(/０/g, '0')
+      .replace(/１/g, '1')
+      .replace(/２/g, '2')
+      .replace(/３/g, '3')
+      .replace(/[○◯〇Ｏ]/g, '〇');
+
+    if (s === '研修' || s.indexOf('研修') >= 0) return '研修';
+
+    var compact = s.replace(/[\s　]/g, '');
+    if (/^11[BbＢ]?$/i.test(compact)) return 'maru';
+    if (/^8[BbＢ]?$/i.test(compact)) return 'hachi';
+
+    s = s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
+    });
+
+    if (s === '〇') return 'maru';
+
+    var lower = s.toLowerCase().replace(/[\s　]/g, '');
+    if (lower === 'o' || lower === '0' || lower === 'maru') return 'maru';
+    if (s === '❽' || s === '⑧' || lower === '8' || lower === '8b' || lower === 'hachi') return 'hachi';
+    if (lower === 'c1') return 'c1';
+    if (lower === 'c3') return 'c3';
+    if (lower === 'bike' || lower === 'biker' || s === 'バイク' || lower === 'ﾊﾞｲｸ') return 'bike';
+    if (lower === 'b1') return 'b1';
+    if (lower === 'b2') return 'b2';
+    if (lower === 'training') return '研修';
+
+    return lower;
+  }
+
+  function formatShiftTokenLabel(token) {
+    return SHIFT_TOKEN_LABELS[token] || '';
+  }
+
+  function getCyclesForShiftToken(token) {
+    var cycles = [];
+    for (var c = 1; c <= 3; c++) {
+      var allowed = CYCLE_SHIFT_ELIGIBILITY[c] || [];
+      if (allowed.indexOf(token) >= 0) cycles.push(c);
+    }
+    return cycles;
+  }
+
+  function formatCycleEligibleLabel(token, currentCycle) {
+    var label = formatShiftTokenLabel(token) || token;
+    var cycles = getCyclesForShiftToken(token);
+    if (cycles.length > 1) {
+      return label + '（' + cycles.map(function (c) { return 'Cycle ' + c; }).join(' / ') + '対応）';
+    }
+    if (currentCycle) return label + '（Cycle ' + currentCycle + '対象）';
+    return label;
+  }
+
+  function isNonAssignableShift(rawCode) {
+    var raw = String(rawCode || '').trim();
+    if (!raw) return true;
+    for (var i = 0; i < NON_ASSIGNABLE_SHIFT_TYPES.length; i++) {
+      if (raw === NON_ASSIGNABLE_SHIFT_TYPES[i]) return true;
+    }
+    return normalizeAssignShiftToken(raw) === '研修';
+  }
+
+  function isShiftEligibleForCycle(token, cycle) {
+    var cycleNum = Number(cycle);
+    var allowed = CYCLE_SHIFT_ELIGIBILITY[cycleNum];
+    if (!allowed) return false;
+    return allowed.indexOf(token) >= 0;
+  }
+
+  function getEligibleShiftLabelsForCycle(cycle) {
+    var tokens = CYCLE_SHIFT_ELIGIBILITY[Number(cycle)] || [];
+    return tokens.map(function (t) {
+      return SHIFT_TOKEN_LABELS[t] || t;
+    });
+  }
+
+  function filterWorkersByCycleEligibility(workers, cycle) {
+    var eligible = [];
+    var excluded = {
+      nonAssignable: [],
+      cycleIneligible: [],
+      noShiftCode: [],
+    };
+    var cycleNum = Number(cycle);
+
+    for (var i = 0; i < (workers || []).length; i++) {
+      var w = workers[i];
+      var shift = w.shiftCode || '';
+      if (!String(shift).trim()) {
+        excluded.noShiftCode.push(w);
+        continue;
+      }
+      if (isNonAssignableShift(shift)) {
+        excluded.nonAssignable.push(w);
+        continue;
+      }
+      var token = normalizeAssignShiftToken(shift);
+      if (!isShiftEligibleForCycle(token, cycleNum)) {
+        excluded.cycleIneligible.push(w);
+        continue;
+      }
+      eligible.push(
+        Object.assign({}, w, {
+          normalizedShiftToken: token,
+          shiftCodeDisplay: formatShiftTokenLabel(token) || shift,
+        })
+      );
+    }
+
+    return {
+      eligible: eligible,
+      excluded: excluded,
+      stats: {
+        totalWorkers: (workers || []).length,
+        eligibleCount: eligible.length,
+        nonAssignableCount: excluded.nonAssignable.length,
+        cycleIneligibleCount: excluded.cycleIneligible.length,
+        noShiftCodeCount: excluded.noShiftCode.length,
+        cycle: cycleNum,
+        eligibleShiftLabels: getEligibleShiftLabelsForCycle(cycleNum),
+      },
+    };
+  }
+
+  function detectCycleFromFileName(name) {
+    var n = String(name || '');
+    var m =
+      n.match(/OFK3[_\-\s]*CYCLE[_\-\s]*([123])/i) || n.match(/CYCLE[_\-\s]*([123])/i);
+    if (m) return Number(m[1]);
+    return null;
+  }
+
+  function detectManifestCycleFromSources(sources) {
+    sources = sources || [];
+    var detected = [];
+    for (var i = 0; i < sources.length; i++) {
+      var src = sources[i] || {};
+      var fromName = detectCycleFromFileName(src.fileName || src.name || src);
+      if (fromName) detected.push(fromName);
+      if (src.workbook && src.workbook.Props) {
+        var meta = String(src.workbook.Props.Title || src.workbook.Props.Subject || '');
+        var fromMeta = detectCycleFromFileName(meta);
+        if (fromMeta) detected.push(fromMeta);
+      }
+    }
+    if (!detected.length) return { cycle: null, ambiguous: false, source: null };
+    var first = detected[0];
+    for (var j = 1; j < detected.length; j++) {
+      if (detected[j] !== first) return { cycle: null, ambiguous: true, source: 'filename' };
+    }
+    return { cycle: first, ambiguous: false, source: 'filename' };
+  }
+
   /** 第一推奨アサイン用・経験Tier閾値（1か所で調整） */
   var ASSIGN_EXPERIENCE_CONFIG = {
     EXPERT_EXPERIENCE_DAYS: 20,
@@ -421,11 +607,16 @@
     }
     var estimatedDeliveryHours =
       pph != null && pph > 0 && packages > 0 ? packages / pph : null;
+    var shiftToken =
+      worker.normalizedShiftToken || normalizeAssignShiftToken(worker.shiftCode || '');
 
     return {
       transportId: worker.transportId,
       driverName: worker.driverName || worker.name,
       shiftCode: worker.shiftCode || '',
+      shiftCodeDisplay: worker.shiftCodeDisplay || formatShiftTokenLabel(shiftToken) || worker.shiftCode || '',
+      normalizedShiftToken: shiftToken,
+      cycleEligibleLabel: options.cycle ? formatCycleEligibleLabel(shiftToken, options.cycle) : '',
       primaryArea: primaryLabel,
       primaryExperienceDays: primaryDays,
       primaryTier: primaryTier,
@@ -488,10 +679,21 @@
     return n;
   }
 
-  function buildFirstRecommendationReasons(pick, route, config) {
+  function buildFirstRecommendationReasons(pick, route, config, cycleOptions) {
     config = config || ASSIGN_EXPERIENCE_CONFIG;
+    cycleOptions = cycleOptions || {};
     var reasons = [];
     var judgment = [];
+
+    if (cycleOptions.cycle) {
+      reasons.push('Cycle：Cycle ' + cycleOptions.cycle);
+    }
+    if (pick.shiftCodeDisplay || pick.shiftCode) {
+      reasons.push('今日のシフト：' + (pick.shiftCodeDisplay || pick.shiftCode));
+    }
+    if (pick.cycleEligibleLabel) {
+      reasons.push('Cycle適格：' + pick.cycleEligibleLabel);
+    }
 
     if (pick.primaryArea) {
       reasons.push('主エリア：' + pick.primaryArea + ' ' + pick.primaryExperienceDays + '日');
@@ -518,6 +720,9 @@
       reasons.push('副エリア経験：' + secParts.join(' / '));
     }
 
+    if (cycleOptions.cycle) {
+      judgment.push('Cycle ' + cycleOptions.cycle + '適格');
+    }
     if (pick.primaryExperienceDays >= config.EXPERT_EXPERIENCE_DAYS) {
       judgment.push('主エリア熟練（' + config.EXPERT_EXPERIENCE_DAYS + '日以上）');
     } else if (pick.primaryExperienceDays >= config.TIER_B_MIN_DAYS) {
@@ -537,15 +742,35 @@
    */
   function buildFirstAssignPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
     options = options || {};
+    var cycle = Number(options.cycle);
+    if (!cycle || cycle < 1 || cycle > 3) {
+      return {
+        cycleError: 'CYCLE_UNKNOWN',
+        routes: [],
+        summary: {
+          confirmedCount: 0,
+          adminReviewCount: 0,
+          unusedWorkerCount: 0,
+          unusedWorkers: [],
+          totalRoutes: 0,
+        },
+        cycleEligibility: null,
+        experienceConfig: Object.assign({}, ASSIGN_EXPERIENCE_CONFIG, options.experienceConfig || {}),
+      };
+    }
+
     var config = Object.assign({}, ASSIGN_EXPERIENCE_CONFIG, options.experienceConfig || {});
     var workers = filterShiftWorkers(shiftWorkers);
+    var cycleFilter = filterWorkersByCycleEligibility(workers, cycle);
+    var eligibleWorkers = cycleFilter.eligible;
     var planOptions = {
       rescueReserveCount: options.rescueReserveCount,
       experienceConfig: config,
       getPackagesPerHour: options.getPackagesPerHour,
+      cycle: cycle,
     };
 
-    var suggestions = buildAssignSuggestions(manifestRoutes, workers, experienceDb, planOptions);
+    var suggestions = buildAssignSuggestions(manifestRoutes, eligibleWorkers, experienceDb, planOptions);
     var suggestionByRoute = {};
     for (var si = 0; si < suggestions.length; si++) {
       suggestionByRoute[suggestions[si].routeCode] = suggestions[si];
@@ -556,8 +781,8 @@
       var route = manifestRoutes[ri];
       if (!route.areas || !route.areas.length) continue;
       var scored = [];
-      for (var wi = 0; wi < workers.length; wi++) {
-        var worker = workers[wi];
+      for (var wi = 0; wi < eligibleWorkers.length; wi++) {
+        var worker = eligibleWorkers[wi];
         if (!worker.transportId) continue;
         var expEntry = experienceDb.byTransportId[worker.transportId];
         scored.push(buildDriverRouteScore(worker, route, expEntry, planOptions));
@@ -650,7 +875,7 @@
               packagesPerHour: firstPick.packagesPerHour,
               estimatedDeliveryHours: firstPick.estimatedDeliveryHours,
               secondaryDetails: firstPick.secondaryDetails,
-              reasons: buildFirstRecommendationReasons(firstPick, rw.route, config),
+              reasons: buildFirstRecommendationReasons(firstPick, rw.route, config, { cycle: cycle }),
             }
           : null,
         needsAdminReview: needsAdminReview,
@@ -664,8 +889,8 @@
     });
 
     var unusedWorkers = [];
-    for (var uwi = 0; uwi < workers.length; uwi++) {
-      var w = workers[uwi];
+    for (var uwi = 0; uwi < eligibleWorkers.length; uwi++) {
+      var w = eligibleWorkers[uwi];
       if (!w.transportId) continue;
       if (!assignedTids[w.transportId]) {
         unusedWorkers.push(w.driverName || w.name);
@@ -681,6 +906,8 @@
         unusedWorkers: unusedWorkers,
         totalRoutes: routesOut.length,
       },
+      cycle: cycle,
+      cycleEligibility: cycleFilter.stats,
       experienceConfig: config,
     };
   }
@@ -1339,6 +1566,16 @@
     compareDriverRouteScores: compareDriverRouteScores,
     isShiftNonDriverRow: isShiftNonDriverRow,
     filterShiftWorkers: filterShiftWorkers,
+    CYCLE_SHIFT_ELIGIBILITY: CYCLE_SHIFT_ELIGIBILITY,
+    NON_ASSIGNABLE_SHIFT_TYPES: NON_ASSIGNABLE_SHIFT_TYPES,
+    normalizeAssignShiftToken: normalizeAssignShiftToken,
+    isNonAssignableShift: isNonAssignableShift,
+    isShiftEligibleForCycle: isShiftEligibleForCycle,
+    filterWorkersByCycleEligibility: filterWorkersByCycleEligibility,
+    detectManifestCycleFromSources: detectManifestCycleFromSources,
+    detectCycleFromFileName: detectCycleFromFileName,
+    getEligibleShiftLabelsForCycle: getEligibleShiftLabelsForCycle,
+    formatCycleEligibleLabel: formatCycleEligibleLabel,
     getPrimaryExperienceTier: getPrimaryExperienceTier,
     isEligibleForFirstRecommendation: isEligibleForFirstRecommendation,
     ASSIGN_EXPERIENCE_CONFIG: ASSIGN_EXPERIENCE_CONFIG,

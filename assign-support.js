@@ -13,6 +13,11 @@
     pendingUpload: null,
     selectedTransportId: '',
     manifestRoutes: [],
+    manifestFileNames: [],
+    manifestCycleDetected: null,
+    manifestCycleManual: null,
+    manifestCycleAmbiguous: false,
+    cycleEligibilityStats: null,
     shiftWorkers: [],
     shiftSource: '',
     shiftLinkStats: { mappedCount: 0, unmappedNames: [] },
@@ -607,6 +612,22 @@
     }
   }
 
+  function getEffectiveCycle() {
+    if (state.manifestCycleManual) return state.manifestCycleManual;
+    if (state.manifestCycleDetected && !state.manifestCycleAmbiguous) return state.manifestCycleDetected;
+    return null;
+  }
+
+  function updateCycleEligibilityStats() {
+    var cycle = getEffectiveCycle();
+    if (!cycle || !state.shiftWorkers.length) {
+      state.cycleEligibilityStats = null;
+      return;
+    }
+    var filtered = AssignSupportCore.filterShiftWorkers(state.shiftWorkers);
+    state.cycleEligibilityStats = AssignSupportCore.filterWorkersByCycleEligibility(filtered, cycle).stats;
+  }
+
   function renderManifestSummary() {
     var box = el('as-manifest-summary');
     if (!box) return;
@@ -614,7 +635,65 @@
       box.innerHTML = '<p class="text-sm text-ink-lighter">マニフェスト未読込</p>';
       return;
     }
-    var html =
+
+    var cycle = getEffectiveCycle();
+    var html = '<div class="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
+    html += '<p class="font-bold text-slate-800 mb-2">今日のマニフェスト</p>';
+
+    if (cycle) {
+      var stats = state.cycleEligibilityStats;
+      var shiftLabels = stats
+        ? stats.eligibleShiftLabels.join(' / ')
+        : AssignSupportCore.getEligibleShiftLabelsForCycle(cycle).join(' / ');
+      html += '<p class="text-xs">Cycle：<strong>Cycle ' + cycle + '</strong></p>';
+      html += '<p class="text-xs mt-1">対象シフト：<strong>' + escapeHtml(shiftLabels) + '</strong></p>';
+      if (stats) {
+        html +=
+          '<p class="text-xs mt-1">対象出勤者：<strong>' +
+          stats.eligibleCount +
+          '名</strong></p>';
+        html +=
+          '<p class="text-xs mt-1 text-ink-lighter">除外：Cycle対象外 <strong>' +
+          stats.cycleIneligibleCount +
+          '名</strong> / 研修 <strong>' +
+          stats.nonAssignableCount +
+          '名</strong></p>';
+      }
+      if (state.manifestCycleManual) {
+        html += '<p class="text-xs text-amber-700 mt-1">Cycle：手動選択</p>';
+      } else if (state.manifestCycleDetected) {
+        html += '<p class="text-xs text-ink-lighter mt-1">Cycle：ファイル名から自動判定</p>';
+      }
+    } else {
+      html +=
+        '<p class="text-xs text-red-700 font-bold">⚠ Cycleを判定できません</p>';
+      if (state.manifestCycleAmbiguous) {
+        html += '<p class="text-xs text-red-600 mt-1">複数ファイルのCycleが一致しません</p>';
+      }
+      html +=
+        '<div class="mt-2"><label class="text-xs font-medium">Cycle手動選択：</label> ' +
+        '<select id="as-cycle-manual-select" class="text-xs border rounded px-2 py-1 ml-1">' +
+        '<option value="">-- 選択 --</option>' +
+        '<option value="1"' +
+        (state.manifestCycleManual === 1 ? ' selected' : '') +
+        '>Cycle 1</option>' +
+        '<option value="2"' +
+        (state.manifestCycleManual === 2 ? ' selected' : '') +
+        '>Cycle 2</option>' +
+        '<option value="3"' +
+        (state.manifestCycleManual === 3 ? ' selected' : '') +
+        '>Cycle 3</option>' +
+        '</select></div>';
+      if (state.manifestFileNames.length) {
+        html +=
+          '<p class="text-xs text-ink-lighter mt-2 break-all">ファイル：' +
+          escapeHtml(state.manifestFileNames.join(', ')) +
+          '</p>';
+      }
+    }
+    html += '</div>';
+
+    html +=
       '<p class="text-sm font-bold text-emerald-700">✅ マニフェスト ' +
       state.manifestRoutes.length +
       'コース読込</p><div class="mt-2 max-h-48 overflow-y-auto text-xs space-y-1">';
@@ -639,6 +718,17 @@
     }
     html += '</div>';
     box.innerHTML = html;
+
+    var cycleSelect = el('as-cycle-manual-select');
+    if (cycleSelect) {
+      cycleSelect.addEventListener('change', function () {
+        var val = Number(cycleSelect.value);
+        state.manifestCycleManual = val >= 1 && val <= 3 ? val : null;
+        updateCycleEligibilityStats();
+        markSuggestionsStale();
+        renderAll();
+      });
+    }
   }
 
   function renderShiftSummary() {
@@ -715,11 +805,23 @@
       return;
     }
 
+    var cycle = getEffectiveCycle();
+    if (!cycle) {
+      box.innerHTML =
+        '<div class="p-4 rounded-lg bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
+        '<p class="font-bold">⚠ Cycleを判定できません</p>' +
+        '<p class="mt-2 text-xs">マニフェストファイル名（例：OFK3_CYCLE_1_...）を確認するか、上のマニフェスト欄で Cycle を手動選択してください。</p>' +
+        '<p class="mt-2 text-xs text-ink-lighter">Cycle不明のまま全シフトを候補にすることはできません。</p>' +
+        '</div>';
+      return;
+    }
+
     var plan = AssignSupportCore.buildFirstAssignPlan(
       state.manifestRoutes,
       state.shiftWorkers,
       state.experience,
       {
+        cycle: cycle,
         rescueReserveCount: state.rescueCount,
         getPackagesPerHour: function (driverName, transportId) {
           return getCapability(driverName, transportId);
@@ -727,9 +829,18 @@
       }
     );
 
+    if (plan.cycleError) {
+      box.innerHTML =
+        '<div class="p-4 rounded-lg bg-red-50 border border-red-300 text-sm text-red-800">' +
+        '<p class="font-bold">⚠ Cycleを判定できません</p>' +
+        '<p class="mt-2 text-xs">アサイン生成を停止しました。</p></div>';
+      return;
+    }
+
+    state.suggestionsGenerated = true;
     var html = '';
     html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
-    html += '<p class="font-bold text-slate-800 mb-1">推奨アサイン一覧</p>';
+    html += '<p class="font-bold text-slate-800 mb-1">推奨アサイン一覧（Cycle ' + cycle + '）</p>';
     html +=
       '<p class="text-xs text-ink-lighter">推奨確定：<strong>' +
       plan.summary.confirmedCount +
@@ -880,7 +991,13 @@
     var files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
     var routes = [];
+    var sources = [];
     var pending = files.length;
+
+    state.manifestFileNames = files.map(function (f) {
+      return f.name;
+    });
+    state.manifestCycleManual = null;
 
     files.forEach(function (file) {
       var reader = new FileReader();
@@ -888,13 +1005,18 @@
         try {
           var data = new Uint8Array(e.target.result);
           var wb = XLSX.read(data, { type: 'array' });
+          sources.push({ fileName: file.name, workbook: wb });
           routes = routes.concat(AssignSupportCore.parseManifestWorkbook(wb));
         } catch (err) {
           console.error('manifest parse error', file.name, err);
         }
         pending--;
         if (pending === 0) {
+          var detection = AssignSupportCore.detectManifestCycleFromSources(sources);
+          state.manifestCycleDetected = detection.cycle;
+          state.manifestCycleAmbiguous = detection.ambiguous;
           state.manifestRoutes = routes;
+          updateCycleEligibilityStats();
           markSuggestionsStale();
           renderAll();
           if (!routes.length) alert('マニフェストからコースを検出できませんでした');
@@ -932,6 +1054,7 @@
     };
     state.shiftSource = source || '未検出';
     logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
+    updateCycleEligibilityStats();
     markSuggestionsStale();
     renderAll();
   }
@@ -1021,6 +1144,12 @@
         }
         if (!state.shiftWorkers.length) {
           alert('シフトを先に読み込んでください');
+          return;
+        }
+        if (!getEffectiveCycle()) {
+          alert(
+            'Cycleを判定できません。マニフェストファイル名（OFK3_CYCLE_1 等）を確認するか、Cycleを手動選択してください'
+          );
           return;
         }
         renderSuggestions();
