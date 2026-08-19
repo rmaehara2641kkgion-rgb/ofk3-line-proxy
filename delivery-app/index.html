@@ -16093,6 +16093,9 @@ var driverDB = {
         var diffIdx = colMap['diff_plan_vs_actual_mins'] !== undefined ? colMap['diff_plan_vs_actual_mins'] : -1;
         var otIdx = colMap['on_time_departure'] !== undefined ? colMap['on_time_departure'] : -1;
 
+        console.log('[LAT-DIAG] DSP headers:', headers);
+        console.log('[LAT-DIAG] DSP colMap routeIdx=', routeIdx, 'empIdx=', empIdx, 'paIdx=', paIdx, 'pdIdx=', pdIdx, 'adIdx=', adIdx, 'diffIdx=', diffIdx);
+
         if (routeIdx === undefined || empIdx < 0) {
           alert('route_id列またはemployee_id列が見つかりません');
           return;
@@ -16117,6 +16120,8 @@ var driverDB = {
         }
 
         var count = Object.keys(dspRouteMap).length;
+        console.log('[LAT-DIAG] dspRouteMap count:', count);
+        console.log('[LAT-DIAG] dspRouteMap[2789048-15]:', dspRouteMap['2789048-15']);
         document.getElementById('dsp-loaded-msg').classList.remove('hidden');
         document.getElementById('dsp-loaded-msg').textContent = '✅ ' + count + 'ルート読込済';
         document.getElementById('dsp-drop-zone').style.borderColor = '#22c55e';
@@ -16316,6 +16321,9 @@ var driverDB = {
       for (rid in allRouteIds) {
         var dsp = dspRouteMap[rid] || {};
         var lat = latBeaconMap[rid] || {};
+        if (rid === '2789048-15') {
+          console.log('[LAT-DIAG] mergeAndRender rid=2789048-15 dsp:', dsp, 'lat:', lat);
+        }
         var empId = dsp.employeeId || lat.employeeId || '';
         var driverName = '';
 
