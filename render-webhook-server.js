@@ -66,6 +66,31 @@ app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
+// デプロイ確認用（Render が注入する RENDER_GIT_* + 診断JSの有無）
+app.get('/deploy-info', (req, res) => {
+  var assignSupportPath = path.join(__dirname, 'assign-support.js');
+  var hasDebugFn = false;
+  var assignSupportBytes = 0;
+  try {
+    var src = fs.readFileSync(assignSupportPath, 'utf8');
+    assignSupportBytes = Buffer.byteLength(src, 'utf8');
+    hasDebugFn = src.indexOf('debugTransportIdLink') >= 0;
+  } catch (e) {
+    /* ignore */
+  }
+  res.json({
+    status: 'ok',
+    gitCommit: process.env.RENDER_GIT_COMMIT || null,
+    gitBranch: process.env.RENDER_GIT_BRANCH || null,
+    gitRepo: process.env.RENDER_GIT_REPO_SLUG || null,
+    nodeEnv: process.env.NODE_ENV || null,
+    assignSupportBytes: assignSupportBytes,
+    hasDebugTransportIdLink: hasDebugFn,
+    expectedDiagCommitPrefix: '062a79b',
+    serverTime: new Date().toISOString(),
+  });
+});
+
 // Render無料プランのスリープ防止用
 app.get('/ping', (req, res) => {
   log('ping received');

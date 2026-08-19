@@ -823,12 +823,16 @@
 
         <!-- 5. レスキュー人数 + 6. アサイン提案 -->
         <section class="card p-4 mb-4">
-          <h3 class="text-sm font-bold mb-2">アサイン提案</h3>
+          <h3 class="text-sm font-bold mb-2" id="as-assign-section-title">アサイン提案</h3>
+          <p class="text-xs text-ink-lighter mb-2" id="as-assign-section-desc">ManifestのCycleに応じて処理モードが切り替わります</p>
           <div class="flex flex-wrap items-center gap-3 mb-3">
             <label class="text-xs font-medium">レスキュー要員
               <input type="number" id="as-rescue-count" min="0" max="20" value="0" class="ml-2 w-16 text-sm border rounded px-2 py-1"> 名
             </label>
             <span class="text-xs text-ink-lighter">（Phase 1: 人数記録のみ）</span>
+            <button type="button" id="as-generate-suggestions-btn" class="btn-primary text-xs px-4 py-1.5 rounded">
+              ⚡ オートアサイン提案を生成
+            </button>
           </div>
           <div id="as-suggest-results"></div>
         </section>
@@ -4775,6 +4779,10 @@ var driverDB = {
 
         // Transport ID がマスタに登録されていれば保持
         var transportId = transportIDs[name] || '';
+        var cellHints =
+          typeof AssignSupportCore !== 'undefined' && AssignSupportCore.parseScheduleCellWorkHint
+            ? AssignSupportCore.parseScheduleCellWorkHint(cellValue)
+            : {};
 
         tenkoSchedule.push({
           name: dispName,
@@ -4782,6 +4790,9 @@ var driverDB = {
           shiftCode: autoShiftCode,
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
+          scheduleCellText: cellValue,
+          assignRole: cellHints.assignRole || 'regular',
+          vehicleHint: cellHints.vehicleHint || '',
           licenseAuth: false,
           mentorAuth: false,
           temporary: false
@@ -5078,8 +5089,29 @@ var driverDB = {
                 console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
                 renderMasterTable();
               }
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: serverDrivers.length,
+                updated: updated,
+              };
             } else if (forceOverwrite) {
               console.log('サーバーにマスタデータが空です');
+            }
+            if (!window.__ofk3MasterLoadStatus) {
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: res.drivers ? res.drivers.length : 0,
+                updated: false,
+                note: 'server response ok but no merge',
+              };
             }
             // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ（updated有無に関わらず）
             if (!forceOverwrite) {
@@ -8851,6 +8883,11 @@ var driverDB = {
         var company = String(row[0] || '').trim();
         var name = String(row[1] || '').trim();
         if (!name) continue;
+        if (typeof AssignSupportCore !== 'undefined' && AssignSupportCore.isShiftNonDriverRow) {
+          if (AssignSupportCore.isShiftNonDriverRow(name)) continue;
+        } else if (name === '必要台数' || name === '合計' || name === '計') {
+          continue;
+        }
 
         var shiftCode = String(row[dateCol] || '').trim();
         if (!shiftCode || shiftCode === '休') continue;
@@ -8871,11 +8908,21 @@ var driverDB = {
         var dispName = driverJapaneseNames[name] || name;
         dispName = normalizeDriverNameOrder(dispName);
 
-        // Transport ID がマスタに登録されていれば保持
-        var transportId = transportIDs[name] || '';
+        // Transport ID — 既存 resolveDriverKey / transportIDs マスタを再利用
+        var transportId = '';
+        if (typeof AssignSupportCore !== 'undefined' && AssignSupportCore.resolveTransportIdForName) {
+          transportId =
+            AssignSupportCore.resolveTransportIdForName(name, transportIDs, resolveDriverKey) ||
+            AssignSupportCore.resolveTransportIdForName(dispName, transportIDs, resolveDriverKey);
+        } else {
+          var resolvedKey = resolveDriverKey(name);
+          transportId =
+            transportIDs[resolvedKey] || transportIDs[name] || transportIDs[dispName] || '';
+        }
 
         shiftMasterData.push({
           name: dispName,
+          rawName: name,
           transportId: transportId,
           shiftCode: normalizedCode || shiftCode,
           company: company
@@ -16354,6 +16401,98 @@ var driverDB = {
     var latBeaconMap = {}; // route_id -> { arrival, entrance, departure, exit, firstScan, lastScan, turnover }
     var latResultData = [];
 
+    function normalizeLatDspHeader(h) {
+      return String(h || '').replace(/^\ufeff/, '').toLowerCase().trim().replace(/[\s_]+/g, '_');
+    }
+
+    function buildLatDspColMap(headerRow) {
+      var colMap = {};
+      for (var h = 0; h < headerRow.length; h++) {
+        var key = normalizeLatDspHeader(headerRow[h]);
+        if (key && colMap[key] === undefined) colMap[key] = h;
+      }
+      return colMap;
+    }
+
+    function latDspColIdx(colMap, keys) {
+      for (var i = 0; i < keys.length; i++) {
+        if (colMap[keys[i]] !== undefined) return colMap[keys[i]];
+      }
+      return -1;
+    }
+
+    function latDspResolveRouteIdx(colMap) {
+      var idx = latDspColIdx(colMap, ['route_id', 'routeid']);
+      if (idx >= 0) return idx;
+      for (var k in colMap) {
+        if (k.indexOf('route') >= 0 && k.indexOf('id') >= 0) return colMap[k];
+      }
+      return -1;
+    }
+
+    function latDspResolveEmpIdx(colMap) {
+      return latDspColIdx(colMap, ['employee_id', 'employeeid', 'transporter_id', 'transporterid', 'transport_id', 'transportid']);
+    }
+
+    function findLatDspHeaderRow(json) {
+      var limit = Math.min(json.length, 15);
+      for (var r = 0; r < limit; r++) {
+        var row = json[r];
+        if (!row || !row.length) continue;
+        if (latDspResolveRouteIdx(buildLatDspColMap(row)) >= 0) return r;
+      }
+      return 0;
+    }
+
+    function parseLatDspRouteData(json) {
+      if (!json || json.length < 2) {
+        return { map: {}, count: 0, error: 'no_data', headers: [], headerRowIdx: 0 };
+      }
+      var headerRowIdx = findLatDspHeaderRow(json);
+      var headers = json[headerRowIdx] || [];
+      var colMap = buildLatDspColMap(headers);
+      var routeIdx = latDspResolveRouteIdx(colMap);
+      var empIdx = latDspResolveEmpIdx(colMap);
+      var dateIdx = latDspColIdx(colMap, ['date']);
+      var paIdx = latDspColIdx(colMap, ['planned_arrival']);
+      var pdIdx = latDspColIdx(colMap, ['planned_departure']);
+      var adIdx = latDspColIdx(colMap, ['route_actual_departure', 'actual_departure']);
+      var beIdx = latDspColIdx(colMap, ['beacon_entrance']);
+      var diffIdx = latDspColIdx(colMap, ['diff_plan_vs_actual_mins']);
+      var otIdx = latDspColIdx(colMap, ['on_time_departure']);
+
+      if (routeIdx < 0) {
+        return { map: {}, count: 0, error: 'no_route_id', headers: headers, headerRowIdx: headerRowIdx };
+      }
+
+      var map = {};
+      for (var i = headerRowIdx + 1; i < json.length; i++) {
+        var row = json[i];
+        if (!row) continue;
+        var rid = row[routeIdx] != null && row[routeIdx] !== '' ? String(row[routeIdx]).trim() : '';
+        if (!rid) continue;
+        var eid = empIdx >= 0 && row[empIdx] != null && row[empIdx] !== '' ? String(row[empIdx]).trim() : '';
+        map[rid] = {
+          employeeId: eid,
+          date: dateIdx >= 0 && row[dateIdx] != null && row[dateIdx] !== '' ? String(row[dateIdx]).trim() : '',
+          plannedArrival: paIdx >= 0 && row[paIdx] != null && row[paIdx] !== '' ? latExtractTime(String(row[paIdx])) : '',
+          plannedDeparture: pdIdx >= 0 && row[pdIdx] != null && row[pdIdx] !== '' ? latExtractTime(String(row[pdIdx])) : '',
+          actualDeparture: adIdx >= 0 && row[adIdx] != null && row[adIdx] !== '' ? latExtractTime(String(row[adIdx])) : '',
+          beaconEntrance: beIdx >= 0 && row[beIdx] != null && row[beIdx] !== '' ? latExtractTime(String(row[beIdx])) : '',
+          diffMins: diffIdx >= 0 ? latParseDiffMins(row[diffIdx]) : null,
+          onTime: otIdx >= 0 && row[otIdx] != null && row[otIdx] !== '' ? String(row[otIdx]).trim() : ''
+        };
+      }
+      return {
+        map: map,
+        count: Object.keys(map).length,
+        headers: headers,
+        headerRowIdx: headerRowIdx,
+        routeIdx: routeIdx,
+        empIdx: empIdx
+      };
+    }
+
     function handleDspDrop(event) {
       var file = event.dataTransfer.files[0];
       if (file) handleDspFile(file);
@@ -16366,51 +16505,40 @@ var driverDB = {
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, { type: 'array' });
         var ws = wb.Sheets[wb.SheetNames[0]];
-        var json = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        if (json.length < 2) { alert('DSPファイルにデータがありません'); return; }
-
-        var headers = json[0];
-        var colMap = {};
-        for (var h = 0; h < headers.length; h++) {
-          colMap[String(headers[h]).toLowerCase().trim()] = h;
+        var json = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+        var jsonText = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+        if (json.length > 0 && jsonText.length > 0) {
+          var hdrRow = findLatDspHeaderRow(json);
+          var hdr = json[hdrRow] || [];
+          for (var ci = 0; ci < hdr.length; ci++) {
+            if (normalizeLatDspHeader(hdr[ci]) === 'date') {
+              for (var ri = hdrRow + 1; ri < json.length; ri++) {
+                if (jsonText[ri] && jsonText[ri][ci]) json[ri][ci] = jsonText[ri][ci];
+              }
+              break;
+            }
+          }
         }
 
-        var routeIdx = colMap['route_id'] !== undefined ? colMap['route_id'] : colMap['routeid'];
-        var empIdx = colMap['employee_id'] !== undefined ? colMap['employee_id'] : -1;
-        var dateIdx = colMap['date'] !== undefined ? colMap['date'] : -1;
-        var paIdx = colMap['planned_arrival'] !== undefined ? colMap['planned_arrival'] : -1;
-        var pdIdx = colMap['planned_departure'] !== undefined ? colMap['planned_departure'] : -1;
-        var adIdx = colMap['route_actual_departure'] !== undefined ? colMap['route_actual_departure'] : -1;
-        var beIdx = colMap['beacon_entrance'] !== undefined ? colMap['beacon_entrance'] : -1;
-        var diffIdx = colMap['diff_plan_vs_actual_mins'] !== undefined ? colMap['diff_plan_vs_actual_mins'] : -1;
-        var otIdx = colMap['on_time_departure'] !== undefined ? colMap['on_time_departure'] : -1;
+        var parsed = parseLatDspRouteData(json);
+        window.__latDspLoadDiagnosis = parsed;
 
-        if (routeIdx === undefined || empIdx < 0) {
-          alert('route_id列またはemployee_id列が見つかりません');
+        if (parsed.error === 'no_data') {
+          alert('DSPファイルにデータがありません');
+          return;
+        }
+        if (parsed.error === 'no_route_id') {
+          alert('route_id列が見つかりません。\nヘッダー: ' + (parsed.headers || []).join(', '));
+          return;
+        }
+        if (parsed.count === 0) {
+          alert('DSPルートを1件も読み込めませんでした。\nヘッダー行: ' + (parsed.headerRowIdx + 1) + '\nヘッダー: ' + (parsed.headers || []).join(', '));
           return;
         }
 
-        dspRouteMap = {};
-        for (var i = 1; i < json.length; i++) {
-          var row = json[i];
-          var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
-          var eid = row[empIdx] ? String(row[empIdx]).trim() : '';
-          if (!rid) continue;
-          dspRouteMap[rid] = {
-            employeeId: eid,
-            date: dateIdx >= 0 && row[dateIdx] ? String(row[dateIdx]).trim() : '',
-            plannedArrival: paIdx >= 0 && row[paIdx] ? latExtractTime(String(row[paIdx])) : '',
-            plannedDeparture: pdIdx >= 0 && row[pdIdx] ? latExtractTime(String(row[pdIdx])) : '',
-            actualDeparture: adIdx >= 0 && row[adIdx] ? latExtractTime(String(row[adIdx])) : '',
-            beaconEntrance: beIdx >= 0 && row[beIdx] ? latExtractTime(String(row[beIdx])) : '',
-            diffMins: diffIdx >= 0 ? latParseDiffMins(row[diffIdx]) : null,
-            onTime: otIdx >= 0 && row[otIdx] ? String(row[otIdx]).trim() : ''
-          };
-        }
-
-        var count = Object.keys(dspRouteMap).length;
+        dspRouteMap = parsed.map;
         document.getElementById('dsp-loaded-msg').classList.remove('hidden');
-        document.getElementById('dsp-loaded-msg').textContent = '✅ ' + count + 'ルート読込済';
+        document.getElementById('dsp-loaded-msg').textContent = '✅ ' + parsed.count + 'ルート読込済';
         document.getElementById('dsp-drop-zone').style.borderColor = '#22c55e';
 
         mergeAndRender();
@@ -19091,8 +19219,8 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260816-2"></script>
-  <script src="/assign-support.js?v=20260816-2"></script>
+  <script src="/assign-support-core.js?v=20260818-6"></script>
+  <script src="/assign-support.js?v=20260818-6"></script>
   <script src="/tenko-transport-audit.js?v=20260812-3"></script>
   <script src="/tenko-transport-audit-success.js?v=20260812-3"></script>
 </body>

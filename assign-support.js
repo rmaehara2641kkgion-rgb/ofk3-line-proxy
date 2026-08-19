@@ -13,8 +13,15 @@
     pendingUpload: null,
     selectedTransportId: '',
     manifestRoutes: [],
+    manifestFileNames: [],
+    manifestCycleDetected: null,
+    manifestCycleManual: null,
+    manifestCycleAmbiguous: false,
+    cycleEligibilityStats: null,
     shiftWorkers: [],
     shiftSource: '',
+    shiftLinkStats: { mappedCount: 0, unmappedNames: [] },
+    suggestionsGenerated: false,
     rescueCount: 0,
   };
 
@@ -44,6 +51,155 @@
 
   function getTransportIDsMap() {
     return typeof transportIDs !== 'undefined' ? transportIDs : {};
+  }
+
+  function readJsonFromLocalStorage(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function readTransportIdsFromLocalStorage() {
+    return readJsonFromLocalStorage('transportIDs');
+  }
+
+  function readDriverJapaneseNamesForDiagnosis() {
+    if (typeof driverJapaneseNames !== 'undefined') return driverJapaneseNames;
+    return readJsonFromLocalStorage('driverJapaneseNames');
+  }
+
+  function gatherTransportIdsForDiagnosis() {
+    var lsMap = readTransportIdsFromLocalStorage();
+    var lsKeys = Object.keys(lsMap);
+    var globalDefined = typeof transportIDs !== 'undefined';
+    var globalMap = globalDefined ? transportIDs : {};
+    var globalKeys = globalDefined ? Object.keys(globalMap) : [];
+    var windowDefined = typeof window !== 'undefined' && typeof window.transportIDs !== 'undefined';
+    var windowMap = windowDefined ? window.transportIDs : {};
+    var windowKeys = windowDefined ? Object.keys(windowMap) : [];
+    var usedMap = globalDefined ? globalMap : windowDefined ? windowMap : lsMap;
+    var usedSource = globalDefined
+      ? 'global transportIDs (inline script let)'
+      : windowDefined
+        ? 'window.transportIDs'
+        : 'localStorage only (global/window transportIDs undefined)';
+
+    return {
+      globalDefined: globalDefined,
+      globalCount: globalKeys.length,
+      globalSample: globalKeys.slice(0, 10).map(function (k) {
+        return { key: k, value: globalMap[k] };
+      }),
+      windowDefined: windowDefined,
+      windowCount: windowKeys.length,
+      windowSample: windowKeys.slice(0, 10).map(function (k) {
+        return { key: k, value: windowMap[k] };
+      }),
+      localStorageCount: lsKeys.length,
+      localStorageSample: lsKeys.slice(0, 10).map(function (k) {
+        return { key: k, value: lsMap[k] };
+      }),
+      map: usedMap,
+      usedSource: usedSource,
+      mismatch: globalDefined && globalKeys.length !== lsKeys.length,
+    };
+  }
+
+  function logShiftTransportIdDiagnosis(workers, linkStats) {
+    if (!workers || !workers.length || typeof AssignSupportCore.diagnoseTransportIdLinking !== 'function') {
+      return null;
+    }
+
+    linkStats = linkStats || {};
+    var tidSources = gatherTransportIdsForDiagnosis();
+    var driverDbMap = typeof driverDB !== 'undefined' ? driverDB : {};
+    var driverDbCount = Object.keys(driverDbMap).length;
+    var jpNames = readDriverJapaneseNamesForDiagnosis();
+
+    var report = AssignSupportCore.diagnoseTransportIdLinking({
+      workers: workers,
+      transportIDs: tidSources.map,
+      resolveDriverKeyFn: getResolveDriverKeyFn(),
+      driverDB: driverDbMap,
+      driverJapaneseNames: jpNames,
+      sampleLimit: 10,
+      transportIDsSource: tidSources.usedSource,
+      globalTransportIDsDefined: tidSources.globalDefined,
+      globalTransportIDsCount: tidSources.globalCount,
+      globalTransportIDsSample: tidSources.globalSample,
+      windowTransportIDsDefined: tidSources.windowDefined,
+      windowTransportIDsCount: tidSources.windowCount,
+      windowTransportIDsSample: tidSources.windowSample,
+      localStorageCount: tidSources.localStorageCount,
+      localStorageSample: tidSources.localStorageSample,
+      masterLoadStatus: typeof window !== 'undefined' ? window.__ofk3MasterLoadStatus || null : null,
+      shiftProcessedAt: Date.now(),
+      attendanceCount: workers.length,
+      mappedCount: linkStats.mappedCount || 0,
+      unmappedCount: (linkStats.unmappedNames || []).length,
+      unmappedNames: linkStats.unmappedNames || [],
+    });
+
+    console.group('[AssignSupport] TransportID 紐付診断');
+    console.log('診断時刻:', report.at);
+    console.log('自動判定:', report.inferredCase, '-', report.inferredCaseLabel);
+
+    console.log('=== マスタ状態 ===');
+    console.table([
+      {
+        'transportIDs.totalKeys': report.transportIDs.totalKeys,
+        'localStorage件数': report.meta.localStorageCount,
+        'global参照可能': report.meta.globalTransportIDsDefined,
+        'global件数': report.meta.globalTransportIDsCount,
+        'window.transportIDs有無': report.meta.windowTransportIDsDefined,
+        'window件数': report.meta.windowTransportIDsCount,
+        driverJapaneseNames件数: report.meta.driverJapaneseNamesCount,
+        driverDB件数: report.meta.driverDBCount,
+      },
+    ]);
+    console.log('transportIDs 参照ソース:', report.meta.transportIDsSource);
+    console.log('__ofk3MasterLoadStatus:', report.meta.masterLoadStatus || '(未設定)');
+    if (tidSources.mismatch) {
+      console.warn(
+        'global と localStorage の件数不一致:',
+        report.meta.globalTransportIDsCount,
+        'vs',
+        report.meta.localStorageCount
+      );
+    }
+    console.log('transportIDs 先頭10件:');
+    console.table(report.transportIDs.first10);
+    if (report.meta.localStorageSample.length) {
+      console.log('localStorage transportIDs 先頭10件:', report.meta.localStorageSample);
+    }
+
+    console.log('=== シフト側 ===');
+    console.table([
+      {
+        出勤者数: report.shift.attendanceCount,
+        TransportID紐付成功数: report.shift.mappedCount,
+        未紐付人数: report.shift.unmappedCount,
+      },
+    ]);
+    if (report.shift.unmappedNames.length) {
+      console.log('未紐付氏名:', report.shift.unmappedNames.join('、'));
+    }
+
+    console.log('=== 代表10名 ===');
+    console.table(report.representativeTable);
+
+    console.log('=== 代表3名 対応表 ===');
+    console.table(report.representative3);
+
+    console.log('JSON確認: copy(JSON.stringify(window.__lastShiftTidDiagnosis, null, 2))');
+    console.groupEnd();
+
+    if (typeof window !== 'undefined') {
+      window.__lastShiftTidDiagnosis = report;
+    }
+    return report;
   }
 
   function getCapability(driverName, transportId) {
@@ -309,6 +465,7 @@
         renderExperienceDashboard();
         return;
       }
+      markSuggestionsStale();
       renderAll();
       alert(state.experience ? 'エリア経験マスタを更新しました' : 'エリア経験マスタを登録しました');
     });
@@ -455,6 +612,79 @@
     }
   }
 
+  function getEffectiveCycle() {
+    if (state.manifestCycleManual) return state.manifestCycleManual;
+    if (state.manifestCycleDetected && !state.manifestCycleAmbiguous) return state.manifestCycleDetected;
+    return null;
+  }
+
+  function updateCycleEligibilityStats() {
+    var cycle = getEffectiveCycle();
+    if (!cycle || !state.shiftWorkers.length) {
+      state.cycleEligibilityStats = null;
+      return;
+    }
+    var filtered = AssignSupportCore.filterShiftWorkers(state.shiftWorkers);
+    state.cycleEligibilityStats = AssignSupportCore.filterWorkersByCycleEligibility(filtered, cycle).stats;
+  }
+
+  function getAmazonAssignmentsForPlan() {
+    if (typeof assignmentData === 'undefined' || !assignmentData || !assignmentData.length) return [];
+    var tidMap = getTransportIDsMap();
+    var resolveFn = getResolveDriverKeyFn();
+    return assignmentData.map(function (row) {
+      var name = row.driverName || '';
+      var tid =
+        row.transportId ||
+        AssignSupportCore.resolveTransportIdForName(name, tidMap, resolveFn);
+      return {
+        routeCode: row.routeCode,
+        driverName: name,
+        serviceType: row.serviceType || '',
+        transportId: tid,
+        isReserve: AssignSupportCore.isReserveServiceType(row.serviceType),
+      };
+    });
+  }
+
+  function renderAssignModeChrome() {
+    var cycle = getEffectiveCycle();
+    var title = el('as-assign-section-title');
+    var desc = el('as-assign-section-desc');
+    var btn = el('as-generate-suggestions-btn');
+    if (!title || !btn) return;
+    var mode = cycle ? AssignSupportCore.getAssignModeForCycle(cycle) : null;
+    if (mode === 'evaluate') {
+      title.textContent = 'Amazonアサイン最適化（Cycle ' + cycle + '）';
+      if (desc) {
+        desc.textContent =
+          'Amazon既存アサインを経験DBで評価し、変更した方がよい箇所だけ提案します（全員再配車しません）';
+      }
+      btn.textContent = '⚡ アサイン評価・最適化';
+    } else if (mode === 'first_pick') {
+      title.textContent = 'Cycle3 自力アサイン支援';
+      if (desc) {
+        desc.textContent = '経験・能力・シフト適格性から第一推奨アサインを生成します';
+      }
+      btn.textContent = '⚡ 第一推奨アサイン生成';
+    } else {
+      title.textContent = 'アサイン提案';
+      if (desc) desc.textContent = 'ManifestのCycleに応じて処理モードが切り替わります';
+      btn.textContent = '⚡ オートアサイン提案を生成';
+    }
+  }
+
+  function buildPlanOptions(cycle) {
+    return {
+      cycle: cycle,
+      rescueReserveCount: state.rescueCount,
+      amazonAssignments: getAmazonAssignmentsForPlan(),
+      getPackagesPerHour: function (driverName, transportId) {
+        return getCapability(driverName, transportId);
+      },
+    };
+  }
+
   function renderManifestSummary() {
     var box = el('as-manifest-summary');
     if (!box) return;
@@ -462,7 +692,71 @@
       box.innerHTML = '<p class="text-sm text-ink-lighter">マニフェスト未読込</p>';
       return;
     }
-    var html =
+
+    var cycle = getEffectiveCycle();
+    var html = '<div class="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
+    html += '<p class="font-bold text-slate-800 mb-2">今日のマニフェスト</p>';
+
+    if (cycle) {
+      var stats = state.cycleEligibilityStats;
+      var shiftLabels = stats
+        ? stats.eligibleShiftLabels.join(' / ')
+        : AssignSupportCore.getEligibleShiftLabelsForCycle(cycle).join(' / ');
+      html += '<p class="text-xs">Cycle：<strong>Cycle ' + cycle + '</strong></p>';
+      html += '<p class="text-xs mt-1">対象シフト：<strong>' + escapeHtml(shiftLabels) + '</strong></p>';
+      if (stats) {
+        html +=
+          '<p class="text-xs mt-1">対象出勤者：<strong>' +
+          stats.eligibleCount +
+          '名</strong></p>';
+        html +=
+          '<p class="text-xs mt-1 text-ink-lighter">除外：Cycle対象外 <strong>' +
+          stats.cycleIneligibleCount +
+          '名</strong> / 研修 <strong>' +
+          stats.nonAssignableCount +
+          '名</strong></p>';
+      }
+      if (state.manifestCycleManual) {
+        html += '<p class="text-xs text-amber-700 mt-1">Cycle：手動選択</p>';
+      } else if (state.manifestCycleDetected) {
+        html += '<p class="text-xs text-ink-lighter mt-1">Cycle：ファイル名から自動判定</p>';
+      }
+      var mode = AssignSupportCore.getAssignModeForCycle(cycle);
+      if (mode === 'evaluate') {
+        html += '<p class="text-xs mt-1 text-blue-800">モード：<strong>Amazonアサイン最適化</strong></p>';
+      } else if (mode === 'first_pick') {
+        html += '<p class="text-xs mt-1 text-blue-800">モード：<strong>Cycle3 自力アサイン支援</strong></p>';
+      }
+    } else {
+      html +=
+        '<p class="text-xs text-red-700 font-bold">⚠ Cycleを判定できません</p>';
+      if (state.manifestCycleAmbiguous) {
+        html += '<p class="text-xs text-red-600 mt-1">複数ファイルのCycleが一致しません</p>';
+      }
+      html +=
+        '<div class="mt-2"><label class="text-xs font-medium">Cycle手動選択：</label> ' +
+        '<select id="as-cycle-manual-select" class="text-xs border rounded px-2 py-1 ml-1">' +
+        '<option value="">-- 選択 --</option>' +
+        '<option value="1"' +
+        (state.manifestCycleManual === 1 ? ' selected' : '') +
+        '>Cycle 1</option>' +
+        '<option value="2"' +
+        (state.manifestCycleManual === 2 ? ' selected' : '') +
+        '>Cycle 2</option>' +
+        '<option value="3"' +
+        (state.manifestCycleManual === 3 ? ' selected' : '') +
+        '>Cycle 3</option>' +
+        '</select></div>';
+      if (state.manifestFileNames.length) {
+        html +=
+          '<p class="text-xs text-ink-lighter mt-2 break-all">ファイル：' +
+          escapeHtml(state.manifestFileNames.join(', ')) +
+          '</p>';
+      }
+    }
+    html += '</div>';
+
+    html +=
       '<p class="text-sm font-bold text-emerald-700">✅ マニフェスト ' +
       state.manifestRoutes.length +
       'コース読込</p><div class="mt-2 max-h-48 overflow-y-auto text-xs space-y-1">';
@@ -487,6 +781,17 @@
     }
     html += '</div>';
     box.innerHTML = html;
+
+    var cycleSelect = el('as-cycle-manual-select');
+    if (cycleSelect) {
+      cycleSelect.addEventListener('change', function () {
+        var val = Number(cycleSelect.value);
+        state.manifestCycleManual = val >= 1 && val <= 3 ? val : null;
+        updateCycleEligibilityStats();
+        markSuggestionsStale();
+        renderAll();
+      });
+    }
   }
 
   function renderShiftSummary() {
@@ -496,18 +801,58 @@
       box.innerHTML = '<p class="text-sm text-ink-lighter">シフト未読込</p>';
       return;
     }
-    var withTid = state.shiftWorkers.filter(function (w) {
-      return w.transportId;
-    }).length;
-    box.innerHTML =
+    var stats = state.shiftLinkStats || { mappedCount: 0, unmappedNames: [] };
+    var mapped = stats.mappedCount || 0;
+    var unmapped = stats.unmappedNames || [];
+    var html =
       '<p class="text-sm font-bold text-emerald-700">✅ 出勤者 ' +
       state.shiftWorkers.length +
-      '名（TransportID紐付 ' +
-      withTid +
-      '名）</p>' +
-      '<p class="text-xs text-ink-lighter mt-1">ソース: ' +
+      '名</p>' +
+      '<div class="mt-2 text-xs space-y-1">' +
+      '<div>TransportID紐付成功: <strong>' +
+      mapped +
+      '名</strong></div>' +
+      '<div>未紐付: <strong class="' +
+      (unmapped.length ? 'text-amber-800' : '') +
+      '">' +
+      unmapped.length +
+      '名</strong></div>' +
+      '</div>' +
+      '<p class="text-xs text-ink-lighter mt-2">ソース: ' +
       escapeHtml(state.shiftSource) +
       '</p>';
+    if (unmapped.length) {
+      html +=
+        '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-xs">' +
+        '<p class="font-medium text-amber-900">未紐付氏名（マスタ管理で TransportID を確認してください）</p>' +
+        '<p class="mt-1 text-amber-800 break-all">' +
+        escapeHtml(unmapped.slice(0, 20).join('、')) +
+        (unmapped.length > 20 ? ' …他' + (unmapped.length - 20) + '名' : '') +
+        '</p></div>';
+    }
+    box.innerHTML = html;
+  }
+
+  function renderSuggestionsIdle() {
+    var box = el('as-suggest-results');
+    if (!box || state.suggestionsGenerated) return;
+    renderAssignModeChrome();
+    var ready =
+      state.experience && state.manifestRoutes.length && state.shiftWorkers.length;
+    if (!ready) {
+      box.innerHTML =
+        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・シフトの3つが揃うと候補を生成できます</p>';
+      return;
+    }
+    var cycle = getEffectiveCycle();
+    var mode = cycle ? AssignSupportCore.getAssignModeForCycle(cycle) : null;
+    var msg =
+      mode === 'evaluate'
+        ? '準備完了。「⚡ アサイン評価・最適化」を押してください（Amazonアサインデータ必要）'
+        : mode === 'first_pick'
+          ? '準備完了。「⚡ 第一推奨アサイン生成」を押してください'
+          : '準備完了。Cycleを確定後、生成ボタンを押してください';
+    box.innerHTML = '<p class="text-sm text-ink-lighter py-4 text-center">' + msg + '</p>';
   }
 
   function formatAreaResults(areaResults) {
@@ -524,6 +869,7 @@
   function renderSuggestions() {
     var box = el('as-suggest-results');
     if (!box) return;
+    renderAssignModeChrome();
 
     if (!state.experience || !state.manifestRoutes.length || !state.shiftWorkers.length) {
       box.innerHTML =
@@ -531,77 +877,246 @@
       return;
     }
 
-    var suggestions = AssignSupportCore.buildAssignSuggestions(
+    var cycle = getEffectiveCycle();
+    if (!cycle) {
+      box.innerHTML =
+        '<div class="p-4 rounded-lg bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
+        '<p class="font-bold">⚠ Cycleを判定できません</p>' +
+        '<p class="mt-2 text-xs">マニフェストファイル名（例：OFK3_CYCLE_1_...）を確認するか、上のマニフェスト欄で Cycle を手動選択してください。</p>' +
+        '</div>';
+      return;
+    }
+
+    var mode = AssignSupportCore.getAssignModeForCycle(cycle);
+    if (mode === 'evaluate' && !getAmazonAssignmentsForPlan().length) {
+      box.innerHTML =
+        '<div class="p-4 rounded-lg bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
+        '<p class="font-bold">⚠ Amazonアサインデータが必要です</p>' +
+        '<p class="mt-2 text-xs">Cycle ' +
+        cycle +
+        ' はAmazon既存アサインの評価モードです。ダッシュボードで「ドライバー別配送データ」を読込んでから実行してください。</p>' +
+        '</div>';
+      return;
+    }
+
+    var plan = AssignSupportCore.buildAssignPlan(
       state.manifestRoutes,
       state.shiftWorkers,
       state.experience,
-      { rescueReserveCount: state.rescueCount }
+      buildPlanOptions(cycle)
     );
 
+    if (plan.cycleError || plan.assignmentError) {
+      box.innerHTML =
+        '<div class="p-4 rounded-lg bg-red-50 border border-red-300 text-sm text-red-800">' +
+        '<p class="font-bold">⚠ 処理を停止しました</p>' +
+        '<p class="mt-2 text-xs">' +
+        escapeHtml(plan.cycleError || plan.assignmentError || 'UNKNOWN') +
+        '</p></div>';
+      return;
+    }
+
+    state.suggestionsGenerated = true;
     var html = '';
-    for (var i = 0; i < suggestions.length; i++) {
-      var s = suggestions[i];
-      var areaLabels = (s.areas || [])
-        .map(function (a) {
-          return a.label + (a.role === 'primary' ? '(主)' : '(副)');
-        })
-        .join('・');
 
-      html += '<div class="card p-4 mb-3 border-l-4 border-amber-400">';
-      html += '<div class="font-mono font-bold text-base">' + escapeHtml(s.routeCode) + '</div>';
-      html += '<div class="text-xs text-ink-lighter mt-1">エリア：' + escapeHtml(areaLabels) + '</div>';
+    if (plan.mode === 'evaluate') {
+      html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
+      html += '<p class="font-bold text-slate-800 mb-1">Amazonアサイン評価（Cycle ' + cycle + '）</p>';
+      html +=
+        '<p class="text-xs text-ink-lighter">変更不要：<strong>' +
+        plan.summary.okCount +
+        '</strong>コース　変更候補：<strong>' +
+        plan.summary.changeCandidateCount +
+        '</strong>コース　管理者判断：<strong>' +
+        plan.summary.adminReviewCount +
+        '</strong>コース</p></div>';
 
-      if (s.noExperiencedDriver) {
+      for (var ei = 0; ei < plan.routes.length; ei++) {
+        var er = plan.routes[ei];
+        var eAreas = (er.areas || [])
+          .map(function (a) {
+            return a.label + (a.role === 'primary' ? '(主)' : '(副)');
+          })
+          .join('・');
+        html += '<div class="card p-4 mb-3 border-l-4 border-blue-400">';
+        html += '<div class="font-mono font-bold text-base">' + escapeHtml(er.routeCode) + '</div>';
         html +=
-          '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
-          '<p class="font-bold">🚨 経験者なし</p>' +
-          '<p>このコースを十分経験している出勤者がいません。管理者判断が必要です。</p></div>';
-      } else {
-        html += '<div class="mt-3"><p class="text-xs font-bold text-emerald-700">推奨候補</p><ol class="mt-1 space-y-1 text-sm">';
-        for (var r = 0; r < Math.min(s.recommended.length, 5); r++) {
-          var c = s.recommended[r];
-          var cap = getCapability(c.driverName, c.transportId);
+          '<div class="text-xs text-ink-lighter mt-1">エリア：' +
+          escapeHtml(eAreas) +
+          ' / Route種別：' +
+          escapeHtml(er.routeVehicleType || '?') +
+          '</div>';
+
+        if (er.evaluationStatus === 'ok') {
           html +=
-            '<li><span class="font-medium">' +
-            (r + 1) +
-            '. ' +
-            escapeHtml(c.driverName) +
-            '</span> <span class="text-xs font-mono text-ink-lighter">' +
-            escapeHtml(formatCapability(cap)) +
-            '</span><br><span class="text-xs text-ink-lighter">' +
-            escapeHtml(formatAreaResults(c.areaResults)) +
-            '</span></li>';
-        }
-        html += '</ol></div>';
-      }
-
-      if (s.partial.length > 0) {
-        html += '<div class="mt-3"><p class="text-xs font-bold text-amber-700">⚠ 経験浅い / 一部未経験</p><ul class="mt-1 space-y-1 text-sm">';
-        for (var p = 0; p < Math.min(s.partial.length, 5); p++) {
-          var pc = s.partial[p];
+            '<div class="mt-3 p-3 rounded bg-emerald-50 border border-emerald-300 text-sm text-emerald-800">' +
+            '<p class="font-bold">✅ Amazonアサイン良好（変更不要）</p></div>';
+        } else if (er.evaluationStatus === 'change_candidate') {
           html +=
-            '<li class="text-amber-800"><span class="font-medium">⚠ ' +
-            escapeHtml(pc.driverName) +
-            '</span><br><span class="text-xs">' +
-            escapeHtml(formatAreaResults(pc.areaResults)) +
-            '</span></li>';
+            '<div class="mt-3 p-3 rounded bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
+            '<p class="font-bold">⚠ 変更候補</p>' +
+            '<p class="mt-1 text-xs">現在：' +
+            escapeHtml((er.amazonAssignment && er.amazonAssignment.driverName) || '?') +
+            '</p>' +
+            '<p class="text-xs">推奨：' +
+            escapeHtml((er.suggestedChange && er.suggestedChange.driverName) || '?') +
+            '</p></div>';
+        } else {
+          html +=
+            '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
+            '<p class="font-bold">🚨 管理者判断</p></div>';
         }
-        html += '</ul></div>';
-      }
 
-      if (s.unexperienced.length > 0 && s.unexperienced.length <= 8) {
-        html += '<div class="mt-2"><p class="text-xs font-bold text-red-600">🚫 未経験（通常候補外）</p><ul class="mt-1 text-xs text-red-700">';
-        for (var u = 0; u < s.unexperienced.length; u++) {
-          var uc = s.unexperienced[u];
-          html += '<li>🚫 ' + escapeHtml(uc.driverName) + ' — ' + escapeHtml(formatAreaResults(uc.areaResults)) + '</li>';
+        if (er.evaluationReasons && er.evaluationReasons.length) {
+          html += '<ul class="mt-2 text-xs text-slate-700 space-y-0.5 list-disc list-inside">';
+          for (var eri = 0; eri < er.evaluationReasons.length; eri++) {
+            html += '<li>' + escapeHtml(er.evaluationReasons[eri]) + '</li>';
+          }
+          html += '</ul>';
         }
-        html += '</ul></div>';
+        html += '</div>';
       }
-
+    } else {
+      html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
+      html += '<p class="font-bold text-slate-800 mb-1">Cycle3 推奨アサイン</p>';
+      html +=
+        '<p class="text-xs text-ink-lighter">推奨確定：<strong>' +
+        plan.summary.confirmedCount +
+        '</strong> / ' +
+        plan.summary.totalRoutes +
+        '　管理者判断：<strong>' +
+        plan.summary.adminReviewCount +
+        '</strong>　Tier A：<strong>' +
+        (plan.summary.tierAAssignments || 0) +
+        '</strong>　Tier B：<strong>' +
+        (plan.summary.tierBAssignments || 0) +
+        '</strong>　Tier C以下：<strong>' +
+        (plan.summary.tierCOrLowerAssignments || 0) +
+        '</strong></p>';
+      html +=
+        '<p class="text-xs text-ink-lighter mt-1">未使用出勤者：<strong>' +
+        plan.summary.unusedWorkerCount +
+        '</strong>名';
+      if (plan.summary.unexperiencedPlacements > 0) {
+        html += '　⚠ 未経験配置：<strong>' + plan.summary.unexperiencedPlacements + '</strong>';
+      }
+      if (plan.summary.sharedConfidenceOnly > 0) {
+        html += '　⚠ confidence sharedのみ：<strong>' + plan.summary.sharedConfidenceOnly + '</strong>';
+      }
+      html += '</p>';
+      if (plan.summary.unusedWorkerDetails && plan.summary.unusedWorkerDetails.length) {
+        html += '<details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">未使用出勤者詳細</summary><ul class="mt-1 space-y-1">';
+        for (var ui = 0; ui < Math.min(plan.summary.unusedWorkerDetails.length, 12); ui++) {
+          var uw = plan.summary.unusedWorkerDetails[ui];
+          html += '<li>' + escapeHtml(uw.driverName);
+          if (uw.tierAAreas && uw.tierAAreas.length) {
+            html += ' <span class="text-ink-lighter">Tier A経験：' + escapeHtml(uw.tierAAreas.join(' / ')) + '</span>';
+          }
+          if (uw.packagesPerHour != null) {
+            html += ' <span class="text-ink-lighter">能力：' + Number(uw.packagesPerHour).toFixed(1) + '個/h</span>';
+          }
+          html += '</li>';
+        }
+        html += '</ul></details>';
+      }
       html += '</div>';
+
+      for (var i = 0; i < plan.routes.length; i++) {
+        var s = plan.routes[i];
+        var areaLabels = (s.areas || [])
+          .map(function (a) {
+            return a.label + (a.role === 'primary' ? '(主)' : '(副)');
+          })
+          .join('・');
+
+        html += '<div class="card p-4 mb-3 border-l-4 border-amber-400">';
+        html += '<div class="font-mono font-bold text-base">' + escapeHtml(s.routeCode) + '</div>';
+        html +=
+          '<div class="text-xs text-ink-lighter mt-1">エリア：' +
+          escapeHtml(areaLabels) +
+          (s.routeVehicleType ? ' / Route種別：' + escapeHtml(s.routeVehicleType) : '') +
+          '</div>';
+
+        if (s.vehicleUnknown) {
+          html +=
+            '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
+            '<p class="font-bold">🚨 管理者判断</p>' +
+            '<p class="text-xs mt-1">Bike/Standard判定不能（Amazonアサインデータの serviceType が必要）</p></div>';
+        } else if (s.needsAdminReview || !s.firstRecommendation) {
+          html +=
+            '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
+            '<p class="font-bold">🚨 管理者判断</p>' +
+            '<p>適任者を安全に特定できません。</p></div>';
+        } else {
+          var fr = s.firstRecommendation;
+          var cap = fr.packagesPerHour != null ? Number(fr.packagesPerHour).toFixed(1) + '個/h' : '-';
+          html += '<div class="mt-3 p-3 rounded bg-emerald-50 border border-emerald-300">';
+          html +=
+            '<p class="text-sm font-bold text-emerald-800">⚡ 第一推奨：' +
+            escapeHtml(fr.driverName) +
+            '</p>';
+          html += '<ul class="mt-2 text-xs text-emerald-900 space-y-0.5 list-disc list-inside">';
+          for (var ri = 0; ri < fr.reasons.length; ri++) {
+            html += '<li>' + escapeHtml(fr.reasons[ri]) + '</li>';
+          }
+          html += '</ul>';
+          html +=
+            '<p class="text-xs text-emerald-700 mt-2">能力 ' +
+            escapeHtml(cap) +
+            ' / 物量 ' +
+            (s.packages || 0) +
+            '個</p>';
+          html += '</div>';
+        }
+
+        if (s.otherCandidates && s.otherCandidates.length > 0) {
+          html += '<div class="mt-3"><p class="text-xs font-bold text-slate-600">その他候補</p><ul class="mt-1 text-sm space-y-0.5">';
+          for (var oc = 0; oc < Math.min(s.otherCandidates.length, 8); oc++) {
+            var other = s.otherCandidates[oc];
+            html +=
+              '<li class="text-slate-700">' +
+              escapeHtml(other.driverName) +
+              ' <span class="text-xs text-ink-lighter">(主' +
+              other.primaryExperienceDays +
+              '日/Tier' +
+              other.primaryTier +
+              ')</span></li>';
+          }
+          html += '</ul></div>';
+        }
+
+        if (s.recommended && s.recommended.length > 0) {
+          html +=
+            '<details class="mt-3"><summary class="text-xs font-bold text-emerald-700 cursor-pointer">経験者候補一覧（' +
+            s.recommended.length +
+            '名）</summary><ol class="mt-1 space-y-1 text-sm">';
+          for (var r = 0; r < Math.min(s.recommended.length, 8); r++) {
+            var c = s.recommended[r];
+            var cap2 = getCapability(c.driverName, c.transportId);
+            html +=
+              '<li><span class="font-medium">' +
+              (r + 1) +
+              '. ' +
+              escapeHtml(c.driverName) +
+              '</span> <span class="text-xs font-mono text-ink-lighter">' +
+              escapeHtml(formatCapability(cap2)) +
+              '</span><br><span class="text-xs text-ink-lighter">' +
+              escapeHtml(formatAreaResults(c.areaResults)) +
+              '</span></li>';
+          }
+          html += '</ol></details>';
+        }
+
+        html += '</div>';
+      }
     }
 
     box.innerHTML = html || '<p class="text-sm text-ink-lighter">候補を生成できませんでした</p>';
+    state.lastAssignPlan = plan;
+  }
+
+  function markSuggestionsStale() {
+    state.suggestionsGenerated = false;
   }
 
   function renderAll() {
@@ -610,7 +1125,12 @@
     renderExperienceTable();
     renderManifestSummary();
     renderShiftSummary();
-    renderSuggestions();
+    renderAssignModeChrome();
+    if (state.suggestionsGenerated) {
+      renderSuggestions();
+    } else {
+      renderSuggestionsIdle();
+    }
   }
 
   function loadExperienceFile(file) {
@@ -634,7 +1154,13 @@
     var files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
     var routes = [];
+    var sources = [];
     var pending = files.length;
+
+    state.manifestFileNames = files.map(function (f) {
+      return f.name;
+    });
+    state.manifestCycleManual = null;
 
     files.forEach(function (file) {
       var reader = new FileReader();
@@ -642,13 +1168,19 @@
         try {
           var data = new Uint8Array(e.target.result);
           var wb = XLSX.read(data, { type: 'array' });
+          sources.push({ fileName: file.name, workbook: wb });
           routes = routes.concat(AssignSupportCore.parseManifestWorkbook(wb));
         } catch (err) {
           console.error('manifest parse error', file.name, err);
         }
         pending--;
         if (pending === 0) {
+          var detection = AssignSupportCore.detectManifestCycleFromSources(sources);
+          state.manifestCycleDetected = detection.cycle;
+          state.manifestCycleAmbiguous = detection.ambiguous;
           state.manifestRoutes = routes;
+          updateCycleEligibilityStats();
+          markSuggestionsStale();
           renderAll();
           if (!routes.length) alert('マニフェストからコースを検出できませんでした');
         }
@@ -660,23 +1192,42 @@
   function syncShiftFromGlobals() {
     var workers = [];
     var source = '';
+    var resolveFn = getResolveDriverKeyFn();
+    var tidMap = getTransportIDsMap();
 
     if (typeof shiftMasterData !== 'undefined' && shiftMasterData && shiftMasterData.length) {
-      workers = AssignSupportCore.extractShiftWorkersFromMaster(shiftMasterData);
+      workers = AssignSupportCore.extractShiftWorkersFromMaster(shiftMasterData, tidMap, resolveFn);
       source = 'DAシフト表（点呼照合と同形式）';
     } else if (typeof execShiftData !== 'undefined' && execShiftData) {
       var day = new Date().getDate();
       workers = AssignSupportCore.extractShiftWorkersFromExecData(
         execShiftData,
         day,
-        getResolveDriverKeyFn(),
-        getTransportIDsMap()
+        resolveFn,
+        tidMap
       );
       source = '経営シフト表（execShiftData・本日=' + day + '日）';
     }
 
-    state.shiftWorkers = workers;
+    var enriched = AssignSupportCore.enrichShiftWorkersWithTransportIds(workers, tidMap, resolveFn);
+    state.shiftWorkers = enriched.workers;
+    if (typeof tenkoSchedule !== 'undefined' && tenkoSchedule && tenkoSchedule.length) {
+      state.shiftWorkers = AssignSupportCore.mergeScheduleIntoShiftWorkers(
+        state.shiftWorkers,
+        tenkoSchedule,
+        tidMap,
+        resolveFn
+      );
+      source = (source || 'DAシフト') + ' + Amazon Schedule UI';
+    }
+    state.shiftLinkStats = {
+      mappedCount: enriched.mappedCount,
+      unmappedNames: enriched.unmappedNames,
+    };
     state.shiftSource = source || '未検出';
+    logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
+    updateCycleEligibilityStats();
+    markSuggestionsStale();
     renderAll();
   }
 
@@ -752,6 +1303,43 @@
       loadShiftFile(files[0]);
     });
 
+    var genBtn = el('as-generate-suggestions-btn');
+    if (genBtn) {
+      genBtn.addEventListener('click', function () {
+        if (!state.experience) {
+          alert('エリア経験DBを先に登録してください');
+          return;
+        }
+        if (!state.manifestRoutes.length) {
+          alert('マニフェストを先に読み込んでください');
+          return;
+        }
+        if (!state.shiftWorkers.length) {
+          alert('シフトを先に読み込んでください');
+          return;
+        }
+        if (!getEffectiveCycle()) {
+          alert(
+            'Cycleを判定できません。マニフェストファイル名（OFK3_CYCLE_1 等）を確認するか、Cycleを手動選択してください'
+          );
+          return;
+        }
+        var genCycle = getEffectiveCycle();
+        if (
+          AssignSupportCore.getAssignModeForCycle(genCycle) === 'evaluate' &&
+          !getAmazonAssignmentsForPlan().length
+        ) {
+          alert(
+            'Cycle ' +
+              genCycle +
+              ' はAmazonアサイン評価モードです。先にダッシュボードでドライバー別配送データを読込んでください'
+          );
+          return;
+        }
+        renderSuggestions();
+      });
+    }
+
     var search = el('as-exp-search');
     if (search) search.addEventListener('input', renderExperienceTable);
 
@@ -759,7 +1347,9 @@
     if (rescue) {
       rescue.addEventListener('change', function () {
         state.rescueCount = Number(rescue.value) || 0;
-        renderSuggestions();
+        if (state.suggestionsGenerated) {
+          renderSuggestions();
+        }
       });
     }
 
@@ -789,6 +1379,10 @@
     syncShiftFromGlobals: syncShiftFromGlobals,
     renderAll: renderAll,
     reloadExperienceFromServer: loadExperienceFromServer,
+    debugTransportIdLink: function () {
+      return logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
+    },
+    gatherTransportIdsForDiagnosis: gatherTransportIdsForDiagnosis,
   };
 
   if (document.readyState === 'loading') {
