@@ -18,6 +18,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+  <script src="/lat-departure-core.js?v=20260820-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -16449,7 +16450,7 @@ var driverDB = {
             plannedDeparture: pdIdx >= 0 && row[pdIdx] ? latExtractTime(String(row[pdIdx])) : '',
             actualDeparture: adIdx >= 0 && row[adIdx] ? latExtractTime(String(row[adIdx])) : '',
             beaconEntrance: beIdx >= 0 && row[beIdx] ? latExtractTime(String(row[beIdx])) : '',
-            diffMins: diffIdx >= 0 && row[diffIdx] ? parseFloat(row[diffIdx]) : null,
+            diffMins: diffIdx >= 0 ? latParseDiffMins(row[diffIdx]) : null,
             onTime: otIdx >= 0 && row[otIdx] ? String(row[otIdx]).trim() : ''
           };
         }
@@ -16626,17 +16627,19 @@ var driverDB = {
     }
 
     function latTimeToMin(t) {
-      if (!t) return null;
-      var m = t.match(/(\d{1,2}):(\d{2})/);
-      if (!m) return null;
-      return parseInt(m[1]) * 60 + parseInt(m[2]);
+      return LatDepartureCore.latTimeToMin(t);
     }
 
     function latMinDiff(t1, t2) {
-      var a = latTimeToMin(t1);
-      var b = latTimeToMin(t2);
-      if (a === null || b === null) return null;
-      return a - b;
+      return LatDepartureCore.latMinDiff(t1, t2);
+    }
+
+    function latParseDiffMins(raw) {
+      return LatDepartureCore.latParseDiffMins(raw);
+    }
+
+    function latFormatDepDiffText(diffMin) {
+      return LatDepartureCore.latFormatDepDiffText(diffMin);
     }
 
     function mergeAndRender() {
@@ -16678,16 +16681,11 @@ var driverDB = {
         // 滞在時間
         var stayMin = lat.turnover ? parseFloat(lat.turnover) : latMinDiff(dsExit, dsEntrance);
 
-        // 差分（予定出発 vs 実出発）
-        var diffMin = dsp.diffMins !== null && dsp.diffMins !== undefined ? dsp.diffMins : latMinDiff(actualDep, plannedDep);
+        // 差分（予定出発 vs 実出発）— DSP有限数値優先、無効時は時刻差分
+        var diffMin = LatDepartureCore.latResolveDiffMin(dsp.diffMins, actualDep, plannedDep);
 
-        // 判定
-        var judgment = '';
-        if (diffMin !== null && diffMin !== undefined && !isNaN(diffMin)) {
-          if (diffMin < -10) judgment = '早着出発';
-          else if (diffMin <= 5) judgment = '定刻';
-          else judgment = '遅延';
-        }
+        // 判定（既存閾値: <-10 早着出発 / <=5 定刻 / >5 遅延）
+        var judgment = LatDepartureCore.latResolveJudgment(diffMin);
 
         latResultData.push({
           routeId: rid,
@@ -16703,7 +16701,7 @@ var driverDB = {
           plannedDeparture: plannedDep,
           actualDeparture: actualDep,
           dsExit: dsExit,
-          diffMin: diffMin !== null && !isNaN(diffMin) ? Math.round(diffMin * 10) / 10 : '',
+          diffMin: LatDepartureCore.latRoundDiffMin(diffMin),
           loadingMin: loadingMin !== null ? loadingMin : '',
           stayMin: stayMin !== null && !isNaN(stayMin) ? Math.round(stayMin * 10) / 10 : '',
           judgment: judgment
@@ -16803,7 +16801,7 @@ var driverDB = {
         html += '<td class="px-2 py-2 text-xs text-center">' + rec.plannedDeparture + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center font-bold text-emerald-400">' + rec.actualDeparture + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + rec.dsExit + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center font-bold">' + (rec.diffMin !== '' ? rec.diffMin : '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center font-bold" title="' + (rec.diffMin !== '' ? rec.diffMin + '分' : '') + '">' + (rec.diffMin !== '' ? latFormatDepDiffText(rec.diffMin) : '-') + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.loadingMin !== '' ? rec.loadingMin + '分' : '-') + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.stayMin !== '' ? rec.stayMin + '分' : '-') + '</td>';
         html += '<td class="px-2 py-2 text-center">' + badgeHtml + '</td>';
@@ -16883,17 +16881,46 @@ var driverDB = {
         }
 
         html += '</div>';
+        var diffText = latFormatDepDiffText(r.diffMin);
+        var judgeLabel = '';
+        var judgeColor = 'text-ink-lighter';
+        if (r.judgment === '早着出発') {
+          judgeLabel = '早着';
+          judgeColor = 'text-orange-400';
+        } else if (r.judgment === '定刻') {
+          judgeLabel = '定刻';
+          judgeColor = 'text-green-400';
+        } else if (r.judgment === '遅延') {
+          judgeLabel = '遅延';
+          judgeColor = 'text-red-400';
+        }
+        if (diffText || judgeLabel) {
+          html += '<div class="text-xs w-24 shrink-0 text-right leading-tight" title="予定出発 ' + (r.plannedDeparture || '-') + ' / 実出発 ' + (r.actualDeparture || '-') + '">';
+          if (judgeLabel && diffText) {
+            html += '<div class="' + judgeColor + '">' + judgeLabel + ' <span class="font-bold">' + diffText + '</span></div>';
+          } else if (judgeLabel) {
+            html += '<div class="' + judgeColor + '">' + judgeLabel + '</div>';
+          } else {
+            html += '<div class="font-bold ' + judgeColor + '">' + diffText + '</div>';
+          }
+          html += '</div>';
+        } else {
+          html += '<div class="w-24 shrink-0"></div>';
+        }
         html += '</div>';
       }
       html += '</div>';
 
-      // 時間軸
-      html += '<div class="relative mt-1" style="margin-left:112px;">';
-      for (var mm = minMin; mm <= maxMin; mm += 10) {
+      // 時間軸（表示ラベルのみ30/60分間隔。minMin/maxMin/range/bar位置は変更しない）
+      var labelStep = LatDepartureCore.latAxisLabelStep(range);
+      var axisStart = Math.floor(minMin / labelStep) * labelStep;
+      html += '<div class="relative mt-1" style="margin-left:112px;margin-right:104px;height:16px;">';
+      for (var mm = axisStart; mm <= maxMin; mm += labelStep) {
         var pos = (mm - minMin) / range * 100;
         var hh = Math.floor(mm / 60);
         var mmm = mm % 60;
-        html += '<span class="absolute text-xs text-ink-lighter" style="left:' + pos + '%;transform:translateX(-50%);">' + (hh < 10 ? '0' : '') + hh + ':' + (mmm < 10 ? '0' : '') + mmm + '</span>';
+        var isHour = mmm === 0;
+        html += '<span class="absolute text-xs ' + (isHour ? 'font-semibold text-ink' : 'text-ink-lighter') + '" style="left:' + pos + '%;transform:translateX(-50%);">' + (hh < 10 ? '0' : '') + hh + ':' + (mmm < 10 ? '0' : '') + mmm + '</span>';
       }
       html += '</div>';
 
