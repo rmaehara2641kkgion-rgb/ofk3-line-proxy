@@ -66,6 +66,31 @@ app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
+// デプロイ確認用（Render が注入する RENDER_GIT_* + 診断JSの有無）
+app.get('/deploy-info', (req, res) => {
+  var assignSupportPath = path.join(__dirname, 'assign-support.js');
+  var hasDebugFn = false;
+  var assignSupportBytes = 0;
+  try {
+    var src = fs.readFileSync(assignSupportPath, 'utf8');
+    assignSupportBytes = Buffer.byteLength(src, 'utf8');
+    hasDebugFn = src.indexOf('debugTransportIdLink') >= 0;
+  } catch (e) {
+    /* ignore */
+  }
+  res.json({
+    status: 'ok',
+    gitCommit: process.env.RENDER_GIT_COMMIT || null,
+    gitBranch: process.env.RENDER_GIT_BRANCH || null,
+    gitRepo: process.env.RENDER_GIT_REPO_SLUG || null,
+    nodeEnv: process.env.NODE_ENV || null,
+    assignSupportBytes: assignSupportBytes,
+    hasDebugTransportIdLink: hasDebugFn,
+    expectedDiagCommitPrefix: '062a79b',
+    serverTime: new Date().toISOString(),
+  });
+});
+
 // Render無料プランのスリープ防止用
 app.get('/ping', (req, res) => {
   log('ping received');
@@ -250,6 +275,7 @@ app.get('/static-map', async (req, res) => {
 const ADDR_MASTER_GAS_URL = process.env.ADDR_MASTER_GAS_URL || '';
 const VOLUME_MASTER_GAS_URL = process.env.VOLUME_MASTER_GAS_URL || '';
 const TENKO_MASTER_GAS_URL = process.env.TENKO_MASTER_GAS_URL || '';
+const AREA_EXPERIENCE_MASTER_GAS_URL = process.env.AREA_EXPERIENCE_MASTER_GAS_URL || '';
 
 // 物量マスターGASプロキシ
 app.get('/volume-master', async (req, res) => {
@@ -724,6 +750,47 @@ async function wh60SendLine(to, text) {
 // 10分ごとに自動チェック
 setInterval(wh60AutoCheck, 10 * 60 * 1000);
 log('WH60 auto-alert started (every 10 min)');
+
+// ===== エリア経験マスタ GASプロキシ =====
+app.get('/area-experience-master', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var qs = Object.keys(req.query).map(function(k) { return k + '=' + encodeURIComponent(req.query[k]); }).join('&');
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?' + qs;
+    console.log('area-experience-master GET:', url);
+    var response = await axios.get(url, { maxRedirects: 5, timeout: 120000 });
+    if (typeof response.data === 'string' && response.data.indexOf('<!DOCTYPE') >= 0) {
+      return res.status(502).json({ status: 'error', message: 'GAS returned HTML' });
+    }
+    res.json(response.data);
+  } catch (e) {
+    console.error('area-experience-master GET error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.post('/area-experience-master', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var action = req.query.action || 'save';
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
+    console.log('area-experience-master POST:', url, 'records:', req.body && req.body.records ? req.body.records.length : 0);
+    var response = await axios.post(url, req.body, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5,
+      timeout: 120000,
+      validateStatus: function() { return true; }
+    });
+    res.status(response.status).json(response.data);
+  } catch (e) {
+    console.error('area-experience-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 // ===== 点呼マスタ＋ログ GASプロキシ =====
 app.get('/tenko-master', async (req, res) => {

@@ -3,6 +3,7 @@ services:
     name: ofk3-line-proxy
     runtime: node
     plan: free
+    branch: feature/assign-support-phase1
     buildCommand: npm install
     startCommand: node render-webhook-server.js
     envVars:

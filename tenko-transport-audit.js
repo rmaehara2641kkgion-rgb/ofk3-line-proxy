@@ -312,11 +312,21 @@
 
     panel.innerHTML = html;
 
-    if (isOk) {
-      alert('✅ TransportID照合：一致\n\n一致 ' + matched.length + '名 / 不一致 0名\nAmazonスケジュールとDAシフト表のTransportIDは一致しています。');
-    } else {
-      alert('🚨 TransportID不一致を検知しました\n\n一致 ' + matched.length + '名 / 不一致 ' + mismatched.length + '名\n詳細は点呼管理画面の赤いTransportID照合欄を確認してください。');
+    // 点呼照合タブにもミラー表示
+    mirrorToTenkoMatch(panel);
+  }
+
+  function mirrorToTenkoMatch(panel) {
+    var matchPanel = document.getElementById('panel-tenko-match');
+    if (!matchPanel) return;
+    var mirror = document.getElementById('tenko-transport-audit-mirror');
+    if (!mirror) {
+      mirror = document.createElement('div');
+      mirror.id = 'tenko-transport-audit-mirror';
+      matchPanel.insertBefore(mirror, matchPanel.firstChild);
     }
+    mirror.className = panel.className;
+    mirror.innerHTML = panel.innerHTML;
   }
 
   function handleAmazonFile(file) {

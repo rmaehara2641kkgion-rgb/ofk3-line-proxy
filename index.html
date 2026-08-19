@@ -293,7 +293,7 @@
       <!-- Tabs -->
       <nav class="flex gap-6 mb-6 border-b border-border overflow-x-auto">
         <button class="tab-active pb-3 text-sm whitespace-nowrap" onclick="switchTab('dashboard')" id="tab-dashboard">本日のダッシュボード</button>
-        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">コース最適化</button>
+        <button class="tab-inactive pb-3 text-sm" onclick="switchTab('optimization')" id="tab-optimization">アサイン・最適化</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tw-extract')" id="tab-tw-extract">📦 時間指定</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('master')" id="tab-master">マスタ管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('drivers')" id="tab-drivers">ドライバー管理</button>
@@ -743,24 +743,118 @@
         </div>
       </div>
 
-      <!-- Optimization Tab -->
+      <!-- Optimization / Assign Support Tab -->
       <div id="panel-optimization" class="hidden">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-sm font-medium">コース割最適化提案</h2>
-            <p class="text-xs text-ink-lighter mt-1">ドライバー能力に基づいて、現在のAmazonアサインからの改善案を提示します</p>
+        <div class="mb-6 pb-4 border-b border-amber-200">
+          <h2 class="text-lg font-bold text-slate-800">アサイン・最適化</h2>
+          <p class="text-xs text-ink-lighter mt-1">エリア経験データに基づき、未経験エリアへの誤アサインを防ぐ判断支援（自動配車確定はしません）</p>
+        </div>
+
+        <!-- 1. エリア経験DB（常設ダッシュボード） -->
+        <section class="card p-4 mb-4 border-l-4 border-emerald-400">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="text-sm font-bold">エリア経験DB</h3>
+              <p class="text-xs text-ink-lighter mt-0.5">OFK3常設マスタ（GAS保存・ページ再読込後も保持）</p>
+            </div>
+            <button type="button" id="as-exp-update-btn" class="btn-primary text-xs px-4 py-1.5 rounded">経験データ登録</button>
           </div>
-          <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runOptimization()" id="optimize-btn">最適化を実行</button>
-        </div>
+          <div id="as-exp-dashboard-status"></div>
+          <div id="as-exp-warnings"></div>
+        </section>
 
-        <div id="optimization-results" class="hidden fade-in">
-          <!-- Will be populated dynamically -->
-        </div>
+        <!-- 登録/更新アップロード -->
+        <section id="as-exp-upload-section" class="card p-4 mb-4 hidden">
+          <h3 id="as-exp-upload-title" class="text-sm font-bold mb-2">エリア経験データを登録</h3>
+          <p class="text-xs text-ink-lighter mb-3">CSV / XLSX（TransportID 必須）。確定前に件数プレビューを表示します。</p>
+          <div id="as-exp-dropzone" class="text-center py-6 border-2 border-dashed border-amber-300 rounded-lg cursor-pointer hover:border-amber-500 hover:bg-amber-50/50 transition-colors">
+            <p class="text-sm font-medium">📂 エリア経験ファイルをドロップ / クリック</p>
+            <p class="text-xs text-gray-400 mt-1">CSV, XLSX</p>
+            <input type="file" id="as-exp-input" accept=".csv,.xlsx,.xls" class="hidden">
+          </div>
+          <div id="as-exp-preview"></div>
+        </section>
 
-        <div id="optimization-empty" class="text-center py-16">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
-          <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
-        </div>
+        <!-- 2. ドライバー経験一覧 -->
+        <section class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-bold">ドライバー経験一覧</h3>
+            <input type="search" id="as-exp-search" placeholder="ドライバー名 / TransportID / エリア名" class="text-sm border rounded px-3 py-1.5 w-64 max-w-full">
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-surface">
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">能力</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">経験エリア</th>
+                  <th class="px-3 py-2 text-right text-xs font-medium text-ink-lighter">最終走行</th>
+                </tr>
+              </thead>
+              <tbody id="as-exp-table-body">
+                <tr><td colspan="5" class="px-4 py-8 text-center text-sm text-ink-lighter">読込中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="as-exp-detail" class="hidden"></div>
+        </section>
+
+        <!-- 3. 今日のマニフェスト -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">今日のマニフェスト</h3>
+          <div id="as-manifest-dropzone" class="text-center py-5 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/30">
+            <p class="text-xs">📦 マニフェストをドロップ / クリック</p>
+            <input type="file" id="as-manifest-input" accept=".xlsx,.xls,.zip" multiple class="hidden">
+          </div>
+          <div id="as-manifest-summary" class="mt-2"></div>
+        </section>
+
+        <!-- 4. 今日のシフト -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2">今日のシフト</h3>
+          <div id="as-shift-dropzone" class="text-center py-5 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/30">
+            <p class="text-xs">📅 シフト表をドロップ / クリック</p>
+            <input type="file" id="as-shift-input" accept=".xlsx,.xls" class="hidden">
+          </div>
+          <div id="as-shift-summary" class="mt-2"></div>
+        </section>
+
+        <!-- 5. レスキュー人数 + 6. アサイン提案 -->
+        <section class="card p-4 mb-4">
+          <h3 class="text-sm font-bold mb-2" id="as-assign-section-title">アサイン提案</h3>
+          <p class="text-xs text-ink-lighter mb-2" id="as-assign-section-desc">ManifestのCycleに応じて処理モードが切り替わります</p>
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <label class="text-xs font-medium">レスキュー要員
+              <input type="number" id="as-rescue-count" min="0" max="20" value="0" class="ml-2 w-16 text-sm border rounded px-2 py-1"> 名
+            </label>
+            <span class="text-xs text-ink-lighter">（Phase 1: 人数記録のみ）</span>
+            <button type="button" id="as-generate-suggestions-btn" class="btn-primary text-xs px-4 py-1.5 rounded">
+              ⚡ オートアサイン提案を生成
+            </button>
+          </div>
+          <div id="as-suggest-results"></div>
+        </section>
+
+        <!-- 7. 既存コース最適化（変更なし） -->
+        <section class="card p-4 mb-4 border-t-4 border-slate-300">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-sm font-medium">コース割最適化提案（既存）</h3>
+              <p class="text-xs text-ink-lighter mt-1">ドライバー能力に基づいて、現在のAmazonアサインからの改善案を提示します</p>
+            </div>
+            <button class="btn-primary text-xs px-4 py-1.5 rounded" onclick="runOptimization()" id="optimize-btn">最適化を実行</button>
+          </div>
+
+          <div id="optimization-results" class="hidden fade-in">
+            <!-- Will be populated dynamically -->
+          </div>
+
+          <div id="optimization-empty" class="text-center py-16">
+            <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
+            <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
+          </div>
+        </section>
       </div>
 
       <!-- Tenko (Roll Call) Management Tab -->
@@ -1458,6 +1552,7 @@
               <input type="file" accept=".xlsx,.xls,.csv" multiple class="hidden" id="tq-bulk-file-input" onchange="handleTeamQualityBulkFiles(this.files)">
             </label>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportTeamQualityCsv()" id="tq-export-btn" disabled>&#128229; CSV&#12456;&#12463;&#12473;&#12509;&#12540;&#12488;</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportAllDeptsReport()" id="tq-export-all-xlsx-btn" disabled>&#128196; 全所属 個人レポート一括出力</button>
           </div>
         </div>
 
@@ -4683,6 +4778,10 @@ var driverDB = {
 
         // Transport ID がマスタに登録されていれば保持
         var transportId = transportIDs[name] || '';
+        var cellHints =
+          typeof AssignSupportCore !== 'undefined' && AssignSupportCore.parseScheduleCellWorkHint
+            ? AssignSupportCore.parseScheduleCellWorkHint(cellValue)
+            : {};
 
         tenkoSchedule.push({
           name: dispName,
@@ -4690,6 +4789,9 @@ var driverDB = {
           shiftCode: autoShiftCode,
           arrivalTime: arrivalTime.display,
           arrivalMinutes: arrivalTime.minutes,
+          scheduleCellText: cellValue,
+          assignRole: cellHints.assignRole || 'regular',
+          vehicleHint: cellHints.vehicleHint || '',
           licenseAuth: false,
           mentorAuth: false,
           temporary: false
@@ -4986,8 +5088,29 @@ var driverDB = {
                 console.log('サーバーからマスタデータ' + (forceOverwrite ? '上書き' : 'マージ') + '完了: ' + serverDrivers.length + '名');
                 renderMasterTable();
               }
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: serverDrivers.length,
+                updated: updated,
+              };
             } else if (forceOverwrite) {
               console.log('サーバーにマスタデータが空です');
+            }
+            if (!window.__ofk3MasterLoadStatus) {
+              window.__ofk3MasterLoadStatus = {
+                completedAt: Date.now(),
+                transportIdsCount: Object.keys(transportIDs).filter(function (k) {
+                  return String(transportIDs[k] || '').trim();
+                }).length,
+                transportIdsKeyCount: Object.keys(transportIDs).length,
+                driverCount: res.drivers ? res.drivers.length : 0,
+                updated: false,
+                note: 'server response ok but no merge',
+              };
             }
             // 幽霊キー整理: 別名マップのalias側がまだ残っていたら自動マージ（updated有無に関わらず）
             if (!forceOverwrite) {
@@ -8759,6 +8882,11 @@ var driverDB = {
         var company = String(row[0] || '').trim();
         var name = String(row[1] || '').trim();
         if (!name) continue;
+        if (typeof AssignSupportCore !== 'undefined' && AssignSupportCore.isShiftNonDriverRow) {
+          if (AssignSupportCore.isShiftNonDriverRow(name)) continue;
+        } else if (name === '必要台数' || name === '合計' || name === '計') {
+          continue;
+        }
 
         var shiftCode = String(row[dateCol] || '').trim();
         if (!shiftCode || shiftCode === '休') continue;
@@ -8779,11 +8907,21 @@ var driverDB = {
         var dispName = driverJapaneseNames[name] || name;
         dispName = normalizeDriverNameOrder(dispName);
 
-        // Transport ID がマスタに登録されていれば保持
-        var transportId = transportIDs[name] || '';
+        // Transport ID — 既存 resolveDriverKey / transportIDs マスタを再利用
+        var transportId = '';
+        if (typeof AssignSupportCore !== 'undefined' && AssignSupportCore.resolveTransportIdForName) {
+          transportId =
+            AssignSupportCore.resolveTransportIdForName(name, transportIDs, resolveDriverKey) ||
+            AssignSupportCore.resolveTransportIdForName(dispName, transportIDs, resolveDriverKey);
+        } else {
+          var resolvedKey = resolveDriverKey(name);
+          transportId =
+            transportIDs[resolvedKey] || transportIDs[name] || transportIDs[dispName] || '';
+        }
 
         shiftMasterData.push({
           name: dispName,
+          rawName: name,
           transportId: transportId,
           shiftCode: normalizedCode || shiftCode,
           company: company
@@ -15066,10 +15204,221 @@ var driverDB = {
       return n === 'transporter id' || n === 'transporter_id' || compact === 'transporterid' || compact === 'transportid';
     }
 
+    function mapAnalysisHeaderColumns(headerRow) {
+      var cols = {};
+      for (var i = 0; i < headerRow.length; i++) {
+        var h = normalizeReportHeader(headerRow[i]);
+        var raw = String(headerRow[i] || '').trim();
+        if (isTransporterHeader(raw)) cols.tid = i;
+        else if (h.indexOf('\u30c9\u30e9\u30a4\u30d0') >= 0 || h.indexOf('driver') >= 0) cols.driver = i;
+        else if (h.indexOf('\u4ef6\u6570\u5408\u8a08') >= 0) cols.count = i;
+        else if ((h === '\u4ef6\u6570' || h.indexOf('\u4ef6\u6570') >= 0) && cols.count === undefined) cols.count = i;
+        else if (h.indexOf('\u65e5\u4ed8') >= 0) cols.date = i;
+        else if (h.indexOf('\u5931\u6557\u7406\u7531') >= 0 && h.indexOf('\u5185\u8a33') >= 0) cols.reasonBreakdown = i;
+        else if (h.indexOf('\u3079\u304d\u67b6\u96fb') >= 0 || h.indexOf('\u30d9\u30ad\u67b6\u96fb') >= 0) cols.ccRequired = i;
+        else if (h.indexOf('\u5b9f\u67b6\u96fb') >= 0) cols.ccActual = i;
+        else if (h.indexOf('\u901a\u8a71\u56de\u6570') >= 0) cols.ccActual = i;
+        else if (h.indexOf('\u901a\u8a71\u6642\u9593') >= 0) cols.duration = i;
+        else if (h.indexOf('\u67b6\u96fb\u7387') >= 0) cols.ccRate = i;
+        else if (h.indexOf('\u7406\u7531\u5185\u8a33') >= 0) cols.reasonBreakdown = i;
+        else if (h.indexOf('\u5bfe\u8c61\u9031') >= 0) cols.weekCount = i;
+        else if (h === 'failure reason' || h === 'failure_reason') cols.reason = i;
+        else if (h === 'cycle name' || h === 'cycle_name') cols.cycle = i;
+        else if (h === 'route code' || h === 'route_code') cols.route = i;
+        else if (h === 'tracking id' || h === 'tracking_id') cols.tracking = i;
+        else if (h === 'scannable id' || h === 'scannable_id') cols.tracking = i;
+        else if (h.indexOf('postal') >= 0 || h === 'zip') cols.zip = i;
+        else if (h === 'call event' || h === 'call_event') cols.callEvent = i;
+        else if (h === 'text event' || h === 'text_event') cols.textEvent = i;
+        else if (h.indexOf('call duration') >= 0) cols.duration = i;
+        else if (h === 'shipment reason' || h === 'shipment_reason') cols.reason = i;
+        else if (h === 'ship method' || h === 'ship_method') cols.method = i;
+      }
+      return cols;
+    }
+
+    function findAnalysisHeaderRow(rows, kind) {
+      for (var ri = 0; ri < Math.min(rows.length, 15); ri++) {
+        var cols = mapAnalysisHeaderColumns(rows[ri]);
+        if (cols.tid === undefined) continue;
+        if (kind === 'ftds') {
+          if (cols.count !== undefined || cols.reasonBreakdown !== undefined || cols.reason !== undefined) return ri;
+        } else if (cols.ccRequired !== undefined || cols.ccActual !== undefined || cols.reasonBreakdown !== undefined) {
+          return ri;
+        }
+      }
+      return -1;
+    }
+
+    function findCumulativeSheetName(wb) {
+      for (var i = 0; i < wb.SheetNames.length; i++) {
+        if (wb.SheetNames[i].indexOf('\u7d2f\u8a08') === 0) return wb.SheetNames[i];
+      }
+      return null;
+    }
+
+    function extractReportPeriodLabel(sheetName, fileName) {
+      var src = (sheetName || '') + ' ' + (fileName || '');
+      var m = src.match(/W\d+\s*[-\u2013~]\s*W\d+/i);
+      if (m) return m[0].replace(/\s/g, '');
+      m = src.match(/W\d+/i);
+      return m ? m[0] : (sheetName || fileName || '');
+    }
+
+    function getSheetRows(wb, sheetName) {
+      return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
+    }
+
+    function parseReasonBreakdownPipe(text) {
+      var out = {};
+      var s = String(text || '').trim();
+      if (!s) return out;
+      var parts = s.split('|');
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i].trim();
+        if (!p) continue;
+        var idx = p.lastIndexOf(':');
+        if (idx <= 0) continue;
+        var reason = p.slice(0, idx).trim();
+        var cnt = parseInt(p.slice(idx + 1).trim(), 10);
+        if (reason && !isNaN(cnt)) out[reason] = cnt;
+      }
+      return out;
+    }
+
+    function buildTidToNameLookup() {
+      var tidToName = {};
+      var keys = Object.keys(transportIDs);
+      for (var k = 0; k < keys.length; k++) {
+        var tid = String(transportIDs[keys[k]] || '').trim();
+        if (tid) tidToName[tid] = keys[k];
+      }
+      return tidToName;
+    }
+
+    function resolveDriverNameFromTid(tid, rowName) {
+      var tidToName = buildTidToNameLookup();
+      if (tid && tidToName[tid]) return tidToName[tid];
+      if (rowName) return resolveDriverKey(rowName) || String(rowName).trim();
+      return '';
+    }
+
+    function ftdsRecordWeight(rec) {
+      return rec && rec.summaryCount ? rec.summaryCount : 1;
+    }
+
+    function importFtdsCumulativeRows(rows, meta) {
+      var headerIdx = findAnalysisHeaderRow(rows, 'ftds');
+      if (headerIdx < 0) {
+        console.error('[FTDS cumulative] header row not found. Detected headers:', rows[0]);
+        return null;
+      }
+      var cols = mapAnalysisHeaderColumns(rows[headerIdx]);
+      if (cols.tid === undefined) {
+        console.error('[FTDS cumulative] TransportID column not found. Detected headers:', rows[headerIdx]);
+        return null;
+      }
+      var results = [];
+      for (var r = headerIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row) continue;
+        var tid = String(row[cols.tid] || '').trim();
+        if (!tid) continue;
+        var rowName = cols.driver !== undefined ? String(row[cols.driver] || '').trim() : '';
+        var driverName = resolveDriverNameFromTid(tid, rowName);
+        var count = cols.count !== undefined ? (parseInt(row[cols.count], 10) || 0) : 0;
+        var dateStr = cols.date !== undefined ? String(row[cols.date] || '') : '';
+        var reasonText = cols.reasonBreakdown !== undefined ? String(row[cols.reasonBreakdown] || '') : '';
+        var weekCount = cols.weekCount !== undefined ? (parseInt(row[cols.weekCount], 10) || 0) : 0;
+        results.push({
+          date: dateStr,
+          driverName: driverName,
+          transporterId: tid,
+          cycle: weekCount ? ('\u7d2f\u8a08' + weekCount + '\u9031') : '',
+          route: '',
+          tracking: '',
+          zip: '',
+          reason: reasonText,
+          summaryCount: count,
+          isSummary: true,
+          weekCount: weekCount,
+          reasonBreakdown: parseReasonBreakdownPipe(reasonText)
+        });
+      }
+      if (results.length === 0) return null;
+      ftdsResultData = results;
+      renderFtdsResultsUI();
+      return {
+        kind: 'cumulative',
+        period: extractReportPeriodLabel(meta.sheetName, meta.fileName),
+        drivers: results.length
+      };
+    }
+
+    function importCcCumulativeRows(rows, meta) {
+      var headerIdx = findAnalysisHeaderRow(rows, 'cc');
+      if (headerIdx < 0) {
+        console.error('[CC cumulative] header row not found. Detected headers:', rows[0]);
+        return null;
+      }
+      var cols = mapAnalysisHeaderColumns(rows[headerIdx]);
+      if (cols.tid === undefined) {
+        console.error('[CC cumulative] TransportID column not found. Detected headers:', rows[headerIdx]);
+        return null;
+      }
+      exportedQualityCounts = exportedQualityCounts || {};
+      ccResultData = [];
+      var imported = 0;
+      for (var r = headerIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row) continue;
+        var tid = String(row[cols.tid] || '').trim();
+        if (!tid) continue;
+        var rowName = cols.driver !== undefined ? String(row[cols.driver] || '').trim() : '';
+        var driverName = resolveDriverNameFromTid(tid, rowName);
+        if (!driverName) driverName = rowName;
+        if (!driverName) continue;
+        var ccRequired = cols.ccRequired !== undefined ? (parseInt(row[cols.ccRequired], 10) || 0) : 0;
+        var ccActual = cols.ccActual !== undefined ? (parseInt(row[cols.ccActual], 10) || 0) : 0;
+        var duration = cols.duration !== undefined ? (parseInt(row[cols.duration], 10) || 0) : 0;
+        var weekCount = cols.weekCount !== undefined ? (parseInt(row[cols.weekCount], 10) || 0) : 0;
+        exportedQualityCounts[driverName] = {
+          ccRequired: ccRequired,
+          ccActual: ccActual,
+          ccDuration: duration,
+          weekCount: weekCount,
+          isCumulative: true
+        };
+        imported++;
+      }
+      if (imported === 0) return null;
+      renderCcResultsUI();
+      return {
+        kind: 'cumulative',
+        period: extractReportPeriodLabel(meta.sheetName, meta.fileName),
+        drivers: imported
+      };
+    }
+
+    function showFtdsImportMessage(info) {
+      var msg = info.kind === 'cumulative'
+        ? ('\u2705 FTDS \u7d2f\u8a08\u30c7\u30fc\u30bf\u8aad\u307f\u8fbc\u307f\u5b8c\u4e86\uff1a' + info.period + ' / ' + info.drivers + '\u540d')
+        : ('\u2705 FTDS \u901a\u5e38\u30c7\u30fc\u30bf\u8aad\u307f\u8fbc\u307f\u5b8c\u4e86\uff1a' + info.period + ' / ' + info.drivers + '\u540d');
+      alert(msg);
+    }
+
+    function showCcImportMessage(info) {
+      var msg = info.kind === 'cumulative'
+        ? ('\u2705 Contact Compliance \u7d2f\u8a08\u30c7\u30fc\u30bf\u8aad\u307f\u8fbc\u307f\u5b8c\u4e86\uff1a' + info.period + ' / ' + info.drivers + '\u540d')
+        : ('\u2705 Contact Compliance \u901a\u5e38\u30c7\u30fc\u30bf\u8aad\u307f\u8fbc\u307f\u5b8c\u4e86\uff1a' + info.period + ' / ' + info.drivers + '\u540d');
+      alert(msg);
+    }
+
     function findReportSheet(wb, kind) {
       var best = null;
       var bestScore = 0;
       for (var si = 0; si < wb.SheetNames.length; si++) {
+        if (wb.SheetNames[si].indexOf('\u7d2f\u8a08') === 0) continue;
         var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], { header: 1, defval: '' });
         if (!rows || rows.length < 2) continue;
         var hdr = rows[0];
@@ -15423,24 +15772,58 @@ var driverDB = {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
-        var fname = (file.name || '').toLowerCase();
-        if (fname.endsWith('.csv')) {
+        var fname = file.name || '';
+        var fnameLower = fname.toLowerCase();
+        if (fnameLower.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importFtdsExportCsv(text)) {
-            alert('FTDS分析CSVを読込: ' + ftdsResultData.length + '件');
+            ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
+            showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
             return;
           }
+          var csvRows = csvTextToRows(text);
+          if (findAnalysisHeaderRow(csvRows, 'ftds') >= 0) {
+            ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
+            processFtdsData(csvRows);
+            showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
+            return;
+          }
+          alert('FTDS CSV形式を認識できませんでした。\nFTDS分析_*.csv（詳細データ付き）を確認してください');
+          return;
         }
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
+        var cumSheet = findCumulativeSheetName(wb);
+        if (cumSheet) {
+          var cumRows = getSheetRows(wb, cumSheet);
+          var cumInfo = importFtdsCumulativeRows(cumRows, { sheetName: cumSheet, fileName: fname });
+          if (cumInfo) {
+            ftdsImportPeriodLabel = cumInfo.period || extractReportPeriodLabel(cumSheet, fname);
+            showFtdsImportMessage(cumInfo);
+            return;
+          }
+        }
         var sheetData = findReportSheet(wb, 'ftds');
         if (!sheetData || sheetData.length < 2) {
-          alert('FTDS形式のシートが見つかりません。\n・Amazon生データ（transporter_id列）\n・または FTDS分析_*.csv（詳細データ付き）\nを確認してください');
+          alert('FTDS形式のシートが見つかりません。\n・Amazon生データ（transporter_id列）\n・FTDS分析_*.csv\n・FTDS_累計*.xlsx\nを確認してください');
           return;
         }
         processFtdsData(sheetData);
+        ftdsImportPeriodLabel = extractReportPeriodLabel('', fname);
+        showFtdsImportMessage({ kind: 'normal', period: ftdsImportPeriodLabel, drivers: Object.keys(groupFtdsDriverStats(ftdsResultData)).length });
       };
       reader.readAsArrayBuffer(file);
+    }
+
+    function groupFtdsDriverStats(results) {
+      var stats = {};
+      for (var i = 0; i < results.length; i++) {
+        var rec = results[i];
+        var key = rec.driverName || ('(不明) ' + rec.transporterId);
+        if (!stats[key]) stats[key] = 0;
+        stats[key] += ftdsRecordWeight(rec);
+      }
+      return stats;
     }
 
     function renderFtdsResultsUI() {
@@ -15452,29 +15835,39 @@ var driverDB = {
         var rec = results[i];
         var tid = rec.transporterId || '';
         var driverName = rec.driverName || '';
+        var weight = ftdsRecordWeight(rec);
         if (driverName) {
-          matched++;
+          matched += weight;
           if (!driverStats[driverName]) driverStats[driverName] = { tid: tid, count: 0, reasons: {} };
-          driverStats[driverName].count++;
-          if (rec.reason) {
-            driverStats[driverName].reasons[rec.reason] = (driverStats[driverName].reasons[rec.reason] || 0) + 1;
+          driverStats[driverName].count += weight;
+          if (rec.reasonBreakdown && Object.keys(rec.reasonBreakdown).length > 0) {
+            var rbKeys = Object.keys(rec.reasonBreakdown);
+            for (var rb = 0; rb < rbKeys.length; rb++) {
+              var rk = rbKeys[rb];
+              driverStats[driverName].reasons[rk] = (driverStats[driverName].reasons[rk] || 0) + rec.reasonBreakdown[rk];
+            }
+          } else if (rec.reason) {
+            driverStats[driverName].reasons[rec.reason] = (driverStats[driverName].reasons[rec.reason] || 0) + weight;
           }
         } else if (tid) {
-          unmatched++;
+          unmatched += weight;
           var unkKey = '(不明) ' + tid;
           if (!driverStats[unkKey]) driverStats[unkKey] = { tid: tid, count: 0, reasons: {} };
-          driverStats[unkKey].count++;
+          driverStats[unkKey].count += weight;
           if (rec.reason) {
-            driverStats[unkKey].reasons[rec.reason] = (driverStats[unkKey].reasons[rec.reason] || 0) + 1;
+            driverStats[unkKey].reasons[rec.reason] = (driverStats[unkKey].reasons[rec.reason] || 0) + weight;
           }
         }
       }
 
+      var totalWeight = 0;
+      for (var tw = 0; tw < results.length; tw++) totalWeight += ftdsRecordWeight(results[tw]);
+
       document.getElementById('ftds-summary').classList.remove('hidden');
-      document.getElementById('ftds-total').textContent = results.length;
+      document.getElementById('ftds-total').textContent = totalWeight;
       document.getElementById('ftds-matched').textContent = matched;
       document.getElementById('ftds-unmatched').textContent = unmatched;
-      var rate = results.length > 0 ? Math.round(matched / results.length * 100) : 0;
+      var rate = totalWeight > 0 ? Math.round(matched / totalWeight * 100) : 0;
       document.getElementById('ftds-rate').textContent = rate + '%';
 
       document.getElementById('ftds-driver-summary').classList.remove('hidden');
@@ -15526,54 +15919,37 @@ var driverDB = {
     }
 
     function processFtdsData(rows) {
-      var header = rows[0];
-      // Find column indices
-      var colMap = {};
-      for (var i = 0; i < header.length; i++) {
-        var h = String(header[i]).toLowerCase().trim();
-        if (h === 'transporter_id') colMap.transporterId = i;
-        else if (h === 'event_date') colMap.date = i;
-        else if (h === 'cycle_name') colMap.cycle = i;
-        else if (h === 'route_code') colMap.route = i;
-        else if (h === 'tracking_id') colMap.tracking = i;
-        else if (h === 'shipping_address_postal_code' || h === 'zip') colMap.zip = i;
-        else if (h === 'failure_reason') colMap.reason = i;
-        else if (h === 'week') colMap.week = i;
-      }
-      if (colMap.transporterId === undefined) {
-        alert('transporter_id列が見つかりません');
+      var headerIdx = findAnalysisHeaderRow(rows, 'ftds');
+      if (headerIdx < 0) headerIdx = 0;
+      var header = rows[headerIdx];
+      var colMap = mapAnalysisHeaderColumns(header);
+      if (colMap.tid === undefined) {
+        console.error('[FTDS] TransportID column not found. Detected headers:', header);
+        alert('TransportID列が見つかりません');
         return;
       }
 
-      // Build reverse lookup: transportID -> driverName
-      var tidToName = {};
-      var keys = Object.keys(transportIDs);
-      for (var k = 0; k < keys.length; k++) {
-        var name = keys[k];
-        var tid = String(transportIDs[name] || '').trim();
-        if (tid) tidToName[tid] = name;
-      }
-
-      // Process rows
+      var tidToName = buildTidToNameLookup();
       var results = [];
       var matched = 0;
       var unmatched = 0;
       var driverStats = {};
 
-      for (var r = 1; r < rows.length; r++) {
+      for (var r = headerIdx + 1; r < rows.length; r++) {
         var row = rows[r];
-        var tid = String(row[colMap.transporterId] || '').trim();
+        var tid = String(row[colMap.tid] || '').trim();
         if (!tid) continue;
-        var driverName = tidToName[tid] || '';
+        var rowName = colMap.driver !== undefined ? String(row[colMap.driver] || '').trim() : '';
+        var driverName = tidToName[tid] || resolveDriverKey(rowName) || rowName;
         var dateVal = colMap.date !== undefined ? String(row[colMap.date] || '') : '';
-        // Format date
         if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
-        var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : '';
+        var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : (colMap.reasonBreakdown !== undefined ? String(row[colMap.reasonBreakdown] || '') : '');
         var cycle = colMap.cycle !== undefined ? String(row[colMap.cycle] || '') : '';
         var route = colMap.route !== undefined ? String(row[colMap.route] || '') : '';
         var tracking = colMap.tracking !== undefined ? String(row[colMap.tracking] || '') : '';
-        var zip = '';
-        if (colMap.zip !== undefined) zip = String(row[colMap.zip] || '');
+        var zip = colMap.zip !== undefined ? String(row[colMap.zip] || '') : '';
+        var summaryCount = colMap.count !== undefined ? (parseInt(row[colMap.count], 10) || 0) : 0;
+        var isSummary = summaryCount > 0 && !tracking && !route;
 
         var rec = {
           date: dateVal,
@@ -15585,22 +15961,34 @@ var driverDB = {
           zip: zip,
           reason: reason
         };
+        if (isSummary) {
+          rec.summaryCount = summaryCount;
+          rec.isSummary = true;
+          rec.reasonBreakdown = parseReasonBreakdownPipe(reason);
+        }
         results.push(rec);
 
+        var weight = ftdsRecordWeight(rec);
         if (driverName) {
-          matched++;
+          matched += weight;
           if (!driverStats[driverName]) driverStats[driverName] = {tid: tid, count: 0, reasons: {}};
-          driverStats[driverName].count++;
-          if (reason) {
-            driverStats[driverName].reasons[reason] = (driverStats[driverName].reasons[reason] || 0) + 1;
+          driverStats[driverName].count += weight;
+          if (rec.reasonBreakdown && Object.keys(rec.reasonBreakdown).length > 0) {
+            var rbKeys = Object.keys(rec.reasonBreakdown);
+            for (var rb = 0; rb < rbKeys.length; rb++) {
+              var rk = rbKeys[rb];
+              driverStats[driverName].reasons[rk] = (driverStats[driverName].reasons[rk] || 0) + rec.reasonBreakdown[rk];
+            }
+          } else if (reason) {
+            driverStats[driverName].reasons[reason] = (driverStats[driverName].reasons[reason] || 0) + weight;
           }
         } else {
-          unmatched++;
+          unmatched += weight;
           var unkKey = '(不明) ' + tid;
           if (!driverStats[unkKey]) driverStats[unkKey] = {tid: tid, count: 0, reasons: {}};
-          driverStats[unkKey].count++;
+          driverStats[unkKey].count += weight;
           if (reason) {
-            driverStats[unkKey].reasons[reason] = (driverStats[unkKey].reasons[reason] || 0) + 1;
+            driverStats[unkKey].reasons[reason] = (driverStats[unkKey].reasons[reason] || 0) + weight;
           }
         }
       }
@@ -15675,58 +16063,63 @@ var driverDB = {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
-        var fname = (file.name || '').toLowerCase();
-        if (fname.endsWith('.csv')) {
+        var fname = file.name || '';
+        var fnameLower = fname.toLowerCase();
+        if (fnameLower.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importCcExportCsv(text)) {
-            var msg = ccResultData.length > 0
-              ? ('Contact Compliance分析CSVを読込: ' + ccResultData.length + '件')
-              : ('Contact Compliance集計CSVを読込: ' + Object.keys(exportedQualityCounts).length + '名');
-            alert(msg);
+            var ccDrivers = ccResultData.length > 0
+              ? Object.keys(groupCcDriverStats(ccResultData)).length
+              : Object.keys(exportedQualityCounts || {}).length;
+            showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: ccDrivers });
             return;
           }
+          alert('Contact Compliance CSV形式を認識できませんでした。\nContactCompliance分析_*.csv を確認してください');
+          return;
         }
         var data = new Uint8Array(e.target.result);
         var wb = XLSX.read(data, {type: 'array'});
+        var cumSheet = findCumulativeSheetName(wb);
+        if (cumSheet) {
+          var cumRows = getSheetRows(wb, cumSheet);
+          var cumInfo = importCcCumulativeRows(cumRows, { sheetName: cumSheet, fileName: fname });
+          if (cumInfo) {
+            showCcImportMessage(cumInfo);
+            return;
+          }
+        }
         var sheetData = findReportSheet(wb, 'cc');
         if (!sheetData || sheetData.length < 2) {
-          alert('Contact Compliance形式のシートが見つかりません。\n・Amazon生データ\n・または ContactCompliance分析_*.csv\nを確認してください');
+          alert('Contact Compliance形式のシートが見つかりません。\n・Amazon生データ\n・ContactCompliance分析_*.csv\n・ContactCompliance_累計*.xlsx\nを確認してください');
           return;
         }
         processCcData(sheetData);
+        showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
       };
       reader.readAsArrayBuffer(file);
     }
 
-    function processCcData(rows) {
-      var header = rows[0];
-      var colMap = {};
-      for (var i = 0; i < header.length; i++) {
-        var h = normalizeReportHeader(header[i]);
-        if (isTransporterHeader(header[i])) colMap.tid = i;
-        else if (h === 'event date' || h === 'event_date') colMap.date = i;
-        else if (h === 'scannable id' || h === 'scannable_id') colMap.tracking = i;
-        else if (h === 'shipment reason' || h === 'shipment_reason') colMap.reason = i;
-        else if (h === 'ship method' || h === 'ship_method') colMap.method = i;
-        else if (h === 'call event' || h === 'call_event') colMap.callEvent = i;
-        else if (h === 'text event' || h === 'text_event') colMap.textEvent = i;
-        else if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) colMap.duration = i;
-        else if (h === 'dsp') colMap.dsp = i;
+    function groupCcDriverStats(results) {
+      var stats = {};
+      for (var i = 0; i < results.length; i++) {
+        var rec = results[i];
+        var key = rec.driverName || ('(不明) ' + rec.transporterId);
+        stats[key] = true;
       }
+      return stats;
+    }
+
+    function processCcData(rows) {
+      var headerIdx = findAnalysisHeaderRow(rows, 'cc');
+      if (headerIdx < 0) headerIdx = 0;
+      var header = rows[headerIdx];
+      var colMap = mapAnalysisHeaderColumns(header);
       if (colMap.tid === undefined) {
-        alert('Transporter ID列が見つかりません');
+        console.error('[CC] TransportID column not found. Detected headers:', header);
+        alert('TransportID列が見つかりません');
         return;
       }
-
-      // Reverse lookup
-      var tidToName = {};
-      var keys = Object.keys(transportIDs);
-      for (var k = 0; k < keys.length; k++) {
-        var name = keys[k];
-        var tid = String(transportIDs[name] || '').trim();
-        if (tid) tidToName[tid] = name;
-      }
-
+      var tidToName = buildTidToNameLookup();
       var results = [];
       var matched = 0;
       var unmatched = 0;
@@ -15734,7 +16127,7 @@ var driverDB = {
       var totalDuration = 0;
       var driverStats = {};
 
-      for (var r = 1; r < rows.length; r++) {
+      for (var r = headerIdx + 1; r < rows.length; r++) {
         var row = rows[r];
         var tid = String(row[colMap.tid] || '').trim();
         if (!tid) continue;
@@ -15869,12 +16262,13 @@ var driverDB = {
             if (resolveDriverKey(dk2) === resolveDriverKey(sk) || dk2 === sk) {
               driverStats[dk2].required = so.ccRequired != null ? so.ccRequired : 0;
               driverStats[dk2].actual = so.ccActual != null ? so.ccActual : 0;
+              if (so.ccDuration != null) driverStats[dk2].duration = so.ccDuration;
               found = true;
               break;
             }
           }
           if (!found && (so.ccRequired || 0) > 0) {
-            driverStats[displayKey] = { tid: '-', count: 0, required: so.ccRequired || 0, actual: so.ccActual != null ? so.ccActual : 0, duration: 0, reasons: {} };
+            driverStats[displayKey] = { tid: '-', count: 0, required: so.ccRequired || 0, actual: so.ccActual != null ? so.ccActual : 0, duration: so.ccDuration || 0, reasons: {} };
           }
         }
         driverKeys = Object.keys(driverStats).sort(function(a, b) {
@@ -15904,13 +16298,18 @@ var driverDB = {
         }
         driverTbody.innerHTML = driverHtml;
         var reqEl2 = document.getElementById('cc-required');
-        var totalReq2 = 0, totalAct2 = 0;
+        var totalReq2 = 0, totalAct2 = 0, totalDur2 = 0;
         for (var ti = 0; ti < driverKeys.length; ti++) {
           totalReq2 += driverStats[driverKeys[ti]].required || 0;
           totalAct2 += driverStats[driverKeys[ti]].actual != null ? driverStats[driverKeys[ti]].actual : 0;
+          totalDur2 += driverStats[driverKeys[ti]].duration || 0;
         }
         if (reqEl2) reqEl2.textContent = totalReq2;
         document.getElementById('cc-calls').textContent = totalAct2;
+        document.getElementById('cc-duration').textContent = totalDur2 + 's';
+        document.getElementById('cc-total').textContent = driverKeys.length;
+        document.getElementById('cc-matched').textContent = driverKeys.length;
+        document.getElementById('cc-unmatched').textContent = 0;
       }
 
       document.getElementById('cc-detail').classList.remove('hidden');
@@ -17090,7 +17489,29 @@ var driverDB = {
     }
 
     // ===== 協力会社ダッシュボード =====
+    var TQ_EXCLUDED_DEPTS = ['GDS管理', '未所属'];
+    function isTqExcludedDept(dept) {
+      for (var i = 0; i < TQ_EXCLUDED_DEPTS.length; i++) { if (dept === TQ_EXCLUDED_DEPTS[i]) return true; }
+      return false;
+    }
+    function getTqFilteredDrivers(snap) {
+      var out = {};
+      if (!snap || !snap.drivers) return out;
+      for (var k in snap.drivers) {
+        var dept = snap.drivers[k].dept || '未所属';
+        if (!isTqExcludedDept(dept)) out[k] = snap.drivers[k];
+      }
+      return out;
+    }
+    function getTqDeptOrder() {
+      var out = [];
+      for (var i = 0; i < DEPARTMENTS.length; i++) {
+        if (!isTqExcludedDept(DEPARTMENTS[i])) out.push(DEPARTMENTS[i]);
+      }
+      return out;
+    }
     var teamQualitySnapshot = null;
+    var ftdsImportPeriodLabel = '';
     var _tqSelectedDept = null;
     var _tqSelectedDriver = null;
     var tqChartScore = null;
@@ -17100,15 +17521,135 @@ var driverDB = {
 
     var TEAM_QUALITY_WEIGHTS = { dnrPerDriver: 5, ftdsPerPkg: 2, misRate: 10, deliveryGap: 0.5 };
 
+    function getEffectiveWeeklyFtds(d) {
+      var count = d.ftdsCount || 0;
+      if (!count) return 0;
+      var weeks = d.ftdsWeekCount || 0;
+      return weeks > 1 ? count / weeks : count;
+    }
+
+    function parseWeekRangeLabel(label) {
+      var s = String(label || '');
+      var m = s.match(/W(\d+)\s*[-\u2013~]\s*W(\d+)/i);
+      if (m) return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+      m = s.match(/W(\d+)/i);
+      if (m) {
+        var w = parseInt(m[1], 10);
+        return { start: w, end: w };
+      }
+      return null;
+    }
+
+    function isAbilityFtdsPeriodAligned(d) {
+      var ab = parseWeekRangeLabel(d.abilityPeriod);
+      var ft = parseWeekRangeLabel(d.ftdsPeriodLabel);
+      if (!ab || !ft) return false;
+      return ab.start === ft.start && ab.end === ft.end;
+    }
+
+    function calcFtdsTierPenalty(weeklyCount) {
+      if (weeklyCount <= 0) return 0;
+      if (weeklyCount <= 2) return 3;
+      if (weeklyCount <= 5) return 8;
+      if (weeklyCount <= 10) return 14;
+      if (weeklyCount <= 20) return 20;
+      if (weeklyCount <= 35) return 26;
+      return 32;
+    }
+
+    function calcFtdsScorePenalty(d) {
+      var weekly = getEffectiveWeeklyFtds(d);
+      if (weekly <= 0) return 0;
+      var tier = calcFtdsTierPenalty(weekly);
+      if (isAbilityFtdsPeriodAligned(d) && d.totalPackages > 0) {
+        var rate = weekly / d.totalPackages * 1000;
+        var ratePen = 0;
+        if (rate >= 80) ratePen = 40;
+        else if (rate >= 50) ratePen = 32;
+        else if (rate >= 30) ratePen = 24;
+        else if (rate >= 15) ratePen = 16;
+        else if (rate >= 8) ratePen = 10;
+        else if (rate >= 4) ratePen = 6;
+        return Math.min(Math.max(tier, ratePen), 40);
+      }
+      return Math.min(tier, 40);
+    }
+
+    function calcDnrScorePenalty(d) {
+      var count = d.dnrCount || 0;
+      if (count <= 0) return 0;
+      if (count === 1) return 5;
+      if (count <= 2) return 10;
+      if (count <= 4) return 15;
+      return 20;
+    }
+
+    function calcMisScorePenalty(d) {
+      var rate = d.misdeliveryRate || 0;
+      if (!rate) return 0;
+      var raw = rate * TEAM_QUALITY_WEIGHTS.misRate;
+      if (raw >= 12) return 20;
+      return Math.min(raw, 15);
+    }
+
+    function calcDeliveryScorePenalty(d) {
+      var deliveryRate = d.deliveryRate || 0;
+      if (!deliveryRate) return 0;
+      var gap = 100 - deliveryRate;
+      if (gap <= 0) return 0;
+      var raw = gap * TEAM_QUALITY_WEIGHTS.deliveryGap;
+      if (gap >= 15) return Math.min(raw, 20);
+      return Math.min(raw, 12);
+    }
+
+    function calcCcScorePenalty(d) {
+      var required = d.ccRequired || 0;
+      var actual = d.ccActual != null ? d.ccActual : 0;
+      if (required <= 0) return 0;
+      var rate = actual / required;
+      if (rate >= 0.5) return 0;
+      if (rate >= 0.3) return 4;
+      if (rate >= 0.15) return 8;
+      if (rate >= 0.08) return 12;
+      if (rate > 0) return 16;
+      return 18;
+    }
+
+    function calcDriverScoreBreakdown(d) {
+      return {
+        base: 100,
+        dnr: calcDnrScorePenalty(d),
+        ftds: calcFtdsScorePenalty(d),
+        mis: calcMisScorePenalty(d),
+        delivery: calcDeliveryScorePenalty(d),
+        cc: calcCcScorePenalty(d)
+      };
+    }
+
     function calcDriverScore(d) {
-      var s = 100;
-      s -= (d.dnrCount || 0) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-      if (d.totalPackages > 0) s -= ((d.ftdsCount || 0) / d.totalPackages * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-      s -= (d.misdeliveryRate || 0) * TEAM_QUALITY_WEIGHTS.misRate;
-      s -= (100 - (d.deliveryRate || 100)) * TEAM_QUALITY_WEIGHTS.deliveryGap;
+      var parts = calcDriverScoreBreakdown(d);
+      var s = parts.base - parts.dnr - parts.ftds - parts.mis - parts.delivery - parts.cc;
       if (s < 0) s = 0;
       if (s > 100) s = 100;
       return Math.round(s);
+    }
+
+    function calcGroupScoreFromMembers(driverSet, matchFn) {
+      var sum = 0;
+      var cnt = 0;
+      for (var name in driverSet) {
+        var dd = driverSet[name];
+        if (!matchFn(dd, name)) continue;
+        sum += dd.qualityScore != null ? dd.qualityScore : calcDriverScore(dd);
+        cnt++;
+      }
+      return cnt > 0 ? Math.round(sum / cnt) : 0;
+    }
+
+    function calcCompanyScoreFromMembers(driverSet, dept) {
+      return calcGroupScoreFromMembers(driverSet, function(dd) {
+        return (dd.dept || '\u672a\u6240\u5c5e') === dept;
+      });
     }
 
     function buildTeamQualitySnapshot() {
@@ -17119,8 +17660,9 @@ var driverDB = {
       for (var name in driverDB) {
         if (isDriverDeleted(name)) continue;
         var key = resolveDriverKey(name);
-        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[key]) drivers[key] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, abilityPeriod: '', ftdsPeriodLabel: '', dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         var db = driverDB[name];
+        drivers[key].abilityPeriod = db.lastUpdated || drivers[key].abilityPeriod || '';
         if (db.packagesPerHour) {
           drivers[key].packagesPerHour = db.packagesPerHour || 0;
           drivers[key].misdeliveryRate = db.misdeliveryRate || 0;
@@ -17136,10 +17678,21 @@ var driverDB = {
         var fr = ftdsResultData[fi];
         var fkey = fr.driverName ? resolveDriverKey(fr.driverName) : (fr.transporterId ? resolveDriverKeyByTid(fr.transporterId) : '');
         if (!fkey) fkey = '(未特定)';
-        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
-        drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + 1;
-        var reason = fr.reason || 'OTHER';
-        drivers[fkey].ftdsTopReasons[reason] = (drivers[fkey].ftdsTopReasons[reason] || 0) + 1;
+        if (!drivers[fkey]) drivers[fkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        var fWeight = ftdsRecordWeight(fr);
+        drivers[fkey].ftdsCount = (drivers[fkey].ftdsCount || 0) + fWeight;
+        if (fr.weekCount) drivers[fkey].ftdsWeekCount = Math.max(drivers[fkey].ftdsWeekCount || 0, fr.weekCount);
+        if (ftdsImportPeriodLabel) drivers[fkey].ftdsPeriodLabel = ftdsImportPeriodLabel;
+        if (fr.reasonBreakdown && Object.keys(fr.reasonBreakdown).length > 0) {
+          var fRbKeys = Object.keys(fr.reasonBreakdown);
+          for (var fRb = 0; fRb < fRbKeys.length; fRb++) {
+            var fRk = fRbKeys[fRb];
+            drivers[fkey].ftdsTopReasons[fRk] = (drivers[fkey].ftdsTopReasons[fRk] || 0) + fr.reasonBreakdown[fRk];
+          }
+        } else {
+          var reason = fr.reason || 'OTHER';
+          drivers[fkey].ftdsTopReasons[reason] = (drivers[fkey].ftdsTopReasons[reason] || 0) + fWeight;
+        }
         sources.ftds = true;
       }
 
@@ -17148,7 +17701,7 @@ var driverDB = {
         var cr = ccResultData[ci];
         var ckey = cr.driverName ? resolveDriverKey(cr.driverName) : (cr.transporterId ? resolveDriverKeyByTid(cr.transporterId) : '');
         if (!ckey) ckey = '(未特定)';
-        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[ckey]) drivers[ckey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         if (isCcCallRequired(cr)) drivers[ckey].ccRequired = (drivers[ckey].ccRequired || 0) + 1;
         if (isCcCallMade(cr)) drivers[ckey].ccActual = (drivers[ckey].ccActual || 0) + 1;
         sources.cc = true;
@@ -17158,7 +17711,7 @@ var driverDB = {
       for (var di = 0; di < dnrResultData.length; di++) {
         var dr = dnrResultData[di];
         var dkey = dr.driverName ? resolveDriverKey(dr.driverName) : '(未特定)';
-        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+        if (!drivers[dkey]) drivers[dkey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
         drivers[dkey].dnrCount = (drivers[dkey].dnrCount || 0) + 1;
         drivers[dkey].dnrCost = (drivers[dkey].dnrCost || 0) + (dr._cost || 0);
         sources.dnr = true;
@@ -17171,7 +17724,7 @@ var driverDB = {
           if (o.ccRequired == null && o.ccActual == null) continue;
           var eqKey = resolveDriverKey(eq);
           if (!eqKey) continue;
-          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
+          if (!drivers[eqKey]) drivers[eqKey] = { dept: '', packagesPerHour: 0, misdeliveryRate: 0, deliveryRate: 0, workDays: 0, totalPackages: 0, dnrCount: 0, dnrCost: 0, ftdsCount: 0, ftdsWeekCount: 0, ftdsTopReasons: {}, ccRequired: 0, ccActual: 0 };
           drivers[eqKey].ccRequired = o.ccRequired != null ? o.ccRequired : 0;
           drivers[eqKey].ccActual = o.ccActual != null ? o.ccActual : 0;
           sources.cc = true;
@@ -17236,8 +17789,16 @@ var driverDB = {
         var fr = ftdsResultData[i];
         var k = fr.driverName ? resolveDriverKey(fr.driverName) : resolveDriverKeyByTid(fr.transporterId);
         if (k !== driverKey) continue;
-        var reason = fr.reason || 'OTHER';
-        reasons[reason] = (reasons[reason] || 0) + 1;
+        if (fr.reasonBreakdown && Object.keys(fr.reasonBreakdown).length > 0) {
+          var gRbKeys = Object.keys(fr.reasonBreakdown);
+          for (var gRb = 0; gRb < gRbKeys.length; gRb++) {
+            var gRk = gRbKeys[gRb];
+            reasons[gRk] = (reasons[gRk] || 0) + fr.reasonBreakdown[gRk];
+          }
+        } else {
+          var reason = fr.reason || 'OTHER';
+          reasons[reason] = (reasons[reason] || 0) + ftdsRecordWeight(fr);
+        }
       }
       return reasons;
     }
@@ -17250,14 +17811,15 @@ var driverDB = {
       return '';
     }
 
-    function getCompanyStats(snapshot) {
+    function getCompanyStats(snapshot, filteredDrivers) {
       var companies = {};
       var deptOrder = DEPARTMENTS.concat(['未所属']);
       for (var di2 = 0; di2 < deptOrder.length; di2++) {
         companies[deptOrder[di2]] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, ccRequired: 0, ccActual: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
       }
-      for (var name in snapshot.drivers) {
-        var d = snapshot.drivers[name];
+      var driverSet = filteredDrivers || snapshot.drivers;
+      for (var name in driverSet) {
+        var d = driverSet[name];
         var dept = d.dept || '未所属';
         if (!companies[dept]) companies[dept] = { count: 0, totalPph: 0, totalPkgs: 0, totalMis: 0, totalDel: 0, ftds: 0, dnr: 0, dnrCost: 0, ccRequired: 0, ccActual: 0, weightedPph: 0, weightedMis: 0, weightedDel: 0 };
         var c = companies[dept];
@@ -17281,16 +17843,7 @@ var driverDB = {
         c.avgFtds = c.count > 0 ? c.ftds / c.count : 0;
         c.avgDnr = c.count > 0 ? c.dnr / c.count : 0;
         c.ccCallRate = calcCcCallRate(c.ccRequired, c.ccActual);
-        // team score
-        var activeDrivers = c.count || 1;
-        c.score = 100;
-        c.score -= (c.dnr / activeDrivers) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-        if (c.totalPkgs > 0) c.score -= (c.ftds / c.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-        c.score -= c.avgMis * TEAM_QUALITY_WEIGHTS.misRate;
-        c.score -= (100 - c.avgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
-        if (c.score < 0) c.score = 0;
-        if (c.score > 100) c.score = 100;
-        c.score = Math.round(c.score);
+        c.score = calcCompanyScoreFromMembers(driverSet, dept);
       }
       return companies;
     }
@@ -17328,12 +17881,13 @@ var driverDB = {
       if (snap.sources.dnr) srcList.push('DNR ' + dnrResultData.length + '\u4EF6');
       if (periodEl) periodEl.textContent = srcList.length > 0 ? srcList.join(' / ') : '\u30C7\u30FC\u30BF\u672A\u8AAD\u8FBC';
 
-      // Global summary
-      var allDriverKeys = Object.keys(snap.drivers);
+      // Global summary (filtered: exclude GDS管理/未所属)
+      var tqFiltered = getTqFilteredDrivers(snap);
+      var allDriverKeys = Object.keys(tqFiltered);
       var totalDrivers = allDriverKeys.length;
       var totalPkgs = 0, wPph = 0, wMis = 0, totalFtds = 0, totalDnrCost = 0;
       for (var ai = 0; ai < allDriverKeys.length; ai++) {
-        var dd = snap.drivers[allDriverKeys[ai]];
+        var dd = tqFiltered[allDriverKeys[ai]];
         totalPkgs += dd.totalPackages || 0;
         wPph += (dd.packagesPerHour || 0) * (dd.totalPackages || 0);
         wMis += (dd.misdeliveryRate || 0) * (dd.totalPackages || 0);
@@ -17347,12 +17901,14 @@ var driverDB = {
       document.getElementById('tq-total-dnr-cost').textContent = '\u00A5' + totalDnrCost.toLocaleString();
       document.getElementById('tq-global-summary').classList.remove('hidden');
       document.getElementById('tq-export-btn').disabled = false;
+      var allXlsxBtn = document.getElementById('tq-export-all-xlsx-btn');
+      if (allXlsxBtn) allXlsxBtn.disabled = false;
 
-      // Company table
-      var companies = getCompanyStats(snap);
+      // Company table (filtered)
+      var companies = getCompanyStats(snap, tqFiltered);
       var tbody = document.getElementById('tq-company-tbody');
       var html = '';
-      var deptOrder = DEPARTMENTS.concat(['\u672A\u6240\u5C5E']);
+      var deptOrder = getTqDeptOrder();
       // GDS合計
       var gdsTotal = { count: 0, avgPph: 0, avgMis: 0, avgDel: 0, ftds: 0, dnr: 0, ccRequired: 0, ccActual: 0, score: 0, totalPkgs: 0, wPph: 0, wMis: 0, wDel: 0 };
       for (var gi = 0; gi < deptOrder.length; gi++) {
@@ -17391,11 +17947,10 @@ var driverDB = {
         var gdsAvgPph = gdsTotal.totalPkgs > 0 ? gdsTotal.wPph / gdsTotal.totalPkgs : 0;
         var gdsAvgMis = gdsTotal.totalPkgs > 0 ? gdsTotal.wMis / gdsTotal.totalPkgs : 0;
         var gdsAvgDel = gdsTotal.totalPkgs > 0 ? gdsTotal.wDel / gdsTotal.totalPkgs : 0;
-        var gdsScore = 100 - (gdsTotal.dnr / (gdsTotal.count || 1)) * TEAM_QUALITY_WEIGHTS.dnrPerDriver;
-        if (gdsTotal.totalPkgs > 0) gdsScore -= (gdsTotal.ftds / gdsTotal.totalPkgs * 1000) * TEAM_QUALITY_WEIGHTS.ftdsPerPkg;
-        gdsScore -= gdsAvgMis * TEAM_QUALITY_WEIGHTS.misRate;
-        gdsScore -= (100 - gdsAvgDel) * TEAM_QUALITY_WEIGHTS.deliveryGap;
-        gdsScore = Math.max(0, Math.min(100, Math.round(gdsScore)));
+        var gdsScore = calcGroupScoreFromMembers(tqFiltered, function(dd) {
+          var gdsDept = dd.dept || '';
+          return gdsDept.indexOf('GDS') === 0 && !isTqExcludedDept(gdsDept);
+        });
         var gdsScoreColor = gdsScore >= 90 ? 'color:#16a34a;' : (gdsScore >= 75 ? 'color:#d97706;' : 'color:#dc2626;');
         html += '<tr style="background:#e5e7eb;font-weight:bold;">';
         html += '<td class="p-2">GDS\u5408\u8A08</td>';
@@ -17417,15 +17972,15 @@ var driverDB = {
       html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (wPph / totalPkgs).toFixed(1) : '-') + '</td>';
       html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (wMis / totalPkgs).toFixed(2) + '%' : '-') + '</td>';
       var globalDel = 0;
-      for (var ai2 = 0; ai2 < allDriverKeys.length; ai2++) { var dd2 = snap.drivers[allDriverKeys[ai2]]; globalDel += (dd2.deliveryRate || 0) * (dd2.totalPackages || 0); }
+      for (var ai2 = 0; ai2 < allDriverKeys.length; ai2++) { var dd2 = tqFiltered[allDriverKeys[ai2]]; globalDel += (dd2.deliveryRate || 0) * (dd2.totalPackages || 0); }
       html += '<td class="p-2 text-right">' + (totalPkgs > 0 ? (globalDel / totalPkgs).toFixed(1) + '%' : '-') + '</td>';
       html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalFtds / totalDrivers).toFixed(1) : '-') + '</td>';
-      var totalDnr = 0; for (var ai3 = 0; ai3 < allDriverKeys.length; ai3++) totalDnr += snap.drivers[allDriverKeys[ai3]].dnrCount || 0;
+      var totalDnr = 0; for (var ai3 = 0; ai3 < allDriverKeys.length; ai3++) totalDnr += tqFiltered[allDriverKeys[ai3]].dnrCount || 0;
       html += '<td class="p-2 text-right">' + (totalDrivers > 0 ? (totalDnr / totalDrivers).toFixed(1) : '-') + '</td>';
       var totalCcReq = 0, totalCcAct = 0;
       for (var ai4 = 0; ai4 < allDriverKeys.length; ai4++) {
-        totalCcReq += snap.drivers[allDriverKeys[ai4]].ccRequired || 0;
-        totalCcAct += snap.drivers[allDriverKeys[ai4]].ccActual || 0;
+        totalCcReq += tqFiltered[allDriverKeys[ai4]].ccRequired || 0;
+        totalCcAct += tqFiltered[allDriverKeys[ai4]].ccActual || 0;
       }
       html += '<td class="p-2 text-right">' + formatCcCallDisplay(totalCcReq, totalCcAct, true) + '</td>';
       html += '<td class="p-2 text-right">' + (calcCcCallRate(totalCcReq, totalCcAct) != null ? calcCcCallRate(totalCcReq, totalCcAct) + '%' : '-') + '</td>';
@@ -17433,7 +17988,7 @@ var driverDB = {
       html += '</tr>';
       tbody.innerHTML = html;
 
-      // Dept list (left sidebar)
+      // Dept list (left sidebar — filtered)
       var deptListEl = document.getElementById('tq-dept-list');
       var deptHtml = '';
       for (var di3 = 0; di3 < deptOrder.length; di3++) {
@@ -17458,7 +18013,7 @@ var driverDB = {
     }
 
     function getTqDeptChartRows(companies) {
-      var deptOrder = DEPARTMENTS.concat(['\u672A\u6240\u5C5E']);
+      var deptOrder = getTqDeptOrder();
       var rows = [];
       for (var i = 0; i < deptOrder.length; i++) {
         var dept = deptOrder[i];
@@ -17612,8 +18167,9 @@ var driverDB = {
       }
 
       var allDrivers = [];
-      for (var name in snap.drivers) {
-        var d = snap.drivers[name];
+      var filteredForRank = getTqFilteredDrivers(snap);
+      for (var name in filteredForRank) {
+        var d = filteredForRank[name];
         allDrivers.push({ name: name, dept: d.dept || '', data: d });
       }
       allDrivers.sort(function(a, b) { return (b.data.qualityScore || 0) - (a.data.qualityScore || 0); });
@@ -17650,7 +18206,7 @@ var driverDB = {
     function renderTeamMemberTable(dept) {
       var members = getTeamMembers(dept);
       var label = document.getElementById('tq-selected-dept-label');
-      if (label) label.textContent = dept + ' (' + members.length + '\u540D)';
+      if (label) label.innerHTML = escapeHtml(dept) + ' (' + members.length + '\u540D) <button style="margin-left:8px;padding:2px 8px;border:1px solid #d1d5db;border-radius:4px;background:#f9fafb;font-size:10px;cursor:pointer;" onclick="exportDeptReport(\'' + dept.replace(/'/g, "\\'") + '\')">📄 個人レポート出力</button>';
 
       var tbody = document.getElementById('tq-member-tbody');
       var html = '';
@@ -17930,7 +18486,7 @@ var driverDB = {
 
     function exportTeamQualityCsv() {
       if (!teamQualitySnapshot) return;
-      var drivers = teamQualitySnapshot.drivers;
+      var drivers = getTqFilteredDrivers(teamQualitySnapshot);
       var lines = ['\u540D\u524D,\u6240\u5C5E,\u4ED5\u5206\u3051\u80FD\u529B(pph),\u8AA4\u914D\u7387(%),\u914D\u7BA1\u7387(%),\u7A3C\u50CD\u65E5\u6570,\u7DCF\u500B\u6570,\u6301\u3061\u623B\u308A,DNR,DNR\u640D\u5BB3,\u30D9\u30AD\u67B6\u96FB,\u5B9F\u67B6\u96FB,\u67B6\u96FB\u7387(%),\u54C1\u8CEA\u30B9\u30B3\u30A2'];
       for (var name in drivers) {
         var d = drivers[name];
@@ -17953,6 +18509,105 @@ var driverDB = {
       a.download = '\u5354\u529B\u4F1A\u793E\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9_' + new Date().toISOString().slice(0, 10) + '.csv';
       a.click();
     }
+
+    // ===== 所属別 個人品質レポート Excel出力 =====
+    function buildDeptReportSheet(dept) {
+      if (!teamQualitySnapshot) return null;
+      var members = getTeamMembers(dept);
+      if (members.length === 0) return null;
+      var now = new Date().toLocaleString('ja-JP');
+      var aoa = [
+        [dept + ' 個人品質レポート'],
+        ['対象人数: ' + members.length + '名', '', '出力日時: ' + now],
+        [],
+        ['氏名', '所属', '能力(個/h)', '誤配率(%)', '配完率(%)', '持ち戻り', 'チーム平均持ち戻り', 'DNR件数', 'DNR金額', '架電 実際', '架電 ベキ', '架電率(%)', '品質スコア']
+      ];
+      // チーム平均持ち戻り
+      var totalFtds = 0;
+      for (var ti = 0; ti < members.length; ti++) totalFtds += members[ti].data.ftdsCount || 0;
+      var avgFtds = members.length > 0 ? Math.round(totalFtds / members.length * 10) / 10 : 0;
+      for (var i = 0; i < members.length; i++) {
+        var m = members[i];
+        var d = m.data;
+        var ccRate = calcCcCallRate(d.ccRequired, d.ccActual);
+        aoa.push([
+          m.name,
+          d.dept || '',
+          d.packagesPerHour ? Math.round(d.packagesPerHour * 10) / 10 : '',
+          d.misdeliveryRate ? Math.round(d.misdeliveryRate * 100) / 100 : '',
+          d.deliveryRate ? Math.round(d.deliveryRate * 10) / 10 : '',
+          d.ftdsCount || 0,
+          avgFtds,
+          d.dnrCount || 0,
+          d.dnrCost || 0,
+          d.ccActual || 0,
+          d.ccRequired || 0,
+          ccRate != null ? ccRate : '',
+          d.qualityScore || 0
+        ]);
+      }
+      return aoa;
+    }
+
+    function styleDeptSheet(ws, memberCount) {
+      // ヘッダー行 (row 4 = index 3)
+      var headerRow = 3;
+      var cols = 13;
+      if (!ws['!cols']) ws['!cols'] = [];
+      var widths = [18, 14, 12, 10, 10, 10, 14, 10, 12, 10, 10, 10, 12];
+      for (var ci = 0; ci < widths.length; ci++) {
+        ws['!cols'][ci] = { wch: widths[ci] };
+      }
+      // Bold header
+      for (var hi = 0; hi < cols; hi++) {
+        var addr = XLSX.utils.encode_cell({ r: headerRow, c: hi });
+        if (ws[addr]) {
+          if (!ws[addr].s) ws[addr].s = {};
+          ws[addr].s.font = { bold: true };
+        }
+      }
+      // Title bold
+      var titleAddr = XLSX.utils.encode_cell({ r: 0, c: 0 });
+      if (ws[titleAddr]) {
+        if (!ws[titleAddr].s) ws[titleAddr].s = {};
+        ws[titleAddr].s.font = { bold: true, sz: 14 };
+      }
+      return ws;
+    }
+
+    function exportDeptReport(dept) {
+      var aoa = buildDeptReportSheet(dept);
+      if (!aoa) { alert(dept + 'のデータがありません'); return; }
+      var wb = XLSX.utils.book_new();
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      styleDeptSheet(ws, aoa.length - 4);
+      var safeName = dept.replace(/[\[\]\\\/\?\*]/g, '_').substring(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, safeName);
+      var dateStr = new Date().toISOString().slice(0, 10);
+      var fileName = 'OFK3_個人品質レポート_' + safeName + '_' + dateStr + '.xlsx';
+      XLSX.writeFile(wb, fileName);
+    }
+
+    function exportAllDeptsReport() {
+      if (!teamQualitySnapshot) { alert('データがありません'); return; }
+      var wb = XLSX.utils.book_new();
+      var depts = getTqDeptOrder();
+      var sheetCount = 0;
+      for (var i = 0; i < depts.length; i++) {
+        var dept = depts[i];
+        var aoa = buildDeptReportSheet(dept);
+        if (!aoa) continue;
+        var ws = XLSX.utils.aoa_to_sheet(aoa);
+        styleDeptSheet(ws, aoa.length - 4);
+        var safeName = dept.replace(/[\[\]\\\/\?\*]/g, '_').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, ws, safeName);
+        sheetCount++;
+      }
+      if (sheetCount === 0) { alert('出力対象がありません'); return; }
+      var dateStr = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, 'OFK3_個人品質レポート_全所属_' + dateStr + '.xlsx');
+    }
+
     var FLEET_MASTER_KEY = 'fleetMasterV2';
     var fleetCompareResults = [];
 
@@ -18456,5 +19111,9 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
+  <script src="/assign-support-core.js?v=20260818-6"></script>
+  <script src="/assign-support.js?v=20260818-6"></script>
+  <script src="/tenko-transport-audit.js?v=20260812-3"></script>
+  <script src="/tenko-transport-audit-success.js?v=20260812-3"></script>
 </body>
 </html>

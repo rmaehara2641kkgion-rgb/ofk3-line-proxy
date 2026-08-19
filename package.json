@@ -5,7 +5,8 @@
   "main": "render-webhook-server.js",
   "scripts": {
     "start": "node inject-tenko-audit.js",
-    "dev": "node inject-tenko-audit.js"
+    "dev": "node inject-tenko-audit.js",
+    "test:assign-support": "node tests/assign-support.test.mjs"
   },
   "engines": {
     "node": ">=18.0.0"
