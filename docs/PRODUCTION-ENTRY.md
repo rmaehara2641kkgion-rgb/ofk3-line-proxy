@@ -137,3 +137,28 @@ render-webhook-server.js L48:
 - `index.html`（root）先頭 HTML コメント — Production 正本
 - `legacy/delivery-app/index.html` — `LEGACY — DO NOT EDIT FOR PRODUCTION`
 - `legacy/README.md`, `demo-app/README.md`, 本ファイル
+
+## Phase 2 削除監査（2026-08）
+
+### git 追跡分（8 ファイル）の実行時依存
+
+| 区分 | `legacy/delivery-app` 参照 |
+|------|---------------------------|
+| 本番（index.html, render-*, root JS, inject） | **0** |
+| demo-app（index.html, server.js, demo-data.js） | **0**（コード） |
+| tests/（npm run test:all） | **0** |
+| scripts/（git 追跡分） | **0** |
+| Render / package.json | **0** |
+
+### 削除前復元 SHA
+
+`git checkout 0a45220 -- legacy/delivery-app` で git 追跡分を復元可能。
+
+### legacy 配下の untracked のみ存在するファイル（完全削除時の注意）
+
+`addr-master.gs`, `mentor-notified.gs` 等は repo root に**未配置**。`rm -rf legacy/delivery-app` 前に root へ移動または別途バックアップが必要。
+
+### Phase 2 判定
+
+- **git 追跡 legacy 8 ファイルのみ削除** → 本番・demo・test 影響なし
+- **ディレクトリ完全削除（untracked 含む）** → 上記 GAS 等の事前移動が必要（→ DELETE NOT SAFE 条件あり）

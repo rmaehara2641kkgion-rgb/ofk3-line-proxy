@@ -54,15 +54,36 @@ Amazon配送拠点「OFK3」の日次オペレーションを一元管理するW
                                   [LINE 管理者通知]
 ```
 
-## ファイル構成
+## ファイル構成（2026-08 Phase 1 以降）
+
 ```
-delivery-app/
-├── index.html          # メインアプリ（約16,000行、フロント全部入り）
-├── render-webhook-server.js  # Render用Express サーバー（エントリポイント）
-├── mentor-notified.gs  # GASコード（メンター通知ログ管理）
+/                                 # リポジトリ直下 = Render 静的配信 root
+├── index.html                    # Production 正本（約19,000行）
+├── lat-departure-core.js         # LAT 判定コア（本番）
+├── assign-support-core.js        # アサイン支援コア（本番）
+├── assign-support.js             # アサイン支援 UI 連携（本番）
+├── tenko-transport-audit.js      # 点呼 TransportID 監査（本番）
+├── render-webhook-server.js      # Render 用 Express サーバー
+├── inject-tenko-audit.js         # 起動前フック → render-webhook-server.js
 ├── package.json
-└── render.yaml
+├── render.yaml
+├── tests/                        # 本番向けテスト（npm run test:all）
+├── demo-app/                     # 営業デモ（独立 server.js、本番とは別）
+│   ├── index.html
+│   ├── demo-data.js
+│   └── server.js
+├── legacy/
+│   └── delivery-app/             # Historical Copy（本番修正禁止・削除前監査対象）
+└── gas-proxy-code.gs 等          # GAS ソース（repo root に配置）
 ```
+
+| 用途 | パス |
+|------|------|
+| **Production** | `index.html`（repo root） |
+| **Demo** | `demo-app/` |
+| **Legacy** | `legacy/delivery-app/` |
+
+詳細: [docs/PRODUCTION-ENTRY.md](docs/PRODUCTION-ENTRY.md)
 
 ## 既知の技術的負債
 - **カメラ統合**: getUserMedia 4箇所 / stop 7箇所が分散。CameraManagerへの集約が必要
