@@ -19,7 +19,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
-  <script src="/lat-departure-core.js?v=20260820-1"></script>
+  <script src="/lat-departure-core.js?v=20260822-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1748,7 +1748,7 @@
           <div id="dsp-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-orange-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#f97316'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDspDrop(event)">
             <p class="text-sm text-ink-lighter mb-1">🚛 DSPルート</p>
             <p class="text-xs text-ink-lighter">CSV（LAT用）</p>
-            <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="handleDspFile(this.files[0])">
+            <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="window.handleDspFile(this.files[0])">
             <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dsp-file-input').click()">選択</button>
             <p id="dsp-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
           </div>
@@ -16398,7 +16398,8 @@ var driverDB = {
     }
 
     // ===== LAT分析 =====
-    var dspRouteMap = {}; // route_id -> { employeeId, date, plannedArrival, plannedDeparture, actualDeparture, beaconEntrance, diffMins, onTime }
+    window.dspRouteMap = window.dspRouteMap || {};
+    var dspRouteMap = window.dspRouteMap; // mergeAndRender と強化loaderが同一オブジェクトを参照
     var latBeaconMap = {}; // route_id -> { arrival, entrance, departure, exit, firstScan, lastScan, turnover }
     var latResultData = [];
 
@@ -16496,7 +16497,7 @@ var driverDB = {
 
     function handleDspDrop(event) {
       var file = event.dataTransfer.files[0];
-      if (file) handleDspFile(file);
+      if (file && typeof window.handleDspFile === 'function') window.handleDspFile(file);
     }
 
     function handleDspFile(file) {
@@ -16537,7 +16538,7 @@ var driverDB = {
           return;
         }
 
-        dspRouteMap = parsed.map;
+        LatDepartureCore.latAssignDspRouteMap(window, parsed.map);
         document.getElementById('dsp-loaded-msg').classList.remove('hidden');
         document.getElementById('dsp-loaded-msg').textContent = '✅ ' + parsed.count + 'ルート読込済';
         document.getElementById('dsp-drop-zone').style.borderColor = '#22c55e';
@@ -16728,14 +16729,15 @@ var driverDB = {
       // DSPとLATをroute_idで結合
       var allRouteIds = {};
       var rid;
-      for (rid in dspRouteMap) allRouteIds[rid] = true;
+      var dspMap = window.dspRouteMap || dspRouteMap;
+      for (rid in dspMap) allRouteIds[rid] = true;
       for (rid in latBeaconMap) allRouteIds[rid] = true;
 
       latResultData = [];
       var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
 
       for (rid in allRouteIds) {
-        var dsp = dspRouteMap[rid] || {};
+        var dsp = dspMap[rid] || {};
         var lat = latBeaconMap[rid] || {};
         var empId = dsp.employeeId || lat.employeeId || '';
         var driverName = '';

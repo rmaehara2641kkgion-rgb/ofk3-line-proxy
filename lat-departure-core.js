@@ -278,11 +278,34 @@
     };
   }
 
+  /** index.html の lexical dspRouteMap と window.dspRouteMap を同一オブジェクトのまま更新する */
+  function latAssignDspRouteMap(host, map) {
+    if (!host || typeof host !== 'object') return {};
+    var target = host.dspRouteMap;
+    if (!target || typeof target !== 'object') {
+      target = {};
+      host.dspRouteMap = target;
+    }
+    for (var k in target) {
+      if (Object.prototype.hasOwnProperty.call(target, k)) delete target[k];
+    }
+    map = map || {};
+    for (var rid in map) {
+      if (Object.prototype.hasOwnProperty.call(map, rid)) target[rid] = map[rid];
+    }
+    return target;
+  }
+
   function installProductionDspLoader() {
     if (!global.document || !global.FileReader || !global.XLSX) return;
 
     global.handleDspFile = function (file) {
       if (!file) return;
+      global.__latDspInvocation = {
+        source: 'production-loader',
+        fileName: file.name,
+        invokedAt: Date.now()
+      };
       var reader = new FileReader();
       reader.onload = function (e) {
         try {
@@ -306,7 +329,7 @@
             return;
           }
 
-          global.dspRouteMap = parsed.map;
+          latAssignDspRouteMap(global, parsed.map);
 
           var msg = document.getElementById('dsp-loaded-msg');
           if (msg) {
@@ -347,6 +370,7 @@
     latAxisLabelStep: latAxisLabelStep,
     normalizeLatDspHeader: normalizeLatDspHeader,
     parseLatDspRows: parseLatDspRows,
+    latAssignDspRouteMap: latAssignDspRouteMap,
     installProductionDspLoader: installProductionDspLoader
   };
 
