@@ -1,15 +1,18 @@
 # legacy/
 
-Phase 3（2026-08）で **git 追跡済み Legacy コード（`legacy/delivery-app/*.html`, `*.js`, tests）は削除済み**。
+Phase 3–4（2026-08）で **Legacy アプリコードは完全解体済み**。
 
-## 現在の状態
+| Phase | 内容 |
+|-------|------|
+| Phase 3 | git 追跡 Legacy 削除 + GAS 救出（`gas/`） |
+| Phase 4 | untracked 残存物の仕分け + `legacy/delivery-app/` 物理削除 |
 
-| 内容 | 状態 |
-|------|------|
-| git 追跡 Legacy アプリコード | **削除済み**（`git rm`） |
-| `legacy/delivery-app/` 配下 untracked | **ローカルに残存**（バックアップ・サンプル・旧 GAS コピー等）。Phase 3 では物理削除していない |
+## 復元（Git 履歴）
 
-復元: `git checkout fee7420 -- legacy/delivery-app`（削除直前 SHA）
+| 内容 | コマンド |
+|------|----------|
+| git 追跡 Legacy 一式 | `git checkout fee7420 -- legacy/delivery-app` |
+| GAS 削除前 | `git checkout ec32c45^ -- gas/` |
 
 ## 正本
 
@@ -18,5 +21,6 @@ Phase 3（2026-08）で **git 追跡済み Legacy コード（`legacy/delivery-a
 | **Production** | [`../index.html`](../index.html) |
 | **Demo** | [`../demo-app/`](../demo-app/) |
 | **GAS source** | [`../gas/`](../gas/) |
+| **LAT fixtures** | [`../tests/fixtures/lat-verify/`](../tests/fixtures/lat-verify/) |
 
 詳細: [`../docs/PRODUCTION-ENTRY.md`](../docs/PRODUCTION-ENTRY.md)

@@ -1,0 +1,6 @@
+route_id,employee_id,date,planned_arrival,planned_departure,route_actual_departure,beacon_entrance,diff_plan_vs_actual_mins
+R001,T001,2026/07/26,08:30,09:00,08:55,08:22,-
+R002,T002,2026/07/26,08:45,09:15,09:14,08:40,-
+R003,T003,2026/07/26,09:00,09:30,09:38,08:55,N/A
+R004,T004,2026/07/26,09:15,09:45,09:38,09:08,-7
+R005,T005,2026/07/26,10:00,10:30,10:45,09:55,15

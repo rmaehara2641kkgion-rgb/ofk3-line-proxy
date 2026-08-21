@@ -10,7 +10,7 @@ OFK3 配送管理アプリ + LINE Webhook プロキシ（Render デプロイ）�
 | **Demo** | [`demo-app/`](demo-app/) |
 | **GAS source** | [`gas/`](gas/) |
 
-`legacy/delivery-app` の git 追跡コードは Phase 3 で削除済み。untracked 残存物は [`legacy/`](legacy/) 参照。
+`legacy/delivery-app` の git 追跡コードは Phase 3 で削除、untracked 残存物は Phase 4 で物理削除済み。
 
 **本番修正時に `legacy/` の untracked コピーを編集しないでください。**
 

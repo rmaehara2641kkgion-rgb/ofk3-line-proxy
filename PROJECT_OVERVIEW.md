@@ -75,7 +75,7 @@ Amazon配送拠点「OFK3」の日次オペレーションを一元管理するW
 ├── gas/                          # GAS ソース正本
 │   ├── addr-master.gs
 │   └── mentor-notified.gs
-├── legacy/                       # git 追跡 Legacy 削除済み（untracked 残存あり）
+├── legacy/                       # README のみ（delivery-app 解体済み）
 └── gas-proxy-code.gs 等          # LINE プロキシ GAS（repo root）
 ```
 
@@ -84,7 +84,7 @@ Amazon配送拠点「OFK3」の日次オペレーションを一元管理するW
 | **Production** | `index.html`（repo root） |
 | **Demo** | `demo-app/` |
 | **GAS** | `gas/` |
-| **Legacy app** | ~~`legacy/delivery-app/`~~ git 追跡分削除済み |
+| **Legacy app** | ~~`legacy/delivery-app/`~~ | **Phase 4 で物理削除済み** |
 
 詳細: [docs/PRODUCTION-ENTRY.md](docs/PRODUCTION-ENTRY.md)
 

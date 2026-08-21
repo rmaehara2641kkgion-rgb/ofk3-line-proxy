@@ -19,7 +19,7 @@ Phase 0（2026-08）調査 + Phase 1（2026-08）物理隔離。**本番修正�
 | **Production** | `index.html` | **はい** — `/` |
 | **Demo** | `demo-app/` | いいえ |
 | **GAS** | `gas/` | ソース正本 |
-| **Legacy app** | ~~`legacy/delivery-app/`~~ | **git 追跡分削除済み** |
+| **Legacy app** | ~~`legacy/delivery-app/`~~ | **Phase 4 で物理削除済み** |
 
 ## エントリポイント一覧（Phase 0 調査時点 → Phase 1 更新）
 
@@ -137,7 +137,12 @@ render-webhook-server.js L48:
 
 - 救出: `gas/addr-master.gs`, `gas/mentor-notified.gs`, `docs/ops/note-line-integration.md`
 - 削除: `git rm -r legacy/delivery-app`（tracked 8 ファイル）
-- 残存: `legacy/delivery-app/` 配下 untracked（バックアップ等）— 物理削除は次 Phase
+
+## Phase 4 最終解体（2026-08）
+
+- 救出: `tests/fixtures/lat-verify/*`, `tests/fixtures/gen-lat-fixtures.mjs`
+- 物理削除: `legacy/delivery-app/` 配下 untracked 一式（バックアップ HTML、重複 GAS/JS、Excel サンプル、temp diff 等）
+- `legacy/delivery-app/` ディレクトリ自体は **存在しない**
 
 ## 誤修正防止
 
@@ -161,11 +166,6 @@ render-webhook-server.js L48:
 
 `git checkout 0a45220 -- legacy/delivery-app` で git 追跡分を復元可能。
 
-### legacy 配下の untracked のみ存在するファイル（完全削除時の注意）
+### legacy 配下の untracked（Phase 2 時点 → Phase 3–4 で解決）
 
-`addr-master.gs`, `mentor-notified.gs` 等は repo root に**未配置**。`rm -rf legacy/delivery-app` 前に root へ移動または別途バックアップが必要。
-
-### Phase 2 判定
-
-- **git 追跡 legacy 8 ファイルのみ削除** → 本番・demo・test 影響なし
-- **ディレクトリ完全削除（untracked 含む）** → 上記 GAS 等の事前移動が必要（→ DELETE NOT SAFE 条件あり）
+Phase 2 時点では GAS が untracked のみ存在 → DELETE NOT SAFE。Phase 3 で `gas/` へ救出、Phase 4 で残存 untracked を物理削除済み。
