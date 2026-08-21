@@ -16524,12 +16524,6 @@ var driverDB = {
         var parsed = parseLatDspRouteData(json);
         window.__latDspLoadDiagnosis = parsed;
 
-        console.log('[LAT-DIAG-ROOT] DSP headers:', parsed.headers);
-        console.log('[LAT-DIAG-ROOT] DSP headerRowIdx:', parsed.headerRowIdx);
-        console.log('[LAT-DIAG-ROOT] DSP count:', parsed.count);
-        console.log('[LAT-DIAG-ROOT] DSP routeIdx:', parsed.routeIdx, 'empIdx:', parsed.empIdx);
-        console.log('[LAT-DIAG-ROOT] dspRouteMap[2789048-15]:', parsed.map['2789048-15']);
-
         if (parsed.error === 'no_data') {
           alert('DSPファイルにデータがありません');
           return;
@@ -16743,9 +16737,6 @@ var driverDB = {
       for (rid in allRouteIds) {
         var dsp = dspRouteMap[rid] || {};
         var lat = latBeaconMap[rid] || {};
-        if (rid === '2789048-15') {
-          console.log('[LAT-DIAG-ROOT] mergeAndRender rid=2789048-15 dsp:', dsp, 'lat:', lat);
-        }
         var empId = dsp.employeeId || lat.employeeId || '';
         var driverName = '';
 
