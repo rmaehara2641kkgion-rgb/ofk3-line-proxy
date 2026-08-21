@@ -60,7 +60,7 @@
   }
 
   // ===== 本番DSP CSV向けの堅牢パーサー =====
-  // index.html 内の旧/段階的 parser に依存せず、window load 後に handleDspFile を安全に差し替える。
+  // index.html 内の旧/段階的 parser に依存せず、handleDspFile を安全に差し替える。
   function normalizeLatDspHeader(h) {
     return String(h == null ? '' : h)
       .replace(/^\ufeff/, '')
@@ -355,10 +355,14 @@
   }
   global.LatDepartureCore = LatDepartureCore;
 
-  // index.html の関数宣言が完了した後に override する。
-  if (global.addEventListener) {
-    global.addEventListener('load', function () {
+  // 通常読み込みは load 後に差し替える。動的/遅延読み込みで既に load 済みなら即時差し替える。
+  if (global.document) {
+    if (global.document.readyState === 'complete') {
       installProductionDspLoader();
-    });
+    } else if (global.addEventListener) {
+      global.addEventListener('load', function () {
+        installProductionDspLoader();
+      }, { once: true });
+    }
   }
 })(typeof window !== 'undefined' ? window : global);
