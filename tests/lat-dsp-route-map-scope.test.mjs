@@ -22,14 +22,25 @@ function parseCsvRows(text) {
 }
 
 function runTests() {
-  // Scope bug regression: reassignment breaks lexical alias used by mergeAndRender
+  // Scope bug regression: plain reassignment (host.dspRouteMap = {...}, the
+  // pattern the production code no longer uses) breaks a lexical alias taken
+  // before the reassignment.
+  var brokenHost = { dspRouteMap: {} };
+  var staleLexical = brokenHost.dspRouteMap;
+  brokenHost.dspRouteMap = { R001: { plannedDeparture: '09:00' } };
+  assert(Object.keys(staleLexical).length === 0, 'reassign breaks lexical alias');
+
+  // latAssignDspRouteMap avoids that bug entirely: as long as every update
+  // (including the first) goes through it -- exactly how the production
+  // dspRouteMap is populated -- a lexical alias taken up front stays valid
+  // across repeated DSP loads.
   var host = { dspRouteMap: {} };
   var lexical = host.dspRouteMap;
-  host.dspRouteMap = { R001: { plannedDeparture: '09:00' } };
-  assert(Object.keys(lexical).length === 0, 'reassign breaks lexical alias');
+  LDC.latAssignDspRouteMap(host, { R001: { plannedDeparture: '09:00' } });
+  assert(lexical === host.dspRouteMap, 'in-place assign keeps same object reference');
 
   LDC.latAssignDspRouteMap(host, { R001: { plannedDeparture: '09:00' }, R002: { plannedDeparture: '09:15' } });
-  assert(lexical === host.dspRouteMap, 'in-place assign keeps same object reference');
+  assert(lexical === host.dspRouteMap, 'in-place assign keeps same object reference across repeated loads');
   assert(Object.keys(lexical).length === 2, 'lexical map populated via latAssignDspRouteMap');
   assert(lexical.R001.plannedDeparture === '09:00', 'route data readable from lexical alias');
 

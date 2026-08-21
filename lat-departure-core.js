@@ -379,10 +379,20 @@
   }
   global.LatDepartureCore = LatDepartureCore;
 
-  // 通常読み込みは load 後に差し替える。動的/遅延読み込みで既に load 済みなら即時差し替える。
+  // 差し替えタイミング: window 'load' は画像/動画/外部リソースの完了まで待つため、
+  // 本番ページ（数MB画像+複数CDN scriptを同期読込）ではDOMContentLoadedより数秒〜
+  // 大幅に遅れうる。その間 index.html 側の素の handleDspFile（重複実装・try/catch無し・
+  // ヘッダー検出が簡易）がユーザー操作を先取りし、強化loaderへの差し替え前にDSPを
+  // 読み込んでしまう競合状態を生む。inline <script> はasync/defer無しの同期実行なので、
+  // DOMContentLoaded の時点で必ずinline側のhandleDspFile宣言は完了済み。
+  // load ではなく DOMContentLoaded を使い、この競合窓を実質ゼロまで縮める。
   if (global.document) {
-    if (global.document.readyState === 'complete') {
+    if (global.document.readyState === 'interactive' || global.document.readyState === 'complete') {
       installProductionDspLoader();
+    } else if (global.document.addEventListener) {
+      global.document.addEventListener('DOMContentLoaded', function () {
+        installProductionDspLoader();
+      }, { once: true });
     } else if (global.addEventListener) {
       global.addEventListener('load', function () {
         installProductionDspLoader();
