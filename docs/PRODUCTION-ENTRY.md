@@ -2,23 +2,24 @@
 
 Phase 0（2026-08）調査 + Phase 1（2026-08）物理隔離。**本番修正は必ず `index.html`（repo root）へ行う。legacy は編集禁止。**
 
-## 最終ディレクトリ構成（Phase 1）
+## 最終ディレクトリ構成（Phase 3）
 
 ```
 /
   index.html              ← Production（Render 本番）
-  lat-departure-core.js   ← 本番 JS（絶対パス /... で参照）
+  lat-departure-core.js   ← 本番 JS
   assign-support*.js
-  demo-app/               ← Demo（独立 server.js）
-  legacy/
-    delivery-app/         ← Historical Copy（本番修正禁止）
+  demo-app/               ← Demo
+  gas/                    ← GAS source
+  legacy/                 ← git 追跡 Legacy 削除済み（untracked 残存あり）
 ```
 
 | 用途 | パス | Render 本番 |
 |------|------|-------------|
 | **Production** | `index.html` | **はい** — `/` |
 | **Demo** | `demo-app/` | いいえ |
-| **Legacy** | `legacy/delivery-app/` | いいえ（到達 URL も `/legacy/delivery-app/...` に変更） |
+| **GAS** | `gas/` | ソース正本 |
+| **Legacy app** | ~~`legacy/delivery-app/`~~ | **git 追跡分削除済み** |
 
 ## エントリポイント一覧（Phase 0 調査時点 → Phase 1 更新）
 
@@ -26,7 +27,7 @@ Phase 0（2026-08）調査 + Phase 1（2026-08）物理隔離。**本番修正�
 |------|-------------------|-------------------|
 | Production | `index.html` | `index.html`（変更なし） |
 | Demo | `delivery-app/demo-app/` | **`demo-app/`** |
-| Legacy | `delivery-app/index.html` | **`legacy/delivery-app/index.html`** |
+| Legacy app | `delivery-app/index.html` | **削除済み**（Phase 3）。GAS → `gas/` |
 
 ## Render 本番配信経路
 
@@ -44,10 +45,10 @@ render-webhook-server.js L48:
   GET /index.html    → index.html（root）
   GET /lat-departure-core.js  → root の JS
   GET /assign-support.js      → root の JS
-  GET /legacy/delivery-app/index.html → 到達可能だが Legacy（本番デフォルトではない）
+  GET /gas/addr-master.gs     → GAS ソース（静的配信・参照用）
 ```
 
-> Phase 1 以前は `/delivery-app/index.html` で Legacy に到達できた。移動後は `/legacy/delivery-app/index.html`。
+> Phase 1 以前は `/delivery-app/index.html` で Legacy に到達できた。Phase 3 で git 追跡 Legacy コードは削除。
 
 - **起動ファイル:** `inject-tenko-audit.js` → `render-webhook-server.js`
 - **express.static 対象:** リポジトリ直下（`__dirname`）
@@ -130,12 +131,18 @@ render-webhook-server.js L48:
 |----|------|------|
 | B. legacy へ移動 | 誤修正防止 + 履歴保持 | **Phase 1 実施済み** |
 | demo-app 独立 | `demo-app/` へ配置 | **Phase 1 実施済み** |
-| A/C. legacy 完全削除 | root が superset のため可能 | **次 Phase で判断** |
+| A/C. legacy 完全削除 | git 追跡 Legacy コード | **Phase 3 実施済み**（GAS → `gas/` 救出後） |
+
+## Phase 3 解体（2026-08）
+
+- 救出: `gas/addr-master.gs`, `gas/mentor-notified.gs`, `docs/ops/note-line-integration.md`
+- 削除: `git rm -r legacy/delivery-app`（tracked 8 ファイル）
+- 残存: `legacy/delivery-app/` 配下 untracked（バックアップ等）— 物理削除は次 Phase
 
 ## 誤修正防止
 
 - `index.html`（root）先頭 HTML コメント — Production 正本
-- `legacy/delivery-app/index.html` — `LEGACY — DO NOT EDIT FOR PRODUCTION`
+- `gas/README.md` — GAS 正本
 - `legacy/README.md`, `demo-app/README.md`, 本ファイル
 
 ## Phase 2 削除監査（2026-08）

@@ -72,16 +72,19 @@ Amazon配送拠点「OFK3」の日次オペレーションを一元管理するW
 │   ├── index.html
 │   ├── demo-data.js
 │   └── server.js
-├── legacy/
-│   └── delivery-app/             # Historical Copy（本番修正禁止・削除前監査対象）
-└── gas-proxy-code.gs 等          # GAS ソース（repo root に配置）
+├── gas/                          # GAS ソース正本
+│   ├── addr-master.gs
+│   └── mentor-notified.gs
+├── legacy/                       # git 追跡 Legacy 削除済み（untracked 残存あり）
+└── gas-proxy-code.gs 等          # LINE プロキシ GAS（repo root）
 ```
 
 | 用途 | パス |
 |------|------|
 | **Production** | `index.html`（repo root） |
 | **Demo** | `demo-app/` |
-| **Legacy** | `legacy/delivery-app/` |
+| **GAS** | `gas/` |
+| **Legacy app** | ~~`legacy/delivery-app/`~~ git 追跡分削除済み |
 
 詳細: [docs/PRODUCTION-ENTRY.md](docs/PRODUCTION-ENTRY.md)
 
