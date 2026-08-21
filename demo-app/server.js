@@ -14,7 +14,7 @@ app.use(express.static(__dirname, {
     }
   }
 }));
-// リポジトリ直下の共有アセット（スプラッシュ・ヒーロー画像等）
+// リポジトリ直下の共有アセット（スプラッシュ・ヒーロー画像等）。demo-app は repo root/demo-app/ に配置。
 app.use(express.static(rootDir, {
   index: false,
   maxAge: '1h'

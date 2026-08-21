@@ -1,14 +1,32 @@
 # OFK3 配送アプリ — 本番正本とディレクトリ構成
 
-Phase 0（2026-08）時点の調査メモ。**本番修正は必ず `root/index.html`（リポジトリ直下）へ行う。**
+Phase 0（2026-08）調査 + Phase 1（2026-08）物理隔離。**本番修正は必ず `index.html`（repo root）へ行う。legacy は編集禁止。**
 
-## エントリポイント一覧
+## 最終ディレクトリ構成（Phase 1）
 
-| 用途 | パス | Render 本番で使用 |
-|------|------|-------------------|
-| **Production Entry** | `index.html`（repo root） | **はい** — `/` および `/index.html` |
-| **Demo** | `delivery-app/demo-app/index.html` | いいえ — 別サーバ `demo-app/server.js` 想定 |
-| **Legacy / Development Copy** | `delivery-app/index.html` | **いいえ** — URL `/delivery-app/index.html` では到達可能だがデフォルトではない |
+```
+/
+  index.html              ← Production（Render 本番）
+  lat-departure-core.js   ← 本番 JS（絶対パス /... で参照）
+  assign-support*.js
+  demo-app/               ← Demo（独立 server.js）
+  legacy/
+    delivery-app/         ← Historical Copy（本番修正禁止）
+```
+
+| 用途 | パス | Render 本番 |
+|------|------|-------------|
+| **Production** | `index.html` | **はい** — `/` |
+| **Demo** | `demo-app/` | いいえ |
+| **Legacy** | `legacy/delivery-app/` | いいえ（到達 URL も `/legacy/delivery-app/...` に変更） |
+
+## エントリポイント一覧（Phase 0 調査時点 → Phase 1 更新）
+
+| 用途 | 旧パス（Phase 0） | 現パス（Phase 1） |
+|------|-------------------|-------------------|
+| Production | `index.html` | `index.html`（変更なし） |
+| Demo | `delivery-app/demo-app/` | **`demo-app/`** |
+| Legacy | `delivery-app/index.html` | **`legacy/delivery-app/index.html`** |
 
 ## Render 本番配信経路
 
@@ -26,8 +44,10 @@ render-webhook-server.js L48:
   GET /index.html    → index.html（root）
   GET /lat-departure-core.js  → root の JS
   GET /assign-support.js      → root の JS
-  GET /delivery-app/index.html → 到達可能だが本番デフォルトではない
+  GET /legacy/delivery-app/index.html → 到達可能だが Legacy（本番デフォルトではない）
 ```
+
+> Phase 1 以前は `/delivery-app/index.html` で Legacy に到達できた。移動後は `/legacy/delivery-app/index.html`。
 
 - **起動ファイル:** `inject-tenko-audit.js` → `render-webhook-server.js`
 - **express.static 対象:** リポジトリ直下（`__dirname`）
@@ -68,12 +88,23 @@ render-webhook-server.js L48:
 | **C. 両方同一** | タブ構成・大部分の UI / ロジック（歴史的コピー） |
 | **D. 両方あるが実装差** | **LAT `handleDspFile`**（root=本番パーサ、da=旧 strict `employee_id` 必須 + 診断 log）、**アサイン支援**（root=Phase 1.8 まで、da=Phase 1 相当の HTML）、外部 JS キャッシュバージョン文字列 |
 
-## demo-app の役割
+## demo-app の役割（Phase 1 更新）
 
-- パス: `delivery-app/demo-app/`
-- タイトル: 「配送管理 - OFK3（デモ版）」
-- `demo-app/server.js` が `demo-app/index.html` を `/` で配信。Sentry なし、`demo-data.js` 注入。
-- Render 本番とは独立。プレゼン・オフライン demo 用。
+- パス: **`demo-app/`**（旧 `delivery-app/demo-app/` から独立）
+- 起動: `cd demo-app && npm start` → `demo-app/server.js`
+- `rootDir = ..` = repo root（共有画像・スプラッシュ）。**legacy/delivery-app への依存なし**
+- `index.html` の `../` = repo root 静的アセット（`/assign-support.js` 等の本番 JS は未参照）
+- Render 本番とは独立。プレゼン・オフライン demo 用
+
+### demo-app 移動時の依存調査結果
+
+| 依存種別 | 内容 |
+|----------|------|
+| `../` 画像・動画 | repo root の静的ファイル（`logo-gds.png`, `ofk3-splash.mp4` 等） |
+| `/demo-tenko-*.png` | demo-app 内ローカル |
+| `demo-data.js` | demo-app 内ローカル |
+| `../index.html` / `../assign-support.js` / legacy JS | **なし** |
+| `delivery-app/index.html` | **なし** |
 
 ## LAT 修正履歴 — どちらに入ったか
 
@@ -93,19 +124,16 @@ render-webhook-server.js L48:
 2. `delivery-app/index.html` を開いてローカル確認 → 動くように見えるが、本番 URL とは別ファイル
 3. `d89f79f` は root のみ → 正しい手順。da 側は旧 `handleDspFile` のまま残存
 
-## 将来整理案（今回は未実施）
+## 将来整理案
 
-| 案 | 内容 | 推奨度 |
-|----|------|--------|
-| A. delivery-app 削除 | 差分確認後に root のみ化 | 中 — da-only 重要機能は無いが、デモパスが `delivery-app/demo-app` に依存 |
-| B. `legacy/delivery-app` へ移動 | 誤修正防止 + 履歴保持 | **高（中期）** |
-| C. 差分移植後削除 | root が superset のため、移植作業はほぼ不要。削除前に da コピー JS への直リンクがないか再確認 | 高 |
-| D. 開発用途として残す | 現状。コメント + 本ドキュメントで防止 | **Phase 0 採用（短期）** |
+| 案 | 内容 | 状態 |
+|----|------|------|
+| B. legacy へ移動 | 誤修正防止 + 履歴保持 | **Phase 1 実施済み** |
+| demo-app 独立 | `demo-app/` へ配置 | **Phase 1 実施済み** |
+| A/C. legacy 完全削除 | root が superset のため可能 | **次 Phase で判断** |
 
-**推奨:** 短期は **D（残す + 正本明示）** → 中期 **B または C**（`demo-app` は `demo/` へ独立移動を検討）。
+## 誤修正防止
 
-## 誤修正防止（Phase 0 で追加）
-
-- `delivery-app/index.html` 先頭 HTML コメント
-- `index.html`（root）先頭 HTML コメント
-- 本ファイル `docs/PRODUCTION-ENTRY.md`
+- `index.html`（root）先頭 HTML コメント — Production 正本
+- `legacy/delivery-app/index.html` — `LEGACY — DO NOT EDIT FOR PRODUCTION`
+- `legacy/README.md`, `demo-app/README.md`, 本ファイル
