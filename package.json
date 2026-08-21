@@ -7,7 +7,7 @@
     "start": "node inject-tenko-audit.js",
     "dev": "node inject-tenko-audit.js",
     "test:assign-support": "node tests/assign-support.test.mjs",
-    "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-production-pipeline.test.mjs",
+    "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-production-pipeline.test.mjs && node tests/lat-dsp-ui-wiring.test.mjs",
     "test:all": "npm run test:assign-support && npm run test:lat"
   },
   "engines": {

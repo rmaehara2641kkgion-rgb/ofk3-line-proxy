@@ -296,6 +296,49 @@
     return target;
   }
 
+  function wireLatDspUploadUi() {
+    var doc = global.document;
+    if (!doc) return;
+    var input = doc.getElementById('dsp-file-input');
+    var zone = doc.getElementById('dsp-drop-zone');
+    if (!input || input.__latDspUiWired) return;
+
+    input.__latDspUiWired = true;
+    input.removeAttribute('onchange');
+
+    input.addEventListener('change', function (ev) {
+      var f = ev.target && ev.target.files && ev.target.files[0];
+      if (f && typeof global.handleDspFile === 'function') global.handleDspFile(f);
+    });
+
+    if (zone && !zone.__latDspUiWired) {
+      zone.__latDspUiWired = true;
+      zone.removeAttribute('ondrop');
+      zone.removeAttribute('ondragover');
+      zone.removeAttribute('ondragleave');
+
+      zone.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        zone.style.borderColor = '#f97316';
+      });
+      zone.addEventListener('dragleave', function () {
+        zone.style.borderColor = '';
+      });
+      zone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        zone.style.borderColor = '';
+        var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f && typeof global.handleDspFile === 'function') global.handleDspFile(f);
+      });
+      zone.addEventListener('click', function (e) {
+        if (e.target && (e.target.tagName === 'BUTTON' || (e.target.closest && e.target.closest('button')))) return;
+        input.click();
+      });
+    }
+
+    global.__latDspUiWired = true;
+  }
+
   function installProductionDspLoader() {
     if (!global.document || !global.FileReader || !global.XLSX) return;
 
@@ -356,6 +399,7 @@
       reader.readAsArrayBuffer(file);
     };
 
+    wireLatDspUploadUi();
     global.__latProductionDspLoaderInstalled = true;
   }
 
@@ -371,6 +415,7 @@
     normalizeLatDspHeader: normalizeLatDspHeader,
     parseLatDspRows: parseLatDspRows,
     latAssignDspRouteMap: latAssignDspRouteMap,
+    wireLatDspUploadUi: wireLatDspUploadUi,
     installProductionDspLoader: installProductionDspLoader
   };
 

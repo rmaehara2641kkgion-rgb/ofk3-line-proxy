@@ -19,7 +19,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
-  <script src="/lat-departure-core.js?v=20260822-2"></script>
+  <script src="/lat-departure-core.js?v=20260822-3"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1745,11 +1745,11 @@
             <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dnr-file-input').click()">選択</button>
             <p id="dnr-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
           </div>
-          <div id="dsp-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-orange-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#f97316'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDspDrop(event)">
+          <div id="dsp-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-orange-500 transition-colors">
             <p class="text-sm text-ink-lighter mb-1">🚛 DSPルート</p>
             <p class="text-xs text-ink-lighter">CSV（LAT用）</p>
-            <input type="file" accept=".csv,.xlsx,.xls" class="hidden" id="dsp-file-input" onchange="window.handleDspFile(this.files[0])">
-            <button class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dsp-file-input').click()">選択</button>
+            <input type="file" accept=".csv,.xlsx,.xls,.xlsm" class="hidden" id="dsp-file-input">
+            <button type="button" class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('dsp-file-input').click()">選択</button>
             <p id="dsp-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
           </div>
           <div id="lat-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-purple-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#a855f7'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleLatDrop(event)">
@@ -16496,7 +16496,8 @@ var driverDB = {
     }
 
     function handleDspDrop(event) {
-      var file = event.dataTransfer.files[0];
+      if (event && event.preventDefault) event.preventDefault();
+      var file = event && event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
       if (file && typeof window.handleDspFile === 'function') window.handleDspFile(file);
     }
 
