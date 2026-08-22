@@ -60,6 +60,12 @@ function runTests() {
   assert(LDC.latAxisLabelStep(240) === 30, 'axis step 30min for 4h range');
   assert(LDC.latAxisLabelStep(800) === 60, 'axis step 60min for long range');
 
+  // LOW-only: no planned_departure column → judgment blocked
+  var pdLow = LDC.latResolvePlannedDepartureFromLow({ wave: 'CYCLE_3', departure: '18:31:02' });
+  assert(pdLow.plannedDeparture === '', 'LOW without planned_departure col');
+  assert(pdLow.unavailableReason === '予定時刻未設定', 'LOW unavailable reason');
+  assert(LDC.latResolveJudgment(LDC.latResolveDiffMin(null, '18:31:02', pdLow.plannedDeparture)) === '', 'no judgment without planned source');
+
   console.log('lat-departure-judgment.test.mjs: all 10 tests passed');
 }
 
