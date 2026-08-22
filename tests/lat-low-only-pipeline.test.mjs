@@ -120,8 +120,9 @@ function runTests() {
   ctx.input.files = [file];
   ctx.input.dispatch('change', { target: ctx.input, preventDefault: function () {} });
 
-  assert(sandbox.__latLowLoadDiagnosis && sandbox.__latLowLoadDiagnosis.count === 3, 'LOW parse count');
-  assert(sandbox.latResultData && sandbox.latResultData.length === 3, 'latResultData rows');
+  assert(sandbox.__latLowLoadDiagnosis && sandbox.__latLowLoadDiagnosis.count === 4, 'LOW parse count');
+  assert(sandbox.__latLowLoadDiagnosis.columnIndex.beacon_exit >= 0, 'beacon_exit column resolved');
+  assert(sandbox.latResultData && sandbox.latResultData.length === 4, 'latResultData rows');
 
   var target = sandbox.latResultData.find(function (r) { return r.routeId === '2789048-15'; });
   assert(target, 'route 2789048-15 present');
@@ -140,6 +141,14 @@ function runTests() {
   assert(target.loadingMin === 15, 'loadingMin 15min');
   assert(target.stayMin === 42.5, 'stayMin from turnover');
 
+  var emptyExitRoute = sandbox.latResultData.find(function (r) { return r.routeId === '2789048-99'; });
+  assert(emptyExitRoute, 'route 2789048-99 present');
+  assert(emptyExitRoute.actualDeparture === '10:00:00', 'empty-exit route keeps actualDeparture');
+  assert(emptyExitRoute.dsExit === '', 'empty beacon_exit stays empty');
+  assert(emptyExitRoute.dsExit !== emptyExitRoute.actualDeparture, 'no fallback from departure to dsExit');
+  assert(sandbox.latBeaconMap['2789048-99'].exit === '', 'lat.exit empty when beacon_exit blank');
+  assert(sandbox.__latLowLoadDiagnosis.emptyExitCount === 1, 'diagnosis emptyExitCount');
+
   // drop event path
   sandbox.latBeaconMap = {};
   sandbox.latResultData = [];
@@ -147,10 +156,11 @@ function runTests() {
     preventDefault: function () {},
     dataTransfer: { files: [file] }
   });
-  assert(sandbox.latResultData.length === 3, 'drop path loads LOW file');
+  assert(sandbox.latResultData.length === 4, 'drop path loads LOW file');
 
   console.log('lat-low-only-pipeline.test.mjs: all tests passed');
-  console.log('  2789048-15 wave=' + target.wave + ' actualDeparture=' + target.actualDeparture + ' judgment=' + target.judgmentDisplay);
+  console.log('  2789048-15 actualDeparture=' + target.actualDeparture + ' dsExit=' + target.dsExit);
+  console.log('  2789048-99 actualDeparture=' + emptyExitRoute.actualDeparture + ' dsExit=(empty)');
 }
 
 runTests();

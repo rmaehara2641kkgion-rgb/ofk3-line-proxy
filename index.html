@@ -16625,6 +16625,8 @@ var driverDB = {
         var latPdIdx = colMap['planned_departure'] !== undefined ? colMap['planned_departure'] : -1;
 
         latBeaconMap = {};
+        var exitSameAsDepartureCount = 0;
+        var emptyExitCount = 0;
         for (var i = 1; i < json.length; i++) {
           var row = json[i];
           var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
@@ -16643,10 +16645,19 @@ var driverDB = {
             routeCode: latRcIdx >= 0 && row[latRcIdx] ? String(row[latRcIdx]).trim() : '',
             plannedDeparture: latPdIdx >= 0 && row[latPdIdx] != null && row[latPdIdx] !== '' ? latExtractTime(String(row[latPdIdx])) : ''
           };
+          if (!latBeaconMap[rid].exit) emptyExitCount++;
+          else if (latBeaconMap[rid].exit === latBeaconMap[rid].departure) exitSameAsDepartureCount++;
         }
 
         var cnt = Object.keys(latBeaconMap).length;
-        window.__latLowLoadDiagnosis = { count: cnt, headers: headers, hasPlannedDepartureCol: latPdIdx >= 0 };
+        window.__latLowLoadDiagnosis = {
+          count: cnt,
+          headers: headers,
+          hasPlannedDepartureCol: latPdIdx >= 0,
+          columnIndex: { beacon_departure: bdIdx, beacon_exit: bexIdx },
+          emptyExitCount: emptyExitCount,
+          exitSameAsDepartureCount: exitSameAsDepartureCount
+        };
         var latMsg = document.getElementById('lat-loaded-msg');
         if (latMsg) {
           latMsg.classList.remove('hidden');
