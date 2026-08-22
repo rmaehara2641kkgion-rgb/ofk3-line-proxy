@@ -1,0 +1,4 @@
+date,delivery_station_code,service_type,provider_type,provider_company_code,wave,route_id,route_code,loading_area_turnover,beacon_departure,beacon_arrival,beacon_entrance,beacon_exit,beacon_firstpackagescan,beacon_lastpackagescan,employee_id,country
+2026/8/4,DSX,,,,CYCLE_3,2789048-15,DSX15,42.5,2026/8/4 18:31:02,2026/8/4 17:55:00,2026/8/4 18:00:00,2026/8/4 18:35:00,2026/8/4 18:10:00,2026/8/4 18:25:00,A3NIVS2X2584EM,JP
+2026/8/4,DSX,,,,CYCLE_1,2789048-01,DSX01,35.0,2026/8/4 09:15:00,2026/8/4 08:50:00,2026/8/4 08:55:00,2026/8/4 09:20:00,2026/8/4 09:00:00,2026/8/4 09:10:00,A3NIVS2X2584EM,JP
+2026/8/4,DSX,,,,CYCLE_2,2789048-08,DSX08,38.0,2026/8/4 14:45:00,2026/8/4 14:20:00,2026/8/4 14:25:00,2026/8/4 14:50:00,2026/8/4 14:30:00,2026/8/4 14:40:00,A3NIVS2X2584EM,JP

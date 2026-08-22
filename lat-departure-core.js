@@ -40,6 +40,14 @@
     return '遅延';
   }
 
+  /** LOW/LAT単独: 正式な予定出発sourceのみ使用（wave/Cycle推測禁止） */
+  function latResolvePlannedDepartureFromLow(lowRow) {
+    lowRow = lowRow || {};
+    var pd = lowRow.plannedDeparture != null ? String(lowRow.plannedDeparture).trim() : '';
+    if (pd) return { plannedDeparture: pd, unavailableReason: '' };
+    return { plannedDeparture: '', unavailableReason: '予定時刻未設定' };
+  }
+
   function latFormatDepDiffText(diffMin) {
     if (!Number.isFinite(diffMin)) return '';
     var rounded = Math.round(diffMin);
@@ -409,6 +417,7 @@
     latParseDiffMins: latParseDiffMins,
     latResolveDiffMin: latResolveDiffMin,
     latResolveJudgment: latResolveJudgment,
+    latResolvePlannedDepartureFromLow: latResolvePlannedDepartureFromLow,
     latFormatDepDiffText: latFormatDepDiffText,
     latRoundDiffMin: latRoundDiffMin,
     latAxisLabelStep: latAxisLabelStep,
