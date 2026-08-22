@@ -1900,23 +1900,7 @@
             <div class="overflow-x-auto" style="max-height:600px; overflow-y:auto;">
               <table class="w-full text-sm">
                 <thead class="sticky top-0 bg-surface z-10">
-                  <tr class="border-b border-border">
-                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">ドライバー</th>
-                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Route ID</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">日付</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">Wave</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">Route Code</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">DS入場</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">First Scan</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">Last Scan</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">出発予定</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">実出発</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">DS退出</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">差分(分)</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">積込時間</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">滞在時間</th>
-                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">判定</th>
-                  </tr>
+                  <tr id="lat-detail-thead-row" class="border-b border-border"></tr>
                 </thead>
                 <tbody id="lat-detail-tbody"></tbody>
               </table>
@@ -16788,21 +16772,22 @@ var driverDB = {
           }
         }
 
-        var dsEntrance = lat.entrance || lat.arrival || '';
+        var dsArrival = lat.arrival || '';
+        var dsEntrance = lat.entrance || '';
         var plannedInfo = LatDepartureCore.latResolvePlannedDepartureFromLow(lat);
         var plannedDep = plannedInfo.plannedDeparture || '';
-        var plannedDepDisplay = plannedDep || plannedInfo.unavailableReason || '予定時刻未設定';
+        var plannedDepDisplay = plannedDep || '未設定';
         var actualDep = lat.departure || '';
         var firstScan = lat.firstScan || '';
         var lastScan = lat.lastScan || '';
-        var dsExit = lat.exit || lat.departure || '';
+        var dsExit = lat.exit || '';
 
         var loadingMin = latMinDiff(lastScan, firstScan);
         var stayMin = lat.turnover ? parseFloat(lat.turnover) : latMinDiff(dsExit, dsEntrance);
 
         var diffMin = LatDepartureCore.latResolveDiffMin(null, actualDep, plannedDep);
         var judgment = LatDepartureCore.latResolveJudgment(diffMin);
-        var judgmentDisplay = judgment || plannedInfo.unavailableReason || '予定時刻未設定';
+        var judgmentDisplay = judgment || '判定不可';
 
         latResultData.push({
           routeId: rid,
@@ -16812,6 +16797,7 @@ var driverDB = {
           wave: lat.wave || '',
           routeCode: lat.routeCode || '',
           plannedArrival: '',
+          dsArrival: dsArrival,
           dsEntrance: dsEntrance,
           firstScan: firstScan,
           lastScan: lastScan,
@@ -16820,7 +16806,7 @@ var driverDB = {
           actualDeparture: actualDep,
           dsExit: dsExit,
           diffMin: LatDepartureCore.latRoundDiffMin(diffMin),
-          diffDisplay: Number.isFinite(diffMin) ? latFormatDepDiffText(diffMin) : plannedInfo.unavailableReason || '予定時刻未設定',
+          diffDisplay: Number.isFinite(diffMin) ? latFormatDepDiffText(diffMin) : '-',
           loadingMin: loadingMin !== null ? loadingMin : '',
           stayMin: stayMin !== null && !isNaN(stayMin) ? Math.round(stayMin * 10) / 10 : '',
           judgment: judgment,
@@ -16834,8 +16820,48 @@ var driverDB = {
       if (qh2) qh2.style.display = 'none';
     }
 
+    function latResultHasPlannedDepartureSource() {
+      for (var i = 0; i < latResultData.length; i++) {
+        if (latResultData[i].plannedDeparture) return true;
+      }
+      return false;
+    }
+
+    function renderLatDetailTableHeader(showPlannedCols) {
+      var theadRow = document.getElementById('lat-detail-thead-row');
+      if (!theadRow) return;
+      var th = ' class="px-2 py-2 text-xs font-medium text-ink-lighter"';
+      var html = '';
+      html += '<th' + th + ' style="text-align:left">ドライバー</th>';
+      html += '<th' + th + ' style="text-align:left">Route ID</th>';
+      html += '<th' + th + ' style="text-align:center">日付</th>';
+      html += '<th' + th + ' style="text-align:center">Wave</th>';
+      html += '<th' + th + ' style="text-align:center">Route Code</th>';
+      html += '<th' + th + ' style="text-align:center">DS到着</th>';
+      html += '<th' + th + ' style="text-align:center">DS入場</th>';
+      html += '<th' + th + ' style="text-align:center">First Scan</th>';
+      html += '<th' + th + ' style="text-align:center">Last Scan</th>';
+      if (showPlannedCols) {
+        html += '<th' + th + ' style="text-align:center">出発予定</th>';
+      }
+      html += '<th' + th + ' style="text-align:center">実出発</th>';
+      html += '<th' + th + ' style="text-align:center">DS退出</th>';
+      if (showPlannedCols) {
+        html += '<th' + th + ' style="text-align:center">差分(分)</th>';
+      }
+      html += '<th' + th + ' style="text-align:center">積込時間</th>';
+      html += '<th' + th + ' style="text-align:center">滞在時間</th>';
+      if (showPlannedCols) {
+        html += '<th' + th + ' style="text-align:center">判定</th>';
+      }
+      theadRow.innerHTML = html;
+    }
+
     function renderLatResults() {
       if (latResultData.length === 0) return;
+
+      var showPlannedCols = latResultHasPlannedDepartureSource();
+      renderLatDetailTableHeader(showPlannedCols);
 
       // ソート
       var sortKey = document.getElementById('lat-sort-select') ? document.getElementById('lat-sort-select').value : 'diff';
@@ -16898,16 +16924,18 @@ var driverDB = {
         var rec = latResultData[i];
         var rowColor = '';
         var badgeHtml = '';
-        if (rec.judgment === '早着出発') {
-          rowColor = 'bg-orange-900 bg-opacity-20';
-          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-600 text-white">早着</span>';
-        } else if (rec.judgment === '定刻') {
-          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-green-700 text-white">定刻</span>';
-        } else if (rec.judgment === '遅延') {
-          rowColor = 'bg-red-900 bg-opacity-20';
-          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">遅延</span>';
-        } else {
-          badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-700 text-white">' + (rec.judgmentDisplay || '予定時刻未設定') + '</span>';
+        if (showPlannedCols) {
+          if (rec.judgment === '早着出発') {
+            rowColor = 'bg-orange-900 bg-opacity-20';
+            badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-600 text-white">早着</span>';
+          } else if (rec.judgment === '定刻') {
+            badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-green-700 text-white">定刻</span>';
+          } else if (rec.judgment === '遅延') {
+            rowColor = 'bg-red-900 bg-opacity-20';
+            badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">遅延</span>';
+          } else {
+            badgeHtml = '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-700 text-white">' + (rec.judgmentDisplay || '判定不可') + '</span>';
+          }
         }
 
         html += '<tr class="border-b border-border ' + rowColor + '">';
@@ -16916,16 +16944,23 @@ var driverDB = {
         html += '<td class="px-2 py-2 text-xs text-center">' + latFormatDate(rec.date) + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.wave || '-') + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.routeCode || '-') + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center font-bold text-blue-400">' + rec.dsEntrance + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + rec.firstScan + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + rec.lastScan + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center">' + (rec.plannedDeparture || rec.plannedDepartureDisplay || '予定時刻未設定') + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center font-bold text-emerald-400">' + rec.actualDeparture + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center">' + rec.dsExit + '</td>';
-        html += '<td class="px-2 py-2 text-xs text-center font-bold" title="' + (rec.diffMin !== '' && rec.diffMin !== null ? rec.diffMin + '分' : '') + '">' + (rec.diffDisplay || (rec.diffMin !== '' && rec.diffMin !== null ? latFormatDepDiffText(rec.diffMin) : '予定時刻未設定')) + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center text-sky-400">' + (rec.dsArrival || '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center font-bold text-blue-400">' + (rec.dsEntrance || '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + (rec.firstScan || '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center text-purple-400">' + (rec.lastScan || '-') + '</td>';
+        if (showPlannedCols) {
+          html += '<td class="px-2 py-2 text-xs text-center">' + (rec.plannedDeparture || rec.plannedDepartureDisplay || '未設定') + '</td>';
+        }
+        html += '<td class="px-2 py-2 text-xs text-center font-bold text-emerald-400">' + (rec.actualDeparture || '-') + '</td>';
+        html += '<td class="px-2 py-2 text-xs text-center">' + (rec.dsExit || '-') + '</td>';
+        if (showPlannedCols) {
+          html += '<td class="px-2 py-2 text-xs text-center font-bold" title="' + (rec.diffMin !== '' && rec.diffMin !== null ? rec.diffMin + '分' : '') + '">' + (rec.diffDisplay || (rec.diffMin !== '' && rec.diffMin !== null ? latFormatDepDiffText(rec.diffMin) : '-')) + '</td>';
+        }
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.loadingMin !== '' ? rec.loadingMin + '分' : '-') + '</td>';
         html += '<td class="px-2 py-2 text-xs text-center">' + (rec.stayMin !== '' ? rec.stayMin + '分' : '-') + '</td>';
-        html += '<td class="px-2 py-2 text-center">' + badgeHtml + '</td>';
+        if (showPlannedCols) {
+          html += '<td class="px-2 py-2 text-center">' + badgeHtml + '</td>';
+        }
         html += '</tr>';
       }
       tbody.innerHTML = html;
@@ -17050,10 +17085,21 @@ var driverDB = {
 
     function exportLatResult() {
       if (!latResultData.length) return;
-      var csvRows = [['日付', 'Wave', 'ドライバー名', 'TransportID', 'Route ID', 'Route Code', 'DS入場', 'FirstScan', 'LastScan', '出発予定', '実出発', 'DS退出', '差分(分)', '積込時間(分)', '滞在時間(分)', '判定']];
+      var showPlannedCols = latResultHasPlannedDepartureSource();
+      var header = ['日付', 'Wave', 'ドライバー名', 'TransportID', 'Route ID', 'Route Code', 'DS到着', 'DS入場', 'FirstScan', 'LastScan', '実出発', 'DS退出', '積込時間(分)', '滞在時間(分)'];
+      if (showPlannedCols) {
+        header.splice(10, 0, '出発予定');
+        header.push('差分(分)', '判定');
+      }
+      var csvRows = [header];
       for (var i = 0; i < latResultData.length; i++) {
         var r = latResultData[i];
-        csvRows.push([r.date, r.wave || '', r.driverName || '(未特定)', r.employeeId, r.routeId, r.routeCode || '', r.dsEntrance, r.firstScan, r.lastScan, (r.plannedDeparture || r.plannedDepartureDisplay || ''), r.actualDeparture, r.dsExit, (r.diffMin !== '' && r.diffMin !== null ? r.diffMin : ''), r.loadingMin, r.stayMin, (r.judgment || r.judgmentDisplay || '')]);
+        var row = [r.date, r.wave || '', r.driverName || '(未特定)', r.employeeId, r.routeId, r.routeCode || '', r.dsArrival || '', r.dsEntrance || '', r.firstScan || '', r.lastScan || '', r.actualDeparture || '', r.dsExit || '', r.loadingMin, r.stayMin];
+        if (showPlannedCols) {
+          row.splice(10, 0, (r.plannedDeparture || r.plannedDepartureDisplay || '未設定'));
+          row.push((r.diffMin !== '' && r.diffMin !== null ? r.diffMin : '-'), (r.judgment || r.judgmentDisplay || '判定不可'));
+        }
+        csvRows.push(row);
       }
       var csv = csvRows.map(function(row) {
         return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');

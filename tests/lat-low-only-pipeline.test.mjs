@@ -54,6 +54,7 @@ function buildSandbox() {
     'lat-file-input': input,
     'lat-drop-zone': zone,
     'lat-detail-tbody': newElement(),
+    'lat-detail-thead-row': newElement(),
     'lat-total': newElement(),
     'lat-export-btn': newElement(),
     'lat-sort-select': { value: 'diff' },
@@ -127,10 +128,15 @@ function runTests() {
   assert(target.wave === 'CYCLE_3', 'wave CYCLE_3');
   assert(target.routeCode === 'DSX15', 'routeCode DSX15');
   assert(target.actualDeparture === '18:31:02', 'actualDeparture from beacon_departure');
+  assert(target.dsArrival === '17:55:00', 'dsArrival from beacon_arrival');
+  assert(target.dsEntrance === '18:00:00', 'dsEntrance from beacon_entrance only');
+  assert(target.dsExit === '18:35:00', 'dsExit from beacon_exit only');
+  assert(target.dsExit !== target.actualDeparture, 'beacon_departure not duplicated in dsExit');
   assert(target.plannedDeparture === '', 'no plannedDeparture in LOW');
-  assert(target.plannedDepartureDisplay === '予定時刻未設定', 'plannedDeparture display reason');
+  assert(target.plannedDepartureDisplay === '未設定', 'plannedDeparture display');
+  assert(target.diffDisplay === '-', 'diff display dash without planned source');
   assert(target.judgment === '', 'judgment empty without planned source');
-  assert(target.judgmentDisplay === '予定時刻未設定', 'judgment display reason');
+  assert(target.judgmentDisplay === '判定不可', 'judgment display');
   assert(target.loadingMin === 15, 'loadingMin 15min');
   assert(target.stayMin === 42.5, 'stayMin from turnover');
 
