@@ -21,6 +21,8 @@
     shiftWorkers: [],
     shiftSource: '',
     shiftLinkStats: { mappedCount: 0, unmappedNames: [] },
+    scheduleWorkerStats: null,
+    scheduleLoadError: '',
     suggestionsGenerated: false,
     rescueCount: 0,
   };
@@ -797,39 +799,97 @@
   function renderShiftSummary() {
     var box = el('as-shift-summary');
     if (!box) return;
-    if (!state.shiftWorkers.length) {
-      box.innerHTML = '<p class="text-sm text-ink-lighter">シフト未読込</p>';
+
+    var targetDate = getAssignTargetDate();
+    var stats = state.scheduleWorkerStats || {};
+    var scheduleEntries = getTenkoScheduleEntries();
+
+    if (state.scheduleLoadError) {
+      box.innerHTML =
+        '<div class="p-3 rounded-lg bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
+        '<p class="font-bold">⚠ ' +
+        escapeHtml(state.scheduleLoadError) +
+        '</p>' +
+        '<p class="text-xs mt-2 text-amber-800">点呼管理タブ → 「スケジュールUI読み込み」で Amazon スケジュールを読込んでください。</p>' +
+        '</div>';
       return;
     }
-    var stats = state.shiftLinkStats || { mappedCount: 0, unmappedNames: [] };
-    var mapped = stats.mappedCount || 0;
-    var unmapped = stats.unmappedNames || [];
+
+    if (!state.shiftWorkers.length) {
+      box.innerHTML =
+        '<p class="text-sm text-ink-lighter">Amazonスケジュールを先に読み込んでください（点呼管理タブ）</p>';
+      return;
+    }
+
+    var linkStats = state.shiftLinkStats || { mappedCount: 0, unmappedNames: [] };
+    var excludedTid = stats.excludedNoTransportId || 0;
     var html =
-      '<p class="text-sm font-bold text-emerald-700">✅ 出勤者 ' +
+      '<div class="text-sm space-y-1">' +
+      '<p><span class="font-bold text-emerald-700">Amazonスケジュール：読込済み</span></p>' +
+      '<p class="text-xs">対象日：<strong>' +
+      escapeHtml(targetDate) +
+      '</strong></p>' +
+      '<p class="text-xs">スケジュール総件数：<strong>' +
+      (stats.scheduleTotal || scheduleEntries.length || 0) +
+      '名</strong></p>' +
+      '<p class="text-xs">Auto Assign候補：<strong class="text-emerald-800">' +
       state.shiftWorkers.length +
-      '名</p>' +
-      '<div class="mt-2 text-xs space-y-1">' +
-      '<div>TransportID紐付成功: <strong>' +
-      mapped +
-      '名</strong></div>' +
-      '<div>未紐付: <strong class="' +
-      (unmapped.length ? 'text-amber-800' : '') +
+      '名</strong></p>' +
+      '<p class="text-xs">TransportID欠損除外：<strong class="' +
+      (excludedTid ? 'text-amber-800' : '') +
       '">' +
-      unmapped.length +
-      '名</strong></div>' +
-      '</div>' +
-      '<p class="text-xs text-ink-lighter mt-2">ソース: ' +
-      escapeHtml(state.shiftSource) +
-      '</p>';
-    if (unmapped.length) {
+      excludedTid +
+      '名</strong></p>';
+
+    if (stats.excludedReserve) {
+      html += '<p class="text-xs text-ink-lighter">予備枠除外：' + stats.excludedReserve + '名</p>';
+    }
+
+    html += '</div>';
+
+    html += '<div class="mt-3 max-h-48 overflow-y-auto border border-border rounded-lg">';
+    html += '<table class="w-full text-xs"><thead><tr class="bg-surface border-b border-border">';
+    html += '<th class="px-2 py-1 text-left">ドライバー</th>';
+    html += '<th class="px-2 py-1 text-left">TransportID</th>';
+    html += '<th class="px-2 py-1 text-left">Cycle/Shift</th>';
+    html += '<th class="px-2 py-1 text-left">車両</th>';
+    html += '</tr></thead><tbody>';
+
+    var preview = state.shiftWorkers.slice(0, 50);
+    for (var i = 0; i < preview.length; i++) {
+      var w = preview[i];
+      html +=
+        '<tr class="border-b border-border">' +
+        '<td class="px-2 py-1">' +
+        escapeHtml(w.driverName || w.name) +
+        '</td>' +
+        '<td class="px-2 py-1 font-mono">' +
+        escapeHtml(w.transportId) +
+        '</td>' +
+        '<td class="px-2 py-1">' +
+        escapeHtml(formatWorkerShiftLabel(w)) +
+        '</td>' +
+        '<td class="px-2 py-1">' +
+        escapeHtml(w.vehicleHint || '-') +
+        '</td>' +
+        '</tr>';
+    }
+    html += '</tbody></table></div>';
+
+    if (state.shiftWorkers.length > 50) {
+      html += '<p class="text-xs text-ink-lighter mt-1">…他 ' + (state.shiftWorkers.length - 50) + '名</p>';
+    }
+
+    if (linkStats.unmappedNames && linkStats.unmappedNames.length) {
       html +=
         '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-xs">' +
-        '<p class="font-medium text-amber-900">未紐付氏名（マスタ管理で TransportID を確認してください）</p>' +
+        '<p class="font-medium text-amber-900">TransportID未設定のため候補から除外</p>' +
         '<p class="mt-1 text-amber-800 break-all">' +
-        escapeHtml(unmapped.slice(0, 20).join('、')) +
-        (unmapped.length > 20 ? ' …他' + (unmapped.length - 20) + '名' : '') +
+        escapeHtml(linkStats.unmappedNames.slice(0, 20).join('、')) +
         '</p></div>';
     }
+
+    html += '<p class="text-xs text-ink-lighter mt-2">ソース: ' + escapeHtml(state.shiftSource) + '</p>';
     box.innerHTML = html;
   }
 
@@ -838,10 +898,10 @@
     if (!box || state.suggestionsGenerated) return;
     renderAssignModeChrome();
     var ready =
-      state.experience && state.manifestRoutes.length && state.shiftWorkers.length;
+      state.experience && state.manifestRoutes.length && state.shiftWorkers.length && !state.scheduleLoadError;
     if (!ready) {
       box.innerHTML =
-        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・シフトの3つが揃うと候補を生成できます</p>';
+        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・Amazonスケジュール（当日稼働者）の3つが揃うと候補を生成できます</p>';
       return;
     }
     var cycle = getEffectiveCycle();
@@ -871,9 +931,9 @@
     if (!box) return;
     renderAssignModeChrome();
 
-    if (!state.experience || !state.manifestRoutes.length || !state.shiftWorkers.length) {
+    if (!state.experience || !state.manifestRoutes.length || !state.shiftWorkers.length || state.scheduleLoadError) {
       box.innerHTML =
-        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・シフトの3つが揃うと候補を表示します</p>';
+        '<p class="text-sm text-ink-lighter py-4 text-center">エリア経験DB・マニフェスト・Amazonスケジュール（当日稼働者）の3つが揃うと候補を表示します</p>';
       return;
     }
 
@@ -1189,84 +1249,85 @@
     });
   }
 
+  function getAssignTargetDate() {
+    if (typeof getTodayJst === 'function') return getTodayJst();
+    var now = new Date();
+    var jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    var y = jst.getUTCFullYear();
+    var m = String(jst.getUTCMonth() + 1).padStart(2, '0');
+    var d = String(jst.getUTCDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+  }
+
+  function getTenkoScheduleEntries() {
+    if (typeof tenkoSchedule !== 'undefined' && tenkoSchedule && tenkoSchedule.length) {
+      return tenkoSchedule;
+    }
+    if (typeof window !== 'undefined' && window.tenkoSchedule && window.tenkoSchedule.length) {
+      return window.tenkoSchedule;
+    }
+    return [];
+  }
+
+  function getTenkoScheduleMeta() {
+    if (typeof tenkoScheduleMeta !== 'undefined' && tenkoScheduleMeta) return tenkoScheduleMeta;
+    if (typeof window !== 'undefined' && window.tenkoScheduleMeta) return window.tenkoScheduleMeta;
+    try {
+      var td = localStorage.getItem('tenkoDate');
+      if (td) return { targetDate: td };
+    } catch (e) {
+      /* ignore */
+    }
+    return null;
+  }
+
+  function formatWorkerShiftLabel(worker) {
+    if (!worker) return '-';
+    var code = worker.shiftCode || '';
+    if (code) return code;
+    if (worker.vehicleHint === 'bike') return 'bike';
+    if (worker.vehicleHint === 'standard') return 'Standard';
+    return '-';
+  }
+
   function syncShiftFromGlobals() {
-    var workers = [];
-    var source = '';
+    var scheduleEntries = getTenkoScheduleEntries();
+    var scheduleMeta = getTenkoScheduleMeta();
+    var assignTargetDate = getAssignTargetDate();
     var resolveFn = getResolveDriverKeyFn();
     var tidMap = getTransportIDsMap();
 
-    if (typeof shiftMasterData !== 'undefined' && shiftMasterData && shiftMasterData.length) {
-      workers = AssignSupportCore.extractShiftWorkersFromMaster(shiftMasterData, tidMap, resolveFn);
-      source = 'DAシフト表（点呼照合と同形式）';
-    } else if (typeof execShiftData !== 'undefined' && execShiftData) {
-      var day = new Date().getDate();
-      workers = AssignSupportCore.extractShiftWorkersFromExecData(
-        execShiftData,
-        day,
-        resolveFn,
-        tidMap
-      );
-      source = '経営シフト表（execShiftData・本日=' + day + '日）';
+    var built = AssignSupportCore.buildAssignWorkersFromAmazonSchedule({
+      scheduleEntries: scheduleEntries,
+      scheduleMeta: scheduleMeta,
+      assignTargetDate: assignTargetDate,
+      transportIDs: tidMap,
+      resolveDriverKeyFn: resolveFn,
+    });
+
+    state.shiftWorkers = built.workers;
+    state.scheduleWorkerStats = built.stats;
+    state.shiftLinkStats = built.linkStats;
+
+    if (built.stats.error === 'not_loaded') {
+      state.scheduleLoadError = 'Amazonスケジュールが未読込です。点呼/スケジュール画面から先に読み込んでください。';
+      state.shiftSource = 'Amazon Schedule（未読込）';
+    } else if (built.stats.error === 'date_mismatch') {
+      state.scheduleLoadError =
+        'Amazonスケジュールの対象日（' +
+        (built.stats.scheduleDate || '?') +
+        '）がアサイン対象日（' +
+        assignTargetDate +
+        '）と一致しません。スケジュールを再読込してください。';
+      state.shiftSource = 'Amazon Schedule（日付不一致）';
+    } else {
+      state.scheduleLoadError = '';
+      state.shiftSource = 'Amazon Schedule UI（' + assignTargetDate + '）';
     }
 
-    var enriched = AssignSupportCore.enrichShiftWorkersWithTransportIds(workers, tidMap, resolveFn);
-    state.shiftWorkers = enriched.workers;
-    if (typeof tenkoSchedule !== 'undefined' && tenkoSchedule && tenkoSchedule.length) {
-      state.shiftWorkers = AssignSupportCore.mergeScheduleIntoShiftWorkers(
-        state.shiftWorkers,
-        tenkoSchedule,
-        tidMap,
-        resolveFn
-      );
-      source = (source || 'DAシフト') + ' + Amazon Schedule UI';
-    }
-    state.shiftLinkStats = {
-      mappedCount: enriched.mappedCount,
-      unmappedNames: enriched.unmappedNames,
-    };
-    state.shiftSource = source || '未検出';
     logShiftTransportIdDiagnosis(state.shiftWorkers, state.shiftLinkStats);
     updateCycleEligibilityStats();
     markSuggestionsStale();
-    renderAll();
-  }
-
-  function loadShiftFile(file) {
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function (e) {
-      try {
-        var data = new Uint8Array(e.target.result);
-        var wb = XLSX.read(data, { type: 'array' });
-        var sheetName = wb.SheetNames.indexOf('メイン') >= 0 ? 'メイン' : wb.SheetNames[0];
-        var json = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
-
-        if (typeof processShiftMaster === 'function' && json[2] && String(json[2][0] || '').indexOf('社') >= 0) {
-          processShiftMaster(json);
-          syncShiftFromGlobals();
-          state.shiftSource = 'DAシフト表アップロード';
-          renderAll();
-          return;
-        }
-
-        if (typeof parseShiftForExec === 'function') {
-          var dt = new DataTransfer();
-          dt.items.add(file);
-          parseShiftForExec(dt.files);
-          setTimeout(function () {
-            syncShiftFromGlobals();
-            state.shiftSource = '経営シフト表アップロード';
-            renderAll();
-          }, 300);
-          return;
-        }
-
-        alert('シフト表形式を判別できませんでした');
-      } catch (err) {
-        alert('シフト読込エラー: ' + err.message);
-      }
-    };
-    reader.readAsArrayBuffer(file);
   }
 
   function bindDropzone(zoneId, inputId, handler) {
@@ -1299,9 +1360,6 @@
       loadExperienceFile(files[0]);
     });
     bindDropzone('as-manifest-dropzone', 'as-manifest-input', loadManifestFiles);
-    bindDropzone('as-shift-dropzone', 'as-shift-input', function (files) {
-      loadShiftFile(files[0]);
-    });
 
     var genBtn = el('as-generate-suggestions-btn');
     if (genBtn) {
@@ -1314,8 +1372,13 @@
           alert('マニフェストを先に読み込んでください');
           return;
         }
+        syncShiftFromGlobals();
+        if (state.scheduleLoadError) {
+          alert(state.scheduleLoadError);
+          return;
+        }
         if (!state.shiftWorkers.length) {
-          alert('シフトを先に読み込んでください');
+          alert('Amazonスケジュールが未読込です。点呼/スケジュール画面から先に読み込んでください。');
           return;
         }
         if (!getEffectiveCycle()) {

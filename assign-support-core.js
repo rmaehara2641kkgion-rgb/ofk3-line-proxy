@@ -546,6 +546,133 @@
     });
   }
 
+  function normalizeAssignTargetDate(dateStr) {
+    if (!dateStr) return '';
+    var s = String(dateStr).trim();
+    var m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+    if (m) {
+      return (
+        m[1] +
+        '-' +
+        String(m[2]).padStart(2, '0') +
+        '-' +
+        String(m[3]).padStart(2, '0')
+      );
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    return s;
+  }
+
+  /** Amazon Schedule (tenkoSchedule) 1件 → Auto Assign worker 行 */
+  function extractShiftWorkersFromSchedule(scheduleEntries, transportIDs, resolveDriverKeyFn) {
+    scheduleEntries = scheduleEntries || [];
+    var workers = [];
+    for (var i = 0; i < scheduleEntries.length; i++) {
+      var se = scheduleEntries[i];
+      var name = String(se.name || '').trim();
+      if (!name || isShiftNonDriverRow(name)) continue;
+      if (se.assignRole === 'reserve') continue;
+      if (!se.shiftCode && !se.arrivalTime) continue;
+      var tid = se.transportId ? String(se.transportId).trim() : '';
+      if (!tid) {
+        tid = resolveTransportIdForName(name, transportIDs || {}, resolveDriverKeyFn);
+      }
+      var driverName = resolveDriverKeyFn ? resolveDriverKeyFn(name) : name;
+      workers.push({
+        name: name,
+        rawName: name,
+        driverName: driverName,
+        transportId: tid,
+        shiftCode: se.shiftCode || '',
+        arrivalTime: se.arrivalTime || '',
+        assignRole: se.assignRole || 'regular',
+        vehicleHint: se.vehicleHint || '',
+        workerSource: 'amazon_schedule',
+      });
+    }
+    return workers;
+  }
+
+  /**
+   * Auto Assign 用: Amazon Schedule から対象日稼働者を抽出（TransportID必須）
+   * shift file / DAシフト表は使用しない
+   */
+  function buildAssignWorkersFromAmazonSchedule(options) {
+    options = options || {};
+    var scheduleEntries = options.scheduleEntries || [];
+    var scheduleMeta = options.scheduleMeta || null;
+    var assignTargetDate = normalizeAssignTargetDate(options.assignTargetDate || '');
+    var transportIDs = options.transportIDs || {};
+    var resolveDriverKeyFn = options.resolveDriverKeyFn || null;
+
+    var stats = {
+      scheduleTotal: scheduleEntries.length,
+      assignTargetDate: assignTargetDate,
+      scheduleDate: scheduleMeta && scheduleMeta.targetDate ? normalizeAssignTargetDate(scheduleMeta.targetDate) : '',
+      dateMismatch: false,
+      excludedReserve: 0,
+      excludedNoShift: 0,
+      excludedNoTransportId: 0,
+      candidateCount: 0,
+      error: null,
+    };
+
+    if (!scheduleEntries.length) {
+      stats.error = 'not_loaded';
+      return {
+        workers: [],
+        stats: stats,
+        linkStats: { mappedCount: 0, unmappedNames: [] },
+      };
+    }
+
+    if (stats.scheduleDate && assignTargetDate && stats.scheduleDate !== assignTargetDate) {
+      stats.dateMismatch = true;
+      stats.error = 'date_mismatch';
+      return {
+        workers: [],
+        stats: stats,
+        linkStats: { mappedCount: 0, unmappedNames: [] },
+      };
+    }
+
+    for (var ri = 0; ri < scheduleEntries.length; ri++) {
+      var row = scheduleEntries[ri];
+      if (row.assignRole === 'reserve') stats.excludedReserve++;
+      else if (!row.shiftCode && !row.arrivalTime) stats.excludedNoShift++;
+    }
+
+    var rawWorkers = extractShiftWorkersFromSchedule(
+      scheduleEntries,
+      transportIDs,
+      resolveDriverKeyFn
+    );
+    var enriched = enrichShiftWorkersWithTransportIds(rawWorkers, transportIDs, resolveDriverKeyFn);
+    var filtered = filterShiftWorkers(enriched.workers);
+
+    var candidates = [];
+    var excludedNames = [];
+    for (var wi = 0; wi < filtered.length; wi++) {
+      var w = filtered[wi];
+      if (!w.transportId) {
+        stats.excludedNoTransportId++;
+        excludedNames.push(w.driverName || w.name || '');
+        continue;
+      }
+      candidates.push(w);
+    }
+
+    stats.candidateCount = candidates.length;
+    return {
+      workers: candidates,
+      stats: stats,
+      linkStats: {
+        mappedCount: candidates.length,
+        unmappedNames: excludedNames,
+      },
+    };
+  }
+
   function mergeScheduleIntoShiftWorkers(shiftWorkers, scheduleEntries, transportIDs, resolveDriverKeyFn) {
     shiftWorkers = shiftWorkers || [];
     scheduleEntries = scheduleEntries || [];
@@ -2268,6 +2395,9 @@
     classifyRouteVehicleType: classifyRouteVehicleType,
     filterWorkersByVehicleType: filterWorkersByVehicleType,
     mergeScheduleIntoShiftWorkers: mergeScheduleIntoShiftWorkers,
+    normalizeAssignTargetDate: normalizeAssignTargetDate,
+    extractShiftWorkersFromSchedule: extractShiftWorkersFromSchedule,
+    buildAssignWorkersFromAmazonSchedule: buildAssignWorkersFromAmazonSchedule,
     enrichManifestRoutesWithAssignment: enrichManifestRoutesWithAssignment,
     buildRouteDifficultyStats: buildRouteDifficultyStats,
     compareRouteAssignmentPriority: compareRouteAssignmentPriority,

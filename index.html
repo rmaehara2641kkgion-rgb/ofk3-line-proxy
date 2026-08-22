@@ -812,14 +812,11 @@
           <div id="as-manifest-summary" class="mt-2"></div>
         </section>
 
-        <!-- 4. 今日のシフト -->
+        <!-- 4. 当日稼働者（Amazonスケジュール） -->
         <section class="card p-4 mb-4">
-          <h3 class="text-sm font-bold mb-2">今日のシフト</h3>
-          <div id="as-shift-dropzone" class="text-center py-5 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-amber-400 hover:bg-amber-50/30">
-            <p class="text-xs">📅 シフト表をドロップ / クリック</p>
-            <input type="file" id="as-shift-input" accept=".xlsx,.xls" class="hidden">
-          </div>
-          <div id="as-shift-summary" class="mt-2"></div>
+          <h3 class="text-sm font-bold mb-2">当日稼働者</h3>
+          <p class="text-xs text-ink-lighter mb-2">Amazonスケジュール（点呼管理タブで読込済みのデータを使用。別シフトファイルは不要）</p>
+          <div id="as-shift-summary" class="mt-1"></div>
         </section>
 
         <!-- 5. レスキュー人数 + 6. アサイン提案 -->
@@ -3446,6 +3443,10 @@ var driverDB = {
       if (tab === 'billing') renderBillingTable();
       if (tab === 'map-master') wh60LoadAddrStats();
       if (tab === 'team-quality') renderTeamQualityDashboard();
+      if (tab === 'optimization' && typeof AssignSupport !== 'undefined') {
+        if (AssignSupport.syncShiftFromGlobals) AssignSupport.syncShiftFromGlobals();
+        if (AssignSupport.renderAll) AssignSupport.renderAll();
+      }
     }
 
     // ===== File Upload - Assignment Data =====
@@ -4592,6 +4593,7 @@ var driverDB = {
 
     // ===== Tenko (Roll Call) Management =====
     let tenkoSchedule = []; // { name, arrivalTime, arrivalMinutes, licenseAuth, mentorAuth, shiftCode, temporary }
+    let tenkoScheduleMeta = null; // { targetDate, targetDay, targetMonth, scheduleCount, loadedAt }
 
     // シフトマスタ（シフトコード → 着車時間）
     var SHIFT_MASTER = {
@@ -4782,13 +4784,24 @@ var driverDB = {
       // Sort by arrival time
       tenkoSchedule.sort((a, b) => a.arrivalMinutes - b.arrivalMinutes);
 
-      // メモリ保持のみ（localStorageには保存しない — 容量節約）
       const todayStr = getTodayJst();
+      tenkoScheduleMeta = {
+        targetDate: todayStr,
+        targetDay: todayDay,
+        targetMonth: todayMonth,
+        scheduleCount: tenkoSchedule.length,
+        loadedAt: Date.now(),
+      };
+      window.tenkoScheduleMeta = tenkoScheduleMeta;
       localStorage.setItem('tenkoDate', todayStr);
       // 古いtenkoScheduleがlocalStorageに残っていたら削除
       localStorage.removeItem('tenkoSchedule');
 
       renderTenkoTable();
+      if (typeof window.AssignSupport !== 'undefined') {
+        if (AssignSupport.syncShiftFromGlobals) AssignSupport.syncShiftFromGlobals();
+        if (AssignSupport.renderAll) AssignSupport.renderAll();
+      }
     }
 
     function parseArrivalTime(cellText) {
