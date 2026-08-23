@@ -7,8 +7,9 @@
     "start": "node inject-tenko-audit.js",
     "dev": "node inject-tenko-audit.js",
     "test:assign-support": "node tests/assign-support.test.mjs && node tests/auto-assign-amazon-schedule.test.mjs",
+    "test:transport-audit": "node tests/test-transport-audit.mjs",
     "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-low-only-pipeline.test.mjs",
-    "test:all": "npm run test:assign-support && npm run test:lat"
+    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit"
   },
   "engines": {
     "node": ">=18.0.0"

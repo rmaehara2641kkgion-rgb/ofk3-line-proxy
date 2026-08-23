@@ -1,5 +1,5 @@
 // OFK3 点呼管理 - TransportID照合監査
-// Amazonスケジュールを正として、DAシフト表のTransport ID登録誤りを検知する。
+// Amazonスケジュールを正として、DAシフト表メイン在籍者のTransport ID登録誤りを検知する。
 (function() {
   'use strict';
 
@@ -8,6 +8,7 @@
   var auditAmazonFile = '';
   var auditShiftFile = '';
   var PANEL_ID = 'tenko-transport-audit-panel';
+  var lastAuditStats = null;
 
   function normalizeName(value) {
     var s = value == null ? '' : String(value);
@@ -32,6 +33,17 @@
     return out;
   }
 
+  function namesMatch(nameA, nameB) {
+    var variantsA = nameVariants(nameA);
+    var variantsB = nameVariants(nameB);
+    for (var i = 0; i < variantsA.length; i++) {
+      for (var j = 0; j < variantsB.length; j++) {
+        if (variantsA[i] === variantsB[j]) return true;
+      }
+    }
+    return false;
+  }
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -39,6 +51,10 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function displayShiftName(record) {
+    return record.japaneseName ? record.japaneseName + ' / ' + record.name : record.name;
   }
 
   function readWorkbook(file, done) {
@@ -104,6 +120,7 @@
     var tidCol = findCol(header, ['配達担当者id']);
     var records = [];
     var lookup = {};
+    var personTids = {};
     var conflicts = [];
 
     for (var r = headerIndex + 1; r < bestRows.length; r++) {
@@ -113,20 +130,57 @@
       if (!norm || !tid) continue;
       if (norm === '全記載' || norm === 'スケジュール済み合計') continue;
 
-      var rec = { name: rawName, normalizedName: norm, transportId: tid, sheet: bestSheet };
+      var rec = {
+        name: rawName,
+        normalizedName: norm,
+        transportId: tid,
+        sheet: bestSheet,
+        sourceRow: r + 1
+      };
       records.push(rec);
+
+      var personKey = norm;
       var variants = nameVariants(rawName);
+      for (var vi = 0; vi < variants.length; vi++) {
+        if (!personTids[variants[vi]]) personTids[variants[vi]] = {};
+        personTids[variants[vi]][tid] = true;
+      }
+
       for (var v = 0; v < variants.length; v++) {
         var key = variants[v];
         if (lookup[key] && lookup[key].transportId !== tid) {
-          conflicts.push({ name: rawName, id1: lookup[key].transportId, id2: tid });
+          conflicts.push({
+            name: rawName,
+            normalizedName: norm,
+            id1: lookup[key].transportId,
+            id2: tid,
+            row1: lookup[key].sourceRow,
+            row2: rec.sourceRow
+          });
         } else if (!lookup[key]) {
           lookup[key] = rec;
         }
       }
     }
 
-    return { records: records, lookup: lookup, conflicts: conflicts, sheet: bestSheet };
+    var amazonTidConflicts = [];
+    var seenConflict = {};
+    for (var ci = 0; ci < conflicts.length; ci++) {
+      var c = conflicts[ci];
+      var cKey = c.normalizedName + '|' + c.id1 + '|' + c.id2;
+      if (seenConflict[cKey]) continue;
+      seenConflict[cKey] = true;
+      amazonTidConflicts.push(c);
+    }
+
+    return {
+      records: records,
+      lookup: lookup,
+      conflicts: conflicts,
+      amazonTidConflicts: amazonTidConflicts,
+      personTids: personTids,
+      sheet: bestSheet
+    };
   }
 
   function parseShiftMaster(wb) {
@@ -163,11 +217,231 @@
         company: company,
         normalizedName: normalizeName(romanName),
         transportId: tid,
-        sheet: sheetName
+        sheet: sheetName,
+        sourceRow: i + 1
       });
     }
 
     return { records: records, sheet: sheetName };
+  }
+
+  function buildShiftAuditPopulation(records) {
+    var groups = [];
+
+    for (var i = 0; i < records.length; i++) {
+      var rec = records[i];
+      var groupIndex = -1;
+      for (var g = 0; g < groups.length; g++) {
+        if (namesMatch(rec.name, groups[g].records[0].name)) {
+          groupIndex = g;
+          break;
+        }
+      }
+      if (groupIndex >= 0) {
+        groups[groupIndex].records.push(rec);
+      } else {
+        groups.push({ records: [rec] });
+      }
+    }
+
+    var auditRecords = [];
+    var shiftTidConflicts = [];
+    var exactDuplicateRows = 0;
+
+    for (var gi = 0; gi < groups.length; gi++) {
+      var groupRecords = groups[gi].records;
+      var tidMap = {};
+      for (var j = 0; j < groupRecords.length; j++) {
+        var tid = groupRecords[j].transportId;
+        if (!tidMap[tid]) tidMap[tid] = [];
+        tidMap[tid].push(groupRecords[j]);
+      }
+
+      var tids = Object.keys(tidMap);
+      if (tids.length > 1) {
+        var conflictEntry = {
+          person: groupRecords[0],
+          records: groupRecords.slice(),
+          transportIds: tids.slice(),
+          sourceRows: groupRecords.map(function(x) { return x.sourceRow; })
+        };
+        shiftTidConflicts.push(conflictEntry);
+        auditRecords.push({
+          name: groupRecords[0].name,
+          japaneseName: groupRecords[0].japaneseName,
+          company: groupRecords[0].company,
+          normalizedName: groupRecords[0].normalizedName,
+          transportId: groupRecords[0].transportId,
+          sheet: groupRecords[0].sheet,
+          sourceRow: groupRecords[0].sourceRow,
+          isShiftTidConflict: true,
+          shiftTransportIds: tids.slice(),
+          sourceRows: groupRecords.map(function(x) { return x.sourceRow; }),
+          rawRecords: groupRecords.slice()
+        });
+        continue;
+      }
+
+      var rows = tidMap[tids[0]];
+      var merged = rows.length - 1;
+      exactDuplicateRows += merged;
+      auditRecords.push({
+        name: rows[0].name,
+        japaneseName: rows[0].japaneseName,
+        company: rows[0].company,
+        normalizedName: rows[0].normalizedName,
+        transportId: rows[0].transportId,
+        sheet: rows[0].sheet,
+        sourceRow: rows[0].sourceRow,
+        isShiftTidConflict: false,
+        sourceRows: rows.map(function(x) { return x.sourceRow; }),
+        rawRecords: rows.slice(),
+        exactDuplicateMerged: merged
+      });
+    }
+
+    return {
+      rawShiftRows: records.length,
+      auditRecords: auditRecords,
+      shiftTidConflicts: shiftTidConflicts,
+      exactDuplicateRows: exactDuplicateRows,
+      uniqueShiftPeople: auditRecords.length,
+      shiftTidConflictPeople: shiftTidConflicts.length
+    };
+  }
+
+  function findAmazonRecord(shiftRecord, amazonData) {
+    var variants = nameVariants(shiftRecord.name);
+    var found = null;
+    for (var v = 0; v < variants.length; v++) {
+      if (amazonData.lookup[variants[v]]) {
+        if (found && found.transportId !== amazonData.lookup[variants[v]].transportId) {
+          return {
+            conflict: true,
+            name: found.name,
+            normalizedName: found.normalizedName,
+            transportIds: [found.transportId, amazonData.lookup[variants[v]].transportId],
+            records: [found, amazonData.lookup[variants[v]]]
+          };
+        }
+        found = amazonData.lookup[variants[v]];
+      }
+    }
+    return found;
+  }
+
+  function getAmazonTidsForPerson(shiftRecord, amazonData) {
+    var tids = {};
+    var variants = nameVariants(shiftRecord.name);
+    for (var v = 0; v < variants.length; v++) {
+      var bucket = amazonData.personTids[variants[v]];
+      if (bucket) {
+        var keys = Object.keys(bucket);
+        for (var k = 0; k < keys.length; k++) tids[keys[k]] = true;
+      }
+    }
+    return Object.keys(tids);
+  }
+
+  function runTransportAudit(amazonData, shiftData) {
+    var population = buildShiftAuditPopulation(shiftData.records);
+    var matched = [];
+    var mismatched = [];
+    var amazonUnconfirmed = [];
+    var shiftTidConflictResults = [];
+    var usedAmazon = {};
+    var amazonMatched = 0;
+
+    for (var i = 0; i < population.auditRecords.length; i++) {
+      var shiftRecord = population.auditRecords[i];
+
+      if (shiftRecord.isShiftTidConflict) {
+        var amazonForConflict = findAmazonRecord(shiftRecord, amazonData);
+        var amazonTidsForPerson = getAmazonTidsForPerson(shiftRecord, amazonData);
+        var amazonConflictForPerson = amazonTidsForPerson.length > 1;
+        shiftTidConflictResults.push({
+          shift: shiftRecord,
+          amazon: amazonForConflict && !amazonForConflict.conflict ? amazonForConflict : null,
+          shiftTransportIds: shiftRecord.shiftTransportIds,
+          amazonTransportIds: amazonTidsForPerson,
+          amazonTidConflict: amazonConflictForPerson
+        });
+        if (amazonForConflict && !amazonForConflict.conflict) {
+          usedAmazon[normalizeName(amazonForConflict.name)] = true;
+          amazonMatched++;
+        } else if (amazonTidsForPerson.length > 0) {
+          amazonMatched++;
+          var lookupRec = findAmazonRecord({ name: shiftRecord.name }, amazonData);
+          if (lookupRec && !lookupRec.conflict) usedAmazon[normalizeName(lookupRec.name)] = true;
+        }
+        continue;
+      }
+
+      var amazonRecord = findAmazonRecord(shiftRecord, amazonData);
+      var personAmazonTids = getAmazonTidsForPerson(shiftRecord, amazonData);
+
+      if (!amazonRecord) {
+        amazonUnconfirmed.push({ shift: shiftRecord });
+        continue;
+      }
+
+      if (amazonRecord.conflict || personAmazonTids.length > 1) {
+        mismatched.push({
+          shift: shiftRecord,
+          amazon: amazonRecord.records ? amazonRecord.records[0] : amazonRecord,
+          amazonTidConflict: true,
+          amazonTransportIds: personAmazonTids.length > 1 ? personAmazonTids : amazonRecord.transportIds
+        });
+        usedAmazon[normalizeName(amazonRecord.normalizedName || (amazonRecord.name || shiftRecord.name))] = true;
+        amazonMatched++;
+        continue;
+      }
+
+      usedAmazon[normalizeName(amazonRecord.name)] = true;
+      amazonMatched++;
+      if (shiftRecord.transportId === amazonRecord.transportId) {
+        matched.push({ shift: shiftRecord, amazon: amazonRecord });
+      } else {
+        mismatched.push({ shift: shiftRecord, amazon: amazonRecord });
+      }
+    }
+
+    var amazonOnlyIgnored = 0;
+    var countedAmazon = {};
+    for (var a = 0; a < amazonData.records.length; a++) {
+      var amz = amazonData.records[a];
+      var amzKey = normalizeName(amz.name);
+      if (usedAmazon[amzKey] || countedAmazon[amzKey]) continue;
+      countedAmazon[amzKey] = true;
+      amazonOnlyIgnored++;
+    }
+
+    var stats = {
+      rawShiftRows: population.rawShiftRows,
+      uniqueShiftPeople: population.uniqueShiftPeople,
+      exactDuplicateRows: population.exactDuplicateRows,
+      shiftTidConflictPeople: population.shiftTidConflictPeople,
+      amazonRecordCount: amazonData.records.length,
+      amazonMatched: amazonMatched,
+      matched: matched.length,
+      mismatched: mismatched.length,
+      shiftOnly: amazonUnconfirmed.length,
+      amazonOnlyIgnored: amazonOnlyIgnored,
+      amazonTidConflicts: (amazonData.amazonTidConflicts || []).length
+    };
+
+    stats.auditEquationOk =
+      stats.matched + stats.mismatched + stats.shiftOnly + stats.shiftTidConflictPeople === stats.uniqueShiftPeople;
+
+    return {
+      matched: matched,
+      mismatched: mismatched,
+      amazonUnconfirmed: amazonUnconfirmed,
+      shiftTidConflicts: shiftTidConflictResults,
+      amazonTidConflicts: amazonData.amazonTidConflicts || [],
+      stats: stats,
+      population: population
+    };
   }
 
   function getPanel() {
@@ -207,112 +481,138 @@
       '<div class="text-xs text-ink-light mt-1">' + escapeHtml(auditShiftFile || '') + ' ' + s + '</div>';
   }
 
+  function renderSummaryLine(stats) {
+    var line = '一致 ' + stats.matched + '名 / 不一致 ' + stats.mismatched + '名 / Amazon側未確認 ' + stats.shiftOnly + '名';
+    if (stats.shiftTidConflictPeople > 0) {
+      line += ' / シフト内TID重複 ' + stats.shiftTidConflictPeople + '名';
+    }
+    if (stats.amazonTidConflicts > 0) {
+      line += ' / Amazon側TID競合 ' + stats.amazonTidConflicts + '名';
+    }
+    return line;
+  }
+
   function compareNow() {
     if (!auditAmazon || !auditShift) {
       renderWaiting();
       return;
     }
 
-    var matched = [];
-    var mismatched = [];
-    var shiftOnly = [];
-    var usedAmazon = {};
-
-    for (var i = 0; i < auditShift.records.length; i++) {
-      var sr = auditShift.records[i];
-      var variants = nameVariants(sr.name);
-      var ar = null;
-      var matchedKey = '';
-      for (var v = 0; v < variants.length; v++) {
-        if (auditAmazon.lookup[variants[v]]) {
-          ar = auditAmazon.lookup[variants[v]];
-          matchedKey = normalizeName(ar.name);
-          break;
-        }
-      }
-
-      if (!ar) {
-        shiftOnly.push(sr);
-        continue;
-      }
-
-      usedAmazon[matchedKey] = true;
-      if (sr.transportId === ar.transportId) {
-        matched.push({ shift: sr, amazon: ar });
-      } else {
-        mismatched.push({ shift: sr, amazon: ar });
-      }
-    }
-
-    var amazonOnly = [];
-    for (var a = 0; a < auditAmazon.records.length; a++) {
-      var amz = auditAmazon.records[a];
-      if (!usedAmazon[normalizeName(amz.name)]) amazonOnly.push(amz);
-    }
-
-    renderResult(matched, mismatched, amazonOnly, shiftOnly, auditAmazon.conflicts || []);
+    var result = runTransportAudit(auditAmazon, auditShift);
+    lastAuditStats = result.stats;
+    window.__tenkoTransportAuditStats = result.stats;
+    renderResult(result);
   }
 
-  function renderResult(matched, mismatched, amazonOnly, shiftOnly, conflicts) {
+  function renderResult(result) {
     var panel = getPanel();
-    var isOk = mismatched.length === 0 && conflicts.length === 0;
-    panel.className = isOk
-      ? 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50'
-      : 'card p-4 mb-4 border-2 border-red-500 bg-red-50';
+    var matched = result.matched;
+    var mismatched = result.mismatched;
+    var amazonUnconfirmed = result.amazonUnconfirmed;
+    var shiftTidConflicts = result.shiftTidConflicts;
+    var amazonTidConflicts = result.amazonTidConflicts;
+    var stats = result.stats;
+
+    var hasProblems = mismatched.length > 0 ||
+      shiftTidConflicts.length > 0 ||
+      amazonTidConflicts.length > 0;
+
+    panel.className = hasProblems
+      ? 'card p-4 mb-4 border-2 border-red-500 bg-red-50'
+      : 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50';
 
     var html = '';
-    if (isOk) {
-      html += '<div class="text-base font-bold text-emerald-700">✅ TransportID照合：一致</div>';
-      html += '<div class="text-sm font-bold text-emerald-700 mt-1">一致 ' + matched.length + '名 / 不一致 0名</div>';
-      html += '<div class="text-xs text-emerald-700 mt-1">AmazonスケジュールのTransportIDとDAシフト表の登録内容は一致しています。</div>';
-    } else {
+    if (hasProblems) {
       html += '<div class="text-base font-bold text-red-700">🚨 TransportID照合：不一致あり</div>';
-      html += '<div class="text-sm font-bold text-red-700 mt-1">一致 ' + matched.length + '名 / 不一致 ' + mismatched.length + '名</div>';
-      html += '<div class="text-xs font-bold text-red-700 mt-1">Amazonスケジュールを正として確認してください。シフト側の誤登録は点呼・コンプライアンス判定へ影響する可能性があります。</div>';
+      html += '<div class="text-sm font-bold text-red-700 mt-1">' + escapeHtml(renderSummaryLine(stats)) + '</div>';
+      html += '<div class="text-xs font-bold text-red-700 mt-1">Amazonスケジュールを正として確認してください。シフト側のTransportID誤登録は、点呼対象者の誤認識やコンプライアンス判定へ影響する可能性があります。</div>';
+    } else {
+      html += '<div class="text-base font-bold text-emerald-700">✅ TransportID照合：一致</div>';
+      html += '<div class="text-sm font-bold text-emerald-700 mt-1">' + escapeHtml(renderSummaryLine(stats)) + '</div>';
+      html += '<div class="text-xs text-emerald-700 mt-1">Amazonスケジュールで確認できたシフト登録者のTransportIDはすべて一致しています。</div>';
+    }
+
+    if (stats.exactDuplicateRows > 0) {
+      html += '<div class="text-xs text-ink-light mt-1">完全重複統合：' + stats.exactDuplicateRows + '行（raw ' + stats.rawShiftRows + '行 → ユニーク ' + stats.uniqueShiftPeople + '名）</div>';
+    }
+
+    if (shiftTidConflicts.length > 0) {
+      html += '<div class="mt-3 space-y-2">';
+      for (var sc = 0; sc < shiftTidConflicts.length; sc++) {
+        var conflict = shiftTidConflicts[sc];
+        var shiftRec = conflict.shift;
+        html += '<div class="rounded-lg border border-red-400 bg-white p-3">' +
+          '<div class="font-bold text-red-700">🚨 シフト表内TransportID重複</div>' +
+          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(shiftRec)) + '</div>' +
+          '<div class="text-xs text-red-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(conflict.shiftTransportIds.join(' / ')) + '</span></div>';
+        if (conflict.amazon) {
+          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazon.transportId) + '</span></div>';
+        } else if (conflict.amazonTransportIds && conflict.amazonTransportIds.length > 0) {
+          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazonTransportIds.join(' / ')) + '</span></div>';
+        }
+        html += '<div class="text-xs text-red-600 mt-1">同一人物に複数TransportIDが登録されています。</div>' +
+          '</div>';
+      }
+      html += '</div>';
     }
 
     if (mismatched.length > 0) {
       html += '<div class="mt-3 space-y-2">';
       for (var i = 0; i < mismatched.length; i++) {
         var m = mismatched[i];
-        var displayName = m.shift.japaneseName ? m.shift.japaneseName + ' / ' + m.shift.name : m.shift.name;
         html += '<div class="rounded-lg border border-red-300 bg-white p-3">' +
-          '<div class="font-bold text-red-700">❌ ' + escapeHtml(displayName) + '</div>' +
+          '<div class="font-bold text-red-700">🚨 TransportID不一致</div>' +
+          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(m.shift)) + '</div>' +
           '<div class="text-xs text-red-700 mt-1">Amazon正：<span class="font-mono font-bold">' + escapeHtml(m.amazon.transportId) + '</span></div>' +
-          '<div class="text-xs text-red-700">シフト登録：<span class="font-mono font-bold">' + escapeHtml(m.shift.transportId) + '</span></div>' +
-          (m.shift.company ? '<div class="text-xs text-red-600 mt-1">所属：' + escapeHtml(m.shift.company) + '</div>' : '') +
+          '<div class="text-xs text-red-700">シフト登録：<span class="font-mono font-bold">' + escapeHtml(m.shift.transportId) + '</span></div>';
+        if (m.amazonTidConflict && m.amazonTransportIds) {
+          html += '<div class="text-xs text-red-700">Amazon側TID競合：<span class="font-mono font-bold">' + escapeHtml(m.amazonTransportIds.join(' / ')) + '</span></div>';
+        }
+        if (m.shift.company) {
+          html += '<div class="text-xs text-red-600 mt-1">所属：' + escapeHtml(m.shift.company) + '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (amazonUnconfirmed.length > 0) {
+      html += '<div class="mt-3 space-y-2">';
+      for (var u = 0; u < amazonUnconfirmed.length; u++) {
+        var unconfirmed = amazonUnconfirmed[u].shift;
+        html += '<div class="rounded-lg border border-amber-300 bg-amber-50 p-3">' +
+          '<div class="font-bold text-amber-800">⚠ Amazon側未確認</div>' +
+          '<div class="text-xs text-amber-800 mt-1">' + escapeHtml(displayShiftName(unconfirmed)) + '</div>' +
+          '<div class="text-xs text-amber-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(unconfirmed.transportId) + '</span></div>' +
+          (unconfirmed.company ? '<div class="text-xs text-amber-700 mt-1">所属：' + escapeHtml(unconfirmed.company) + '</div>' : '') +
           '</div>';
       }
       html += '</div>';
     }
 
-    if (conflicts.length > 0) {
-      html += '<div class="mt-3 text-xs font-bold text-red-700">⚠ Amazonスケジュール内で同一名に複数TransportIDが存在します：' + conflicts.length + '件</div>';
+    if (amazonTidConflicts.length > 0) {
+      html += '<div class="mt-3 space-y-2">';
+      html += '<div class="text-xs font-bold text-red-700">⚠ Amazon側TransportID競合：' + amazonTidConflicts.length + '件</div>';
+      for (var ac = 0; ac < Math.min(amazonTidConflicts.length, 20); ac++) {
+        var amzC = amazonTidConflicts[ac];
+        html += '<div class="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">' +
+          escapeHtml(amzC.name) + '：' + escapeHtml(amzC.id1) + ' / ' + escapeHtml(amzC.id2) +
+          '</div>';
+      }
+      html += '</div>';
     }
 
-    if (amazonOnly.length > 0 || shiftOnly.length > 0) {
-      html += '<details class="mt-3"><summary class="text-xs font-bold text-amber-700 cursor-pointer">⚠ 未照合：Amazonのみ ' + amazonOnly.length + '名 / シフトのみ ' + shiftOnly.length + '名</summary>';
-      html += '<div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">';
-      if (amazonOnly.length > 0) {
-        html += '<div class="rounded border border-amber-200 bg-amber-50 p-2"><div class="text-xs font-bold text-amber-800">Amazon側のみ</div><div class="text-xs text-amber-700 mt-1">';
-        for (var a = 0; a < Math.min(amazonOnly.length, 30); a++) html += escapeHtml(amazonOnly[a].name) + '<br>';
-        if (amazonOnly.length > 30) html += '...他 ' + (amazonOnly.length - 30) + '名';
-        html += '</div></div>';
+    if (matched.length > 0) {
+      html += '<details class="mt-3"><summary class="text-xs font-bold text-emerald-700 cursor-pointer">✅ TransportID一致（' + matched.length + '名）</summary>';
+      html += '<div class="mt-2 space-y-1">';
+      for (var m2 = 0; m2 < Math.min(matched.length, 50); m2++) {
+        html += '<div class="text-xs text-emerald-700">✅ ' + escapeHtml(displayShiftName(matched[m2].shift)) + ' / ' + escapeHtml(matched[m2].shift.transportId) + '</div>';
       }
-      if (shiftOnly.length > 0) {
-        html += '<div class="rounded border border-amber-200 bg-amber-50 p-2"><div class="text-xs font-bold text-amber-800">シフト側のみ</div><div class="text-xs text-amber-700 mt-1">';
-        for (var s = 0; s < Math.min(shiftOnly.length, 30); s++) {
-          html += escapeHtml(shiftOnly[s].japaneseName || shiftOnly[s].name) + ' / ' + escapeHtml(shiftOnly[s].name) + '<br>';
-        }
-        if (shiftOnly.length > 30) html += '...他 ' + (shiftOnly.length - 30) + '名';
-        html += '</div></div>';
-      }
+      if (matched.length > 50) html += '<div class="text-xs text-emerald-700">...他 ' + (matched.length - 50) + '名</div>';
       html += '</div></details>';
     }
 
     panel.innerHTML = html;
-
-    // 点呼照合タブにもミラー表示
     mirrorToTenkoMatch(panel);
   }
 
@@ -361,7 +661,6 @@
     });
   }
 
-  // capture phaseでinline onchangeより先にFile参照を確保する。
   document.addEventListener('change', function(e) {
     var target = e.target;
     if (!target || !target.files || !target.files.length) return;
@@ -382,4 +681,16 @@
   } else {
     initPanel();
   }
+
+  window.__tenkoTransportAudit = {
+    normalizeName: normalizeName,
+    normalizeTid: normalizeTid,
+    nameVariants: nameVariants,
+    namesMatch: namesMatch,
+    parseAmazonSchedule: parseAmazonSchedule,
+    parseShiftMaster: parseShiftMaster,
+    buildShiftAuditPopulation: buildShiftAuditPopulation,
+    runTransportAudit: runTransportAudit,
+    getLastAuditStats: function() { return lastAuditStats; }
+  };
 })();
