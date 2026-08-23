@@ -1,0 +1,10 @@
+# Blueprint for a NEW Render Web Service only.
+# Do not reuse the existing production web service.
+# Dashboard: Root Directory = general-delivery-demo
+services:
+  - type: web
+    name: general-delivery-demo
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js

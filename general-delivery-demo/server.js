@@ -21,20 +21,23 @@ app.get('/', function (req, res) {
   res.sendFile(path.join(DEMO_DIR, 'index.html'));
 });
 
+app.get('/health', function (req, res) {
+  res.status(200).json({ ok: true, service: 'general-delivery-demo' });
+});
+
+app.get('/deploy-info', function (req, res) {
+  res.status(200).json({
+    name: 'general-delivery-demo',
+    demo: true,
+    lineSend: false
+  });
+});
+
 app.post('/api/line/send', function (req, res) {
-  var enabled = process.env.LINE_SEND_ENABLED === 'true';
-  var hasToken = !!(process.env.PRIVATE_LINE_TOKEN || '').trim();
-  if (!enabled || !hasToken) {
-    res.status(403).json({
-      ok: false,
-      previewOnly: true,
-      message: 'Demoでは実際には送信されません'
-    });
-    return;
-  }
-  res.status(501).json({
+  res.status(403).json({
     ok: false,
-    message: 'Private send is reserved for a configured environment'
+    demo: true,
+    message: 'Demoでは実際には送信されません'
   });
 });
 

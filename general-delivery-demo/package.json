@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node tests/assign.test.mjs && node tests/security.test.mjs"
+    "test": "node tests/assign.test.mjs && node tests/security.test.mjs && node tests/smoke.test.mjs"
   },
   "engines": {
     "node": ">=18.0.0"

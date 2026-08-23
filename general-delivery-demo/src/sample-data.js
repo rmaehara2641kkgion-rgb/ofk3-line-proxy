@@ -1,6 +1,6 @@
 /**
  * Fully fictional showcase data.
- * No real drivers, customer addresses, phone numbers, or carrier IDs.
+ * Fully fictional showcase records. No real people or delivery destinations.
  */
 (function (root) {
   'use strict';
