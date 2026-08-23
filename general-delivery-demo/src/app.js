@@ -15,9 +15,12 @@
     mapFilter: 'all',
     mapDriverId: 'all',
     selectedShareDriverId: '',
+    selectedProfileId: '',
+    profileQuery: '',
     story: {
       sample: false,
       drivers: false,
+      profile: false,
       schedule: false,
       assign: false,
       map: false,
@@ -87,9 +90,12 @@
     state.mapFilter = 'all';
     state.mapDriverId = 'all';
     state.selectedShareDriverId = '';
+    state.selectedProfileId = '';
+    state.profileQuery = '';
     state.story = {
       sample: false,
       drivers: false,
+      profile: false,
       schedule: false,
       assign: false,
       map: false,
@@ -142,14 +148,19 @@
     for (var n = 0; n < navs.length; n++) navs[n].classList.toggle('active', navs[n].getAttribute('data-page') === name);
     var page = $('page-' + name);
     if (page) page.classList.add('active');
-    if (name === 'drivers' || name === 'schedule' || name === 'assign' || name === 'map' || name === 'line') {
+    if (name === 'drivers' || name === 'profile' || name === 'schedule' || name === 'assign' || name === 'map' || name === 'line') {
       ensureLoaded();
     }
     if (name === 'drivers') state.story.drivers = true;
+    if (name === 'profile') {
+      state.story.profile = true;
+      renderProfile();
+    }
     if (name === 'schedule') state.story.schedule = true;
     if (name === 'map') {
       state.story.map = true;
-      setTimeout(renderMap, 80);
+      renderMap();
+      setTimeout(function () { if (state.map) state.map.invalidateSize(); }, 80);
     }
     if (name === 'line') state.story.line = true;
     renderStory();
@@ -172,15 +183,51 @@
     $('story').innerHTML = html;
   }
 
+  function currentOps() {
+    if (!state.loaded || typeof DeliveryOps === 'undefined') return null;
+    return DeliveryOps.estimate({
+      drivers: state.drivers,
+      routes: state.routes,
+      schedule: state.schedule,
+      experiences: state.experiences
+    });
+  }
+
+  function driverLink(id, name) {
+    if (!id) return escapeHtml(name || '未アサイン');
+    return '<button type="button" class="text-link" onclick="DemoApp.openProfile(\'' + escapeHtml(id) + '\')">' + escapeHtml(name) + '</button>';
+  }
+
+  function lineBadge(driver, clickable) {
+    if (!driver) return '<span class="line-status off"><span class="dot"></span>未連携</span>';
+    var on = !!driver.lineConnected;
+    var label = on ? 'LINE連携済み' : '未連携';
+    var cls = 'line-status ' + (on ? 'on' : 'off');
+    if (clickable && on) {
+      return '<button type="button" class="line-btn" onclick="DemoApp.openDriverLine(\'' + escapeHtml(driver.id) + '\')"><span class="' + cls + '"><span class="dot"></span>' + label + '</span></button>';
+    }
+    return '<span class="' + cls + '"><span class="dot"></span>' + label + '</span>';
+  }
+
   function renderDashboard() {
+    var board = $('ops-board');
     var s = state.summary;
     if (!s) {
+      if (board) board.hidden = true;
       $('stats').innerHTML = '';
+      $('ops-hero').innerHTML = '';
+      $('ops-route-body').innerHTML = '';
       $('dash-empty').style.display = 'block';
       return;
     }
     $('dash-empty').style.display = 'none';
+    if (board) board.hidden = false;
+    var ops = currentOps();
     var unassigned = state.assignResult ? state.assignResult.unassignedCount : s.unassignedRoutes;
+    $('ops-hero').innerHTML =
+      '<div class="ops-feature"><span>予測配送終了</span><b>' + escapeHtml(ops ? ops.estimatedFinish : '—') + '</b><em>デモ時刻 ' + escapeHtml(ops ? ops.now : '') + ' 時点</em></div>' +
+      '<div class="ops-feature alt"><span>配送進捗</span><b>' + (ops ? ops.progress : 0) + '%</b><em>参考予測</em></div>' +
+      '<div class="ops-feature paper"><span>配送完了</span><b>' + (ops ? ops.completedPackages.toLocaleString() : '0') + ' / ' + s.packages.toLocaleString() + '個</b><em>予定 ' + s.packages.toLocaleString() + '個</em></div>';
     var cards = [
       ['稼働ドライバー', s.workingDrivers + '名'],
       ['配送ルート', s.routes + 'ルート'],
@@ -194,6 +241,30 @@
       html += '<div class="stat"><span>' + cards[i][0] + '</span><b>' + cards[i][1] + '</b></div>';
     }
     $('stats').innerHTML = html;
+    renderOpsRoutes(ops);
+  }
+
+  function renderOpsRoutes(ops) {
+    var body = $('ops-route-body');
+    if (!body) return;
+    if (!ops) {
+      body.innerHTML = '';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < ops.routes.length; i++) {
+      var row = ops.routes[i];
+      var driver = driverById(row.driverId);
+      html += '<tr>';
+      html += '<td><button type="button" class="text-link" onclick="DemoApp.openDriverMap(\'' + escapeHtml(row.driverId || '') + '\')">' + escapeHtml(row.routeId) + '</button><div class="sub" style="margin:4px 0 0">' + escapeHtml(row.routeName) + '</div></td>';
+      html += '<td>' + driverLink(row.driverId, row.driverName) + '</td>';
+      html += '<td><span class="bar"><span class="bar-track"><i style="width:' + row.progress + '%"></i></span>' + row.progress + '%</span></td>';
+      html += '<td>' + row.remaining + '個</td>';
+      html += '<td>' + escapeHtml(row.eta) + '</td>';
+      html += '<td>' + (driver ? lineBadge(driver, true) : '—') + '</td>';
+      html += '</tr>';
+    }
+    body.innerHTML = html;
   }
 
   function areaText(driver) {
@@ -205,16 +276,123 @@
     for (var i = 0; i < state.drivers.length; i++) {
       var d = state.drivers[i];
       html += '<tr>';
-      html += '<td>' + escapeHtml(d.name) + '</td>';
+      html += '<td>' + driverLink(d.id, d.name) + '</td>';
       html += '<td>' + escapeHtml(d.id) + '</td>';
       html += '<td>' + escapeHtml(d.department) + '</td>';
       html += '<td><span class="badge ' + (d.vehicle === 'Bike' ? 'badge-bike' : 'badge-van') + '">' + escapeHtml(d.vehicle) + '</span></td>';
       html += '<td>' + Number(d.capability).toFixed(1) + '個/h</td>';
       html += '<td><span class="badge ' + (d.status === '稼働' ? 'badge-ok' : 'badge-off') + '">' + escapeHtml(d.status) + '</span></td>';
+      html += '<td>' + lineBadge(d, true) + '</td>';
       html += '<td>' + escapeHtml(areaText(d)) + '</td>';
       html += '</tr>';
     }
     $('driver-body').innerHTML = html;
+  }
+
+  function profileMatches(driver, query) {
+    var q = String(query || '').replace(/\s+/g, '').toLowerCase();
+    if (!q) return true;
+    var exp = (driver.areaExperience || state.experiences.filter(function (row) {
+      return row.driverId === driver.id;
+    })).map(function (row) { return row.area; }).join('');
+    var hay = [driver.name, driver.id, driver.department, areaText(driver), exp].join('').replace(/\s+/g, '').toLowerCase();
+    return hay.indexOf(q) >= 0;
+  }
+
+  function setProfileQuery(value) {
+    state.profileQuery = value;
+    renderProfile();
+  }
+
+  function openProfile(driverId) {
+    if (!driverId) return;
+    ensureLoaded();
+    state.selectedProfileId = driverId;
+    state.story.profile = true;
+    showPage('profile');
+    renderProfile();
+  }
+
+  function openDriverMap(driverId) {
+    ensureLoaded();
+    state.mapDriverId = driverId || 'all';
+    showPage('map');
+  }
+
+  function openDriverLine(driverId) {
+    if (!driverId) return;
+    ensureLoaded();
+    state.selectedShareDriverId = driverId;
+    showPage('line');
+    previewLine(driverId);
+  }
+
+  function renderProfile() {
+    var list = $('profile-list');
+    var detail = $('profile-detail');
+    if (!list || !detail) return;
+    if (!state.loaded) {
+      list.innerHTML = '';
+      detail.innerHTML = '<p class="sub">先にデモを開始してください。</p>';
+      return;
+    }
+    currentOps();
+    var rows = state.drivers.filter(function (d) { return profileMatches(d, state.profileQuery); });
+    if (!state.selectedProfileId && rows[0]) state.selectedProfileId = rows[0].id;
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var d = rows[i];
+      html += '<button type="button" class="' + (d.id === state.selectedProfileId ? 'active' : '') + '" onclick="DemoApp.openProfile(\'' + escapeHtml(d.id) + '\')">';
+      html += '<strong>' + escapeHtml(d.name) + '</strong>';
+      html += '<span>' + escapeHtml(d.id) + ' / ' + escapeHtml(d.department) + '</span></button>';
+    }
+    list.innerHTML = html || '<p class="sub">該当するドライバーがいません。</p>';
+
+    var driver = driverById(state.selectedProfileId);
+    if (!driver) {
+      detail.innerHTML = '<p class="sub">ドライバーを選んでください。</p>';
+      return;
+    }
+    var schedule = null;
+    for (var s = 0; s < state.schedule.length; s++) {
+      if (state.schedule[s].driverId === driver.id) schedule = state.schedule[s];
+    }
+    var experiences = driver.areaExperience || DeliveryOps.experiencesFor(state.experiences, driver.id);
+    var lastDate = driver.lastRunDate || experiences.reduce(function (latest, row) {
+      return !latest || row.lastDate > latest ? row.lastDate : latest;
+    }, '');
+    var areasHtml = '';
+    if (experiences.length) {
+      experiences.forEach(function (row) {
+        areasHtml += '<li>' + escapeHtml(row.area) + '：' + Number(row.days) + '回' + (row.lastDate ? '　最終 ' + escapeHtml(row.lastDate) : '') + '</li>';
+      });
+    } else {
+      areasHtml = '<li>経験データなし</li>';
+    }
+    detail.innerHTML =
+      '<h3>' + escapeHtml(driver.name) + '</h3>' +
+      '<p class="profile-meta">' + escapeHtml(driver.id) + '　／　' + escapeHtml(driver.department) + '　／　' + escapeHtml(driver.vehicle) + '</p>' +
+      lineBadge(driver, true) +
+      '<div class="toolbar" style="margin-top:14px">' +
+        '<button class="btn btn-secondary" onclick="DemoApp.openDriverMap(\'' + escapeHtml(driver.id) + '\')">担当MAPを見る</button>' +
+        '<button class="btn btn-secondary" onclick="DemoApp.openDriverLine(\'' + escapeHtml(driver.id) + '\')">LINE共有を見る</button>' +
+      '</div>' +
+      '<h4>基本情報</h4>' +
+      '<p>本日の勤務状態：' + escapeHtml(driver.status) + (schedule ? '　' + escapeHtml(schedule.start) + '〜' + escapeHtml(schedule.end) : '') + '</p>' +
+      '<h4>配送実績</h4>' +
+      '<div class="profile-kpis">' +
+        '<div><span>本日の配送</span><b>' + Number(driver.packagesToday || 0).toLocaleString() + '個</b></div>' +
+        '<div><span>累計配送</span><b>' + Number(driver.packagesTotal || 0).toLocaleString() + '個</b></div>' +
+        '<div><span>能力</span><b>' + Number(driver.capability).toFixed(1) + '個/h</b></div>' +
+        '<div><span>配完率</span><b>' + Number(driver.completionRate).toFixed(1) + '%</b></div>' +
+        '<div><span>誤配率</span><b>' + Number(driver.misdeliveryRate).toFixed(2) + '%</b></div>' +
+        '<div><span>本日進捗</span><b>' + Number(driver.progress || 0) + '%</b></div>' +
+      '</div>' +
+      '<h4>エリア経験</h4>' +
+      '<p>経験エリア数：' + experiences.length + '　／　主な経験：' + escapeHtml(experiences[0] ? experiences[0].area : '—') + '</p>' +
+      '<ul class="area-list">' + areasHtml + '</ul>' +
+      '<p>最終経験日：' + escapeHtml(lastDate || '—') + '</p>' +
+      '<p class="sub">能力とエリア経験は Auto Assign と同じサンプルデータを参照しています。</p>';
   }
 
   function renderSchedule() {
@@ -222,7 +400,7 @@
     for (var i = 0; i < state.schedule.length; i++) {
       var s = state.schedule[i];
       html += '<tr>';
-      html += '<td>' + escapeHtml(s.name) + '</td>';
+      html += '<td>' + driverLink(s.driverId, s.name) + '</td>';
       html += '<td>' + escapeHtml(s.start) + '〜' + escapeHtml(s.end) + '</td>';
       html += '<td><span class="badge ' + (s.vehicle === 'Bike' ? 'badge-bike' : 'badge-van') + '">' + escapeHtml(s.vehicle) + '</span></td>';
       html += '<td><span class="badge ' + (s.status === '稼働' ? 'badge-ok' : 'badge-off') + '">' + escapeHtml(s.status) + '</span></td>';
@@ -248,6 +426,7 @@
     state.story.assign = true;
     renderAssign();
     renderDashboard();
+    renderProfile();
     renderLine();
     renderStory();
     toast('おすすめアサインを作成しました');
@@ -284,7 +463,7 @@
       html += '<h3>' + escapeHtml(row.routeId) + '　' + escapeHtml(row.routeName) + '</h3>';
       html += '<p class="sub" style="margin:0 0 8px">' + escapeHtml(row.area) + ' / ' + escapeHtml(row.vehicle) + ' / ' + row.packages + '個</p>';
       if (rec) {
-        html += '<p><strong>おすすめ：</strong>' + escapeHtml(rec.driverName) + '</p>';
+        html += '<p><strong>おすすめ：</strong>' + driverLink(rec.driverId, rec.driverName) + '</p>';
         html += '<p>信頼度：<span class="badge ' + confClass(rec.confidence) + '">' + escapeHtml(rec.confidence) + '</span></p>';
         html += '<ul class="reason-list">';
         rec.reasons.forEach(function (reason) {
@@ -431,13 +610,17 @@
       .filter(function (d) { return d.status === '稼働' && windowsForDriver(d.id).length > 0; })
       .sort(function (a, b) { return windowsForDriver(b.id).length - windowsForDriver(a.id).length; })
       .map(function (d) { return d.id; });
+    if (state.selectedShareDriverId && ids.indexOf(state.selectedShareDriverId) < 0) {
+      ids.unshift(state.selectedShareDriverId);
+    }
     if (!state.selectedShareDriverId) state.selectedShareDriverId = ids[0] || '';
     var html = '';
     ids.forEach(function (id) {
       var d = driverById(id);
+      if (!d) return;
       var tw = windowsForDriver(id);
-      html += '<article class="share-card card">';
-      html += '<h3>' + escapeHtml(d.name) + '</h3>';
+      html += '<article class="share-card card' + (id === state.selectedShareDriverId ? ' active-share' : '') + '">';
+      html += '<h3>' + driverLink(d.id, d.name) + '</h3>';
       html += '<p>時間指定：' + tw.length + '件</p>';
       html += '<div class="toolbar">';
       html += '<button class="btn btn-ghost" onclick="DemoApp.go(\'map\'); DemoApp.setMapDriver(\'' + id + '\')">MAP表示</button>';
@@ -458,6 +641,7 @@
   function renderAll() {
     renderDashboard();
     renderDrivers();
+    renderProfile();
     renderSchedule();
     renderAssign();
     renderLine();
@@ -478,7 +662,18 @@
     readFile(file, function (text) {
       if (kind === 'drivers') {
         var drivers = DeliveryCsv.parseDrivers(text);
-        if (drivers.length) state.drivers = drivers;
+        if (drivers.length) {
+          state.drivers = drivers.map(function (d) {
+            return Object.assign({
+              abilityPerHour: d.capability,
+              packagesTotal: d.packagesTotal || 0,
+              completionRate: d.completionRate || 98.5,
+              misdeliveryRate: d.misdeliveryRate || 0.10,
+              lineConnected: d.lineConnected !== false,
+              areaExperience: []
+            }, d);
+          });
+        }
       } else if (kind === 'schedule') {
         var schedule = DeliveryCsv.parseSchedule(text);
         if (schedule.length) state.schedule = schedule;
@@ -510,6 +705,10 @@
     setMapDriver: setMapDriver,
     openPin: openPin,
     previewLine: previewLine,
+    openProfile: openProfile,
+    openDriverMap: openDriverMap,
+    openDriverLine: openDriverLine,
+    setProfileQuery: setProfileQuery,
     handleUpload: handleUpload
   };
 

@@ -180,6 +180,142 @@ a { color: var(--teal); }
 .stat b { display: block; font-size: 28px; line-height: 1.1; }
 .stat span { color: var(--muted); font-size: 12px; }
 
+.ops-board { margin: 4px 0 18px; }
+.ops-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ops-kicker {
+  margin: 0 0 4px;
+  color: var(--teal);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.ops-head h3 { margin: 0; font-size: 22px; }
+.ops-hero {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1.2fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ops-feature {
+  background: var(--navy);
+  color: #f7f3ec;
+  border-radius: 18px;
+  padding: 18px 20px;
+  min-height: 118px;
+}
+.ops-feature.alt { background: var(--navy-soft); }
+.ops-feature.paper {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.ops-feature span { display: block; font-size: 12px; opacity: 0.78; }
+.ops-feature b { display: block; margin-top: 8px; font-size: 36px; line-height: 1; }
+.ops-feature em { display: block; margin-top: 8px; font-style: normal; font-size: 13px; opacity: 0.8; }
+.ops-note { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+.ops-table-title { margin: 0; padding: 16px 16px 0; font-size: 16px; }
+.bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 110px;
+}
+.bar i {
+  display: block;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--teal);
+}
+.bar-track {
+  width: 72px;
+  height: 8px;
+  border-radius: 999px;
+  background: #efe8dc;
+  overflow: hidden;
+}
+.text-link, .line-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--teal);
+  font-weight: 700;
+  text-align: left;
+}
+.line-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.line-status.on { background: #e5f6ec; color: var(--ok); }
+.line-status.off { background: #f3eee6; color: var(--muted); }
+.line-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+}
+.profile-search-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+#profile-search {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.profile-list { margin-top: 12px; display: grid; gap: 6px; }
+.profile-list button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px;
+}
+.profile-list button.active { border-color: var(--teal); background: var(--teal-soft); }
+.profile-list button strong { display: block; }
+.profile-list button span { color: var(--muted); font-size: 12px; }
+.profile-detail { padding: 20px; }
+.profile-detail h3 { margin: 0 0 6px; font-size: 24px; }
+.profile-detail h4 { margin: 18px 0 8px; font-size: 14px; }
+.assign-card .text-link, .share-card .text-link { font-size: 16px; }
+.active-share { border-color: var(--teal); }
+.profile-meta { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+.profile-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.profile-kpis div {
+  background: #f7f3ec;
+  border-radius: 14px;
+  padding: 12px;
+}
+.profile-kpis span { display: block; color: var(--muted); font-size: 12px; }
+.profile-kpis b { font-size: 22px; }
+.area-list { margin: 0; padding-left: 18px; }
+.area-list li { margin: 0 0 6px; }
+
 .story {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -323,7 +459,8 @@ th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: 0.0
 
 @media (max-width: 980px) {
   .stats, .story { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .assign-grid, .upload-help, .map-layout { grid-template-columns: 1fr; }
+  .assign-grid, .upload-help, .map-layout, .ops-hero, .profile-layout, .profile-kpis { grid-template-columns: 1fr; }
+  .ops-head { flex-direction: column; align-items: flex-start; }
   #map { height: 380px; }
 }
 @media (max-width: 720px) {
@@ -337,4 +474,6 @@ th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: 0.0
   #map { height: 320px; }
   .pin-list { max-height: 220px; }
   .assign-card, .share-card, .panel { padding: 12px; }
+  .ops-feature b { font-size: 30px; }
+  .profile-detail { padding: 16px; }
 }

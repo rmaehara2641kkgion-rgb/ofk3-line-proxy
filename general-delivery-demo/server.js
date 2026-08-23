@@ -42,6 +42,9 @@ app.get('/src/sample-data.js', function (req, res) {
 app.get('/src/assign.js', function (req, res) {
   sendExisting(path.join(SRC_DIR, 'assign.js'), 'application/javascript; charset=utf-8', res);
 });
+app.get('/src/ops.js', function (req, res) {
+  sendExisting(path.join(SRC_DIR, 'ops.js'), 'application/javascript; charset=utf-8', res);
+});
 app.get('/src/csv.js', function (req, res) {
   sendExisting(path.join(SRC_DIR, 'csv.js'), 'application/javascript; charset=utf-8', res);
 });

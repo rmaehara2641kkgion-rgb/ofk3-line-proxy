@@ -26,6 +26,7 @@
       <nav class="nav" aria-label="主要画面">
         <button class="active" data-page="dashboard" onclick="DemoApp.go('dashboard')">ダッシュボード</button>
         <button data-page="drivers" onclick="DemoApp.go('drivers')">ドライバー</button>
+        <button data-page="profile" onclick="DemoApp.go('profile')">プロフィール</button>
         <button data-page="schedule" onclick="DemoApp.go('schedule')">勤務スケジュール</button>
         <button data-page="assign" onclick="DemoApp.go('assign')">アサイン最適化</button>
         <button data-page="map" onclick="DemoApp.go('map')">時間指定MAP</button>
@@ -67,7 +68,38 @@
           <button class="btn btn-secondary" onclick="DemoApp.go('line')">LINE共有を見る</button>
         </div>
       </div>
-      <div id="stats" class="stats"></div>
+      <div id="ops-board" class="ops-board" hidden>
+        <div class="ops-head">
+          <div>
+            <p class="ops-kicker">配送オペレーション</p>
+            <h3>現場司令室</h3>
+          </div>
+          <div class="toolbar ops-actions">
+            <button class="btn btn-secondary" onclick="DemoApp.go('assign')">アサイン最適化</button>
+            <button class="btn btn-secondary" onclick="DemoApp.go('map')">時間指定MAP</button>
+            <button class="btn btn-secondary" onclick="DemoApp.go('line')">LINE共有</button>
+          </div>
+        </div>
+        <div id="ops-hero" class="ops-hero"></div>
+        <div id="stats" class="stats"></div>
+        <p class="ops-note">現在進捗・残配送数・ドライバー能力から算出した参考予測です。実運用の保証値ではありません。表示データはすべて架空です。</p>
+        <div class="card table-wrap">
+          <h3 class="ops-table-title">本日の配送状況</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Route</th>
+                <th>Driver</th>
+                <th>進捗</th>
+                <th>残り</th>
+                <th>予測終了</th>
+                <th>LINE</th>
+              </tr>
+            </thead>
+            <tbody id="ops-route-body"></tbody>
+          </table>
+        </div>
+      </div>
       <p id="dash-empty" class="sub">上のボタン1つで、架空の1日分を読み込めます。ファイル選択は不要です。</p>
       <div id="story" class="story"></div>
     </section>
@@ -85,11 +117,25 @@
               <th>車両タイプ</th>
               <th>能力</th>
               <th>稼働状態</th>
+              <th>LINE</th>
               <th>経験エリア</th>
             </tr>
           </thead>
           <tbody id="driver-body"></tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="page-profile" class="page">
+      <h2>ドライバープロフィール</h2>
+      <p class="sub">名前を選ぶと、実績・エリア経験・LINE状態まで確認できます。表示データはすべて架空です。</p>
+      <div class="profile-layout">
+        <aside class="card profile-list-card">
+          <label class="profile-search-label" for="profile-search">検索</label>
+          <input id="profile-search" type="search" placeholder="名前 / ID / 所属 / エリア" oninput="DemoApp.setProfileQuery(this.value)">
+          <div id="profile-list" class="profile-list"></div>
+        </aside>
+        <div id="profile-detail" class="card profile-detail"></div>
       </div>
     </section>
 
@@ -186,6 +232,7 @@ R-01,博多駅周辺,博多区,Van,80,52</pre>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/src/sample-data.js"></script>
   <script src="/src/assign.js"></script>
+  <script src="/src/ops.js"></script>
   <script src="/src/csv.js"></script>
   <script src="/src/app.js"></script>
 </body>

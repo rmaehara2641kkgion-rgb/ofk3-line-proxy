@@ -45,6 +45,12 @@ try {
   assert.equal(home.status, 200);
   var html = await home.text();
   assert.match(html, /3分でデモを体験/);
+  assert.match(html, /現場司令室/);
+  assert.match(html, /プロフィール/);
+
+  var opsJs = await request('GET', '/src/ops.js');
+  assert.equal(opsJs.status, 200);
+  assert.match(String(opsJs.headers.get('content-type') || ''), /javascript/);
 
   var health = await request('GET', '/health');
   assert.equal(health.status, 200);

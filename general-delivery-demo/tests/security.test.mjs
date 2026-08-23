@@ -61,6 +61,8 @@ assert.equal(hits.length, 0, 'forbidden terms:\n' + hits.join('\n'));
 var html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 assert.match(html, /Demoでは実際には送信されません/);
 assert.match(html, /3分でデモを体験/);
+assert.match(html, /プロフィール/);
+assert.match(html, /現場司令室/);
 assert.match(html, /すべて架空です/);
 assert.match(html, /配送管理デモ \| Delivery Operations Demo/);
 assert.doesNotMatch(html, /line-channel-token/);

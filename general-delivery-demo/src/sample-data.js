@@ -80,6 +80,33 @@
     { id: 'R-18', name: '西区周船寺方面', area: '西区', vehicle: 'Van', packages: 55, stops: 36, assignedDriverId: null }
   ];
 
+  var PROFILES = {
+    'D-1001': { packagesTotal: 18420, completionRate: 99.1, misdeliveryRate: 0.08, lineConnected: true },
+    'D-1002': { packagesTotal: 16210, completionRate: 98.7, misdeliveryRate: 0.12, lineConnected: true },
+    'D-1003': { packagesTotal: 12880, completionRate: 99.4, misdeliveryRate: 0.05, lineConnected: true },
+    'D-1004': { packagesTotal: 17150, completionRate: 99.0, misdeliveryRate: 0.09, lineConnected: true },
+    'D-1005': { packagesTotal: 14320, completionRate: 98.4, misdeliveryRate: 0.18, lineConnected: true },
+    'D-1006': { packagesTotal: 15890, completionRate: 98.8, misdeliveryRate: 0.11, lineConnected: true },
+    'D-1007': { packagesTotal: 11240, completionRate: 99.2, misdeliveryRate: 0.06, lineConnected: true },
+    'D-1008': { packagesTotal: 9860, completionRate: 97.8, misdeliveryRate: 0.28, lineConnected: false },
+    'D-1009': { packagesTotal: 13970, completionRate: 99.6, misdeliveryRate: 0.03, lineConnected: true },
+    'D-1010': { packagesTotal: 8740, completionRate: 98.1, misdeliveryRate: 0.22, lineConnected: true },
+    'D-1011': { packagesTotal: 16540, completionRate: 99.3, misdeliveryRate: 0.07, lineConnected: true },
+    'D-1012': { packagesTotal: 9120, completionRate: 97.5, misdeliveryRate: 0.31, lineConnected: false },
+    'D-1013': { packagesTotal: 19880, completionRate: 99.7, misdeliveryRate: 0.02, lineConnected: true },
+    'D-1014': { packagesTotal: 14760, completionRate: 98.9, misdeliveryRate: 0.10, lineConnected: true },
+    'D-1015': { packagesTotal: 10110, completionRate: 99.0, misdeliveryRate: 0.08, lineConnected: true },
+    'D-1016': { packagesTotal: 10850, completionRate: 98.2, misdeliveryRate: 0.16, lineConnected: true },
+    'D-1017': { packagesTotal: 15430, completionRate: 99.1, misdeliveryRate: 0.09, lineConnected: true },
+    'D-1018': { packagesTotal: 13620, completionRate: 98.6, misdeliveryRate: 0.14, lineConnected: true },
+    'D-1019': { packagesTotal: 12190, completionRate: 98.5, misdeliveryRate: 0.15, lineConnected: true },
+    'D-1020': { packagesTotal: 7640, completionRate: 97.3, misdeliveryRate: 0.41, lineConnected: false },
+    'D-1021': { packagesTotal: 11880, completionRate: 99.2, misdeliveryRate: 0.06, lineConnected: true },
+    'D-1022': { packagesTotal: 17640, completionRate: 99.5, misdeliveryRate: 0.04, lineConnected: true },
+    'D-1023': { packagesTotal: 6890, completionRate: 97.9, misdeliveryRate: 0.24, lineConnected: false },
+    'D-1024': { packagesTotal: 12450, completionRate: 98.8, misdeliveryRate: 0.13, lineConnected: true }
+  };
+
   var EXPERIENCES = [
     { driverId: 'D-1001', area: '博多区', days: 18 },
     { driverId: 'D-1001', area: '東区', days: 6 },
@@ -202,6 +229,30 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function lastExperienceDate(days) {
+    if (days >= 18) return '2026-08-22';
+    if (days >= 12) return '2026-08-21';
+    if (days >= 7) return '2026-08-20';
+    return '2026-08-18';
+  }
+
+  function attachDriverProfiles(drivers, experiences) {
+    drivers.forEach(function (driver) {
+      var extra = PROFILES[driver.id] || {};
+      driver.abilityPerHour = driver.capability;
+      driver.packagesTotal = extra.packagesTotal || 0;
+      driver.completionRate = extra.completionRate != null ? extra.completionRate : 98.5;
+      driver.misdeliveryRate = extra.misdeliveryRate != null ? extra.misdeliveryRate : 0.10;
+      driver.lineConnected = extra.lineConnected !== false;
+      driver.areaExperience = experiences.filter(function (row) {
+        return String(row.driverId) === String(driver.id);
+      });
+      driver.lastRunDate = driver.areaExperience.reduce(function (latest, row) {
+        return !latest || row.lastDate > latest ? row.lastDate : latest;
+      }, '');
+    });
+  }
+
   function summarize(data) {
     var working = data.drivers.filter(function (d) { return d.status === '稼働'; }).length;
     var packages = data.routes.reduce(function (sum, r) { return sum + r.packages; }, 0);
@@ -218,11 +269,17 @@
   }
 
   function createSampleDataset() {
+    var experiences = clone(EXPERIENCES).map(function (row) {
+      row.lastDate = lastExperienceDate(row.days);
+      return row;
+    });
+    var drivers = clone(DRIVERS);
+    attachDriverProfiles(drivers, experiences);
     var data = {
-      drivers: clone(DRIVERS),
+      drivers: drivers,
       schedule: clone(SCHEDULE),
       routes: clone(ROUTES),
-      experiences: clone(EXPERIENCES),
+      experiences: experiences,
       timeWindows: withCoordinates(clone(TIME_WINDOWS))
     };
     data.summary = summarize(data);
