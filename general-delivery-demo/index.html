@@ -20,7 +20,7 @@
           <p>Delivery Operations Demo　／　公開デモ</p>
         </div>
         <div class="header-actions">
-          <button class="btn btn-primary" onclick="DemoApp.loadSample()">サンプルデータで試す</button>
+          <button class="btn btn-primary" onclick="DemoApp.startDemo()">▶ デモを開始する</button>
         </div>
       </div>
       <nav class="nav" aria-label="主要画面">
@@ -39,7 +39,13 @@
     <section id="page-dashboard" class="page active">
       <div class="hero">
         <h2>配送現場の<br>「確認・配車・共有」をひとつに。</h2>
-        <p class="lead">当日人員、配送ルート、自動アサイン、時間指定MAP、LINE共有を一画面で体験できます。ファイル準備は不要です。</p>
+        <p class="lead">当日人員、配送ルート、自動アサイン、時間指定MAP、LINE共有を一画面で体験できます。</p>
+        <div class="trust">
+          <span>登録不要</span>
+          <span>ファイル不要</span>
+          <span>すべて架空データ</span>
+          <span>実際のLINE送信なし</span>
+        </div>
         <div class="hero-points">
           <span class="chip">当日人員</span>
           <span class="chip">配送ルート</span>
@@ -48,12 +54,21 @@
           <span class="chip">LINE共有</span>
         </div>
         <div class="toolbar">
-          <button class="btn btn-primary" onclick="DemoApp.loadSample()">サンプルデータで試す</button>
-          <button class="btn btn-ghost" onclick="DemoApp.go('assign')">アサインを見る</button>
+          <button class="btn btn-cta" onclick="DemoApp.startDemo()">▶ 3分でデモを体験</button>
+        </div>
+      </div>
+      <div id="demo-start-notice" class="start-notice card" hidden>
+        <p class="start-notice-title">デモデータを読み込みました</p>
+        <p id="demo-start-counts"></p>
+        <p>各機能を自由にお試しください</p>
+        <div class="toolbar">
+          <button class="btn btn-secondary" onclick="DemoApp.go('assign')">アサイン最適化を見る</button>
+          <button class="btn btn-secondary" onclick="DemoApp.go('map')">時間指定MAPを見る</button>
+          <button class="btn btn-secondary" onclick="DemoApp.go('line')">LINE共有を見る</button>
         </div>
       </div>
       <div id="stats" class="stats"></div>
-      <p id="dash-empty" class="sub">上のボタンで、架空の1日分を読み込めます。</p>
+      <p id="dash-empty" class="sub">上のボタン1つで、架空の1日分を読み込めます。ファイル選択は不要です。</p>
       <div id="story" class="story"></div>
     </section>
 
@@ -140,7 +155,7 @@
       <p>このサイトは配送事業者向け業務アプリのデモです。表示される人物・住所・配送データはすべて架空です。</p>
       <p>業務アプリのカスタマイズ例として公開しています。</p>
       <details>
-        <summary>任意ファイルで試す（CSV）</summary>
+        <summary>自分のデータを試す（ファイルから読み込む）</summary>
         <p>最初から複雑な専用フォーマットは不要です。必要列は次のとおりです。</p>
         <div class="upload-help">
           <div>

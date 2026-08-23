@@ -132,6 +132,30 @@ a { color: var(--teal); }
   font-weight: 700;
   font-size: 14px;
 }
+.trust {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.trust span {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.start-notice { padding: 18px 20px; margin-bottom: 16px; }
+.start-notice-title { margin: 0 0 8px; font-weight: 700; }
+.start-notice p { margin: 0 0 8px; }
+.btn-cta {
+  background: var(--coral);
+  color: #fff;
+  font-size: 18px;
+  padding: 16px 22px;
+  box-shadow: 0 8px 20px rgba(212, 87, 60, 0.28);
+}
 .btn-primary { background: var(--coral); color: #fff; }
 .btn-secondary { background: var(--navy); color: #fff; }
 .btn-ghost {

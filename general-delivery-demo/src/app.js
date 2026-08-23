@@ -75,6 +75,40 @@
     return driver ? driver.name : '未アサイン';
   }
 
+  function resetDemoState() {
+    state.loaded = false;
+    state.drivers = [];
+    state.schedule = [];
+    state.routes = [];
+    state.experiences = [];
+    state.timeWindows = [];
+    state.summary = null;
+    state.assignResult = null;
+    state.mapFilter = 'all';
+    state.mapDriverId = 'all';
+    state.selectedShareDriverId = '';
+    state.story = {
+      sample: false,
+      drivers: false,
+      schedule: false,
+      assign: false,
+      map: false,
+      line: false
+    };
+  }
+
+  function updateStartNotice() {
+    var notice = $('demo-start-notice');
+    var counts = $('demo-start-counts');
+    if (!notice || !counts) return;
+    if (!state.loaded || !state.summary) {
+      notice.hidden = true;
+      return;
+    }
+    counts.textContent = 'ドライバー：' + state.drivers.length + '名　配送ルート：' + state.routes.length + '件　時間指定：' + state.timeWindows.length + '件';
+    notice.hidden = false;
+  }
+
   function loadSample() {
     var data = DeliverySampleData.createSampleDataset();
     state.loaded = true;
@@ -87,7 +121,14 @@
     state.assignResult = null;
     state.story.sample = true;
     renderAll();
-    toast('サンプルデータを読み込みました');
+    updateStartNotice();
+    toast('デモデータを読み込みました');
+  }
+
+  function startDemo() {
+    resetDemoState();
+    loadSample();
+    showPage('dashboard');
   }
 
   function ensureLoaded() {
@@ -462,6 +503,7 @@
 
   window.DemoApp = {
     go: showPage,
+    startDemo: startDemo,
     loadSample: loadSample,
     runAssign: runAssign,
     setMapFilter: setMapFilter,

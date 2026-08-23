@@ -44,7 +44,7 @@ try {
   var home = await request('GET', '/');
   assert.equal(home.status, 200);
   var html = await home.text();
-  assert.match(html, /サンプルデータで試す/);
+  assert.match(html, /3分でデモを体験/);
 
   var health = await request('GET', '/health');
   assert.equal(health.status, 200);
