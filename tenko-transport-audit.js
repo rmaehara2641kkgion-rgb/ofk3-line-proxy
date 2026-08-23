@@ -1,7 +1,9 @@
 // OFK3 点呼管理 - TransportID照合監査
-// Amazonスケジュールを正として、DAシフト表メイン在籍者のTransport ID登録誤りを検知する。
+// Amazonスケジュールを正として、DAシフト表メインの「本日勤務者」のTransport ID登録誤りを検知する。
 (function() {
   'use strict';
+
+  var SHIFT_NON_DRIVER_NAME_EXACT = ['必要台数', '合計', '計', '小計'];
 
   var auditAmazon = null;
   var auditShift = null;
@@ -55,6 +57,36 @@
 
   function displayShiftName(record) {
     return record.japaneseName ? record.japaneseName + ' / ' + record.name : record.name;
+  }
+
+  // processShiftMaster(index.html) と同じ本日列判定
+  function getTodayDayOfMonth() {
+    return new Date().getDate();
+  }
+
+  function isShiftNonDriverRow(name) {
+    var n = String(name || '').trim();
+    if (!n) return true;
+    for (var i = 0; i < SHIFT_NON_DRIVER_NAME_EXACT.length; i++) {
+      if (n === SHIFT_NON_DRIVER_NAME_EXACT[i]) return true;
+    }
+    return false;
+  }
+
+  function findTodayDateCol(headerRow, dayOfMonth) {
+    var dateCol = -1;
+    for (var c = 3; c < headerRow.length; c++) {
+      var headerVal = String(headerRow[c] || '').trim();
+      if (headerVal === String(dayOfMonth)) { dateCol = c; break; }
+    }
+    if (dateCol < 0) dateCol = dayOfMonth + 2;
+    return dateCol;
+  }
+
+  function isTodayWorkingShiftCode(shiftCode) {
+    var code = String(shiftCode || '').trim();
+    if (!code || code === '休') return false;
+    return true;
   }
 
   function readWorkbook(file, done) {
@@ -184,45 +216,69 @@
   }
 
   function parseShiftMaster(wb) {
-    var sheetName = wb.SheetNames.indexOf('メイン') >= 0 ? 'メイン' : wb.SheetNames[0];
-    var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
-    var headerIndex = -1;
-
-    for (var r = 0; r < Math.min(rows.length, 20); r++) {
-      var row = rows[r] || [];
-      var romanColTest = findCol(row, ['roman character', 'ローマ字名', 'roman']);
-      var tidColTest = findCol(row, ['transport id', 'transportid', 'transport id ']);
-      if (romanColTest >= 0 && tidColTest >= 0) { headerIndex = r; break; }
+    if (wb.SheetNames.indexOf('メイン') < 0) {
+      throw new Error('DAシフト表に「メイン」シートが見つかりません');
     }
 
-    if (headerIndex < 0) throw new Error('DAシフト表の「Roman character / Transport ID」列が見つかりません');
+    var sheetName = 'メイン';
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
+    var headerRow = rows[2] || [];
+    var romanCol = findCol(headerRow, ['roman character', 'ローマ字名', 'roman']);
+    var tidCol = findCol(headerRow, ['transport id', 'transportid', 'transport id ']);
 
-    var header = rows[headerIndex] || [];
-    var companyCol = findCol(header, ['社　名', '社 名', '社名', 'company']);
-    var jpNameCol = findCol(header, ['名　前', '名 前', '名前', 'name']);
-    var romanCol = findCol(header, ['roman character', 'ローマ字名', 'roman']);
-    var tidCol = findCol(header, ['transport id', 'transportid', 'transport id ']);
+    if (romanCol < 0 || tidCol < 0) {
+      throw new Error('DAシフト表「メイン」の「Roman character / Transport ID」列が見つかりません');
+    }
+
+    var dayOfMonth = getTodayDayOfMonth();
+    var dateCol = findTodayDateCol(headerRow, dayOfMonth);
     var records = [];
+    var rawMainRows = 0;
+    var todayExcludedNonWorking = 0;
 
-    for (var i = headerIndex + 1; i < rows.length; i++) {
-      var rowData = rows[i] || [];
+    // processShiftMaster と同じ: 行5(index 4)〜がデータ
+    for (var r = 4; r < rows.length; r++) {
+      var rowData = rows[r] || [];
+      var company = String(rowData[0] || '').trim();
+      var jpName = String(rowData[1] || '').trim();
+      if (isShiftNonDriverRow(jpName)) continue;
+
       var romanName = String(rowData[romanCol] || '').trim();
-      var jpName = jpNameCol >= 0 ? String(rowData[jpNameCol] || '').trim() : '';
-      var company = companyCol >= 0 ? String(rowData[companyCol] || '').trim() : '';
       var tid = normalizeTid(rowData[tidCol]);
-      if (!romanName || !tid) continue;
+      var hasIdentity = !!(romanName && tid);
+      if (hasIdentity) rawMainRows++;
+
+      var shiftCode = String(rowData[dateCol] || '').trim();
+      if (!isTodayWorkingShiftCode(shiftCode)) {
+        if (hasIdentity) todayExcludedNonWorking++;
+        continue;
+      }
+
+      if (!hasIdentity) continue;
+
       records.push({
         name: romanName,
         japaneseName: jpName,
         company: company,
         normalizedName: normalizeName(romanName),
         transportId: tid,
+        shiftCode: shiftCode,
         sheet: sheetName,
-        sourceRow: i + 1
+        sourceRow: r + 1
       });
     }
 
-    return { records: records, sheet: sheetName };
+    return {
+      records: records,
+      sheet: sheetName,
+      stats: {
+        rawMainRows: rawMainRows,
+        todayWorkingRows: records.length,
+        todayExcludedNonWorking: todayExcludedNonWorking,
+        todayDayOfMonth: dayOfMonth,
+        todayDateCol: dateCol
+      }
+    };
   }
 
   function buildShiftAuditPopulation(records) {
@@ -305,7 +361,7 @@
       auditRecords: auditRecords,
       shiftTidConflicts: shiftTidConflicts,
       exactDuplicateRows: exactDuplicateRows,
-      uniqueShiftPeople: auditRecords.length,
+      uniqueTodayShiftPeople: auditRecords.length,
       shiftTidConflictPeople: shiftTidConflicts.length
     };
   }
@@ -417,8 +473,10 @@
     }
 
     var stats = {
-      rawShiftRows: population.rawShiftRows,
-      uniqueShiftPeople: population.uniqueShiftPeople,
+      rawMainRows: shiftData.stats ? shiftData.stats.rawMainRows : population.rawShiftRows,
+      todayWorkingRows: shiftData.stats ? shiftData.stats.todayWorkingRows : population.rawShiftRows,
+      todayExcludedNonWorking: shiftData.stats ? shiftData.stats.todayExcludedNonWorking : 0,
+      uniqueTodayShiftPeople: population.uniqueTodayShiftPeople,
       exactDuplicateRows: population.exactDuplicateRows,
       shiftTidConflictPeople: population.shiftTidConflictPeople,
       amazonRecordCount: amazonData.records.length,
@@ -431,7 +489,7 @@
     };
 
     stats.auditEquationOk =
-      stats.matched + stats.mismatched + stats.shiftOnly + stats.shiftTidConflictPeople === stats.uniqueShiftPeople;
+      stats.matched + stats.mismatched + stats.shiftOnly + stats.shiftTidConflictPeople === stats.uniqueTodayShiftPeople;
 
     return {
       matched: matched,
@@ -533,7 +591,9 @@
     }
 
     if (stats.exactDuplicateRows > 0) {
-      html += '<div class="text-xs text-ink-light mt-1">完全重複統合：' + stats.exactDuplicateRows + '行（raw ' + stats.rawShiftRows + '行 → ユニーク ' + stats.uniqueShiftPeople + '名）</div>';
+      html += '<div class="text-xs text-ink-light mt-1">完全重複統合：' + stats.exactDuplicateRows + '行（本日勤務 ' + stats.todayWorkingRows + '行 → ユニーク ' + stats.uniqueTodayShiftPeople + '名）</div>';
+    } else if (stats.todayWorkingRows > 0) {
+      html += '<div class="text-xs text-ink-light mt-1">本日勤務 ' + stats.todayWorkingRows + '名（メイン在籍TransportID登録 ' + stats.rawMainRows + '名 / 本日非稼働除外 ' + stats.todayExcludedNonWorking + '名）</div>';
     }
 
     if (shiftTidConflicts.length > 0) {
@@ -687,6 +747,10 @@
     normalizeTid: normalizeTid,
     nameVariants: nameVariants,
     namesMatch: namesMatch,
+    isShiftNonDriverRow: isShiftNonDriverRow,
+    isTodayWorkingShiftCode: isTodayWorkingShiftCode,
+    findTodayDateCol: findTodayDateCol,
+    getTodayDayOfMonth: getTodayDayOfMonth,
     parseAmazonSchedule: parseAmazonSchedule,
     parseShiftMaster: parseShiftMaster,
     buildShiftAuditPopulation: buildShiftAuditPopulation,
