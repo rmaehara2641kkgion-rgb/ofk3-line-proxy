@@ -51,6 +51,18 @@ try {
   var healthJson = await health.json();
   assert.equal(healthJson.ok, true);
 
+  var css = await request('GET', '/assets/app.css');
+  assert.equal(css.status, 200);
+  assert.match(String(css.headers.get('content-type') || ''), /text\/css/);
+  var cssText = await css.text();
+  assert.match(cssText, /--navy/);
+
+  var js = await request('GET', '/src/app.js');
+  assert.equal(js.status, 200);
+  assert.match(String(js.headers.get('content-type') || ''), /javascript/);
+  var jsText = await js.text();
+  assert.match(jsText, /window\.DemoApp/);
+
   var line = await request('POST', '/api/line/send', '{}');
   assert.equal(line.status, 403);
   var lineJson = await line.json();
