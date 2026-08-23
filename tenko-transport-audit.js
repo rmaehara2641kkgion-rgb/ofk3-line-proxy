@@ -11,6 +11,13 @@
   var auditShiftFile = '';
   var PANEL_ID = 'tenko-transport-audit-panel';
   var lastAuditStats = null;
+  var lastAuditResult = null;
+  var auditUiState = {
+    unconfirmedOpen: false,
+    compact: false,
+    compactTimer: null
+  };
+  var auditUiBound = false;
 
   function normalizeName(value) {
     var s = value == null ? '' : String(value);
@@ -498,81 +505,60 @@
       '<div class="text-xs text-ink-light mt-1">' + escapeHtml(auditShiftFile || '') + ' ' + s + '</div>';
   }
 
-  function renderSummaryLine(stats) {
-    var line = '一致 ' + stats.matched + '名 / 不一致 ' + stats.mismatched + '名 / Amazon側未確認 ' + stats.shiftOnly + '名';
-    if (stats.shiftTidConflictPeople > 0) {
-      line += ' / シフト内TID重複 ' + stats.shiftTidConflictPeople + '名';
-    }
-    if (stats.amazonTidConflicts > 0) {
-      line += ' / Amazon側TID競合 ' + stats.amazonTidConflicts + '名';
-    }
-    return line;
+  function isAuditFullyNormal(stats) {
+    return stats.mismatched === 0 &&
+      stats.shiftTidConflictPeople === 0 &&
+      stats.amazonTidConflicts === 0;
   }
 
-  function compareNow() {
-    if (!auditAmazon || !auditShift) {
-      renderWaiting();
-      return;
+  function buildUnconfirmedCards(amazonUnconfirmed) {
+    var html = '';
+    for (var u = 0; u < amazonUnconfirmed.length; u++) {
+      var unconfirmed = amazonUnconfirmed[u].shift;
+      html += '<div class="rounded-lg border border-amber-300 bg-amber-50 p-3">' +
+        '<div class="font-bold text-amber-800">⚠ Amazon側未確認</div>' +
+        '<div class="text-xs text-amber-800 mt-1">' + escapeHtml(displayShiftName(unconfirmed)) + '</div>' +
+        '<div class="text-xs text-amber-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(unconfirmed.transportId) + '</span></div>' +
+        (unconfirmed.company ? '<div class="text-xs text-amber-700 mt-1">所属：' + escapeHtml(unconfirmed.company) + '</div>' : '') +
+        '</div>';
     }
-
-    var result = runTransportAudit(auditAmazon, auditShift);
-    lastAuditStats = result.stats;
-    window.__tenkoTransportAuditStats = result.stats;
-    renderResult(result);
+    return html;
   }
 
-  function renderResult(result) {
-    var panel = getPanel();
+  function buildAuditResultHtml(result, uiState) {
+    uiState = uiState || { unconfirmedOpen: false, compact: false };
     var matched = result.matched;
     var mismatched = result.mismatched;
     var amazonUnconfirmed = result.amazonUnconfirmed;
     var shiftTidConflicts = result.shiftTidConflicts;
     var amazonTidConflicts = result.amazonTidConflicts;
     var stats = result.stats;
-
-    var hasProblems = mismatched.length > 0 ||
-      shiftTidConflicts.length > 0 ||
-      amazonTidConflicts.length > 0;
-
-    panel.className = hasProblems
-      ? 'card p-4 mb-4 border-2 border-red-500 bg-red-50'
-      : 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50';
-
+    var hasProblems = !isAuditFullyNormal(stats);
+    var compact = uiState.compact && !hasProblems;
     var html = '';
-    if (hasProblems) {
+
+    if (compact) {
+      html += '<div class="text-sm font-bold text-emerald-700">✅ TransportID一致 ' + stats.matched + '名</div>';
+      if (stats.shiftOnly > 0) {
+        html += '<div class="text-xs text-amber-700 mt-1">⚠ Amazon側未確認：' + stats.shiftOnly + '名</div>';
+      }
+      html += '<button type="button" data-tenko-audit-panel-expand="1" class="text-xs font-bold text-emerald-700 underline mt-2 cursor-pointer bg-transparent border-0 p-0">詳細を表示</button>';
+    } else if (hasProblems) {
       html += '<div class="text-base font-bold text-red-700">🚨 TransportID照合：不一致あり</div>';
       html += '<div class="text-sm font-bold text-red-700 mt-1">' + escapeHtml(renderSummaryLine(stats)) + '</div>';
       html += '<div class="text-xs font-bold text-red-700 mt-1">Amazonスケジュールを正として確認してください。シフト側のTransportID誤登録は、点呼対象者の誤認識やコンプライアンス判定へ影響する可能性があります。</div>';
     } else {
       html += '<div class="text-base font-bold text-emerald-700">✅ TransportID照合：一致</div>';
       html += '<div class="text-sm font-bold text-emerald-700 mt-1">' + escapeHtml(renderSummaryLine(stats)) + '</div>';
-      html += '<div class="text-xs text-emerald-700 mt-1">Amazonスケジュールで確認できたシフト登録者のTransportIDはすべて一致しています。</div>';
+      html += '<div class="text-xs text-emerald-700 mt-1">Amazonで確認できた' + stats.matched + '名はすべて一致</div>';
     }
 
-    if (stats.exactDuplicateRows > 0) {
-      html += '<div class="text-xs text-ink-light mt-1">完全重複統合：' + stats.exactDuplicateRows + '行（raw ' + stats.rawMainRows + '行 → ユニーク ' + stats.uniqueShiftPeople + '名）</div>';
-    } else if (stats.rawMainRows > 0) {
-      html += '<div class="text-xs text-ink-light mt-1">メイン在籍TransportID登録 ' + stats.rawMainRows + '名</div>';
-    }
-
-    if (shiftTidConflicts.length > 0) {
-      html += '<div class="mt-3 space-y-2">';
-      for (var sc = 0; sc < shiftTidConflicts.length; sc++) {
-        var conflict = shiftTidConflicts[sc];
-        var shiftRec = conflict.shift;
-        html += '<div class="rounded-lg border border-red-400 bg-white p-3">' +
-          '<div class="font-bold text-red-700">🚨 シフト表内TransportID重複</div>' +
-          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(shiftRec)) + '</div>' +
-          '<div class="text-xs text-red-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(conflict.shiftTransportIds.join(' / ')) + '</span></div>';
-        if (conflict.amazon) {
-          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazon.transportId) + '</span></div>';
-        } else if (conflict.amazonTransportIds && conflict.amazonTransportIds.length > 0) {
-          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazonTransportIds.join(' / ')) + '</span></div>';
-        }
-        html += '<div class="text-xs text-red-600 mt-1">同一人物に複数TransportIDが登録されています。</div>' +
-          '</div>';
+    if (!compact) {
+      if (stats.exactDuplicateRows > 0) {
+        html += '<div class="text-xs text-ink-light mt-1">完全重複統合：' + stats.exactDuplicateRows + '行（raw ' + stats.rawMainRows + '行 → ユニーク ' + stats.uniqueShiftPeople + '名）</div>';
+      } else if (stats.rawMainRows > 0) {
+        html += '<div class="text-xs text-ink-light mt-1">メイン在籍TransportID登録 ' + stats.rawMainRows + '名</div>';
       }
-      html += '</div>';
     }
 
     if (mismatched.length > 0) {
@@ -595,15 +581,21 @@
       html += '</div>';
     }
 
-    if (amazonUnconfirmed.length > 0) {
+    if (shiftTidConflicts.length > 0) {
       html += '<div class="mt-3 space-y-2">';
-      for (var u = 0; u < amazonUnconfirmed.length; u++) {
-        var unconfirmed = amazonUnconfirmed[u].shift;
-        html += '<div class="rounded-lg border border-amber-300 bg-amber-50 p-3">' +
-          '<div class="font-bold text-amber-800">⚠ Amazon側未確認</div>' +
-          '<div class="text-xs text-amber-800 mt-1">' + escapeHtml(displayShiftName(unconfirmed)) + '</div>' +
-          '<div class="text-xs text-amber-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(unconfirmed.transportId) + '</span></div>' +
-          (unconfirmed.company ? '<div class="text-xs text-amber-700 mt-1">所属：' + escapeHtml(unconfirmed.company) + '</div>' : '') +
+      for (var sc = 0; sc < shiftTidConflicts.length; sc++) {
+        var conflict = shiftTidConflicts[sc];
+        var shiftRec = conflict.shift;
+        html += '<div class="rounded-lg border border-red-400 bg-white p-3">' +
+          '<div class="font-bold text-red-700">🚨 シフト表内TransportID重複</div>' +
+          '<div class="font-bold text-red-700 mt-1">' + escapeHtml(displayShiftName(shiftRec)) + '</div>' +
+          '<div class="text-xs text-red-700 mt-1">シフト登録：<span class="font-mono font-bold">' + escapeHtml(conflict.shiftTransportIds.join(' / ')) + '</span></div>';
+        if (conflict.amazon) {
+          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazon.transportId) + '</span></div>';
+        } else if (conflict.amazonTransportIds && conflict.amazonTransportIds.length > 0) {
+          html += '<div class="text-xs text-red-700">Amazon正：<span class="font-mono font-bold">' + escapeHtml(conflict.amazonTransportIds.join(' / ')) + '</span></div>';
+        }
+        html += '<div class="text-xs text-red-600 mt-1">同一人物に複数TransportIDが登録されています。</div>' +
           '</div>';
       }
       html += '</div>';
@@ -621,17 +613,111 @@
       html += '</div>';
     }
 
-    if (matched.length > 0) {
-      html += '<details class="mt-3"><summary class="text-xs font-bold text-emerald-700 cursor-pointer">✅ TransportID一致（' + matched.length + '名）</summary>';
-      html += '<div class="mt-2 space-y-1">';
-      for (var m2 = 0; m2 < Math.min(matched.length, 50); m2++) {
-        html += '<div class="text-xs text-emerald-700">✅ ' + escapeHtml(displayShiftName(matched[m2].shift)) + ' / ' + escapeHtml(matched[m2].shift.transportId) + '</div>';
-      }
-      if (matched.length > 50) html += '<div class="text-xs text-emerald-700">...他 ' + (matched.length - 50) + '名</div>';
-      html += '</div></details>';
+    if (amazonUnconfirmed.length > 0 && !compact) {
+      var toggleLabel = uiState.unconfirmedOpen
+        ? 'Amazon側未確認を閉じる'
+        : 'Amazon側未確認 ' + amazonUnconfirmed.length + '名を表示';
+      html += '<div class="mt-3" data-tenko-audit-unconfirmed-wrap="1">' +
+        '<button type="button" data-tenko-audit-unconfirmed-toggle="1" class="text-xs font-bold text-amber-800 underline cursor-pointer bg-transparent border-0 p-0">' +
+        escapeHtml(toggleLabel) +
+        '</button>' +
+        '<div data-tenko-audit-unconfirmed-list="1" class="mt-2 space-y-2"' +
+        (uiState.unconfirmedOpen ? '' : ' style="display:none"') +
+        '>' + buildUnconfirmedCards(amazonUnconfirmed) + '</div>' +
+        '</div>';
     }
 
-    panel.innerHTML = html;
+    if (compact && amazonUnconfirmed.length > 0) {
+      var compactToggleLabel = uiState.unconfirmedOpen ? 'Amazon側未確認を閉じる' : '確認する';
+      html += '<button type="button" data-tenko-audit-unconfirmed-toggle="1" class="text-xs font-bold text-amber-800 underline mt-1 cursor-pointer bg-transparent border-0 p-0">' +
+        escapeHtml(compactToggleLabel) +
+        '</button>';
+      html += '<div data-tenko-audit-unconfirmed-list="1" class="mt-2 space-y-2"' +
+        (uiState.unconfirmedOpen ? '' : ' style="display:none"') +
+        '>' + buildUnconfirmedCards(amazonUnconfirmed) + '</div>';
+    }
+
+    return {
+      html: html,
+      hasProblems: hasProblems,
+      compact: compact
+    };
+  }
+
+  function bindAuditUiEvents() {
+    if (auditUiBound) return;
+    auditUiBound = true;
+    document.addEventListener('click', function(e) {
+      var unconfToggle = e.target.closest('[data-tenko-audit-unconfirmed-toggle]');
+      if (unconfToggle && lastAuditResult) {
+        auditUiState.unconfirmedOpen = !auditUiState.unconfirmedOpen;
+        renderResult(lastAuditResult);
+        return;
+      }
+      var expandBtn = e.target.closest('[data-tenko-audit-panel-expand]');
+      if (expandBtn && lastAuditResult) {
+        auditUiState.compact = false;
+        if (auditUiState.compactTimer) {
+          clearTimeout(auditUiState.compactTimer);
+          auditUiState.compactTimer = null;
+        }
+        renderResult(lastAuditResult);
+      }
+    });
+  }
+
+  function scheduleCompactIfNormal(result) {
+    if (!isAuditFullyNormal(result.stats)) return;
+    if (auditUiState.compactTimer) clearTimeout(auditUiState.compactTimer);
+    auditUiState.compactTimer = setTimeout(function() {
+      auditUiState.compact = true;
+      if (lastAuditResult) renderResult(lastAuditResult);
+    }, 3000);
+  }
+
+  function renderSummaryLine(stats) {
+    var line = '一致 ' + stats.matched + '名 / 不一致 ' + stats.mismatched + '名 / Amazon側未確認 ' + stats.shiftOnly + '名';
+    if (stats.shiftTidConflictPeople > 0) {
+      line += ' / シフト内TID重複 ' + stats.shiftTidConflictPeople + '名';
+    }
+    if (stats.amazonTidConflicts > 0) {
+      line += ' / Amazon側TID競合 ' + stats.amazonTidConflicts + '名';
+    }
+    return line;
+  }
+
+  function compareNow() {
+    if (!auditAmazon || !auditShift) {
+      renderWaiting();
+      return;
+    }
+
+    var result = runTransportAudit(auditAmazon, auditShift);
+    lastAuditStats = result.stats;
+    lastAuditResult = result;
+    window.__tenkoTransportAuditStats = result.stats;
+    auditUiState.unconfirmedOpen = false;
+    auditUiState.compact = false;
+    if (auditUiState.compactTimer) {
+      clearTimeout(auditUiState.compactTimer);
+      auditUiState.compactTimer = null;
+    }
+    bindAuditUiEvents();
+    renderResult(result);
+    scheduleCompactIfNormal(result);
+  }
+
+  function renderResult(result) {
+    var panel = getPanel();
+    var built = buildAuditResultHtml(result, auditUiState);
+
+    panel.className = built.hasProblems
+      ? 'card p-4 mb-4 border-2 border-red-500 bg-red-50'
+      : (built.compact
+        ? 'card p-3 mb-4 border-2 border-emerald-400 bg-emerald-50'
+        : 'card p-4 mb-4 border-2 border-emerald-400 bg-emerald-50');
+
+    panel.innerHTML = built.html;
     mirrorToTenkoMatch(panel);
   }
 
@@ -711,6 +797,8 @@
     parseShiftMaster: parseShiftMaster,
     buildShiftAuditPopulation: buildShiftAuditPopulation,
     runTransportAudit: runTransportAudit,
+    isAuditFullyNormal: isAuditFullyNormal,
+    buildAuditResultHtml: buildAuditResultHtml,
     getLastAuditStats: function() { return lastAuditStats; }
   };
 })();

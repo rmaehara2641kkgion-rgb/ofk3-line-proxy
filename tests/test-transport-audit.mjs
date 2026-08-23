@@ -188,6 +188,85 @@ function runCase6(api) {
   console.log('Case6 passed');
 }
 
+function runUiCompactionTests(api) {
+  function makeShift(name, tid) {
+    return { name: name, japaneseName: name, company: 'GDS', normalizedName: name.toLowerCase(), transportId: tid, sheet: 'メイン', sourceRow: 1 };
+  }
+
+  function makeUnconfirmed(count) {
+    var list = [];
+    for (var i = 0; i < count; i++) {
+      list.push({ shift: makeShift('Unconfirmed ' + i, 'U' + i) });
+    }
+    return list;
+  }
+
+  function makeResult(opts) {
+    opts = opts || {};
+    var stats = {
+      rawMainRows: opts.rawMainRows || 100,
+      uniqueShiftPeople: opts.uniqueShiftPeople || 100,
+      exactDuplicateRows: 0,
+      shiftTidConflictPeople: opts.shiftTidConflictPeople || 0,
+      amazonTidConflicts: opts.amazonTidConflicts || 0,
+      matched: opts.matched != null ? opts.matched : 65,
+      mismatched: opts.mismatched != null ? opts.mismatched : 0,
+      shiftOnly: opts.shiftOnly != null ? opts.shiftOnly : 28
+    };
+    return {
+      matched: opts.matchedList || [],
+      mismatched: (opts.mismatchedList || []).map(function(x) { return { shift: x.shift, amazon: x.amazon }; }),
+      amazonUnconfirmed: opts.amazonUnconfirmed || makeUnconfirmed(stats.shiftOnly),
+      shiftTidConflicts: opts.shiftTidConflicts || [],
+      amazonTidConflicts: opts.amazonTidConflictsList || [],
+      stats: stats
+    };
+  }
+
+  var ui1 = api.buildAuditResultHtml(makeResult(), { unconfirmedOpen: false, compact: false });
+  assert(ui1.html.indexOf('Amazon側未確認 28名を表示') >= 0, 'UI1 toggle label');
+  assert(ui1.html.indexOf('data-tenko-audit-unconfirmed-list="1" class="mt-2 space-y-2" style="display:none"') >= 0, 'UI1 hidden list');
+  assert(ui1.html.indexOf('<details') < 0, 'UI1 no matched details');
+
+  var ui2 = api.buildAuditResultHtml(makeResult({
+    matched: 62,
+    mismatched: 2,
+    shiftOnly: 28,
+    mismatchedList: [
+      { shift: makeShift('Bad One', 'A1'), amazon: { transportId: 'B1' } },
+      { shift: makeShift('Bad Two', 'A2'), amazon: { transportId: 'B2' } }
+    ]
+  }), { unconfirmedOpen: false, compact: false });
+  assert((ui2.html.match(/TransportID不一致/g) || []).length === 2, 'UI2 mismatch cards visible');
+  assert(ui2.html.indexOf('style="display:none"') >= 0, 'UI2 unconfirmed still hidden');
+
+  var ui3 = api.buildAuditResultHtml(makeResult(), { unconfirmedOpen: true, compact: false });
+  assert(ui3.html.indexOf('Amazon側未確認を閉じる') >= 0, 'UI3 close label');
+  assert(ui3.html.indexOf('data-tenko-audit-unconfirmed-list="1" class="mt-2 space-y-2">') >= 0, 'UI3 expanded list');
+  assert((ui3.html.match(/Amazon側未確認<\/div>/g) || []).length === 28, 'UI3 all unconfirmed cards rendered');
+
+  var ui4 = api.buildAuditResultHtml(makeResult(), { unconfirmedOpen: false, compact: false });
+  assert(ui4.html.indexOf('style="display:none"') >= 0, 'UI4 collapsed again');
+
+  var ui5 = api.buildAuditResultHtml(makeResult({
+    shiftTidConflictPeople: 1,
+    shiftTidConflicts: [{
+      shift: makeShift('Dup Person', 'A111'),
+      shiftTransportIds: ['A111', 'A222'],
+      amazon: null,
+      amazonTransportIds: []
+    }]
+  }), { unconfirmedOpen: false, compact: false });
+  assert(ui5.html.indexOf('シフト表内TransportID重複') >= 0, 'UI5 shift TID conflict visible');
+
+  var uiCompact = api.buildAuditResultHtml(makeResult(), { unconfirmedOpen: false, compact: true });
+  assert(uiCompact.compact === true, 'UI compact mode');
+  assert(uiCompact.html.indexOf('TransportID一致 65名') >= 0, 'UI compact summary');
+  assert(api.isAuditFullyNormal(makeResult().stats), 'UI fully normal stats');
+
+  console.log('UI compaction tests passed');
+}
+
 function runRosterScopeTests(api) {
   const header = ['社　名', '名　前', '回数', '', '', 'Roman character', 'Transport ID'];
   const rows = [
@@ -242,5 +321,6 @@ runCase3(api);
 runCase4(api);
 runCase5(api);
 runCase6(api);
+runUiCompactionTests(api);
 runRosterScopeTests(api);
 console.log('\nAll transport audit tests passed.');
