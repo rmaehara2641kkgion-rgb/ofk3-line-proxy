@@ -149,6 +149,8 @@
         driverName: driver.name,
         lineConnected: !!driver.lineConnected,
         neighborhood: agg.neighborhood,
+        routeIds: agg.routeIds.slice(),
+        routeLabel: agg.routeIds.join(' / '),
         packagesDone: packagesDone,
         packagesTotal: agg.packagesTotal,
         stopsDone: stopsDone,

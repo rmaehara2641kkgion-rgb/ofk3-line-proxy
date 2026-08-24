@@ -85,26 +85,15 @@
         <p class="ops-note">現在進捗・残配送数・ドライバー能力から算出した参考予測です。実運用の保証値ではありません。表示データはすべて架空です。</p>
         <div class="card driver-board-card">
           <div class="ops-table-head">
-            <h3 class="ops-table-title">稼働中ドライバー一覧</h3>
-            <p class="ops-table-note">残り時間と遅延判定は現在時刻から更新します。荷物個数と配送先件数は別集計です。</p>
+            <div>
+              <h3 class="ops-table-title">稼働中ドライバー一覧</h3>
+              <p class="ops-table-note">残り時間と遅延判定は現在時刻から更新します。荷物個数と配送先件数は別集計です。</p>
+            </div>
+            <div class="ops-table-actions">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="DemoApp.openAllDriversMap()">MAP一斉表示</button>
+            </div>
           </div>
           <div id="driver-board" class="driver-board"></div>
-        </div>
-        <div class="card table-wrap">
-          <h3 class="ops-table-title">本日の配送状況</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Route</th>
-                <th>Driver</th>
-                <th>進捗</th>
-                <th>残り</th>
-                <th>予測終了</th>
-                <th>LINE</th>
-              </tr>
-            </thead>
-            <tbody id="ops-route-body"></tbody>
-          </table>
         </div>
       </div>
       <p id="dash-empty" class="sub">上のボタン1つで、架空の1日分を読み込めます。ファイル選択は不要です。</p>
@@ -241,7 +230,7 @@ R-01,博多駅周辺,鳥飼,Van,80,52</pre>
       <h3 id="line-modal-title">メッセージ</h3>
       <div class="phone">
         <div class="phone-bar">ドライバー向けプレビュー</div>
-        <div id="line-modal-preview" class="bubble"></div>
+        <textarea id="line-modal-preview" class="bubble" rows="9"></textarea>
       </div>
       <p class="preview-note">Demoでは実際には送信されません</p>
       <div class="toolbar modal-actions">

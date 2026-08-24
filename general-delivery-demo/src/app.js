@@ -224,6 +224,14 @@
     return '<button type="button" class="line-icon-btn" title="メッセージを開く" aria-label="' + escapeHtml(driver.name) + 'へLINE" onclick="DemoApp.openLineModal(\'' + escapeHtml(driver.id) + '\')">' + lineIconSvg() + '</button>';
   }
 
+  function lineTextButton(driver) {
+    if (!driver) return '';
+    if (!driver.lineConnected) {
+      return '<button type="button" class="btn btn-ghost btn-sm" disabled title="未連携">' + lineIconSvg() + ' LINE送信</button>';
+    }
+    return '<button type="button" class="btn btn-line btn-sm" onclick="DemoApp.openLineModal(\'' + escapeHtml(driver.id) + '\')">' + lineIconSvg() + ' LINE送信</button>';
+  }
+
   function renderDashboard() {
     var board = $('ops-board');
     var s = state.summary;
@@ -231,7 +239,6 @@
       if (board) board.hidden = true;
       $('stats').innerHTML = '';
       $('ops-hero').innerHTML = '';
-      $('ops-route-body').innerHTML = '';
       if ($('driver-board')) $('driver-board').innerHTML = '';
       $('dash-empty').style.display = 'block';
       return;
@@ -258,7 +265,6 @@
     }
     $('stats').innerHTML = html;
     renderDriverBoard(ops);
-    renderOpsRoutes(ops);
     startBoardTimer();
   }
 
@@ -286,15 +292,18 @@
       var driver = driverById(row.driverId);
       var tone = row.status && row.status.tone ? row.status.tone : 'idle';
       var pct = Number(row.progress) || 0;
+      var driverForActions = driver || { id: row.driverId, name: row.driverName, lineConnected: row.lineConnected };
+      var packagesRemain = Math.max(0, row.packagesTotal - row.packagesDone);
+      var stopsRemain = Math.max(0, row.stopsTotal - row.stopsDone);
       html += '<article class="driver-card tone-' + tone + '">';
       html += '<div class="driver-card-top">';
       html += '<div class="driver-name-row">';
       html += driverLink(row.driverId, row.driverName);
-      html += lineIconButton(driver || { id: row.driverId, name: row.driverName, lineConnected: row.lineConnected });
+      html += '<span class="driver-id">ID: ' + escapeHtml(row.driverId) + '</span>';
       html += '</div>';
       html += '<span class="status-badge tone-' + tone + '"><span class="mark"></span>' + escapeHtml(row.status.label) + '</span>';
       html += '</div>';
-      html += '<p class="driver-area">📍 ' + escapeHtml(row.neighborhood || '—') + '</p>';
+      html += '<p class="driver-area">📍 ' + escapeHtml(row.neighborhood || '—') + '　・　コース ' + escapeHtml(row.routeLabel || '—') + '</p>';
       html += '<div class="driver-metrics">';
       html += '<div><span>荷物</span><b>' + row.packagesDone + ' / ' + row.packagesTotal + '個</b></div>';
       html += '<div><span>配送先</span><b>' + row.stopsDone + ' / ' + row.stopsTotal + '件</b></div>';
@@ -304,38 +313,21 @@
       html += '<div class="driver-return">';
       html += '<span>帰庫予定 <strong>' + escapeHtml(row.plannedReturn) + '</strong></span>';
       html += '<span class="muted">' + escapeHtml(row.remainLabel) + '</span>';
+      html += '<span>残数 ' + packagesRemain + '個 / ' + stopsRemain + '件</span>';
       if (row.predictedReturn) {
         html += '<span>予測帰庫 <strong>' + escapeHtml(row.predictedReturn) + '</strong></span>';
       }
       if (row.delayLabel) {
         html += '<span class="delay">' + escapeHtml(row.delayLabel) + '</span>';
       }
-      html += '</div></article>';
+      html += '</div>';
+      html += '<div class="driver-card-actions">';
+      html += '<button type="button" class="btn btn-ghost btn-sm" onclick="DemoApp.openDriverMap(\'' + escapeHtml(row.driverId) + '\')">MAP表示</button>';
+      html += lineTextButton(driverForActions);
+      html += '</div>';
+      html += '</article>';
     }
     el.innerHTML = html;
-  }
-
-  function renderOpsRoutes(ops) {
-    var body = $('ops-route-body');
-    if (!body) return;
-    if (!ops) {
-      body.innerHTML = '';
-      return;
-    }
-    var html = '';
-    for (var i = 0; i < ops.routes.length; i++) {
-      var row = ops.routes[i];
-      var driver = driverById(row.driverId);
-      html += '<tr>';
-      html += '<td><button type="button" class="text-link" onclick="DemoApp.openDriverMap(\'' + escapeHtml(row.driverId || '') + '\')">' + escapeHtml(row.routeId) + '</button><div class="sub" style="margin:4px 0 0">' + escapeHtml(row.routeName) + '</div></td>';
-      html += '<td>' + driverLink(row.driverId, row.driverName) + '</td>';
-      html += '<td><span class="bar"><span class="bar-track"><i style="width:' + row.progress + '%"></i></span>' + row.progress + '%</span></td>';
-      html += '<td>' + row.remaining + '個</td>';
-      html += '<td>' + escapeHtml(row.eta) + '</td>';
-      html += '<td>' + (driver ? lineBadge(driver, true) : '—') + '</td>';
-      html += '</tr>';
-    }
-    body.innerHTML = html;
   }
 
   function areaText(driver) {
@@ -390,6 +382,13 @@
     showPage('map');
   }
 
+  function openAllDriversMap() {
+    ensureLoaded();
+    state.mapFilter = 'all';
+    state.mapDriverId = 'all';
+    showPage('map');
+  }
+
   function openDriverLine(driverId) {
     if (!driverId) return;
     ensureLoaded();
@@ -408,7 +407,7 @@
     var openPage = $('line-modal-open-page');
     if (!modal || !title || !preview) return;
     title.textContent = (driver ? driver.name : 'ドライバー') + ' へメッセージ';
-    preview.textContent = buildLineMessage(driverId);
+    preview.value = buildLineMessage(driverId);
     if (openPage) {
       openPage.onclick = function () {
         closeLineModal();
@@ -664,40 +663,42 @@
     return state.timeWindows.filter(function (item) { return item.driverId === driverId; });
   }
 
+  function driverBoardRow(driverId) {
+    var ops = currentOps();
+    var board = ops && ops.driverBoard ? ops.driverBoard : [];
+    for (var i = 0; i < board.length; i++) {
+      if (board[i].driverId === driverId) return board[i];
+    }
+    return null;
+  }
+
   function buildLineMessage(driverId) {
     var driver = driverById(driverId);
     var tw = windowsForDriver(driverId);
-    var routeIds = [];
-    tw.forEach(function (item) {
-      if (routeIds.indexOf(item.routeId) < 0) routeIds.push(item.routeId);
-    });
-    if (!routeIds.length && state.assignResult) {
-      state.assignResult.assignments.forEach(function (row) {
-        if (row.recommended && row.recommended.driverId === driverId) routeIds.push(row.routeId);
-      });
-    }
     var evening = tw.filter(function (item) { return item.note === '18時指定'; }).length;
-    var routeLabel = routeIds[0] || '未設定';
-    var route = routeById(routeLabel);
-    var lines = [
-      '【本日の配送】',
-      '',
-      '担当：',
-      route ? (routeLabel + ' / ' + route.name) : routeLabel,
-      '',
-      '時間指定：',
-      tw.length + '件',
-      '',
-      'MAP：',
-      '[MAPを開く]',
-      '',
-      '注意事項：',
-      evening ? ('18時指定 ' + evening + '件') : '特記なし'
-    ];
-    if (driver) {
-      lines.unshift(driver.name);
-      lines.splice(1, 0, '本日の時間指定MAPです', '');
+    var row = driverBoardRow(driverId);
+    var lines = [];
+    if (driver) lines.push(driver.name + ' さん');
+    lines.push('【本日の配送状況】');
+    lines.push('');
+    if (row) {
+      var packagesRemain = Math.max(0, row.packagesTotal - row.packagesDone);
+      var stopsRemain = Math.max(0, row.stopsTotal - row.stopsDone);
+      lines.push('コース：' + (row.routeLabel || '未設定'));
+      lines.push('配送エリア：' + (row.neighborhood || '—'));
+      lines.push('個口数：' + row.packagesTotal + '個');
+      lines.push('件数：' + row.stopsTotal + '件');
+      lines.push('配送進捗：' + row.progress + '%');
+      lines.push('残数：' + packagesRemain + '個 / ' + stopsRemain + '件');
+      lines.push('終了予測時間：' + (row.predictedReturn || row.plannedReturn));
+    } else {
+      lines.push('現在、稼働中の配送データがありません。');
     }
+    lines.push('');
+    lines.push('時間指定：' + tw.length + '件');
+    lines.push('');
+    lines.push('注意事項：');
+    lines.push(evening ? ('18時指定 ' + evening + '件') : '特記なし');
     return lines.join('\n');
   }
 
@@ -803,6 +804,7 @@
     previewLine: previewLine,
     openProfile: openProfile,
     openDriverMap: openDriverMap,
+    openAllDriversMap: openAllDriversMap,
     openDriverLine: openDriverLine,
     openLineModal: openLineModal,
     closeLineModal: closeLineModal,

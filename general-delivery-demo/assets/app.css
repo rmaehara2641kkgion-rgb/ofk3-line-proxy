@@ -167,6 +167,9 @@ a { color: var(--teal); }
   border: 1px solid var(--line);
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 10px; }
+.btn-line { background: #06c755; color: #fff; }
+.btn-line svg { vertical-align: -2px; margin-right: 4px; }
 
 .stats {
   display: grid;
@@ -223,8 +226,16 @@ a { color: var(--teal); }
 .ops-feature em { display: block; margin-top: 8px; font-style: normal; font-size: 13px; opacity: 0.8; }
 .ops-note { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
 .ops-table-title { margin: 0; padding: 16px 16px 0; font-size: 16px; }
-.ops-table-head { padding: 0 0 8px; }
+.ops-table-head {
+  padding: 0 0 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
 .ops-table-head .ops-table-title { padding-bottom: 4px; }
+.ops-table-actions { padding: 14px 16px 0 0; }
 .ops-table-note {
   margin: 0;
   padding: 0 16px 12px;
@@ -363,6 +374,13 @@ a { color: var(--teal); }
 .driver-return strong { font-weight: 700; }
 .driver-return .muted { color: var(--muted); }
 .driver-return .delay { color: var(--late); font-weight: 700; }
+.driver-id { color: var(--muted); font-size: 12px; }
+.driver-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
 
 .modal {
   position: fixed;
@@ -588,6 +606,14 @@ th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: 0.0
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.7;
+}
+textarea.bubble {
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  box-sizing: border-box;
 }
 .preview-note {
   margin-top: 12px;
