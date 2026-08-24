@@ -14,6 +14,7 @@
     markers: [],
     mapFilter: 'all',
     mapDriverId: 'all',
+    mapDriverIds: null,
     selectedShareDriverId: '',
     selectedProfileId: '',
     profileQuery: '',
@@ -89,6 +90,7 @@
     state.assignResult = null;
     state.mapFilter = 'all';
     state.mapDriverId = 'all';
+    state.mapDriverIds = null;
     state.selectedShareDriverId = '';
     state.selectedProfileId = '';
     state.profileQuery = '';
@@ -224,6 +226,15 @@
     return '<button type="button" class="line-icon-btn" title="メッセージを開く" aria-label="' + escapeHtml(driver.name) + 'へLINE" onclick="DemoApp.openLineModal(\'' + escapeHtml(driver.id) + '\')">' + lineIconSvg() + '</button>';
   }
 
+  function mapIconSvg() {
+    return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2C8.14 2 5 5.14 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>';
+  }
+
+  function mapIconButton(driverId, driverName) {
+    if (!driverId) return '';
+    return '<button type="button" class="line-icon-btn map-icon-btn" title="MAP表示" aria-label="' + escapeHtml(driverName || '') + 'のMAP表示" onclick="DemoApp.openDriverMap(\'' + escapeHtml(driverId) + '\')">' + mapIconSvg() + '</button>';
+  }
+
   function renderDashboard() {
     var board = $('ops-board');
     var s = state.summary;
@@ -231,7 +242,6 @@
       if (board) board.hidden = true;
       $('stats').innerHTML = '';
       $('ops-hero').innerHTML = '';
-      $('ops-route-body').innerHTML = '';
       if ($('driver-board')) $('driver-board').innerHTML = '';
       $('dash-empty').style.display = 'block';
       return;
@@ -258,7 +268,6 @@
     }
     $('stats').innerHTML = html;
     renderDriverBoard(ops);
-    renderOpsRoutes(ops);
     startBoardTimer();
   }
 
@@ -290,14 +299,17 @@
       html += '<div class="driver-card-top">';
       html += '<div class="driver-name-row">';
       html += driverLink(row.driverId, row.driverName);
+      html += mapIconButton(row.driverId, row.driverName);
       html += lineIconButton(driver || { id: row.driverId, name: row.driverName, lineConnected: row.lineConnected });
       html += '</div>';
       html += '<span class="status-badge tone-' + tone + '"><span class="mark"></span>' + escapeHtml(row.status.label) + '</span>';
       html += '</div>';
+      html += '<p class="driver-route">🚚 コース：' + escapeHtml(row.routeLabel || '—') + '</p>';
       html += '<p class="driver-area">📍 ' + escapeHtml(row.neighborhood || '—') + '</p>';
       html += '<div class="driver-metrics">';
-      html += '<div><span>荷物</span><b>' + row.packagesDone + ' / ' + row.packagesTotal + '個</b></div>';
-      html += '<div><span>配送先</span><b>' + row.stopsDone + ' / ' + row.stopsTotal + '件</b></div>';
+      html += '<div><span>個口数</span><b>' + row.packagesDone + ' / ' + row.packagesTotal + '個</b></div>';
+      html += '<div><span>件数</span><b>' + row.stopsDone + ' / ' + row.stopsTotal + '件</b></div>';
+      html += '<div><span>残数</span><b>' + (row.packagesTotal - row.packagesDone) + '個</b></div>';
       html += '</div>';
       html += '<div class="driver-progress-label"><span>配送進捗</span><span>' + pct + '%</span></div>';
       html += '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>';
@@ -313,29 +325,6 @@
       html += '</div></article>';
     }
     el.innerHTML = html;
-  }
-
-  function renderOpsRoutes(ops) {
-    var body = $('ops-route-body');
-    if (!body) return;
-    if (!ops) {
-      body.innerHTML = '';
-      return;
-    }
-    var html = '';
-    for (var i = 0; i < ops.routes.length; i++) {
-      var row = ops.routes[i];
-      var driver = driverById(row.driverId);
-      html += '<tr>';
-      html += '<td><button type="button" class="text-link" onclick="DemoApp.openDriverMap(\'' + escapeHtml(row.driverId || '') + '\')">' + escapeHtml(row.routeId) + '</button><div class="sub" style="margin:4px 0 0">' + escapeHtml(row.routeName) + '</div></td>';
-      html += '<td>' + driverLink(row.driverId, row.driverName) + '</td>';
-      html += '<td><span class="bar"><span class="bar-track"><i style="width:' + row.progress + '%"></i></span>' + row.progress + '%</span></td>';
-      html += '<td>' + row.remaining + '個</td>';
-      html += '<td>' + escapeHtml(row.eta) + '</td>';
-      html += '<td>' + (driver ? lineBadge(driver, true) : '—') + '</td>';
-      html += '</tr>';
-    }
-    body.innerHTML = html;
   }
 
   function areaText(driver) {
@@ -386,8 +375,19 @@
 
   function openDriverMap(driverId) {
     ensureLoaded();
+    state.mapDriverIds = null;
     state.mapDriverId = driverId || 'all';
     showPage('map');
+  }
+
+  function showAllOnMap() {
+    ensureLoaded();
+    var ops = currentOps();
+    var ids = ops && ops.driverBoard ? ops.driverBoard.map(function (row) { return row.driverId; }) : [];
+    state.mapDriverIds = ids;
+    state.mapDriverId = 'all';
+    showPage('map');
+    toast('表示中の配送カードのPINをMAPにまとめて表示しました');
   }
 
   function openDriverLine(driverId) {
@@ -408,7 +408,7 @@
     var openPage = $('line-modal-open-page');
     if (!modal || !title || !preview) return;
     title.textContent = (driver ? driver.name : 'ドライバー') + ' へメッセージ';
-    preview.textContent = buildLineMessage(driverId);
+    preview.value = buildLineMessage(driverId);
     if (openPage) {
       openPage.onclick = function () {
         closeLineModal();
@@ -577,7 +577,11 @@
   function filteredWindows() {
     return state.timeWindows.filter(function (item) {
       if (state.mapFilter !== 'all' && item.window !== state.mapFilter) return false;
-      if (state.mapDriverId !== 'all' && item.driverId !== state.mapDriverId) return false;
+      if (state.mapDriverIds) {
+        if (state.mapDriverIds.indexOf(item.driverId) < 0) return false;
+      } else if (state.mapDriverId !== 'all' && item.driverId !== state.mapDriverId) {
+        return false;
+      }
       return true;
     });
   }
@@ -656,12 +660,22 @@
   }
 
   function setMapDriver(id) {
+    state.mapDriverIds = null;
     state.mapDriverId = id;
     renderMap();
   }
 
   function windowsForDriver(driverId) {
     return state.timeWindows.filter(function (item) { return item.driverId === driverId; });
+  }
+
+  function boardRowFor(driverId) {
+    var ops = currentOps();
+    if (!ops) return null;
+    for (var i = 0; i < ops.driverBoard.length; i++) {
+      if (ops.driverBoard[i].driverId === driverId) return ops.driverBoard[i];
+    }
+    return null;
   }
 
   function buildLineMessage(driverId) {
@@ -677,26 +691,61 @@
       });
     }
     var evening = tw.filter(function (item) { return item.note === '18時指定'; }).length;
-    var routeLabel = routeIds[0] || '未設定';
-    var route = routeById(routeLabel);
-    var lines = [
-      '【本日の配送】',
-      '',
-      '担当：',
-      route ? (routeLabel + ' / ' + route.name) : routeLabel,
-      '',
-      '時間指定：',
-      tw.length + '件',
-      '',
-      'MAP：',
-      '[MAPを開く]',
-      '',
-      '注意事項：',
-      evening ? ('18時指定 ' + evening + '件') : '特記なし'
-    ];
+    var board = boardRowFor(driverId);
+    var lines;
+    if (board) {
+      lines = [
+        '【本日の配送】',
+        '',
+        'コース：',
+        board.routeLabel || '未設定',
+        '',
+        '配送エリア：',
+        board.neighborhood || '—',
+        '',
+        '個口数：',
+        board.packagesDone + ' / ' + board.packagesTotal + '個',
+        '',
+        '件数：',
+        board.stopsDone + ' / ' + board.stopsTotal + '件',
+        '',
+        '配送進捗：',
+        board.progress + '%',
+        '',
+        '残数：',
+        (board.packagesTotal - board.packagesDone) + '個',
+        '',
+        '終了予測時間：',
+        board.predictedReturn || board.plannedReturn,
+        '',
+        'MAP：',
+        '[MAPを開く]',
+        '',
+        '注意事項：',
+        evening ? ('18時指定 ' + evening + '件') : '特記なし'
+      ];
+    } else {
+      var routeLabel = routeIds[0] || '未設定';
+      var route = routeById(routeLabel);
+      lines = [
+        '【本日の配送】',
+        '',
+        '担当：',
+        route ? (routeLabel + ' / ' + route.name) : routeLabel,
+        '',
+        '時間指定：',
+        tw.length + '件',
+        '',
+        'MAP：',
+        '[MAPを開く]',
+        '',
+        '注意事項：',
+        evening ? ('18時指定 ' + evening + '件') : '特記なし'
+      ];
+    }
     if (driver) {
       lines.unshift(driver.name);
-      lines.splice(1, 0, '本日の時間指定MAPです', '');
+      lines.splice(1, 0, '本日の配送状況です', '');
     }
     return lines.join('\n');
   }
@@ -799,6 +848,7 @@
     runAssign: runAssign,
     setMapFilter: setMapFilter,
     setMapDriver: setMapDriver,
+    showAllOnMap: showAllOnMap,
     openPin: openPin,
     previewLine: previewLine,
     openProfile: openProfile,

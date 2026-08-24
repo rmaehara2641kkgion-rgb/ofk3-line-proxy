@@ -286,6 +286,7 @@ a { color: var(--teal); }
   background: #c5cdd4;
   cursor: not-allowed;
 }
+.map-icon-btn { background: var(--navy-soft); }
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -307,6 +308,12 @@ a { color: var(--teal); }
 .status-badge.tone-late { background: var(--coral-soft); color: var(--late); }
 .status-badge.tone-done { background: #e8eef7; color: var(--done); }
 .status-badge.tone-idle { background: #f3eee6; color: var(--idle); }
+.driver-route {
+  margin: 0 0 4px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 700;
+}
 .driver-area {
   margin: 0 0 10px;
   color: var(--muted);
@@ -314,7 +321,7 @@ a { color: var(--teal); }
 }
 .driver-metrics {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -390,25 +397,6 @@ a { color: var(--teal); }
 }
 .modal-card h3 { margin: 0 0 14px; }
 .modal-actions { margin: 0; justify-content: flex-end; }
-.bar {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 110px;
-}
-.bar i {
-  display: block;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--teal);
-}
-.bar-track {
-  width: 72px;
-  height: 8px;
-  border-radius: 999px;
-  background: #efe8dc;
-  overflow: hidden;
-}
 .text-link, .line-btn {
   border: 0;
   background: none;
@@ -589,6 +577,14 @@ th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: 0.0
   font-size: 13px;
   line-height: 1.7;
 }
+textarea.bubble {
+  display: block;
+  width: 100%;
+  border: 0;
+  resize: vertical;
+  min-height: 180px;
+  font-family: inherit;
+}
 .preview-note {
   margin-top: 12px;
   text-align: center;
@@ -637,6 +633,7 @@ th { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: 0.0
   .hero h2 { font-size: 24px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .story { grid-template-columns: 1fr 1fr; }
+  .driver-metrics { grid-template-columns: 1fr 1fr; }
   .header-inner { padding: 12px 14px 0; }
   .wrap { padding: 16px 14px 80px; }
   .nav { padding-bottom: 8px; }

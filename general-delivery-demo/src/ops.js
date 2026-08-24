@@ -98,13 +98,14 @@
       if (!route.assignedDriverId) continue;
       var id = String(route.assignedDriverId);
       if (!byDriver[id]) {
-        byDriver[id] = { packagesTotal: 0, stopsTotal: 0, neighborhood: '', routeIds: [] };
+        byDriver[id] = { packagesTotal: 0, stopsTotal: 0, neighborhood: '', routeIds: [], routeNames: [] };
       }
       var slot = byDriver[id];
       slot.packagesTotal += num(route.packages);
       slot.stopsTotal += num(route.stops);
       if (!slot.neighborhood) slot.neighborhood = route.neighborhood || route.area || '';
       slot.routeIds.push(route.id);
+      slot.routeNames.push(route.name || route.id);
     }
 
     var rows = [];
@@ -149,6 +150,9 @@
         driverName: driver.name,
         lineConnected: !!driver.lineConnected,
         neighborhood: agg.neighborhood,
+        routeIds: agg.routeIds.slice(),
+        routeLabel: agg.routeIds.join(' / '),
+        routeNameLabel: agg.routeNames.join(' / '),
         packagesDone: packagesDone,
         packagesTotal: agg.packagesTotal,
         stopsDone: stopsDone,
