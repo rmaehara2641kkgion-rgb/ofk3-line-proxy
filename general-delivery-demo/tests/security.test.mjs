@@ -63,6 +63,8 @@ assert.match(html, /Demoでは実際には送信されません/);
 assert.match(html, /3分でデモを体験/);
 assert.match(html, /プロフィール/);
 assert.match(html, /現場司令室/);
+assert.match(html, /稼働中ドライバー一覧/);
+assert.match(html, /line-modal/);
 assert.match(html, /すべて架空です/);
 assert.match(html, /配送管理デモ \| Delivery Operations Demo/);
 assert.doesNotMatch(html, /line-channel-token/);

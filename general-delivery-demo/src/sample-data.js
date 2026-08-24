@@ -6,19 +6,19 @@
   'use strict';
 
   var DRIVERS = [
-    { id: 'D-1001', name: '山田 太郎', department: '第一配送', vehicle: 'Van', capability: 19.2, status: '稼働', areas: ['博多区', '東区'] },
-    { id: 'D-1002', name: '佐藤 次郎', department: '第一配送', vehicle: 'Van', capability: 17.8, status: '稼働', areas: ['中央区', '南区'] },
-    { id: 'D-1003', name: '鈴木 花子', department: '軽貨物', vehicle: 'Bike', capability: 16.4, status: '稼働', areas: ['中央区', '城南区'] },
-    { id: 'D-1004', name: '高橋 美咲', department: '第一配送', vehicle: 'Van', capability: 18.6, status: '稼働', areas: ['東区', '博多区'] },
-    { id: 'D-1005', name: '田中 健太', department: '第二配送', vehicle: 'Van', capability: 15.1, status: '稼働', areas: ['南区', '城南区'] },
-    { id: 'D-1006', name: '渡辺 翔太', department: '第二配送', vehicle: 'Van', capability: 17.2, status: '稼働', areas: ['西区', '早良区'] },
-    { id: 'D-1007', name: '伊藤 さくら', department: '軽貨物', vehicle: 'Bike', capability: 15.8, status: '稼働', areas: ['早良区', '西区'] },
+    { id: 'D-1001', name: '山田 太郎', department: '第一配送', vehicle: 'Van', capability: 19.2, status: '稼働', areas: ['博多区', '東区'], boardOffset: 0 },
+    { id: 'D-1002', name: '佐藤 次郎', department: '第一配送', vehicle: 'Van', capability: 17.8, status: '稼働', areas: ['中央区', '南区'], boardOffset: -0.10 },
+    { id: 'D-1003', name: '鈴木 花子', department: '軽貨物', vehicle: 'Bike', capability: 16.4, status: '稼働', areas: ['中央区', '城南区'], boardOffset: -0.20 },
+    { id: 'D-1004', name: '高橋 美咲', department: '第一配送', vehicle: 'Van', capability: 18.6, status: '稼働', areas: ['東区', '博多区'], boardOffset: 0.02 },
+    { id: 'D-1005', name: '田中 健太', department: '第二配送', vehicle: 'Van', capability: 15.1, status: '稼働', areas: ['南区', '城南区'], boardOffset: -0.18 },
+    { id: 'D-1006', name: '渡辺 翔太', department: '第二配送', vehicle: 'Van', capability: 17.2, status: '稼働', areas: ['西区', '早良区'], boardOffset: -0.08 },
+    { id: 'D-1007', name: '伊藤 さくら', department: '軽貨物', vehicle: 'Bike', capability: 15.8, status: '稼働', areas: ['早良区', '西区'], boardComplete: true },
     { id: 'D-1008', name: '中村 大輝', department: '第二配送', vehicle: 'Van', capability: 14.6, status: '稼働', areas: ['西区'] },
     { id: 'D-1009', name: '小林 裕子', department: 'パートナー', vehicle: 'Van', capability: 16.9, status: '稼働', areas: ['城南区', '南区'] },
     { id: 'D-1010', name: '加藤 拓海', department: 'パートナー', vehicle: 'Bike', capability: 14.2, status: '稼働', areas: ['博多区'] },
     { id: 'D-1011', name: '松本 彩花', department: '第一配送', vehicle: 'Van', capability: 18.1, status: '稼働', areas: ['博多区', '中央区'] },
     { id: 'D-1012', name: '吉田 蓮', department: '第二配送', vehicle: 'Van', capability: 13.8, status: '稼働', areas: ['南区'] },
-    { id: 'D-1013', name: '山口 真由', department: '第一配送', vehicle: 'Van', capability: 20.4, status: '稼働', areas: ['東区'] },
+    { id: 'D-1013', name: '山口 真由', department: '第一配送', vehicle: 'Van', capability: 20.4, status: '稼働', areas: ['東区'], boardComplete: true },
     { id: 'D-1014', name: '石田 陽介', department: 'パートナー', vehicle: 'Van', capability: 16.0, status: '稼働', areas: ['早良区'] },
     { id: 'D-1015', name: '森 優衣', department: '軽貨物', vehicle: 'Bike', capability: 15.3, status: '稼働', areas: ['中央区'] },
     { id: 'D-1016', name: '池田 悠真', department: '第二配送', vehicle: 'Van', capability: 14.9, status: '稼働', areas: ['西区', '早良区'] },
@@ -60,24 +60,24 @@
   ];
 
   var ROUTES = [
-    { id: 'R-01', name: '博多駅周辺', area: '博多区', vehicle: 'Van', packages: 80, stops: 52, assignedDriverId: 'D-1001' },
-    { id: 'R-02', name: '東区香椎方面', area: '東区', vehicle: 'Van', packages: 95, stops: 61, assignedDriverId: 'D-1013' },
-    { id: 'R-03', name: '中央区天神周辺', area: '中央区', vehicle: 'Van', packages: 72, stops: 48, assignedDriverId: 'D-1022' },
-    { id: 'R-04', name: '南区大橋方面', area: '南区', vehicle: 'Van', packages: 88, stops: 57, assignedDriverId: 'D-1005' },
-    { id: 'R-05', name: '西区姪浜方面', area: '西区', vehicle: 'Van', packages: 110, stops: 70, assignedDriverId: 'D-1006' },
-    { id: 'R-06', name: '城南区七隈方面', area: '城南区', vehicle: 'Van', packages: 64, stops: 41, assignedDriverId: 'D-1009' },
-    { id: 'R-07', name: '早良区西新方面', area: '早良区', vehicle: 'Van', packages: 91, stops: 59, assignedDriverId: 'D-1014' },
-    { id: 'R-08', name: '博多区住吉方面', area: '博多区', vehicle: 'Van', packages: 78, stops: 50, assignedDriverId: 'D-1011' },
-    { id: 'R-09', name: '東区アイランド方面', area: '東区', vehicle: 'Van', packages: 85, stops: 54, assignedDriverId: 'D-1004' },
-    { id: 'R-10', name: '中央区大濠方面', area: '中央区', vehicle: 'Van', packages: 102, stops: 66, assignedDriverId: 'D-1002' },
-    { id: 'R-11', name: '南区井尻方面', area: '南区', vehicle: 'Van', packages: 69, stops: 44, assignedDriverId: 'D-1017' },
-    { id: 'R-12', name: '西区今宿方面', area: '西区', vehicle: 'Van', packages: 77, stops: 49, assignedDriverId: 'D-1016' },
-    { id: 'R-13', name: '城南区別府方面', area: '城南区', vehicle: 'Van', packages: 93, stops: 60, assignedDriverId: 'D-1019' },
-    { id: 'R-14', name: '早良区藤崎方面', area: '早良区', vehicle: 'Van', packages: 58, stops: 38, assignedDriverId: null },
-    { id: 'R-15', name: '博多区東比恵方面', area: '博多区', vehicle: 'Van', packages: 86, stops: 55, assignedDriverId: 'D-1018' },
-    { id: 'R-16', name: '中央区薬院ミニ便', area: '中央区', vehicle: 'Bike', packages: 71, stops: 46, assignedDriverId: 'D-1003' },
-    { id: 'R-17', name: '早良区室見ミニ便', area: '早良区', vehicle: 'Bike', packages: 54, stops: 35, assignedDriverId: 'D-1007' },
-    { id: 'R-18', name: '西区周船寺方面', area: '西区', vehicle: 'Van', packages: 55, stops: 36, assignedDriverId: null }
+    { id: 'R-01', name: '博多駅周辺', area: '博多区', neighborhood: '鳥飼', vehicle: 'Van', packages: 80, stops: 52, assignedDriverId: 'D-1001' },
+    { id: 'R-02', name: '東区香椎方面', area: '東区', neighborhood: '荒江', vehicle: 'Van', packages: 95, stops: 61, assignedDriverId: 'D-1013' },
+    { id: 'R-03', name: '中央区天神周辺', area: '中央区', neighborhood: '西新', vehicle: 'Van', packages: 72, stops: 48, assignedDriverId: 'D-1022' },
+    { id: 'R-04', name: '南区大橋方面', area: '南区', neighborhood: '原', vehicle: 'Van', packages: 88, stops: 57, assignedDriverId: 'D-1005' },
+    { id: 'R-05', name: '西区姪浜方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 110, stops: 70, assignedDriverId: 'D-1006' },
+    { id: 'R-06', name: '城南区七隈方面', area: '城南区', neighborhood: '福重', vehicle: 'Van', packages: 64, stops: 41, assignedDriverId: 'D-1009' },
+    { id: 'R-07', name: '早良区西新方面', area: '早良区', neighborhood: '百道', vehicle: 'Van', packages: 91, stops: 59, assignedDriverId: 'D-1014' },
+    { id: 'R-08', name: '博多区住吉方面', area: '博多区', neighborhood: '室見', vehicle: 'Van', packages: 78, stops: 50, assignedDriverId: 'D-1011' },
+    { id: 'R-09', name: '東区アイランド方面', area: '東区', neighborhood: '荒江', vehicle: 'Van', packages: 85, stops: 54, assignedDriverId: 'D-1004' },
+    { id: 'R-10', name: '中央区大濠方面', area: '中央区', neighborhood: '西新', vehicle: 'Van', packages: 102, stops: 66, assignedDriverId: 'D-1002' },
+    { id: 'R-11', name: '南区井尻方面', area: '南区', neighborhood: '原', vehicle: 'Van', packages: 69, stops: 44, assignedDriverId: 'D-1017' },
+    { id: 'R-12', name: '西区今宿方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 77, stops: 49, assignedDriverId: 'D-1016' },
+    { id: 'R-13', name: '城南区別府方面', area: '城南区', neighborhood: '福重', vehicle: 'Van', packages: 93, stops: 60, assignedDriverId: 'D-1019' },
+    { id: 'R-14', name: '早良区藤崎方面', area: '早良区', neighborhood: '百道', vehicle: 'Van', packages: 58, stops: 38, assignedDriverId: null },
+    { id: 'R-15', name: '博多区東比恵方面', area: '博多区', neighborhood: '鳥飼', vehicle: 'Van', packages: 86, stops: 55, assignedDriverId: 'D-1018' },
+    { id: 'R-16', name: '中央区薬院ミニ便', area: '中央区', neighborhood: '西新', vehicle: 'Bike', packages: 71, stops: 46, assignedDriverId: 'D-1003' },
+    { id: 'R-17', name: '早良区室見ミニ便', area: '早良区', neighborhood: '室見', vehicle: 'Bike', packages: 54, stops: 35, assignedDriverId: 'D-1007' },
+    { id: 'R-18', name: '西区周船寺方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 55, stops: 36, assignedDriverId: null }
   ];
 
   var PROFILES = {
@@ -244,6 +244,8 @@
       driver.completionRate = extra.completionRate != null ? extra.completionRate : 98.5;
       driver.misdeliveryRate = extra.misdeliveryRate != null ? extra.misdeliveryRate : 0.10;
       driver.lineConnected = extra.lineConnected !== false;
+      driver.boardOffset = driver.boardOffset || 0;
+      driver.boardComplete = !!driver.boardComplete;
       driver.areaExperience = experiences.filter(function (row) {
         return String(row.driverId) === String(driver.id);
       });

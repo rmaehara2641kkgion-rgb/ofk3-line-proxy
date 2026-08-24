@@ -68,6 +68,8 @@ try {
   assert.match(String(js.headers.get('content-type') || ''), /javascript/);
   var jsText = await js.text();
   assert.match(jsText, /window\.DemoApp/);
+assert.match(jsText, /openLineModal/);
+assert.match(jsText, /renderDriverBoard/);
 
   var line = await request('POST', '/api/line/send', '{}');
   assert.equal(line.status, 403);

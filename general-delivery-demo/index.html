@@ -83,6 +83,13 @@
         <div id="ops-hero" class="ops-hero"></div>
         <div id="stats" class="stats"></div>
         <p class="ops-note">現在進捗・残配送数・ドライバー能力から算出した参考予測です。実運用の保証値ではありません。表示データはすべて架空です。</p>
+        <div class="card driver-board-card">
+          <div class="ops-table-head">
+            <h3 class="ops-table-title">稼働中ドライバー一覧</h3>
+            <p class="ops-table-note">残り時間と遅延判定は現在時刻から更新します。荷物個数と配送先件数は別集計です。</p>
+          </div>
+          <div id="driver-board" class="driver-board"></div>
+        </div>
         <div class="card table-wrap">
           <h3 class="ops-table-title">本日の配送状況</h3>
           <table>
@@ -219,7 +226,7 @@
           <div>
             <strong>routes.csv</strong>
             <pre>route_id,name,area,vehicle,packages,stops
-R-01,博多駅周辺,博多区,Van,80,52</pre>
+R-01,博多駅周辺,鳥飼,Van,80,52</pre>
             <input type="file" accept=".csv" onchange="DemoApp.handleUpload('routes', this)">
           </div>
         </div>
@@ -228,6 +235,21 @@ R-01,博多駅周辺,博多区,Van,80,52</pre>
   </main>
 
   <div id="toast" class="toast" role="status"></div>
+  <div id="line-modal" class="modal" hidden>
+    <div class="modal-backdrop" onclick="DemoApp.closeLineModal()"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="line-modal-title">
+      <h3 id="line-modal-title">メッセージ</h3>
+      <div class="phone">
+        <div class="phone-bar">ドライバー向けプレビュー</div>
+        <div id="line-modal-preview" class="bubble"></div>
+      </div>
+      <p class="preview-note">Demoでは実際には送信されません</p>
+      <div class="toolbar modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="DemoApp.closeLineModal()">閉じる</button>
+        <button type="button" class="btn btn-secondary" id="line-modal-open-page">共有ページで見る</button>
+      </div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/src/sample-data.js"></script>

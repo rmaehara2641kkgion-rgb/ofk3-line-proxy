@@ -68,4 +68,43 @@ const r01 = opsA.routes.find(function (row) { return row.routeId === 'R-01'; });
 assert.equal(r01.driverName, '山田 太郎');
 assert.equal(r01.capability, 19.2);
 
+assert.equal(Ops.STATUS_THRESHOLDS.onTimeBand, 0.05);
+assert.equal(Ops.STATUS_THRESHOLDS.slightDelay, 0.15);
+assert.equal(Ops.classifyStatus(1, 0.5, { complete: true }).id, 'done');
+assert.equal(Ops.classifyStatus(0.50, 0.52, {}).id, 'ok');
+assert.equal(Ops.classifyStatus(0.40, 0.50, {}).id, 'warn');
+assert.equal(Ops.classifyStatus(0.30, 0.50, {}).id, 'late');
+assert.equal(Ops.classifyStatus(0, 0, { notStarted: true }).id, 'idle');
+assert.equal(Ops.formatRemain(135), 'あと 2時間15分');
+
+const board = Ops.buildDriverBoard(first, '16:00');
+const statusCount = { ok: 0, warn: 0, late: 0, done: 0, idle: 0 };
+board.forEach(function (row) {
+  statusCount[row.status.id] = (statusCount[row.status.id] || 0) + 1;
+  assert.notEqual(row.packagesTotal, row.stopsTotal);
+  assert.ok(row.neighborhood);
+});
+assert.ok(statusCount.ok >= 1, '正常が1名以上');
+assert.ok(statusCount.warn >= 1, 'やや遅れ気味が1名以上');
+assert.ok(statusCount.late >= 1, '遅延が1名以上');
+assert.ok(statusCount.done >= 1, '完了が1名以上');
+
+const yamadaBoard = board.find(function (row) { return row.driverId === 'D-1001'; });
+assert.ok(yamadaBoard);
+assert.equal(yamadaBoard.neighborhood, '鳥飼');
+assert.equal(yamadaBoard.status.id, 'ok');
+assert.equal(yamadaBoard.packagesTotal, 80);
+assert.equal(yamadaBoard.stopsTotal, 52);
+assert.match(yamadaBoard.remainLabel, /あと/);
+
+const suzukiBoard = board.find(function (row) { return row.driverId === 'D-1003'; });
+assert.equal(suzukiBoard.status.id, 'late');
+assert.ok(suzukiBoard.predictedReturn);
+assert.match(suzukiBoard.delayLabel, /予定より/);
+
+const itoBoard = board.find(function (row) { return row.driverId === 'D-1007'; });
+assert.equal(itoBoard.status.id, 'done');
+assert.equal(itoBoard.packagesDone, itoBoard.packagesTotal);
+assert.equal(itoBoard.remainLabel, '配送完了');
+
 console.log('ops.test.mjs ok');

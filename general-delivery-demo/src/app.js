@@ -183,13 +183,16 @@
     $('story').innerHTML = html;
   }
 
+  var boardTimer = null;
+
   function currentOps() {
     if (!state.loaded || typeof DeliveryOps === 'undefined') return null;
     return DeliveryOps.estimate({
       drivers: state.drivers,
       routes: state.routes,
       schedule: state.schedule,
-      experiences: state.experiences
+      experiences: state.experiences,
+      clock: new Date()
     });
   }
 
@@ -209,6 +212,18 @@
     return '<span class="' + cls + '"><span class="dot"></span>' + label + '</span>';
   }
 
+  function lineIconSvg() {
+    return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3C7.03 3 3 6.36 3 10.5c0 3.74 3.32 6.88 7.8 7.45V21l3.04-2.64c.38.04.77.07 1.16.07C16.97 18.43 21 15.07 21 10.5 21 6.36 16.97 3 12 3zm-3.1 9.15H7.6V8.7h1.3v3.45zm2.55 0h-1.3V8.7h1.3v3.45zm2.55 0h-1.3V8.7h1.3v3.45zm2.55 0h-1.3V8.7H16.55v3.45z"/></svg>';
+  }
+
+  function lineIconButton(driver) {
+    if (!driver) return '';
+    if (!driver.lineConnected) {
+      return '<button type="button" class="line-icon-btn is-off" disabled title="未連携" aria-label="LINE未連携">' + lineIconSvg() + '</button>';
+    }
+    return '<button type="button" class="line-icon-btn" title="メッセージを開く" aria-label="' + escapeHtml(driver.name) + 'へLINE" onclick="DemoApp.openLineModal(\'' + escapeHtml(driver.id) + '\')">' + lineIconSvg() + '</button>';
+  }
+
   function renderDashboard() {
     var board = $('ops-board');
     var s = state.summary;
@@ -217,6 +232,7 @@
       $('stats').innerHTML = '';
       $('ops-hero').innerHTML = '';
       $('ops-route-body').innerHTML = '';
+      if ($('driver-board')) $('driver-board').innerHTML = '';
       $('dash-empty').style.display = 'block';
       return;
     }
@@ -241,7 +257,62 @@
       html += '<div class="stat"><span>' + cards[i][0] + '</span><b>' + cards[i][1] + '</b></div>';
     }
     $('stats').innerHTML = html;
+    renderDriverBoard(ops);
     renderOpsRoutes(ops);
+    startBoardTimer();
+  }
+
+  function startBoardTimer() {
+    if (boardTimer) return;
+    boardTimer = setInterval(function () {
+      if (!state.loaded) return;
+      var page = $('page-dashboard');
+      if (!page || !page.classList.contains('active')) return;
+      renderDriverBoard(currentOps());
+    }, 30000);
+  }
+
+  function renderDriverBoard(ops) {
+    var el = $('driver-board');
+    if (!el) return;
+    var rows = ops && ops.driverBoard ? ops.driverBoard : [];
+    if (!rows.length) {
+      el.innerHTML = '<p class="sub" style="margin:0">稼働中の配送担当がいません。</p>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var driver = driverById(row.driverId);
+      var tone = row.status && row.status.tone ? row.status.tone : 'idle';
+      var pct = Number(row.progress) || 0;
+      html += '<article class="driver-card tone-' + tone + '">';
+      html += '<div class="driver-card-top">';
+      html += '<div class="driver-name-row">';
+      html += driverLink(row.driverId, row.driverName);
+      html += lineIconButton(driver || { id: row.driverId, name: row.driverName, lineConnected: row.lineConnected });
+      html += '</div>';
+      html += '<span class="status-badge tone-' + tone + '"><span class="mark"></span>' + escapeHtml(row.status.label) + '</span>';
+      html += '</div>';
+      html += '<p class="driver-area">📍 ' + escapeHtml(row.neighborhood || '—') + '</p>';
+      html += '<div class="driver-metrics">';
+      html += '<div><span>荷物</span><b>' + row.packagesDone + ' / ' + row.packagesTotal + '個</b></div>';
+      html += '<div><span>配送先</span><b>' + row.stopsDone + ' / ' + row.stopsTotal + '件</b></div>';
+      html += '</div>';
+      html += '<div class="driver-progress-label"><span>配送進捗</span><span>' + pct + '%</span></div>';
+      html += '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>';
+      html += '<div class="driver-return">';
+      html += '<span>帰庫予定 <strong>' + escapeHtml(row.plannedReturn) + '</strong></span>';
+      html += '<span class="muted">' + escapeHtml(row.remainLabel) + '</span>';
+      if (row.predictedReturn) {
+        html += '<span>予測帰庫 <strong>' + escapeHtml(row.predictedReturn) + '</strong></span>';
+      }
+      if (row.delayLabel) {
+        html += '<span class="delay">' + escapeHtml(row.delayLabel) + '</span>';
+      }
+      html += '</div></article>';
+    }
+    el.innerHTML = html;
   }
 
   function renderOpsRoutes(ops) {
@@ -325,6 +396,31 @@
     state.selectedShareDriverId = driverId;
     showPage('line');
     previewLine(driverId);
+  }
+
+  function openLineModal(driverId) {
+    if (!driverId) return;
+    ensureLoaded();
+    var driver = driverById(driverId);
+    var modal = $('line-modal');
+    var title = $('line-modal-title');
+    var preview = $('line-modal-preview');
+    var openPage = $('line-modal-open-page');
+    if (!modal || !title || !preview) return;
+    title.textContent = (driver ? driver.name : 'ドライバー') + ' へメッセージ';
+    preview.textContent = buildLineMessage(driverId);
+    if (openPage) {
+      openPage.onclick = function () {
+        closeLineModal();
+        openDriverLine(driverId);
+      };
+    }
+    modal.hidden = false;
+  }
+
+  function closeLineModal() {
+    var modal = $('line-modal');
+    if (modal) modal.hidden = true;
   }
 
   function renderProfile() {
@@ -708,6 +804,8 @@
     openProfile: openProfile,
     openDriverMap: openDriverMap,
     openDriverLine: openDriverLine,
+    openLineModal: openLineModal,
+    closeLineModal: closeLineModal,
     setProfileQuery: setProfileQuery,
     handleUpload: handleUpload
   };
@@ -716,5 +814,8 @@
     renderStory();
     renderDashboard();
     showPage('dashboard');
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeLineModal();
   });
 })();
