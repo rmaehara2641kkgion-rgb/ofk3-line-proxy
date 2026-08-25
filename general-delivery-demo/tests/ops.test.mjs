@@ -142,6 +142,28 @@ assert.equal(Ops.pinStyle({ window: '16:00〜18:00' }).color, '#e67700');
 assert.equal(Ops.pinStyle({ window: '18:00〜20:00' }).color, '#c92a2a');
 assert.equal(Ops.PIN_COLORS.regular, '#6b7280');
 
+const timedYamada = yamadaPins.find(function (pin) { return !!pin.window; });
+const regularYamada = yamadaPins.find(function (pin) { return !pin.window; });
+assert.ok(timedYamada && regularYamada);
+assert.deepEqual(Ops.describeStop(regularYamada).windowLabel, '時間指定なし');
+assert.equal(Ops.describeStop(regularYamada).kindLabel, '通常配送');
+assert.match(Ops.describeStop(regularYamada).address, /デモ|サンプル|架空/);
+assert.equal(Ops.describeStop(timedYamada).kindLabel, '時間指定');
+assert.match(Ops.describeStop(timedYamada).windowLabel, /\d{2}:\d{2}〜\d{2}:\d{2}/);
+assert.equal(Ops.describeStop(yamadaPins[11]).seq, 12);
+assert.equal(Ops.nextStopIndex(null, 64), 0);
+assert.equal(Ops.nextStopIndex(11, 64), 12);
+assert.equal(Ops.nextStopIndex(63, 64), 63);
+assert.equal(Ops.prevStopIndex(null), null);
+assert.equal(Ops.prevStopIndex(0), 0);
+assert.equal(Ops.prevStopIndex(11), 10);
+assert.equal(Ops.canPrevStop(null), false);
+assert.equal(Ops.canPrevStop(0), false);
+assert.equal(Ops.canPrevStop(1), true);
+assert.equal(Ops.canNextStop(null, 64), true);
+assert.equal(Ops.canNextStop(0, 64), true);
+assert.equal(Ops.canNextStop(63, 64), false);
+
 const suzukiBoard = board.find(function (row) { return row.driverId === 'D-1003'; });
 assert.equal(suzukiBoard.status.id, 'late');
 assert.ok(suzukiBoard.predictedReturn);

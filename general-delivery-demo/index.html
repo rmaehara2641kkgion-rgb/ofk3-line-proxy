@@ -275,6 +275,20 @@ R-01,博多駅周辺,鳥飼,Van,80,64</pre>
       <div id="route-map-meta" class="route-map-meta"></div>
       <div id="route-map-legend" class="map-legend" aria-label="PIN凡例"></div>
       <div id="route-map"></div>
+      <div id="route-pin-inspect" class="route-pin-inspect">
+        <div id="route-pin-card" class="route-pin-card is-overview">
+          <p id="route-pin-card-hint" class="pin-card-hint">PINをタップするか、次へで配送先を確認できます。</p>
+          <div id="route-pin-card-body" hidden></div>
+        </div>
+        <div class="route-pin-nav" aria-label="配送先の確認">
+          <button type="button" class="btn btn-ghost" id="route-pin-overview" onclick="DemoApp.showRouteOverview()" disabled>全体表示</button>
+          <div class="route-pin-stepper">
+            <button type="button" class="btn btn-secondary" id="route-pin-prev" onclick="DemoApp.routePinPrev()" disabled>← 前へ</button>
+            <span id="route-pin-counter">全体 / 0</span>
+            <button type="button" class="btn btn-secondary" id="route-pin-next" onclick="DemoApp.routePinNext()">次へ →</button>
+          </div>
+        </div>
+      </div>
       <p class="preview-note">表示地点はすべて架空のデモPINです</p>
       <div class="toolbar modal-actions">
         <button type="button" class="btn btn-ghost" onclick="DemoApp.closeRouteMap()">閉じる</button>

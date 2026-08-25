@@ -19,6 +19,9 @@
     profileQuery: '',
     routeMap: null,
     routeMarkers: [],
+    routePins: [],
+    routePinIndex: null,
+    routeBounds: [],
     mapModalDriverId: '',
     story: {
       sample: false,
@@ -438,21 +441,22 @@
       '<br>帰庫予定 ' + escapeHtml(row.plannedReturn || '—');
   }
 
-  function routePinIcon(pin) {
+  function routePinIcon(pin, selected) {
     var style = DeliveryOps.pinStyle(pin);
+    var extra = selected ? ' is-selected' : '';
     if (style.kind === 'timed') {
       return L.divIcon({
         className: 'route-pin',
-        html: '<span class="map-pin-dot map-pin-timed" style="background:' + style.color + '"></span>',
-        iconSize: [18, 18],
-        iconAnchor: [9, 9]
+        html: '<span class="map-pin-dot map-pin-timed' + extra + '" style="background:' + style.color + '"></span>',
+        iconSize: selected ? [26, 26] : [18, 18],
+        iconAnchor: selected ? [13, 13] : [9, 9]
       });
     }
     return L.divIcon({
       className: 'route-pin',
-      html: '<span class="map-pin-dot map-pin-regular"></span>',
-      iconSize: [12, 12],
-      iconAnchor: [6, 6]
+      html: '<span class="map-pin-dot map-pin-regular' + extra + '"></span>',
+      iconSize: selected ? [18, 18] : [12, 12],
+      iconAnchor: selected ? [9, 9] : [6, 6]
     });
   }
 
@@ -469,6 +473,121 @@
       html += '<span><i class="leg-dot" style="background:' + color + '"></i>' + escapeHtml(slot) + '</span>';
     });
     el.innerHTML = html;
+  }
+
+  function inspectCardHtml(pin) {
+    var info = DeliveryOps.describeStop(pin);
+    var style = DeliveryOps.pinStyle(pin);
+    var windowClass = info.timed ? ' pin-window is-timed' : ' pin-window is-regular';
+    var windowStyle = info.timed ? ' style="--pin:' + style.color + '"' : '';
+    return '<p class="pin-seq">配送順：<b>' + info.seq + '</b></p>' +
+      '<p class="pin-address">住所：' + escapeHtml(info.address) + '</p>' +
+      '<p class="pin-kind">区分：' + escapeHtml(info.kindLabel) + '</p>' +
+      '<p class="' + windowClass.trim() + '"' + windowStyle + '>時間指定：' + escapeHtml(info.windowLabel) + '</p>';
+  }
+
+  function renderPinInspect() {
+    var card = $('route-pin-card');
+    var body = $('route-pin-card-body');
+    var hint = $('route-pin-card-hint');
+    var counter = $('route-pin-counter');
+    var prev = $('route-pin-prev');
+    var next = $('route-pin-next');
+    var overview = $('route-pin-overview');
+    var total = state.routePins.length;
+    var index = state.routePinIndex;
+    var inspecting = index != null && index >= 0 && index < total;
+    if (card) card.classList.toggle('is-overview', !inspecting);
+    if (card) card.classList.toggle('is-timed', inspecting && !!state.routePins[index].window);
+    if (hint) hint.hidden = inspecting;
+    if (body) {
+      body.hidden = !inspecting;
+      body.innerHTML = inspecting ? inspectCardHtml(state.routePins[index]) : '';
+    }
+    if (counter) {
+      counter.textContent = inspecting ? ((index + 1) + ' / ' + total) : ('全体 / ' + total);
+    }
+    if (prev) prev.disabled = !DeliveryOps.canPrevStop(index);
+    if (next) next.disabled = !DeliveryOps.canNextStop(index, total);
+    if (overview) overview.disabled = !inspecting;
+  }
+
+  function refreshPinSelection() {
+    state.routeMarkers.forEach(function (marker, i) {
+      var pin = state.routePins[i];
+      if (!marker || !pin) return;
+      var selected = state.routePinIndex === i;
+      marker.setIcon(routePinIcon(pin, selected));
+      marker.setZIndexOffset(selected ? 2000 : (pin.window ? 800 : 0));
+    });
+    renderPinInspect();
+  }
+
+  function fitRouteOverview() {
+    if (!state.routeMap || !state.routeBounds.length) return;
+    state.routeMap.invalidateSize();
+    state.routeMap.fitBounds(state.routeBounds, { padding: [36, 36], maxZoom: 14 });
+  }
+
+  function selectRoutePin(index, opts) {
+    opts = opts || {};
+    var total = state.routePins.length;
+    if (!total) return;
+    if (index == null || index < 0 || index >= total) {
+      showRouteOverview();
+      return;
+    }
+    state.routePinIndex = index;
+    refreshPinSelection();
+    var pin = state.routePins[index];
+    if (opts.center !== false && state.routeMap && pin) {
+      state.routeMap.panTo([pin.lat, pin.lng], { animate: true });
+    }
+  }
+
+  function showRouteOverview() {
+    state.routePinIndex = null;
+    refreshPinSelection();
+    fitRouteOverview();
+  }
+
+  function routePinNext() {
+    var next = DeliveryOps.nextStopIndex(state.routePinIndex, state.routePins.length);
+    if (next == null) return;
+    if (state.routePinIndex != null && next === state.routePinIndex && state.routePinIndex >= state.routePins.length - 1) return;
+    selectRoutePin(next);
+  }
+
+  function routePinPrev() {
+    if (!DeliveryOps.canPrevStop(state.routePinIndex)) return;
+    selectRoutePin(DeliveryOps.prevStopIndex(state.routePinIndex));
+  }
+
+  function bindPinInspectSwipe() {
+    var el = $('route-pin-inspect');
+    if (!el || el.getAttribute('data-swipe') === 'on') return;
+    el.setAttribute('data-swipe', 'on');
+    var startX = 0;
+    var startY = 0;
+    var tracking = false;
+    el.addEventListener('touchstart', function (event) {
+      if (!event.touches || event.touches.length !== 1) return;
+      tracking = true;
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+    }, { passive: true });
+    el.addEventListener('touchend', function (event) {
+      if (!tracking) return;
+      tracking = false;
+      var touch = event.changedTouches && event.changedTouches[0];
+      if (!touch) return;
+      var dx = touch.clientX - startX;
+      var dy = touch.clientY - startY;
+      if (Math.abs(dx) < 48) return;
+      if (Math.abs(dx) <= Math.abs(dy)) return;
+      if (dx < 0) routePinNext();
+      else routePinPrev();
+    }, { passive: true });
   }
 
   function openRouteMap(driverId) {
@@ -491,45 +610,37 @@
     var el = $('route-map');
     if (!el || !row) return;
     var pins = pinsForRow(row);
+    state.routePins = pins;
+    state.routePinIndex = null;
     renderRouteMapLegend(pins);
+    bindPinInspectSwipe();
     if (state.routeMap) {
       state.routeMap.remove();
       state.routeMap = null;
     }
     state.routeMarkers = [];
+    state.routeBounds = [];
     state.routeMap = L.map(el, { scrollWheelZoom: true }).setView([33.59, 130.40], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
       maxZoom: 18
     }).addTo(state.routeMap);
-    var bounds = [];
-    function addPinMarker(pin) {
+    pins.forEach(function (pin, index) {
       var style = DeliveryOps.pinStyle(pin);
       var marker = L.marker([pin.lat, pin.lng], {
-        icon: routePinIcon(pin),
+        icon: routePinIcon(pin, false),
         zIndexOffset: style.kind === 'timed' ? 800 : 0,
         keyboard: false
       }).addTo(state.routeMap);
-      var title = style.kind === 'timed' ? ('時間指定 ' + pin.window) : '通常配送';
-      marker.bindPopup(
-        '<strong>' + escapeHtml(title) + '</strong><br>' +
-        escapeHtml(pin.address || pin.label || '') +
-        '<br>' + escapeHtml(pin.neighborhood || pin.areaName || '') +
-        '<br>Route ' + escapeHtml(pin.routeId || row.routeLabel || '')
-      );
-      marker.bindTooltip(title, { direction: 'top', opacity: 0.92 });
+      marker.on('click', function () {
+        selectRoutePin(index);
+      });
       state.routeMarkers.push(marker);
-      bounds.push([pin.lat, pin.lng]);
-    }
-    pins.filter(function (pin) { return !pin.window; }).forEach(addPinMarker);
-    pins.filter(function (pin) { return !!pin.window; }).forEach(addPinMarker);
-    function fitAll() {
-      if (!state.routeMap || !bounds.length) return;
-      state.routeMap.invalidateSize();
-      state.routeMap.fitBounds(bounds, { padding: [36, 36], maxZoom: 14 });
-    }
-    fitAll();
-    setTimeout(fitAll, 160);
+      state.routeBounds.push([pin.lat, pin.lng]);
+    });
+    renderPinInspect();
+    fitRouteOverview();
+    setTimeout(fitRouteOverview, 160);
   }
 
   function closeRouteMap() {
@@ -539,6 +650,9 @@
       state.routeMap = null;
       state.routeMarkers = [];
     }
+    state.routePins = [];
+    state.routePinIndex = null;
+    state.routeBounds = [];
     if (modal) modal.hidden = true;
   }
 
@@ -979,6 +1093,9 @@
     openAllDriversMap: openAllDriversMap,
     openRouteMap: openRouteMap,
     closeRouteMap: closeRouteMap,
+    showRouteOverview: showRouteOverview,
+    routePinNext: routePinNext,
+    routePinPrev: routePinPrev,
     openDriverLine: openDriverLine,
     openLineModal: openLineModal,
     closeLineModal: closeLineModal,

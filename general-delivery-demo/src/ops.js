@@ -349,6 +349,43 @@
     return pins;
   }
 
+  function describeStop(pin) {
+    pin = pin || {};
+    var timed = !!pin.window;
+    return {
+      seq: num(pin.seq, 0),
+      address: pin.address || pin.label || '',
+      timed: timed,
+      kindLabel: timed ? '時間指定' : '通常配送',
+      windowLabel: timed ? String(pin.window) : '時間指定なし'
+    };
+  }
+
+  function nextStopIndex(index, total) {
+    var n = num(total);
+    if (n <= 0) return null;
+    if (index == null || index < 0) return 0;
+    if (index >= n - 1) return n - 1;
+    return index + 1;
+  }
+
+  function prevStopIndex(index) {
+    if (index == null || index < 0) return null;
+    if (index <= 0) return 0;
+    return index - 1;
+  }
+
+  function canPrevStop(index) {
+    return index != null && index > 0;
+  }
+
+  function canNextStop(index, total) {
+    var n = num(total);
+    if (n <= 0) return false;
+    if (index == null || index < 0) return true;
+    return index < n - 1;
+  }
+
   function byId(list, id, key) {
     key = key || 'id';
     for (var i = 0; i < list.length; i++) {
@@ -491,6 +528,11 @@
     pinStyle: pinStyle,
     pinCountFor: pinCountFor,
     summarizePins: summarizePins,
+    describeStop: describeStop,
+    nextStopIndex: nextStopIndex,
+    prevStopIndex: prevStopIndex,
+    canPrevStop: canPrevStop,
+    canNextStop: canNextStop,
     buildRoutePins: buildRoutePins,
     detailAreasOf: detailAreasOf,
     classifyStatus: classifyStatus,

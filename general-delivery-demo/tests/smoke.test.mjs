@@ -50,6 +50,8 @@ try {
   assert.match(html, /finish-explain/);
   assert.match(html, /map-modal/);
   assert.match(html, /route-map-legend/);
+  assert.match(html, /route-pin-inspect/);
+  assert.match(html, /全体表示/);
 
   var opsJs = await request('GET', '/src/ops.js');
   assert.equal(opsJs.status, 200);
@@ -77,6 +79,9 @@ try {
   assert.match(jsText, /fitBounds/);
   assert.match(jsText, /map-pin-regular/);
   assert.match(jsText, /map-pin-timed/);
+  assert.match(jsText, /routePinNext/);
+  assert.match(jsText, /showRouteOverview/);
+  assert.match(jsText, /bindPinInspectSwipe/);
   assert.match(jsText, /evidence-grid/);
 
   var line = await request('POST', '/api/line/send', '{}');
