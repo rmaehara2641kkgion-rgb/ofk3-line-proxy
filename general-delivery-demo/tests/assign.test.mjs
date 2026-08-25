@@ -21,12 +21,14 @@ assert.equal(sample.summary.workingDrivers, 23);
 const first = Assign.runAutoAssign({
   drivers: sample.drivers,
   routes: sample.routes,
-  experiences: sample.experiences
+  experiences: sample.experiences,
+  schedule: sample.schedule
 });
 const second = Assign.runAutoAssign({
   drivers: sample.drivers,
   routes: sample.routes,
-  experiences: sample.experiences
+  experiences: sample.experiences,
+  schedule: sample.schedule
 });
 
 assert.deepEqual(first, second);
@@ -40,6 +42,16 @@ assert.equal(hakata.recommended.confidence, '高');
 assert.ok(hakata.recommended.reasons.some(function (r) { return r.indexOf('博多区経験 18日') >= 0; }));
 assert.ok(hakata.recommended.reasons.some(function (r) { return r.indexOf('19.2個/h') >= 0; }));
 assert.ok(hakata.recommended.reasons.some(function (r) { return r.indexOf('Van勤務') >= 0; }));
+
+// Evidence: structured grounds for the recommendation (used by the assign-grid UI).
+assert.ok(hakata.recommended.evidence);
+assert.equal(hakata.recommended.evidence.area, '博多区');
+assert.equal(hakata.recommended.evidence.areaVisits, 18);
+assert.equal(hakata.recommended.evidence.areaLastDate, '2026-08-22');
+assert.equal(hakata.recommended.evidence.capability, 19.2);
+assert.equal(hakata.recommended.evidence.vehicleMatched, true);
+assert.equal(hakata.recommended.evidence.workStart, '09:00');
+assert.equal(hakata.recommended.evidence.workEnd, '20:00');
 
 const bike = first.assignments.find(function (row) { return row.routeId === 'R-16'; });
 assert.equal(bike.recommended.vehicle, 'Bike');

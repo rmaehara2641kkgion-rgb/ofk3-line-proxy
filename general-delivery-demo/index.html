@@ -83,6 +83,33 @@
         <div id="ops-hero" class="ops-hero"></div>
         <div id="stats" class="stats"></div>
         <p class="ops-note">現在進捗・残配送数・ドライバー能力から算出した参考予測です。実運用の保証値ではありません。表示データはすべて架空です。</p>
+        <details class="card finish-explain">
+          <summary>終了時間予測の算出方法（このデモの仕組み）</summary>
+          <div class="finish-explain-body">
+            <p class="finish-explain-lead">このデモでは、経過時間・ドライバー能力・ペース比率から終了予測を簡易的に算出しています。</p>
+            <div class="finish-formula">
+              <span class="fx-term">経過稼働時間</span>
+              <span class="fx-op">×</span>
+              <span class="fx-term">配送能力（個/h）</span>
+              <span class="fx-op">×</span>
+              <span class="fx-term fx-key">ペース比率 0.52</span>
+              <span class="fx-op">＝</span>
+              <span class="fx-term fx-result">配送完了数（予測）</span>
+            </div>
+            <p class="finish-explain-note">残個数を能力値で割り戻すことで、終了予測時刻を算出しています。</p>
+            <p class="finish-explain-real">
+              実運用（本番アプリ）では、この予測式を事業者ごとの実態に合わせて拡張できます。例えば：
+            </p>
+            <ul class="finish-explain-list">
+              <li>積み込み時間（例：出庫前20分）</li>
+              <li>最初の目的地までの移動時間</li>
+              <li>配送件数 ÷ 1時間あたりの能力値</li>
+              <li>天候・道路状況等の補正値</li>
+              <li>最終目的地からステーションまでの帰還移動時間</li>
+            </ul>
+            <p class="finish-explain-note">これらのパラメータは事業者の運用に合わせて自由に設定可能です。本デモでは分かりやすさを優先し、簡易モデルで表示しています。</p>
+          </div>
+        </details>
         <div class="card driver-board-card">
           <div class="ops-table-head">
             <div>

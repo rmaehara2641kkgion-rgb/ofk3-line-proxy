@@ -49,12 +49,13 @@
     return '低';
   }
 
-  function scoreCandidate(driver, route, experiences) {
+  function scoreCandidate(driver, route, experiences, schedule) {
     if (!isWorking(driver)) return null;
     if (!vehicleOk(driver.vehicle, route.vehicle)) return null;
 
     var exp = findExperience(experiences, driver.id, route.area);
     var expDays = exp ? num(exp.days) : 0;
+    var expLastDate = exp ? (exp.lastDate || '') : '';
     var capability = num(driver.capability);
     var vehicleMatched = norm(driver.vehicle) === norm(route.vehicle) || norm(driver.vehicle) === 'both';
     var score = expDays * 10 + capability * 3;
@@ -68,6 +69,8 @@
     if (driver.vehicle) reasons.push('本日' + driver.vehicle + '勤務');
     if (!expDays) reasons.push('エリア経験は少なめ');
 
+    var shift = findShift(schedule, driver.id);
+
     return {
       driverId: driver.id,
       driverName: driver.name,
@@ -77,8 +80,26 @@
       capability: capability,
       score: Math.round(score * 10) / 10,
       confidence: confidenceOf(expDays, capability, vehicleMatched),
-      reasons: reasons
+      reasons: reasons,
+      evidence: {
+        area: route.area || '',
+        areaVisits: expDays,
+        areaLastDate: expLastDate,
+        capability: capability,
+        vehicle: driver.vehicle || '',
+        vehicleMatched: vehicleMatched,
+        workStart: shift ? shift.start : '',
+        workEnd: shift ? shift.end : ''
+      }
     };
+  }
+
+  function findShift(schedule, driverId) {
+    if (!schedule) return null;
+    for (var i = 0; i < schedule.length; i++) {
+      if (String(schedule[i].driverId) === String(driverId)) return schedule[i];
+    }
+    return null;
   }
 
   function compareCandidates(a, b) {
@@ -92,6 +113,7 @@
     var drivers = (input && input.drivers) || [];
     var routes = (input && input.routes) || [];
     var experiences = (input && input.experiences) || [];
+    var schedule = (input && input.schedule) || [];
     var used = {};
     var assignments = [];
 
@@ -103,7 +125,7 @@
       var route = sortedRoutes[i];
       var pool = [];
       for (var d = 0; d < drivers.length; d++) {
-        var candidate = scoreCandidate(drivers[d], route, experiences);
+        var candidate = scoreCandidate(drivers[d], route, experiences, schedule);
         if (candidate) pool.push(candidate);
       }
       pool.sort(compareCandidates);

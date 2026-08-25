@@ -509,7 +509,8 @@
     state.assignResult = DeliveryAssign.runAutoAssign({
       drivers: state.drivers,
       routes: state.routes,
-      experiences: state.experiences
+      experiences: state.experiences,
+      schedule: state.schedule
     });
     for (var i = 0; i < state.assignResult.assignments.length; i++) {
       var row = state.assignResult.assignments[i];
@@ -544,6 +545,31 @@
     return 'badge-low';
   }
 
+  function evidenceBadges(evidence) {
+    if (!evidence) return '';
+    var html = '<div class="evidence-grid">';
+    var visitsLabel = evidence.areaVisits > 0
+      ? escapeHtml(evidence.area) + '経験 <b>' + evidence.areaVisits + '回</b>'
+      : escapeHtml(evidence.area) + '経験なし';
+    html += '<div class="evidence-item' + (evidence.areaVisits > 0 ? '' : ' evidence-weak') + '">';
+    html += '<span class="evidence-label">エリア経験</span><span class="evidence-value">' + visitsLabel + '</span>';
+    html += '</div>';
+    html += '<div class="evidence-item">';
+    html += '<span class="evidence-label">最終経験日</span><span class="evidence-value">' + (evidence.areaLastDate ? escapeHtml(evidence.areaLastDate) : '記録なし') + '</span>';
+    html += '</div>';
+    html += '<div class="evidence-item">';
+    html += '<span class="evidence-label">配送能力</span><span class="evidence-value">' + evidence.capability.toFixed(1) + ' 個/h</span>';
+    html += '</div>';
+    html += '<div class="evidence-item' + (evidence.vehicleMatched ? '' : ' evidence-weak') + '">';
+    html += '<span class="evidence-label">車両条件</span><span class="evidence-value">' + escapeHtml(evidence.vehicle || '—') + (evidence.vehicleMatched ? '（適合）' : '（要確認）') + '</span>';
+    html += '</div>';
+    html += '<div class="evidence-item">';
+    html += '<span class="evidence-label">稼働条件</span><span class="evidence-value">' + (evidence.workStart ? (escapeHtml(evidence.workStart) + '〜' + escapeHtml(evidence.workEnd)) : '—') + '</span>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
   function renderAssign() {
     var result = state.assignResult;
     if (!result) {
@@ -558,13 +584,9 @@
       html += '<h3>' + escapeHtml(row.routeId) + '　' + escapeHtml(row.routeName) + '</h3>';
       html += '<p class="sub" style="margin:0 0 8px">' + escapeHtml(row.area) + ' / ' + escapeHtml(row.vehicle) + ' / ' + row.packages + '個</p>';
       if (rec) {
-        html += '<p><strong>おすすめ：</strong>' + driverLink(rec.driverId, rec.driverName) + '</p>';
-        html += '<p>信頼度：<span class="badge ' + confClass(rec.confidence) + '">' + escapeHtml(rec.confidence) + '</span></p>';
-        html += '<ul class="reason-list">';
-        rec.reasons.forEach(function (reason) {
-          html += '<li>' + escapeHtml(reason) + '</li>';
-        });
-        html += '</ul>';
+        html += '<p class="assign-pick"><strong>おすすめ：</strong>' + driverLink(rec.driverId, rec.driverName) +
+          '　<span class="badge ' + confClass(rec.confidence) + '">信頼度 ' + escapeHtml(rec.confidence) + '</span></p>';
+        html += evidenceBadges(rec.evidence);
       } else {
         html += '<p>未アサイン</p>';
       }
