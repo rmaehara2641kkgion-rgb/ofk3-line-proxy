@@ -94,8 +94,53 @@ assert.ok(yamadaBoard);
 assert.equal(yamadaBoard.neighborhood, '鳥飼');
 assert.equal(yamadaBoard.status.id, 'ok');
 assert.equal(yamadaBoard.packagesTotal, 80);
-assert.equal(yamadaBoard.stopsTotal, 52);
+assert.equal(yamadaBoard.stopsTotal, 64);
 assert.match(yamadaBoard.remainLabel, /あと/);
+
+const r07 = first.routes.find(function (row) { return row.id === 'R-07'; });
+const pins07 = Ops.buildRoutePins(r07, first.timeWindows, Sample.AREA_COORDS);
+const route01 = first.routes.find(function (row) { return row.id === 'R-01'; });
+const pins01 = Ops.buildRoutePins(route01, first.timeWindows, Sample.AREA_COORDS);
+const pins01b = Ops.buildRoutePins(route01, first.timeWindows, Sample.AREA_COORDS);
+assert.deepEqual(pins01, pins01b);
+assert.ok(pins07.every(function (pin) { return pin.routeId === 'R-07'; }));
+assert.ok(pins01.every(function (pin) { return pin.routeId === 'R-01'; }));
+assert.notEqual(pins07[0].lat + ',' + pins07[0].lng, pins01[0].lat + ',' + pins01[0].lng);
+
+first.routes.forEach(function (route) {
+  const pins = Ops.buildRoutePins(route, first.timeWindows, Sample.AREA_COORDS);
+  const summary = Ops.summarizePins(pins);
+  assert.equal(summary.total, route.stops);
+  assert.ok(summary.total >= 60 && summary.total <= 70, route.id + ' pin count');
+  const timedWindows = first.timeWindows.filter(function (tw) { return tw.routeId === route.id; });
+  assert.equal(summary.timed, timedWindows.length);
+  assert.ok(summary.timed <= 8, route.id + ' timed pins should be a minority');
+  assert.ok(summary.timed * 4 < summary.total, route.id + ' timed pins should not dominate');
+  pins.forEach(function (pin) {
+    assert.equal(typeof pin.lat, 'number');
+    assert.equal(typeof pin.lng, 'number');
+    assert.match(pin.address || pin.label, /デモ|サンプル|架空/);
+    const style = Ops.pinStyle(pin);
+    if (pin.window) {
+      assert.equal(style.kind, 'timed');
+      assert.ok(style.color !== Ops.PIN_COLORS.regular);
+    } else {
+      assert.equal(style.kind, 'regular');
+      assert.equal(style.color, '#6b7280');
+    }
+  });
+});
+
+const yamadaPins = Ops.buildRoutePins(route01, first.timeWindows, Sample.AREA_COORDS);
+const yamadaSummary = Ops.summarizePins(yamadaPins);
+assert.equal(yamadaSummary.total, 64);
+assert.equal(yamadaSummary.timed, 6);
+assert.equal(yamadaSummary.regular, 58);
+assert.equal(Ops.pinStyle({ window: '10:00〜12:00' }).color, '#2b6cb0');
+assert.equal(Ops.pinStyle({ window: '14:00〜16:00' }).color, '#2f9e44');
+assert.equal(Ops.pinStyle({ window: '16:00〜18:00' }).color, '#e67700');
+assert.equal(Ops.pinStyle({ window: '18:00〜20:00' }).color, '#c92a2a');
+assert.equal(Ops.PIN_COLORS.regular, '#6b7280');
 
 const suzukiBoard = board.find(function (row) { return row.driverId === 'D-1003'; });
 assert.equal(suzukiBoard.status.id, 'late');

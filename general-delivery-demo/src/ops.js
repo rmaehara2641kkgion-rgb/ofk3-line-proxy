@@ -176,6 +176,179 @@
     return rows;
   }
 
+  function detailAreasOf(route) {
+    if (!route) return [];
+    if (route.neighborhoods && route.neighborhoods.length) return route.neighborhoods.slice();
+    if (route.detailAreas && route.detailAreas.length) return route.detailAreas.slice();
+    var raw = String(route.detailAreaLabel || route.neighborhood || '');
+    if (raw) {
+      return raw.split(/[・、,]/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    return route.area ? [route.area] : [];
+  }
+
+  var PIN_COLORS = {
+    regular: '#6b7280',
+    windows: {
+      '10:00〜12:00': '#2b6cb0',
+      '14:00〜16:00': '#2f9e44',
+      '16:00〜18:00': '#e67700',
+      '18:00〜20:00': '#c92a2a'
+    }
+  };
+  var FICTIONAL_STREETS = ['デモ通り', 'サンプル小路', '架空台', 'デモ丘', 'サンプル橋', '架空野'];
+
+  function seedFrom(text) {
+    var s = 0;
+    var str = String(text || '');
+    for (var i = 0; i < str.length; i++) {
+      s = (s * 31 + str.charCodeAt(i)) % 1000003;
+    }
+    return s;
+  }
+
+  function round5(value) {
+    return Math.round(num(value) * 100000) / 100000;
+  }
+
+  function pinCountFor(route) {
+    var n = num(route && route.stops);
+    if (n > 0) return n;
+    return 60 + (seedFrom(route && route.id) % 11);
+  }
+
+  function pinStyle(pin) {
+    var windowLabel = pin && pin.window ? String(pin.window) : '';
+    if (windowLabel && PIN_COLORS.windows[windowLabel]) {
+      return { kind: 'timed', color: PIN_COLORS.windows[windowLabel], window: windowLabel };
+    }
+    return { kind: 'regular', color: PIN_COLORS.regular, window: '' };
+  }
+
+  function summarizePins(pins) {
+    var timed = 0;
+    var byWindow = {};
+    (pins || []).forEach(function (pin) {
+      if (!pin || !pin.window) return;
+      timed += 1;
+      byWindow[pin.window] = (byWindow[pin.window] || 0) + 1;
+    });
+    var total = (pins || []).length;
+    return {
+      total: total,
+      timed: timed,
+      regular: Math.max(0, total - timed),
+      byWindow: byWindow
+    };
+  }
+
+  function pinOffset(index, seed) {
+    var ring = Math.floor(Math.max(0, index) / 8);
+    var slot = Math.max(0, index) % 8;
+    var angle = ((slot * 45) + ((seed + ring * 11) % 30)) * Math.PI / 180;
+    var dist = 0.00105 + ring * 0.00082 + ((index * 13 + seed) % 6) * 0.00011;
+    return {
+      lat: Math.cos(angle) * dist,
+      lng: Math.sin(angle) * dist * 1.15
+    };
+  }
+
+  function neighborhoodCenter(base, name, nIndex, routeSeed) {
+    var local = seedFrom(name);
+    var angle = ((nIndex * 90 + (routeSeed % 50) + (local % 40)) % 360) * Math.PI / 180;
+    var dist = 0.0054 + (nIndex % 3) * 0.0021 + (local % 5) * 0.00035;
+    return {
+      lat: base.lat + Math.cos(angle) * dist,
+      lng: base.lng + Math.sin(angle) * dist * 1.18
+    };
+  }
+
+  function fictionalAddress(ward, neighborhood, index) {
+    var street = FICTIONAL_STREETS[index % FICTIONAL_STREETS.length];
+    var chome = 1 + (index % 9);
+    var ban = 1 + ((index * 3 + String(neighborhood || '').length) % 19);
+    var go = 1 + ((index * 7) % 14);
+    return '福岡市' + (ward || '') + (neighborhood || '') + street + chome + '-' + ban + '-' + go;
+  }
+
+  function timedIndexMap(total, twCount, seed) {
+    var map = {};
+    if (twCount <= 0 || total <= 0) return map;
+    var used = {};
+    var t;
+    for (t = 0; t < twCount; t++) {
+      var idx = Math.floor((t + 1) * (total - 1) / (twCount + 1));
+      idx = (idx + (seed % 5)) % total;
+      var guard = 0;
+      while (used[idx] && guard < total) {
+        idx = (idx + 7) % total;
+        guard += 1;
+      }
+      used[idx] = true;
+      map[idx] = t;
+    }
+    return map;
+  }
+
+  function buildRoutePins(route, timeWindows, areaCoords) {
+    var routeId = route && route.id ? String(route.id) : '';
+    var ward = (route && route.area) || '博多区';
+    var areas = detailAreasOf(route);
+    if (!areas.length) areas = [ward];
+    var coords = areaCoords || {};
+    var base = coords[ward] || coords['博多区'] || { lat: 33.59, lng: 130.40 };
+    var seed = seedFrom(routeId);
+    var tws = (timeWindows || []).filter(function (tw) {
+      return String(tw.routeId) === routeId;
+    });
+    var total = pinCountFor(route);
+    if (tws.length > total) total = tws.length;
+    var timedAt = timedIndexMap(total, tws.length, seed);
+    var pins = [];
+    var i;
+    for (i = 0; i < total; i++) {
+      var nIndex = i % areas.length;
+      var neighborhood = areas[nIndex];
+      var center = neighborhoodCenter(base, neighborhood, nIndex, seed);
+      var localIndex = Math.floor(i / areas.length);
+      var off = pinOffset(localIndex, seed + nIndex * 19);
+      var tw = timedAt[i] != null ? tws[timedAt[i]] : null;
+      var lat = round5(center.lat + off.lat);
+      var lng = round5(center.lng + off.lng);
+      if (tw) {
+        pins.push({
+          id: tw.id || (routeId + '-TW-' + pad(i + 1)),
+          lat: lat,
+          lng: lng,
+          label: tw.address || tw.window || routeId,
+          address: tw.address || fictionalAddress(ward, neighborhood, i),
+          window: tw.window || '',
+          timed: true,
+          routeId: routeId,
+          areaName: tw.area || neighborhood,
+          neighborhood: neighborhood,
+          seq: i + 1
+        });
+      } else {
+        var address = fictionalAddress(ward, neighborhood, i);
+        pins.push({
+          id: routeId + '-P-' + pad(i + 1),
+          lat: lat,
+          lng: lng,
+          label: address,
+          address: address,
+          window: '',
+          timed: false,
+          routeId: routeId,
+          areaName: neighborhood,
+          neighborhood: neighborhood,
+          seq: i + 1
+        });
+      }
+    }
+    return pins;
+  }
+
   function byId(list, id, key) {
     key = key || 'id';
     for (var i = 0; i < list.length; i++) {
@@ -314,6 +487,12 @@
     estimate: estimate,
     estimateRoute: estimateRoute,
     buildDriverBoard: buildDriverBoard,
+    PIN_COLORS: PIN_COLORS,
+    pinStyle: pinStyle,
+    pinCountFor: pinCountFor,
+    summarizePins: summarizePins,
+    buildRoutePins: buildRoutePins,
+    detailAreasOf: detailAreasOf,
     classifyStatus: classifyStatus,
     experiencesFor: experiencesFor,
     formatTime: formatTime,

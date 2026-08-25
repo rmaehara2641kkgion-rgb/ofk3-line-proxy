@@ -17,6 +17,9 @@
     selectedShareDriverId: '',
     selectedProfileId: '',
     profileQuery: '',
+    routeMap: null,
+    routeMarkers: [],
+    mapModalDriverId: '',
     story: {
       sample: false,
       drivers: false,
@@ -322,7 +325,7 @@
       }
       html += '</div>';
       html += '<div class="driver-card-actions">';
-      html += '<button type="button" class="btn btn-ghost btn-sm" onclick="DemoApp.openDriverMap(\'' + escapeHtml(row.driverId) + '\')">MAP表示</button>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" onclick="DemoApp.openRouteMap(\'' + escapeHtml(row.driverId) + '\')">MAP表示</button>';
       html += lineTextButton(driverForActions);
       html += '</div>';
       html += '</article>';
@@ -395,6 +398,153 @@
     state.selectedShareDriverId = driverId;
     showPage('line');
     previewLine(driverId);
+  }
+
+  function pinsForRow(row) {
+    var ids = (row && row.routeIds) ? row.routeIds.slice() : [];
+    if (!ids.length && row && row.routeId) ids = [row.routeId];
+    var pins = [];
+    ids.forEach(function (id) {
+      var route = routeById(id);
+      pins = pins.concat(DeliveryOps.buildRoutePins(
+        route || { id: id, area: row && row.neighborhood, neighborhood: row && row.neighborhood },
+        state.timeWindows,
+        DeliverySampleData.AREA_COORDS
+      ));
+    });
+    return pins;
+  }
+
+  function enrichRowPins(row) {
+    if (!row) return row;
+    var summary = DeliveryOps.summarizePins(pinsForRow(row));
+    row.pinCount = summary.total;
+    row.timedPinCount = summary.timed;
+    row.regularPinCount = summary.regular;
+    return row;
+  }
+
+  function routeMetaHtml(row) {
+    if (!row) return '';
+    var remainPkg = Math.max(0, row.packagesTotal - row.packagesDone);
+    var remainStops = Math.max(0, row.stopsTotal - row.stopsDone);
+    var pinLine = row.pinCount != null
+      ? '<br>配送先 ' + row.pinCount + '件（通常 ' + (row.regularPinCount != null ? row.regularPinCount : row.pinCount) + ' / 時間指定 ' + (row.timedPinCount || 0) + '）'
+      : '';
+    return '<strong>' + escapeHtml(row.routeLabel || row.routeId || '—') + '</strong>　' + escapeHtml(row.driverName || '') +
+      '<br>' + escapeHtml(row.neighborhood || '—') +
+      pinLine +
+      '<br>残り ' + remainPkg + '個 / ' + remainStops + '件' +
+      '<br>帰庫予定 ' + escapeHtml(row.plannedReturn || '—');
+  }
+
+  function routePinIcon(pin) {
+    var style = DeliveryOps.pinStyle(pin);
+    if (style.kind === 'timed') {
+      return L.divIcon({
+        className: 'route-pin',
+        html: '<span class="map-pin-dot map-pin-timed" style="background:' + style.color + '"></span>',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+    }
+    return L.divIcon({
+      className: 'route-pin',
+      html: '<span class="map-pin-dot map-pin-regular"></span>',
+      iconSize: [12, 12],
+      iconAnchor: [6, 6]
+    });
+  }
+
+  function renderRouteMapLegend(pins) {
+    var el = $('route-map-legend');
+    if (!el) return;
+    var html = '<span><i class="leg-dot regular"></i>通常配送</span>';
+    var seen = {};
+    WINDOWS.forEach(function (slot) {
+      var used = (pins || []).some(function (pin) { return pin.window === slot; });
+      if (!used || seen[slot]) return;
+      seen[slot] = true;
+      var color = (DeliveryOps.PIN_COLORS && DeliveryOps.PIN_COLORS.windows && DeliveryOps.PIN_COLORS.windows[slot]) || WINDOW_COLORS[slot];
+      html += '<span><i class="leg-dot" style="background:' + color + '"></i>' + escapeHtml(slot) + '</span>';
+    });
+    el.innerHTML = html;
+  }
+
+  function openRouteMap(driverId) {
+    if (!driverId) return;
+    ensureLoaded();
+    var row = enrichRowPins(driverBoardRow(driverId));
+    var modal = $('map-modal');
+    var meta = $('route-map-meta');
+    var title = $('map-modal-title');
+    if (!modal) return;
+    state.mapModalDriverId = driverId;
+    if (title) title.textContent = (row && (row.routeLabel || row.routeId) ? (row.routeLabel || row.routeId) : 'Route') + ' MAP';
+    if (meta) meta.innerHTML = routeMetaHtml(row);
+    modal.hidden = false;
+    renderRouteMap(row);
+  }
+
+  function renderRouteMap(row) {
+    if (typeof L === 'undefined') return;
+    var el = $('route-map');
+    if (!el || !row) return;
+    var pins = pinsForRow(row);
+    renderRouteMapLegend(pins);
+    if (state.routeMap) {
+      state.routeMap.remove();
+      state.routeMap = null;
+    }
+    state.routeMarkers = [];
+    state.routeMap = L.map(el, { scrollWheelZoom: true }).setView([33.59, 130.40], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 18
+    }).addTo(state.routeMap);
+    var bounds = [];
+    function addPinMarker(pin) {
+      var style = DeliveryOps.pinStyle(pin);
+      var marker = L.marker([pin.lat, pin.lng], {
+        icon: routePinIcon(pin),
+        zIndexOffset: style.kind === 'timed' ? 800 : 0,
+        keyboard: false
+      }).addTo(state.routeMap);
+      var title = style.kind === 'timed' ? ('時間指定 ' + pin.window) : '通常配送';
+      marker.bindPopup(
+        '<strong>' + escapeHtml(title) + '</strong><br>' +
+        escapeHtml(pin.address || pin.label || '') +
+        '<br>' + escapeHtml(pin.neighborhood || pin.areaName || '') +
+        '<br>Route ' + escapeHtml(pin.routeId || row.routeLabel || '')
+      );
+      marker.bindTooltip(title, { direction: 'top', opacity: 0.92 });
+      state.routeMarkers.push(marker);
+      bounds.push([pin.lat, pin.lng]);
+    }
+    pins.filter(function (pin) { return !pin.window; }).forEach(addPinMarker);
+    pins.filter(function (pin) { return !!pin.window; }).forEach(addPinMarker);
+    function fitAll() {
+      if (!state.routeMap || !bounds.length) return;
+      state.routeMap.invalidateSize();
+      state.routeMap.fitBounds(bounds, { padding: [36, 36], maxZoom: 14 });
+    }
+    fitAll();
+    setTimeout(fitAll, 160);
+  }
+
+  function closeRouteMap() {
+    var modal = $('map-modal');
+    if (state.routeMap) {
+      state.routeMap.remove();
+      state.routeMap = null;
+      state.routeMarkers = [];
+    }
+    if (modal) modal.hidden = true;
+  }
+
+  function closeAllModals() {
+    closeLineModal();
+    closeRouteMap();
   }
 
   function openLineModal(driverId) {
@@ -827,6 +977,8 @@
     openProfile: openProfile,
     openDriverMap: openDriverMap,
     openAllDriversMap: openAllDriversMap,
+    openRouteMap: openRouteMap,
+    closeRouteMap: closeRouteMap,
     openDriverLine: openDriverLine,
     openLineModal: openLineModal,
     closeLineModal: closeLineModal,
@@ -840,6 +992,6 @@
     showPage('dashboard');
   });
   document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeLineModal();
+    if (event.key === 'Escape') closeAllModals();
   });
 })();

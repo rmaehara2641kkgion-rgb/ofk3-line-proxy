@@ -60,24 +60,24 @@
   ];
 
   var ROUTES = [
-    { id: 'R-01', name: '博多駅周辺', area: '博多区', neighborhood: '鳥飼', vehicle: 'Van', packages: 80, stops: 52, assignedDriverId: 'D-1001' },
-    { id: 'R-02', name: '東区香椎方面', area: '東区', neighborhood: '荒江', vehicle: 'Van', packages: 95, stops: 61, assignedDriverId: 'D-1013' },
-    { id: 'R-03', name: '中央区天神周辺', area: '中央区', neighborhood: '西新', vehicle: 'Van', packages: 72, stops: 48, assignedDriverId: 'D-1022' },
-    { id: 'R-04', name: '南区大橋方面', area: '南区', neighborhood: '原', vehicle: 'Van', packages: 88, stops: 57, assignedDriverId: 'D-1005' },
-    { id: 'R-05', name: '西区姪浜方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 110, stops: 70, assignedDriverId: 'D-1006' },
-    { id: 'R-06', name: '城南区七隈方面', area: '城南区', neighborhood: '福重', vehicle: 'Van', packages: 64, stops: 41, assignedDriverId: 'D-1009' },
-    { id: 'R-07', name: '早良区西新方面', area: '早良区', neighborhood: '百道', vehicle: 'Van', packages: 91, stops: 59, assignedDriverId: 'D-1014' },
-    { id: 'R-08', name: '博多区住吉方面', area: '博多区', neighborhood: '室見', vehicle: 'Van', packages: 78, stops: 50, assignedDriverId: 'D-1011' },
-    { id: 'R-09', name: '東区アイランド方面', area: '東区', neighborhood: '荒江', vehicle: 'Van', packages: 85, stops: 54, assignedDriverId: 'D-1004' },
-    { id: 'R-10', name: '中央区大濠方面', area: '中央区', neighborhood: '西新', vehicle: 'Van', packages: 102, stops: 66, assignedDriverId: 'D-1002' },
-    { id: 'R-11', name: '南区井尻方面', area: '南区', neighborhood: '原', vehicle: 'Van', packages: 69, stops: 44, assignedDriverId: 'D-1017' },
-    { id: 'R-12', name: '西区今宿方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 77, stops: 49, assignedDriverId: 'D-1016' },
-    { id: 'R-13', name: '城南区別府方面', area: '城南区', neighborhood: '福重', vehicle: 'Van', packages: 93, stops: 60, assignedDriverId: 'D-1019' },
-    { id: 'R-14', name: '早良区藤崎方面', area: '早良区', neighborhood: '百道', vehicle: 'Van', packages: 58, stops: 38, assignedDriverId: null },
-    { id: 'R-15', name: '博多区東比恵方面', area: '博多区', neighborhood: '鳥飼', vehicle: 'Van', packages: 86, stops: 55, assignedDriverId: 'D-1018' },
-    { id: 'R-16', name: '中央区薬院ミニ便', area: '中央区', neighborhood: '西新', vehicle: 'Bike', packages: 71, stops: 46, assignedDriverId: 'D-1003' },
-    { id: 'R-17', name: '早良区室見ミニ便', area: '早良区', neighborhood: '室見', vehicle: 'Bike', packages: 54, stops: 35, assignedDriverId: 'D-1007' },
-    { id: 'R-18', name: '西区周船寺方面', area: '西区', neighborhood: '姪浜', vehicle: 'Van', packages: 55, stops: 36, assignedDriverId: null }
+    { id: 'R-01', name: '博多駅周辺', area: '博多区', neighborhood: '鳥飼', neighborhoods: ['祇園', '中洲', '住吉', '東比恵'], vehicle: 'Van', packages: 80, stops: 64, assignedDriverId: 'D-1001' },
+    { id: 'R-02', name: '東区香椎方面', area: '東区', neighborhood: '荒江', neighborhoods: ['香椎', '千早', '箱崎', '奈多'], vehicle: 'Van', packages: 95, stops: 66, assignedDriverId: 'D-1013' },
+    { id: 'R-03', name: '中央区天神周辺', area: '中央区', neighborhood: '西新', neighborhoods: ['天神', '赤坂', '今泉', '大名'], vehicle: 'Van', packages: 72, stops: 62, assignedDriverId: 'D-1022' },
+    { id: 'R-04', name: '南区大橋方面', area: '南区', neighborhood: '原', neighborhoods: ['大橋', '高宮', '塩原', '井尻'], vehicle: 'Van', packages: 88, stops: 65, assignedDriverId: 'D-1005' },
+    { id: 'R-05', name: '西区姪浜方面', area: '西区', neighborhood: '姪浜', neighborhoods: ['姪浜', '内浜', '愛宕', '福重'], vehicle: 'Van', packages: 110, stops: 70, assignedDriverId: 'D-1006' },
+    { id: 'R-06', name: '城南区七隈方面', area: '城南区', neighborhood: '福重', neighborhoods: ['七隈', '別府', '長尾', '金山'], vehicle: 'Van', packages: 64, stops: 61, assignedDriverId: 'D-1009' },
+    { id: 'R-07', name: '早良区西新方面', area: '早良区', neighborhood: '百道', neighborhoods: ['西新', '祖原', '荒江', '鳥飼'], vehicle: 'Van', packages: 91, stops: 67, assignedDriverId: 'D-1014' },
+    { id: 'R-08', name: '博多区住吉方面', area: '博多区', neighborhood: '室見', neighborhoods: ['住吉', '冷泉', '博多駅前', '築港'], vehicle: 'Van', packages: 78, stops: 63, assignedDriverId: 'D-1011' },
+    { id: 'R-09', name: '東区アイランド方面', area: '東区', neighborhood: '荒江', neighborhoods: ['アイランドシティ', '香住ヶ丘', '和白', '三苫'], vehicle: 'Van', packages: 85, stops: 64, assignedDriverId: 'D-1004' },
+    { id: 'R-10', name: '中央区大濠方面', area: '中央区', neighborhood: '西新', neighborhoods: ['大濠', '荒戸', '城内', '港'], vehicle: 'Van', packages: 102, stops: 68, assignedDriverId: 'D-1002' },
+    { id: 'R-11', name: '南区井尻方面', area: '南区', neighborhood: '原', neighborhoods: ['井尻', '老司', '横手', '曰佐'], vehicle: 'Van', packages: 69, stops: 62, assignedDriverId: 'D-1017' },
+    { id: 'R-12', name: '西区今宿方面', area: '西区', neighborhood: '姪浜', neighborhoods: ['今宿', '周船寺', '北原', '拾六町'], vehicle: 'Van', packages: 77, stops: 63, assignedDriverId: 'D-1016' },
+    { id: 'R-13', name: '城南区別府方面', area: '城南区', neighborhood: '福重', neighborhoods: ['別府', '田島', '茶山', '樋井川'], vehicle: 'Van', packages: 93, stops: 66, assignedDriverId: 'D-1019' },
+    { id: 'R-14', name: '早良区藤崎方面', area: '早良区', neighborhood: '百道', neighborhoods: ['藤崎', '百道', '室見', '高取'], vehicle: 'Van', packages: 58, stops: 60, assignedDriverId: null },
+    { id: 'R-15', name: '博多区東比恵方面', area: '博多区', neighborhood: '鳥飼', neighborhoods: ['東比恵', '比恵', '春町', '堅粕'], vehicle: 'Van', packages: 86, stops: 65, assignedDriverId: 'D-1018' },
+    { id: 'R-16', name: '中央区薬院ミニ便', area: '中央区', neighborhood: '西新', neighborhoods: ['薬院', '渡辺通', '清川', '春吉'], vehicle: 'Bike', packages: 71, stops: 61, assignedDriverId: 'D-1003' },
+    { id: 'R-17', name: '早良区室見ミニ便', area: '早良区', neighborhood: '室見', neighborhoods: ['室見', '原', '次郎丸', '田村'], vehicle: 'Bike', packages: 54, stops: 60, assignedDriverId: 'D-1007' },
+    { id: 'R-18', name: '西区周船寺方面', area: '西区', neighborhood: '姪浜', neighborhoods: ['周船寺', '今宿西', '西の丘', '女原'], vehicle: 'Van', packages: 55, stops: 60, assignedDriverId: null }
   ];
 
   var PROFILES = {

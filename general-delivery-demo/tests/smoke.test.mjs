@@ -47,6 +47,9 @@ try {
   assert.match(html, /3分でデモを体験/);
   assert.match(html, /現場司令室/);
   assert.match(html, /プロフィール/);
+  assert.match(html, /finish-explain/);
+  assert.match(html, /map-modal/);
+  assert.match(html, /route-map-legend/);
 
   var opsJs = await request('GET', '/src/ops.js');
   assert.equal(opsJs.status, 200);
@@ -68,8 +71,13 @@ try {
   assert.match(String(js.headers.get('content-type') || ''), /javascript/);
   var jsText = await js.text();
   assert.match(jsText, /window\.DemoApp/);
-assert.match(jsText, /openLineModal/);
-assert.match(jsText, /renderDriverBoard/);
+  assert.match(jsText, /openLineModal/);
+  assert.match(jsText, /renderDriverBoard/);
+  assert.match(jsText, /openRouteMap/);
+  assert.match(jsText, /fitBounds/);
+  assert.match(jsText, /map-pin-regular/);
+  assert.match(jsText, /map-pin-timed/);
+  assert.match(jsText, /evidence-grid/);
 
   var line = await request('POST', '/api/line/send', '{}');
   assert.equal(line.status, 403);

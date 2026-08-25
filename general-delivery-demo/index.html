@@ -242,7 +242,7 @@
           <div>
             <strong>routes.csv</strong>
             <pre>route_id,name,area,vehicle,packages,stops
-R-01,博多駅周辺,鳥飼,Van,80,52</pre>
+R-01,博多駅周辺,鳥飼,Van,80,64</pre>
             <input type="file" accept=".csv" onchange="DemoApp.handleUpload('routes', this)">
           </div>
         </div>
@@ -263,6 +263,21 @@ R-01,博多駅周辺,鳥飼,Van,80,52</pre>
       <div class="toolbar modal-actions">
         <button type="button" class="btn btn-ghost" onclick="DemoApp.closeLineModal()">閉じる</button>
         <button type="button" class="btn btn-secondary" id="line-modal-open-page">共有ページで見る</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="map-modal" class="modal" hidden>
+    <div class="modal-backdrop" onclick="DemoApp.closeRouteMap()"></div>
+    <div class="modal-card modal-card-map" role="dialog" aria-modal="true" aria-labelledby="map-modal-title">
+      <h3 id="map-modal-title">Route MAP</h3>
+      <p class="sub route-map-purpose">出庫前に、全配送先の分布・時間指定の位置・回り方を確認できます。</p>
+      <div id="route-map-meta" class="route-map-meta"></div>
+      <div id="route-map-legend" class="map-legend" aria-label="PIN凡例"></div>
+      <div id="route-map"></div>
+      <p class="preview-note">表示地点はすべて架空のデモPINです</p>
+      <div class="toolbar modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="DemoApp.closeRouteMap()">閉じる</button>
       </div>
     </div>
   </div>
