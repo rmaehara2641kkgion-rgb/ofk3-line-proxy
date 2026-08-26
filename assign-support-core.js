@@ -753,7 +753,14 @@
               driverName: amz.driverName || '',
               serviceType: amz.serviceType || '',
               transportId: amz.transportId || '',
+              amazonDaId: amz.amazonDaId || amz.daId || '',
               isReserve: !!amz.isReserve,
+              departure: amz.departure || '',
+              predictedEnd: amz.predictedEnd || '',
+              totalDeliveries: amz.totalDeliveries != null ? amz.totalDeliveries : amz.packages,
+              allDestinations: amz.allDestinations != null ? amz.allDestinations : amz.stops,
+              capability: amz.capability,
+              routeDuration: amz.routeDuration,
             }
           : null,
       });
@@ -791,6 +798,7 @@
 
     if (currentDays >= config.TIER_D_MIN_DAYS) return 'ok';
     if (!bestAlternative) return 'admin_review';
+    if (currentDays <= 0) return 'admin_review';
     return 'ok';
   }
 
@@ -862,6 +870,188 @@
     TIER_D_MIN_DAYS: 1,
     MIN_SECONDARY_DAYS_FOR_WEAK_PRIMARY: 5,
   };
+
+  /** コース交換最適化：僅差は変更不要。index.html の終了予測パラメータを再利用 */
+  var SWAP_OPTIMIZE_CONFIG = {
+    MIN_TOTAL_FINISH_IMPROVEMENT_MINUTES: 8,
+    MAX_SINGLE_FINISH_WORSEN_MINUTES: 15,
+    WORSEN_WARNING_MINUTES: 10,
+    MIN_TIME_TO_OVERRIDE_EXPERIENCE_LOSS: 20,
+    DEFAULT_PACKAGES_PER_HOUR: 16,
+    DEFAULT_LOADING_MINUTES: 15,
+    DEFAULT_TRAVEL_OUTBOUND: 20,
+    DEFAULT_TRAVEL_RETURN: 20,
+    DEFAULT_DEPARTURE: '09:00',
+    MAX_SWAP_PAIRS: 10,
+  };
+
+  /** nursery ⇄ standard を許可するか。false にすると nursery は nursery 同士のみ */
+  var VEHICLE_SWAP_CONFIG = {
+    NURSERY_COMPATIBLE_WITH_STANDARD: true,
+  };
+
+  /**
+   * エリア経験による実効速度のプラス補正。1.0未満にはしない。
+   * 本番で強すぎる場合はこの定数だけ調整する。
+   */
+  var AREA_EXPERIENCE_SPEED_BONUS = {
+    unknown: 1.0,
+    weak: 1.02,
+    medium: 1.04,
+    strong: 1.06,
+    veryStrong: 1.08,
+    highConfidenceBonus: 0.02,
+    primaryCountMediumBonus: 0.01,
+    primaryCountStrongBonus: 0.02,
+    volumeBonus: 0.01,
+    maxBonus: 1.1,
+    maxFactor: 1.1,
+  };
+
+  /**
+   * エリア経験マスタの観測開始。現時点は W31 以降の蓄積のみ。
+   * 過去データ復元時は START_WEEK / START_LABEL を更新する。
+   */
+  var AREA_EXPERIENCE_OBSERVATION = {
+    START_WEEK: 'W31',
+    START_LABEL: 'W31以降',
+  };
+
+  function normalizeRouteCode(routeCode) {
+    return String(routeCode || '')
+      .toUpperCase()
+      .replace(/\s+/g, '');
+  }
+
+  function isDcxRouteCode(routeCode) {
+    return normalizeRouteCode(routeCode).indexOf('DCX') === 0;
+  }
+
+  function isDmxRouteCode(routeCode) {
+    return normalizeRouteCode(routeCode).indexOf('DMX') === 0;
+  }
+
+  /**
+   * Cycle 1 = DCX*（DCMRA/DCMRB除外）
+   * Cycle 2 = DMX*（DMMRA/DMMRB除外）
+   */
+  function isOptimizationRoute(routeCode, cycle) {
+    var code = normalizeRouteCode(routeCode);
+    var c = Number(cycle);
+    if (!code) return false;
+    if (c === 1) {
+      if (code.indexOf('DCMRA') === 0 || code.indexOf('DCMRB') === 0) return false;
+      return code.indexOf('DCX') === 0;
+    }
+    if (c === 2) {
+      if (code.indexOf('DMMRA') === 0 || code.indexOf('DMMRB') === 0) return false;
+      return code.indexOf('DMX') === 0;
+    }
+    return false;
+  }
+
+  function optimizationRoutePrefixLabel(cycle) {
+    if (Number(cycle) === 2) return 'DMX';
+    return 'DCX';
+  }
+
+  /**
+   * 最適化母集団：Amazonアサインxlsxに存在する GDS 担当route。
+   * マニフェストのステーション全routeは件数把握とroute詳細取得に使う。
+   */
+  function collectGdsOptimizationPopulation(manifestRoutes, amazonAssignments, cycle) {
+    var stationRoutes = [];
+    var manifestByCode = {};
+    for (var i = 0; i < (manifestRoutes || []).length; i++) {
+      var route = manifestRoutes[i];
+      if (!route || !isOptimizationRoute(route.routeCode, cycle)) continue;
+      stationRoutes.push(route);
+      manifestByCode[route.routeCode] = route;
+    }
+
+    var gdsByCode = {};
+    for (var j = 0; j < (amazonAssignments || []).length; j++) {
+      var a = amazonAssignments[j];
+      if (!a || !a.routeCode) continue;
+      if (!isOptimizationRoute(a.routeCode, cycle)) continue;
+      gdsByCode[a.routeCode] = a;
+    }
+
+    var gdsRouteCodes = Object.keys(gdsByCode);
+    var gdsAssignments = [];
+    for (var k = 0; k < gdsRouteCodes.length; k++) {
+      gdsAssignments.push(gdsByCode[gdsRouteCodes[k]]);
+    }
+
+    var gdsOutOfScopeRoutes = [];
+    for (var s = 0; s < stationRoutes.length; s++) {
+      var stationRoute = stationRoutes[s];
+      if (gdsByCode[stationRoute.routeCode]) continue;
+      gdsOutOfScopeRoutes.push({
+        routeCode: stationRoute.routeCode,
+        evaluationStatus: 'gds_out_of_scope',
+        gdsScopeReason: 'GDSアサイン対象外',
+        packages: stationRoute.packages,
+        stops: stationRoute.stops,
+        areas: stationRoute.areas || [],
+      });
+    }
+
+    return {
+      stationRoutes: stationRoutes,
+      manifestByCode: manifestByCode,
+      gdsByCode: gdsByCode,
+      gdsAssignments: gdsAssignments,
+      gdsOutOfScopeRoutes: gdsOutOfScopeRoutes,
+      stationRouteCount: stationRoutes.length,
+      gdsAssignmentCount: gdsRouteCodes.length,
+      gdsOutOfScopeCount: gdsOutOfScopeRoutes.length,
+    };
+  }
+
+  function normalizeSwapDriverName(name) {
+    return String(name || '')
+      .replace(/[\s\u3000]/g, '')
+      .toLowerCase();
+  }
+
+  /** 同一人物の識別。TransportID → Amazon DA ID → 正規化氏名 */
+  function swapDriverIdentityKey(slot) {
+    if (!slot) return '';
+    var tid = '';
+    if (slot.score && slot.score.transportId) tid = String(slot.score.transportId).trim();
+    if (!tid && slot.amz && slot.amz.transportId) tid = String(slot.amz.transportId).trim();
+    if (!tid && slot.worker && slot.worker.transportId) tid = String(slot.worker.transportId).trim();
+    if (tid) return 'tid:' + tid.toUpperCase();
+    var da =
+      (slot.amz && (slot.amz.amazonDaId || slot.amz.daId || slot.amz.associateId)) ||
+      (slot.worker && slot.worker.amazonDaId) ||
+      '';
+    if (da) return 'da:' + String(da).trim().toUpperCase();
+    var name = normalizeSwapDriverName(
+      (slot.score && slot.score.driverName) ||
+        (slot.amz && slot.amz.driverName) ||
+        (slot.worker && (slot.worker.driverName || slot.worker.name)) ||
+        ''
+    );
+    if (name) return 'name:' + name;
+    return 'route:' + String((slot.route && slot.route.routeCode) || '');
+  }
+
+  function detectRouteDataAnomaly(route, amz) {
+    var pkgs = routePackageCount({ amazonAssignment: amz, packages: route && route.packages });
+    var stops = Number(route && route.stops);
+    if (!(stops > 0) && amz && Number(amz.allDestinations) > 0) stops = Number(amz.allDestinations);
+    var flags = [];
+    if (pkgs > 0 && stops >= 10 && stops >= pkgs * 5) flags.push('stops_vs_packages');
+    var vt = (route && route.routeVehicleType) || 'unknown';
+    if (vt === 'unknown') flags.push('vehicle_unknown');
+    return {
+      hasAnomaly: flags.length > 0,
+      flags: flags,
+      warningLabel: flags.length ? '⚠️ routeデータ異常の可能性' : '',
+    };
+  }
 
   function getPrimaryExperienceTier(days, config) {
     config = config || ASSIGN_EXPERIENCE_CONFIG;
@@ -962,6 +1152,12 @@
       primaryExperienceDays: primaryDays,
       primaryTier: primaryTier,
       primaryConfidence: primaryConf,
+      experienceStatus: classifyExperienceEvidence(primaryDays).status,
+      primaryCount: primaryExp ? Number(primaryExp.primaryCount) || 0 : 0,
+      primarySplitCount: primaryExp ? Number(primaryExp.splitCount) || 0 : 0,
+      primaryRescueCount: primaryExp ? Number(primaryExp.rescueCount) || 0 : 0,
+      primaryStops: primaryExp ? Number(primaryExp.stops) || 0 : 0,
+      primaryPackages: primaryExp ? Number(primaryExp.packages) || 0 : 0,
       primaryLastVisit: primaryExp ? primaryExp.lastVisitDate || '' : '',
       secondaryDetails: secondaryDetails,
       secondaryExperienceDays: secondaryDaysSum,
@@ -1577,18 +1773,436 @@
     };
   }
 
+  function parseTimeToMinutes(hhmm) {
+    var m = String(hhmm || '').match(/(\d{1,2}):(\d{2})/);
+    if (!m) return -1;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+
+  function formatMinutesToTime(totalMin) {
+    var n = Math.round(Number(totalMin) || 0);
+    if (n < 0) n = 0;
+    var h = Math.floor(n / 60);
+    var mm = n % 60;
+    return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  }
+
+  /** index.html calculateEndTime と同じ能力補正（終了予測用） */
+  function adjustCapabilityForFinishEstimate(capability) {
+    var cap = Number(capability);
+    if (!(cap > 0)) return 0;
+    if (cap >= 30) return cap;
+    if (cap >= 25) return cap + 1;
+    if (cap >= 20) return cap + 2.5;
+    if (cap >= 15) return cap + 3;
+    if (cap >= 10) return cap + 3.5;
+    if (cap >= 5) return cap + 4;
+    return cap;
+  }
+
   /**
-   * Phase 1.7: Cycle 1/2 — Amazon既存アサインを経験DBで評価し変更提案
+   * 主エリア経験による実効速度係数。
+   * experienceDays=0 は未経験ではなく観測なし（neutral）。マイナス補正しない。
+   * 1日以上の観測実績のみプラス方向の根拠として使う。
+   */
+  function classifyExperienceEvidence(days) {
+    var n = Number(days) || 0;
+    var start = AREA_EXPERIENCE_OBSERVATION.START_LABEL;
+    if (n <= 0) {
+      return { status: 'unknown', band: 0, days: 0, label: '確認なし（' + start + '）' };
+    }
+    if (n <= 2) return { status: 'weak', band: 1, days: n, label: n + '日' };
+    if (n <= 5) return { status: 'clear', band: 2, days: n, label: n + '日' };
+    if (n <= 9) return { status: 'strong', band: 3, days: n, label: n + '日' };
+    return { status: 'very_strong', band: 4, days: n, label: n + '日' };
+  }
+
+  function formatExperienceDaysDisplay(days) {
+    return classifyExperienceEvidence(days).label;
+  }
+
+  function formatExperienceEvidenceLine(area, days) {
+    var ev = classifyExperienceEvidence(days);
+    var areaLabel = area || '?';
+    if (ev.status === 'unknown') return areaLabel + '　経験確認なし（' + AREA_EXPERIENCE_OBSERVATION.START_LABEL + '）';
+    return areaLabel + '　' + ev.days + '日';
+  }
+
+  function experienceSpeedFactor(score) {
+    var bonus = AREA_EXPERIENCE_SPEED_BONUS;
+    var days = Number(score && score.primaryExperienceDays) || 0;
+    var evidence = classifyExperienceEvidence(days);
+    var factor = bonus.unknown;
+    if (evidence.band === 1) factor = bonus.weak;
+    else if (evidence.band === 2) factor = bonus.medium;
+    else if (evidence.band === 3) factor = bonus.strong;
+    else if (evidence.band >= 4) factor = bonus.veryStrong;
+
+    if (evidence.band > 0) {
+      var primaryCount = Number(score && score.primaryCount) || 0;
+      var conf = confidenceRank(score && score.primaryConfidence);
+      var volume = (Number(score && score.primaryStops) || 0) + (Number(score && score.primaryPackages) || 0);
+      if (primaryCount >= 8) factor += bonus.primaryCountStrongBonus;
+      else if (primaryCount >= 3) factor += bonus.primaryCountMediumBonus;
+      if (conf >= 2) factor += bonus.highConfidenceBonus;
+      if (volume >= 500) factor += bonus.volumeBonus;
+    }
+    if (factor < bonus.unknown) factor = bonus.unknown;
+    if (factor > bonus.maxFactor) factor = bonus.maxFactor;
+    return factor;
+  }
+
+  function areaFitScore(score) {
+    var days = Number(score && score.primaryExperienceDays) || 0;
+    if (days <= 0) return 0;
+    var primaryCount = Number(score && score.primaryCount) || 0;
+    var conf = confidenceRank(score && score.primaryConfidence);
+    var volume = Math.log(
+      1 + (Number(score && score.primaryStops) || 0) + (Number(score && score.primaryPackages) || 0)
+    );
+    var secondary = Number(score && score.secondaryExperienceDays) || 0;
+    return days * 10 + primaryCount * 3 + conf * 4 + volume + secondary * 0.3;
+  }
+
+  function resolvePackagesPerHour(score, options) {
+    var pph = score && score.packagesPerHour;
+    if (pph > 0) return pph;
+    return (options && options.defaultPackagesPerHour) || SWAP_OPTIMIZE_CONFIG.DEFAULT_PACKAGES_PER_HOUR;
+  }
+
+  /** 純粋な配送処理時間（分）。積込・往復は含まない。 */
+  function estimateDeliveryDurationMinutes(score, packages, options) {
+    options = options || {};
+    var pkgs = Number(packages) || 0;
+    if (pkgs <= 0) return 0;
+    var pph = resolvePackagesPerHour(score, options);
+    var factor = experienceSpeedFactor(score);
+    var adjusted = adjustCapabilityForFinishEstimate(pph) * factor;
+    if (!(adjusted > 0)) return 0;
+    return (pkgs / adjusted) * 60;
+  }
+
+  function estimateDeliveryMinutes(score, packages, options) {
+    return estimateDeliveryDurationMinutes(score, packages, options);
+  }
+
+  function effectivePackagesPerHour(score, options) {
+    var pph = resolvePackagesPerHour(score, options);
+    return adjustCapabilityForFinishEstimate(pph) * experienceSpeedFactor(score);
+  }
+
+  function routePackageCount(route) {
+    var amz = route && route.amazonAssignment;
+    if (amz && amz.totalDeliveries != null && Number(amz.totalDeliveries) > 0) {
+      return Number(amz.totalDeliveries);
+    }
+    return Number(route && route.packages) || 0;
+  }
+
+  function estimatePredictedFinishMinutes(route, score, options) {
+    options = options || {};
+    var cfg = SWAP_OPTIMIZE_CONFIG;
+    var loading = Number(options.loadingTime);
+    if (!isFinite(loading)) loading = cfg.DEFAULT_LOADING_MINUTES;
+    var outbound = Number(options.travelOutbound);
+    if (!isFinite(outbound)) outbound = cfg.DEFAULT_TRAVEL_OUTBOUND;
+    var ret = Number(options.travelReturn);
+    if (!isFinite(ret)) ret = cfg.DEFAULT_TRAVEL_RETURN;
+    var amz = route && route.amazonAssignment;
+    var packages = routePackageCount(route);
+    var dep = (amz && amz.departure) || options.defaultDeparture || cfg.DEFAULT_DEPARTURE;
+    var depMin = parseTimeToMinutes(dep);
+    if (depMin < 0) depMin = parseTimeToMinutes(cfg.DEFAULT_DEPARTURE);
+    var deliveryDurationMinutes = estimateDeliveryDurationMinutes(score, packages, options);
+    if (!(deliveryDurationMinutes > 0) && amz && Number(amz.routeDuration) > 0) {
+      deliveryDurationMinutes = Number(amz.routeDuration);
+    }
+    return depMin + loading + outbound + deliveryDurationMinutes + ret;
+  }
+
+  function finishMinutesForPairing(route, currentScore, newScore, options) {
+    var amz = route && route.amazonAssignment;
+    var baseline = amz ? parseTimeToMinutes(amz.predictedEnd) : -1;
+    var packages = routePackageCount(route);
+    if (baseline >= 0 && currentScore) {
+      var curDel = estimateDeliveryDurationMinutes(currentScore, packages, options);
+      var newDel = estimateDeliveryDurationMinutes(newScore, packages, options);
+      return baseline + (newDel - curDel);
+    }
+    return estimatePredictedFinishMinutes(route, newScore, options);
+  }
+
+  function resolveVehicleKind(route, worker) {
+    var vt = route && route.routeVehicleType;
+    if (vt === 'bike' || vt === 'standard' || vt === 'nursery') return vt;
+    var token = '';
+    if (worker) {
+      token = worker.normalizedShiftToken || normalizeAssignShiftToken(worker.shiftCode || '');
+    }
+    if (token === 'bike') return 'bike';
+    if (token) return 'standard';
+    return 'unknown';
+  }
+
+  function vehicleKindToSwapGroup(kind, vehicleConfig) {
+    var cfg = Object.assign({}, VEHICLE_SWAP_CONFIG, vehicleConfig || {});
+    if (kind === 'bike') return 'bike';
+    if (kind === 'standard') return 'standard';
+    if (kind === 'nursery') {
+      return cfg.NURSERY_COMPATIBLE_WITH_STANDARD ? 'standard' : 'nursery';
+    }
+    return 'unknown';
+  }
+
+  function resolveVehicleSwapGroup(route, worker, vehicleConfig) {
+    return vehicleKindToSwapGroup(resolveVehicleKind(route, worker), vehicleConfig);
+  }
+
+  function canSwapVehicleGroups(groupA, groupB) {
+    if (!groupA || !groupB || groupA === 'unknown' || groupB === 'unknown') return false;
+    if (groupA === 'bike' && groupB === 'bike') return true;
+    if (groupA === 'standard' && groupB === 'standard') return true;
+    if (groupA === 'nursery' && groupB === 'nursery') return true;
+    return false;
+  }
+
+  function classifySwapWorsenWarning(worsenA, worsenB, cfg) {
+    cfg = cfg || SWAP_OPTIMIZE_CONFIG;
+    var maxWorsen = Math.max(Number(worsenA) || 0, Number(worsenB) || 0, 0);
+    var warnAt = cfg.WORSEN_WARNING_MINUTES || 10;
+    var limit = cfg.MAX_SINGLE_FINISH_WORSEN_MINUTES || 15;
+    if (maxWorsen < warnAt) return null;
+    if (maxWorsen >= limit) {
+      return {
+        level: 'near_limit',
+        message: '⚠️ 悪化上限に近い交換です',
+        maxWorsenMinutes: maxWorsen,
+      };
+    }
+    return {
+      level: 'worsen_10plus',
+      message: '⚠️ 一方のドライバーが10分以上悪化します',
+      maxWorsenMinutes: maxWorsen,
+    };
+  }
+
+  function findAssignedWorker(workers, amz) {
+    if (!amz) return null;
+    workers = workers || [];
+    var i;
+    if (amz.transportId) {
+      for (i = 0; i < workers.length; i++) {
+        if (workers[i].transportId && workers[i].transportId === amz.transportId) return workers[i];
+      }
+    }
+    var target = String(amz.driverName || '').replace(/\s+/g, '');
+    if (target) {
+      for (i = 0; i < workers.length; i++) {
+        var n = String(workers[i].driverName || workers[i].name || '').replace(/\s+/g, '');
+        if (n && n === target) return workers[i];
+      }
+    }
+    return null;
+  }
+
+  function losesStrongObservedExperience(fromScore, toScore) {
+    var from = classifyExperienceEvidence(fromScore && fromScore.primaryExperienceDays);
+    var to = classifyExperienceEvidence(toScore && toScore.primaryExperienceDays);
+    return from.band >= 3 && to.band === 0;
+  }
+
+  function buildSwapReason(evalResult, slotA, slotB) {
+    var expGain = (evalResult.experienceImprovement || 0) > 0.5;
+    var fromA = classifyExperienceEvidence(slotA.score.primaryExperienceDays);
+    var toA = classifyExperienceEvidence(slotA.scoreOnPartner && slotA.scoreOnPartner.primaryExperienceDays);
+    var fromB = classifyExperienceEvidence(slotB.score.primaryExperienceDays);
+    var toB = classifyExperienceEvidence(slotB.scoreOnPartner && slotB.scoreOnPartner.primaryExperienceDays);
+    var bothUnknown =
+      fromA.status === 'unknown' &&
+      toA.status === 'unknown' &&
+      fromB.status === 'unknown' &&
+      toB.status === 'unknown';
+    if (expGain) return '終了時間短縮 + エリア経験適合';
+    if (bothUnknown) return 'ドライバー能力・PPHとroute負荷による終了時間短縮';
+    return 'ドライバー能力・PPHとroute負荷による終了時間短縮';
+  }
+
+  function evaluateSwapPair(slotA, slotB, options) {
+    options = options || {};
+    var cfg = Object.assign({}, SWAP_OPTIMIZE_CONFIG, options.swapConfig || {});
+    var afterAonB = Math.round(finishMinutesForPairing(slotB.route, slotB.score, slotA.scoreOnPartner, options));
+    var afterBonA = Math.round(finishMinutesForPairing(slotA.route, slotA.score, slotB.scoreOnPartner, options));
+    var beforeSum = slotA.finishMinutes + slotB.finishMinutes;
+    var afterSum = afterAonB + afterBonA;
+    var timeImprovement = beforeSum - afterSum;
+    var worsenA = afterAonB - slotA.finishMinutes;
+    var worsenB = afterBonA - slotB.finishMinutes;
+    var expBefore = slotA.areaScore + slotB.areaScore;
+    var expAfter = areaFitScore(slotA.scoreOnPartner) + areaFitScore(slotB.scoreOnPartner);
+    var beforeMax = Math.max(slotA.finishMinutes, slotB.finishMinutes);
+    var afterMax = Math.max(afterAonB, afterBonA);
+    var loseStrong =
+      losesStrongObservedExperience(slotA.score, slotA.scoreOnPartner) ||
+      losesStrongObservedExperience(slotB.score, slotB.scoreOnPartner);
+    var overrideMin = cfg.MIN_TIME_TO_OVERRIDE_EXPERIENCE_LOSS || 20;
+
+    var rejectedReason = '';
+    if (!canSwapVehicleGroups(slotA.vehicleGroup, slotB.vehicleGroup)) {
+      rejectedReason = 'vehicle_mismatch';
+    } else if (
+      worsenA > cfg.MAX_SINGLE_FINISH_WORSEN_MINUTES ||
+      worsenB > cfg.MAX_SINGLE_FINISH_WORSEN_MINUTES
+    ) {
+      rejectedReason = 'one_side_worsens';
+    } else if (timeImprovement < cfg.MIN_TOTAL_FINISH_IMPROVEMENT_MINUTES) {
+      rejectedReason = 'below_threshold';
+    } else if (loseStrong && timeImprovement < overrideMin) {
+      rejectedReason = 'experience_loss_for_slight_gain';
+    }
+
+    var evalResult = {
+      accepted: !rejectedReason,
+      rejectedReason: rejectedReason,
+      timeImprovement: timeImprovement,
+      maxFinishImprovement: beforeMax - afterMax,
+      experienceImprovement: expAfter - expBefore,
+      beforeScore: beforeSum,
+      afterScore: afterSum,
+      improvement: timeImprovement,
+      afterFinishAMinutes: afterAonB,
+      afterFinishBMinutes: afterBonA,
+      afterFinishATime: formatMinutesToTime(afterAonB),
+      afterFinishBTime: formatMinutesToTime(afterBonA),
+      driverAImprovement: slotA.finishMinutes - afterAonB,
+      driverBImprovement: slotB.finishMinutes - afterBonA,
+    };
+    evalResult.reason = buildSwapReason(evalResult, slotA, slotB);
+    evalResult.worsenAMinutes = worsenA;
+    evalResult.worsenBMinutes = worsenB;
+    evalResult.worsenWarning = classifySwapWorsenWarning(worsenA, worsenB, cfg);
+    return evalResult;
+  }
+
+  function buildDriverSwapSide(slot, partnerSlot, scoreOnPartner, afterFinishTime, improvementMinutes, options) {
+    var pkgsFrom = routePackageCount(slot.route);
+    var pkgsTo = routePackageCount(partnerSlot.route);
+    var pph = resolvePackagesPerHour(slot.score, options);
+    var fromFactor = experienceSpeedFactor(slot.score);
+    var toFactor = experienceSpeedFactor(scoreOnPartner);
+    return {
+      driverName: slot.score.driverName,
+      transportId: slot.score.transportId,
+      fromRouteCode: slot.route.routeCode,
+      toRouteCode: partnerSlot.route.routeCode,
+      fromArea: slot.score.primaryArea || '',
+      toArea: partnerSlot.score.primaryArea || '',
+      fromExperienceDays: slot.score.primaryExperienceDays || 0,
+      toExperienceDays: (scoreOnPartner && scoreOnPartner.primaryExperienceDays) || 0,
+      fromExperienceLabel: formatExperienceDaysDisplay(slot.score.primaryExperienceDays || 0),
+      toExperienceLabel: formatExperienceDaysDisplay((scoreOnPartner && scoreOnPartner.primaryExperienceDays) || 0),
+      fromExperienceLine: formatExperienceEvidenceLine(
+        slot.score.primaryArea || '',
+        slot.score.primaryExperienceDays || 0
+      ),
+      toExperienceLine: formatExperienceEvidenceLine(
+        partnerSlot.score.primaryArea || '',
+        (scoreOnPartner && scoreOnPartner.primaryExperienceDays) || 0
+      ),
+      fromPrimaryCount: slot.score.primaryCount || 0,
+      toPrimaryCount: (scoreOnPartner && scoreOnPartner.primaryCount) || 0,
+      fromFinishTime: slot.finishTime,
+      toFinishTime: afterFinishTime,
+      fromPredictedFinishTime: slot.finishTime,
+      toPredictedFinishTime: afterFinishTime,
+      improvementMinutes: improvementMinutes,
+      packagesPerHour: pph,
+      fromExperienceSpeedFactor: fromFactor,
+      toExperienceSpeedFactor: toFactor,
+      fromDeliveryDurationMinutes: Math.round(estimateDeliveryDurationMinutes(slot.score, pkgsFrom, options)),
+      toDeliveryDurationMinutes: Math.round(estimateDeliveryDurationMinutes(scoreOnPartner, pkgsTo, options)),
+      routePackagesFrom: pkgsFrom,
+      routePackagesTo: pkgsTo,
+      routeStopsFrom: Number(slot.route.stops) || 0,
+      routeStopsTo: Number(partnerSlot.route.stops) || 0,
+      primaryConfidence: slot.score.primaryConfidence || '',
+      toPrimaryConfidence: (scoreOnPartner && scoreOnPartner.primaryConfidence) || '',
+      vehicleKind: slot.vehicleKind || resolveVehicleKind(slot.route, slot.worker),
+    };
+  }
+
+  function buildSwapProposal(slotA, slotB, evalResult, pairIndex, options) {
+    return {
+      pairIndex: pairIndex,
+      routeCodeA: slotA.route.routeCode,
+      routeCodeB: slotB.route.routeCode,
+      reason: evalResult.reason || buildSwapReason(evalResult, slotA, slotB),
+      driverA: buildDriverSwapSide(
+        slotA,
+        slotB,
+        slotA.scoreOnPartner,
+        evalResult.afterFinishATime,
+        evalResult.driverAImprovement,
+        options
+      ),
+      driverB: buildDriverSwapSide(
+        slotB,
+        slotA,
+        slotB.scoreOnPartner,
+        evalResult.afterFinishBTime,
+        evalResult.driverBImprovement,
+        options
+      ),
+      totalImprovementMinutes: evalResult.timeImprovement,
+      beforeScore: evalResult.beforeScore,
+      afterScore: evalResult.afterScore,
+      improvement: evalResult.improvement,
+      judgment: 'swap_recommended',
+      vehicleGroup: slotA.vehicleGroup,
+      vehicleKindA: slotA.vehicleKind || resolveVehicleKind(slotA.route, slotA.worker),
+      vehicleKindB: slotB.vehicleKind || resolveVehicleKind(slotB.route, slotB.worker),
+      worsenWarning: evalResult.worsenWarning || null,
+      driverAImprovement: evalResult.driverAImprovement,
+      driverBImprovement: evalResult.driverBImprovement,
+      routeDataAnomaly:
+        (slotA.baseRow && slotA.baseRow.routeDataAnomaly) ||
+        (slotB.baseRow && slotB.baseRow.routeDataAnomaly) ||
+        null,
+    };
+  }
+
+  /**
+   * Phase 1.7: Cycle 1/2 — GDS Amazonアサインを母集団とし、
+   * 同一CycleのGDS担当ルート同士のコース交換で終了時間短縮が見込める組だけ提案する。
+   * マニフェストはroute詳細（荷物・stops・エリア）の取得に使う。
+   * Cycle 1 = GDS DCX* / Cycle 2 = GDS DMX*
    */
   function buildAmazonAssignEvaluationPlan(manifestRoutes, shiftWorkers, experienceDb, options) {
     options = options || {};
+    var emptySummary = {
+      okCount: 0,
+      changeCandidateCount: 0,
+      adminReviewCount: 0,
+      inputMissingCount: 0,
+      totalRoutes: 0,
+      targetRouteCount: 0,
+      stationRouteCount: 0,
+      gdsAssignmentCount: 0,
+      gdsOutOfScopeCount: 0,
+      linkedAssignmentCount: 0,
+      unlinkedCount: 0,
+      evaluableCount: 0,
+      swapPairCount: 0,
+      totalFinishImprovementMinutes: 0,
+      assignmentIncomplete: false,
+    };
     var cycle = Number(options.cycle);
     if (cycle !== 1 && cycle !== 2) {
       return {
         mode: 'evaluate',
         cycleError: 'INVALID_CYCLE_FOR_EVAL',
         routes: [],
-        summary: { okCount: 0, changeCandidateCount: 0, adminReviewCount: 0, totalRoutes: 0 },
+        swaps: [],
+        summary: emptySummary,
       };
     }
     if (!options.amazonAssignments || !options.amazonAssignments.length) {
@@ -1596,132 +2210,383 @@
         mode: 'evaluate',
         assignmentError: 'AMAZON_ASSIGNMENT_REQUIRED',
         routes: [],
-        summary: { okCount: 0, changeCandidateCount: 0, adminReviewCount: 0, totalRoutes: 0 },
+        swaps: [],
+        summary: emptySummary,
         cycle: cycle,
       };
     }
 
     var config = Object.assign({}, ASSIGN_EXPERIENCE_CONFIG, options.experienceConfig || {});
+    var swapConfig = Object.assign({}, SWAP_OPTIMIZE_CONFIG, options.swapConfig || {});
+    var vehicleConfig = Object.assign({}, VEHICLE_SWAP_CONFIG, options.vehicleSwapConfig || {});
     var workers = filterShiftWorkers(shiftWorkers);
     var cycleFilter = filterWorkersByCycleEligibility(workers, cycle);
-    var cycleEligibleWorkers = cycleFilter.eligible;
-    var enrichedRoutes = enrichManifestRoutesWithAssignment(manifestRoutes, options.amazonAssignments);
+    var lookupWorkers = (cycleFilter.eligible || []).concat(workers);
+    var population = collectGdsOptimizationPopulation(
+      manifestRoutes,
+      options.amazonAssignments,
+      cycle
+    );
+    var gdsManifestRoutes = [];
+    var gdsCodes = Object.keys(population.gdsByCode).sort(function (a, b) {
+      return String(a).localeCompare(String(b));
+    });
+    for (var gi = 0; gi < gdsCodes.length; gi++) {
+      var gdsManifest = population.manifestByCode[gdsCodes[gi]];
+      if (gdsManifest) gdsManifestRoutes.push(gdsManifest);
+    }
+    var enrichedRoutes = enrichManifestRoutesWithAssignment(
+      gdsManifestRoutes,
+      options.amazonAssignments
+    );
+    var enrichedByCode = {};
+    for (var ei = 0; ei < enrichedRoutes.length; ei++) {
+      if (enrichedRoutes[ei] && enrichedRoutes[ei].routeCode) {
+        enrichedByCode[enrichedRoutes[ei].routeCode] = enrichedRoutes[ei];
+      }
+    }
     var planOptions = {
       experienceConfig: config,
       getPackagesPerHour: options.getPackagesPerHour,
       cycle: cycle,
+      loadingTime: options.loadingTime,
+      travelOutbound: options.travelOutbound,
+      travelReturn: options.travelReturn,
+      defaultPackagesPerHour: options.defaultPackagesPerHour || swapConfig.DEFAULT_PACKAGES_PER_HOUR,
+      defaultDeparture: options.defaultDeparture,
+      swapConfig: swapConfig,
+      vehicleSwapConfig: vehicleConfig,
     };
+    var expDb = experienceDb && experienceDb.byTransportId ? experienceDb.byTransportId : {};
 
-    var routesOut = [];
-    var okCount = 0;
-    var changeCount = 0;
-    var adminCount = 0;
+    var adminSlots = [];
+    var inputMissingSlots = [];
+    var swapSlots = [];
+    var stationRouteCount = population.stationRouteCount;
+    var gdsAssignmentCount = population.gdsAssignmentCount;
+    var gdsOutOfScopeRoutes = population.gdsOutOfScopeRoutes;
+    var linkedAssignmentCount = 0;
 
-    for (var ri = 0; ri < enrichedRoutes.length; ri++) {
-      var route = enrichedRoutes[ri];
-      if (!route.areas || !route.areas.length) continue;
+    for (var ri = 0; ri < gdsCodes.length; ri++) {
+      var gdsCode = gdsCodes[ri];
+      var amzRaw = population.gdsByCode[gdsCode];
+      var route = enrichedByCode[gdsCode];
+      var amz = route && route.amazonAssignment ? route.amazonAssignment : amzRaw;
+      var roles = route ? resolveRouteAreaRoles(route.areas || []) : { primary: null };
+      var primaryLabel = roles.primary ? roles.primary.label : '';
+      var inputMissingReason = '';
+      var adminReason = '';
+      var anomaly = detectRouteDataAnomaly(route || { routeCode: gdsCode }, amz);
 
-      var vehicleType = route.routeVehicleType || 'unknown';
-      if (vehicleType === 'unknown') {
-        routesOut.push({
-          routeCode: route.routeCode,
-          packages: route.packages,
-          stops: route.stops,
-          areas: route.areas,
-          routeVehicleType: vehicleType,
-          amazonAssignment: route.amazonAssignment,
-          evaluationStatus: 'admin_review',
-          evaluationReasons: buildAmazonEvaluationReasons(null, null, 'admin_review', route, config, cycle),
-        });
-        adminCount++;
-        continue;
+      if (!amz) {
+        inputMissingReason = '必須データなし';
+      } else if (!amz.driverName && !amz.transportId) {
+        inputMissingReason = 'ドライバー特定不能';
+      } else {
+        linkedAssignmentCount++;
+        if (!route) {
+          inputMissingReason = 'マニフェスト側routeとの対応不能';
+        } else if (!route.areas || !route.areas.length || !primaryLabel) {
+          inputMissingReason = '必須データなし';
+        }
       }
 
-      var vehicleWorkers = filterWorkersByVehicleType(cycleEligibleWorkers, vehicleType);
-      var regularWorkers = vehicleWorkers.filter(function (w) {
-        return w.assignRole !== 'reserve';
-      });
-
-      var scored = [];
-      for (var wi = 0; wi < regularWorkers.length; wi++) {
-        var worker = regularWorkers[wi];
-        if (!worker.transportId) continue;
-        scored.push(
-          buildDriverRouteScore(worker, route, experienceDb.byTransportId[worker.transportId], planOptions)
-        );
-      }
-      scored.sort(compareDriverRouteScores);
-
-      var amz = route.amazonAssignment;
+      var worker = null;
       var currentScore = null;
-      if (amz && amz.driverName) {
-        for (var ci = 0; ci < vehicleWorkers.length; ci++) {
-          var cw = vehicleWorkers[ci];
-          if (!cw.transportId) continue;
-          if ((cw.driverName || cw.name) === amz.driverName || cw.transportId === amz.transportId) {
-            currentScore = buildDriverRouteScore(
-              cw,
-              route,
-              experienceDb.byTransportId[cw.transportId],
-              planOptions
-            );
-            break;
+      if (!inputMissingReason) {
+        worker = findAssignedWorker(lookupWorkers, amz);
+        if (worker && !worker.normalizedShiftToken) {
+          worker = Object.assign({}, worker, {
+            normalizedShiftToken: normalizeAssignShiftToken(worker.shiftCode || ''),
+          });
+        }
+        if (!worker) {
+          if (amz.transportId || amz.driverName) {
+            worker = {
+              driverName: amz.driverName || '',
+              name: amz.driverName || '',
+              transportId: amz.transportId || '',
+              shiftCode: '',
+              assignRole: 'regular',
+            };
           }
         }
-        if (!currentScore && amz.transportId) {
+        if (!worker || (!worker.transportId && !worker.driverName)) {
+          inputMissingReason = 'ドライバー特定不能';
+        } else {
           currentScore = buildDriverRouteScore(
-            { driverName: amz.driverName, transportId: amz.transportId, shiftCode: '' },
+            worker,
             route,
-            experienceDb.byTransportId[amz.transportId],
+            worker.transportId ? expDb[worker.transportId] : null,
             planOptions
           );
         }
       }
 
-      var bestAlt = null;
-      for (var bi = 0; bi < scored.length; bi++) {
-        if (!isEligibleForFirstRecommendation(scored[bi], config)) continue;
-        if (currentScore && scored[bi].transportId === currentScore.transportId) continue;
-        bestAlt = scored[bi];
-        break;
+      var safeRoute = route || {
+        routeCode: gdsCode,
+        packages: 0,
+        stops: 0,
+        areas: [],
+        routeVehicleType: amz ? classifyRouteVehicleType(amz.serviceType) : 'unknown',
+      };
+      var vehicleKind = resolveVehicleKind(safeRoute, worker);
+      var vehicleType = safeRoute.routeVehicleType || vehicleKind || 'unknown';
+      var baseRow = {
+        routeCode: gdsCode,
+        packages: route ? routePackageCount(route) || route.packages : 0,
+        stops: route ? route.stops : 0,
+        areas: (route && route.areas) || [],
+        routeVehicleType: vehicleType,
+        vehicleKind: vehicleKind,
+        amazonAssignment: amz,
+        currentEvaluation: currentScore,
+        suggestedChange: null,
+        alternativeCandidates: [],
+        routeDataAnomaly: anomaly.hasAnomaly ? anomaly : null,
+      };
+
+      if (inputMissingReason) {
+        inputMissingSlots.push(
+          Object.assign({}, baseRow, {
+            evaluationStatus: 'input_missing',
+            inputMissingReason: inputMissingReason,
+            evaluationReasons: [
+              'Cycle：Cycle ' + cycle,
+              '判定：入力不足（' + inputMissingReason + '）',
+            ],
+          })
+        );
+        continue;
       }
 
-      var evalStatus = evaluateAmazonAssignmentStatus(currentScore, bestAlt, config);
-      if (evalStatus === 'ok') okCount++;
-      else if (evalStatus === 'change_candidate') changeCount++;
-      else adminCount++;
+      if (adminReason) {
+        adminSlots.push(
+          Object.assign({}, baseRow, {
+            evaluationStatus: 'admin_review',
+            adminReviewReason: adminReason,
+            evaluationReasons: [
+              'Cycle：Cycle ' + cycle,
+              '判定：管理者確認（' + adminReason + '）',
+            ],
+          })
+        );
+        continue;
+      }
 
-      routesOut.push({
-        routeCode: route.routeCode,
-        packages: route.packages,
-        stops: route.stops,
-        areas: route.areas,
-        routeVehicleType: vehicleType,
-        amazonAssignment: amz,
-        evaluationStatus: evalStatus,
-        currentEvaluation: currentScore,
-        suggestedChange: evalStatus === 'change_candidate' ? bestAlt : null,
-        alternativeCandidates: scored.slice(0, 8),
-        evaluationReasons: buildAmazonEvaluationReasons(currentScore, bestAlt, evalStatus, route, config, cycle),
+      var finishMinutes = Math.round(finishMinutesForPairing(route, currentScore, currentScore, planOptions));
+      var deliveryDurationMinutes = Math.round(
+        estimateDeliveryDurationMinutes(currentScore, routePackageCount(route), planOptions)
+      );
+      swapSlots.push({
+        route: route,
+        worker: worker,
+        amz: amz,
+        score: currentScore,
+        finishMinutes: finishMinutes,
+        finishTime: formatMinutesToTime(finishMinutes),
+        predictedFinishTime: formatMinutesToTime(finishMinutes),
+        deliveryDurationMinutes: deliveryDurationMinutes,
+        areaScore: areaFitScore(currentScore),
+        vehicleKind: vehicleKind,
+        vehicleGroup: vehicleKindToSwapGroup(vehicleKind, vehicleConfig),
+        driverKey: swapDriverIdentityKey({
+          route: route,
+          worker: worker,
+          amz: amz,
+          score: currentScore,
+        }),
+        baseRow: baseRow,
       });
     }
 
-    routesOut.sort(function (a, b) {
-      return String(a.routeCode).localeCompare(b.routeCode);
+    var candidates = [];
+    for (var i = 0; i < swapSlots.length; i++) {
+      for (var j = i + 1; j < swapSlots.length; j++) {
+        var slotA = swapSlots[i];
+        var slotB = swapSlots[j];
+        if (slotA.driverKey && slotA.driverKey === slotB.driverKey) continue;
+        var scoreAonB = buildDriverRouteScore(
+          slotA.worker,
+          slotB.route,
+          slotA.worker.transportId ? expDb[slotA.worker.transportId] : null,
+          planOptions
+        );
+        var scoreBonA = buildDriverRouteScore(
+          slotB.worker,
+          slotA.route,
+          slotB.worker.transportId ? expDb[slotB.worker.transportId] : null,
+          planOptions
+        );
+        var evalSlotA = Object.assign({}, slotA, { scoreOnPartner: scoreAonB });
+        var evalSlotB = Object.assign({}, slotB, { scoreOnPartner: scoreBonA });
+        var ev = evaluateSwapPair(evalSlotA, evalSlotB, planOptions);
+        if (!ev.accepted) continue;
+        candidates.push({ slotA: evalSlotA, slotB: evalSlotB, eval: ev, indexA: i, indexB: j });
+      }
+    }
+
+    candidates.sort(function (a, b) {
+      if (b.eval.timeImprovement !== a.eval.timeImprovement) {
+        return b.eval.timeImprovement - a.eval.timeImprovement;
+      }
+      if (b.eval.maxFinishImprovement !== a.eval.maxFinishImprovement) {
+        return b.eval.maxFinishImprovement - a.eval.maxFinishImprovement;
+      }
+      if (b.eval.experienceImprovement !== a.eval.experienceImprovement) {
+        return b.eval.experienceImprovement - a.eval.experienceImprovement;
+      }
+      return String(a.slotA.route.routeCode).localeCompare(String(b.slotA.route.routeCode));
     });
+
+    var usedDrivers = {};
+    var selected = [];
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var cand = candidates[ci];
+      var keyA = cand.slotA.driverKey || swapDriverIdentityKey(cand.slotA);
+      var keyB = cand.slotB.driverKey || swapDriverIdentityKey(cand.slotB);
+      if (!keyA || !keyB || usedDrivers[keyA] || usedDrivers[keyB]) continue;
+      usedDrivers[keyA] = true;
+      usedDrivers[keyB] = true;
+      selected.push(cand);
+      if (selected.length >= swapConfig.MAX_SWAP_PAIRS) break;
+    }
+
+    var swaps = [];
+    var swapByRoute = {};
+    var totalImprovement = 0;
+    for (var si = 0; si < selected.length; si++) {
+      var pick = selected[si];
+      var proposal = buildSwapProposal(pick.slotA, pick.slotB, pick.eval, si + 1, planOptions);
+      swaps.push(proposal);
+      totalImprovement += proposal.totalImprovementMinutes;
+      swapByRoute[proposal.routeCodeA] = proposal;
+      swapByRoute[proposal.routeCodeB] = proposal;
+    }
+
+    var routesOut = [];
+    var unchangedRoutes = [];
+    var okCount = 0;
+    var changeCount = 0;
+
+    for (var s = 0; s < swapSlots.length; s++) {
+      var slot = swapSlots[s];
+      var proposalForRoute = swapByRoute[slot.route.routeCode];
+      var row;
+      if (proposalForRoute) {
+        changeCount++;
+        var partnerCode =
+          proposalForRoute.routeCodeA === slot.route.routeCode
+            ? proposalForRoute.routeCodeB
+            : proposalForRoute.routeCodeA;
+        var side =
+          proposalForRoute.routeCodeA === slot.route.routeCode
+            ? proposalForRoute.driverA
+            : proposalForRoute.driverB;
+        row = Object.assign({}, slot.baseRow, {
+          evaluationStatus: 'swap_recommended',
+          swapProposal: proposalForRoute,
+          suggestedChange: {
+            driverName: side.driverName,
+            transportId: side.transportId,
+            fromRouteCode: side.fromRouteCode,
+            toRouteCode: side.toRouteCode,
+          },
+          predictedFinishCurrent: slot.finishTime,
+          predictedFinishAfter: side.toFinishTime,
+          evaluationReasons: [
+            'Cycle：Cycle ' + cycle,
+            '判定：🔄 コース交換推奨',
+            slot.route.routeCode + ' ⇄ ' + partnerCode,
+            '現在：' + formatExperienceEvidenceLine(side.fromArea, side.fromExperienceDays),
+            '変更後：' + formatExperienceEvidenceLine(side.toArea, side.toExperienceDays),
+            '予測終了：' + side.fromFinishTime + ' → ' + side.toFinishTime,
+            '組全体の短縮：' + proposalForRoute.totalImprovementMinutes + '分',
+            '推奨理由：' + (proposalForRoute.reason || ''),
+            '車種/種別：' +
+              (proposalForRoute.vehicleKindA || slot.vehicleKind || '?') +
+              ' ⇄ ' +
+              (proposalForRoute.vehicleKindB || '?'),
+          ].concat(
+            proposalForRoute.worsenWarning ? [proposalForRoute.worsenWarning.message] : [],
+            (slot.baseRow.routeDataAnomaly && slot.baseRow.routeDataAnomaly.warningLabel
+              ? [slot.baseRow.routeDataAnomaly.warningLabel]
+              : [])
+          ),
+        });
+      } else {
+        okCount++;
+        row = Object.assign({}, slot.baseRow, {
+          evaluationStatus: 'ok',
+          predictedFinishCurrent: slot.finishTime,
+          evaluationReasons: [
+            'Cycle：Cycle ' + cycle,
+            'Amazonアサイン：' + ((slot.amz && slot.amz.driverName) || slot.score.driverName || ''),
+            '現在担当 主エリア：' +
+              (slot.score.primaryArea || '?') +
+              ' ' +
+              formatExperienceDaysDisplay(slot.score.primaryExperienceDays || 0),
+            '予測終了：' + slot.finishTime,
+            '配送処理時間：約' + (slot.deliveryDurationMinutes || 0) + '分',
+            '判定：明確な交換改善なし（変更不要）',
+          ],
+        });
+        unchangedRoutes.push(row);
+      }
+      routesOut.push(row);
+    }
+
+    for (var ai = 0; ai < adminSlots.length; ai++) {
+      routesOut.push(adminSlots[ai]);
+    }
+    for (var mi = 0; mi < inputMissingSlots.length; mi++) {
+      routesOut.push(inputMissingSlots[mi]);
+    }
+
+    routesOut.sort(function (a, b) {
+      var rank = { swap_recommended: 0, admin_review: 1, input_missing: 2, ok: 3 };
+      var ra = rank[a.evaluationStatus] != null ? rank[a.evaluationStatus] : 9;
+      var rb = rank[b.evaluationStatus] != null ? rank[b.evaluationStatus] : 9;
+      if (ra !== rb) return ra - rb;
+      return String(a.routeCode).localeCompare(String(b.routeCode));
+    });
+
+    var realInputMissingCount = inputMissingSlots.length;
+    var assignmentIncomplete =
+      gdsAssignmentCount > 0 &&
+      (realInputMissingCount >= 10 || realInputMissingCount / gdsAssignmentCount >= 0.25);
 
     return {
       mode: 'evaluate',
       cycle: cycle,
       routes: routesOut,
+      swaps: swaps,
+      unchangedRoutes: unchangedRoutes,
+      adminReviewRoutes: adminSlots,
+      inputMissingRoutes: inputMissingSlots,
+      gdsOutOfScopeRoutes: gdsOutOfScopeRoutes,
       summary: {
         okCount: okCount,
         changeCandidateCount: changeCount,
-        adminReviewCount: adminCount,
+        adminReviewCount: adminSlots.length,
+        inputMissingCount: realInputMissingCount,
         totalRoutes: routesOut.length,
+        targetRouteCount: gdsAssignmentCount,
+        stationRouteCount: stationRouteCount,
+        gdsAssignmentCount: gdsAssignmentCount,
+        gdsOutOfScopeCount: gdsOutOfScopeRoutes.length,
+        linkedAssignmentCount: linkedAssignmentCount,
+        unlinkedCount: realInputMissingCount,
+        evaluableCount: swapSlots.length,
+        swapPairCount: swaps.length,
+        totalFinishImprovementMinutes: totalImprovement,
+        assignmentIncomplete: assignmentIncomplete,
+        optimizationPrefix: optimizationRoutePrefixLabel(cycle),
       },
       cycleEligibility: cycleFilter.stats,
       experienceConfig: config,
+      swapConfig: swapConfig,
+      vehicleSwapConfig: vehicleConfig,
     };
   }
 
@@ -1824,10 +2689,11 @@
   function getExperienceStatusLabel(experienceDays, thresholds) {
     thresholds = thresholds || EXPERIENCE_STATUS_THRESHOLDS;
     var days = Number(experienceDays) || 0;
-    if (days <= 0) return '未経験';
-    if (days < thresholds.shallow) return '経験浅い';
-    if (days < thresholds.experienced) return '経験あり';
-    if (days < thresholds.skilled) return '経験あり';
+    if (days <= 0) return '確認なし（' + AREA_EXPERIENCE_OBSERVATION.START_LABEL + '）';
+    if (days <= 2) return '弱い経験実績';
+    if (days <= 5) return '明確な経験実績';
+    if (days <= 9) return '強い経験実績';
+    if (days < thresholds.skilled) return '非常に強い経験実績';
     return '熟練';
   }
 
@@ -1873,7 +2739,7 @@
     var parts = [];
     for (var i = 0; i < Math.min(keys.length, maxAreas); i++) {
       var ar = entry.areas[keys[i]];
-      parts.push(ar.area + ' ' + ar.experienceDays + '日');
+      parts.push(ar.area + ' ' + formatExperienceDaysDisplay(ar.experienceDays));
     }
     if (keys.length > maxAreas) parts.push('…');
     return parts.join(' / ');
@@ -2391,6 +3257,30 @@
     buildFirstAssignPlan: buildFirstAssignPlan,
     buildAmazonAssignEvaluationPlan: buildAmazonAssignEvaluationPlan,
     buildAssignPlan: buildAssignPlan,
+    isDcxRouteCode: isDcxRouteCode,
+    isDmxRouteCode: isDmxRouteCode,
+    isOptimizationRoute: isOptimizationRoute,
+    optimizationRoutePrefixLabel: optimizationRoutePrefixLabel,
+    collectGdsOptimizationPopulation: collectGdsOptimizationPopulation,
+    SWAP_OPTIMIZE_CONFIG: SWAP_OPTIMIZE_CONFIG,
+    VEHICLE_SWAP_CONFIG: VEHICLE_SWAP_CONFIG,
+    AREA_EXPERIENCE_OBSERVATION: AREA_EXPERIENCE_OBSERVATION,
+    AREA_EXPERIENCE_SPEED_BONUS: AREA_EXPERIENCE_SPEED_BONUS,
+    classifyExperienceEvidence: classifyExperienceEvidence,
+    formatExperienceDaysDisplay: formatExperienceDaysDisplay,
+    formatExperienceEvidenceLine: formatExperienceEvidenceLine,
+    evaluateSwapPair: evaluateSwapPair,
+    experienceSpeedFactor: experienceSpeedFactor,
+    estimateDeliveryDurationMinutes: estimateDeliveryDurationMinutes,
+    estimatePredictedFinishMinutes: estimatePredictedFinishMinutes,
+    adjustCapabilityForFinishEstimate: adjustCapabilityForFinishEstimate,
+    canSwapVehicleGroups: canSwapVehicleGroups,
+    resolveVehicleSwapGroup: resolveVehicleSwapGroup,
+    resolveVehicleKind: resolveVehicleKind,
+    vehicleKindToSwapGroup: vehicleKindToSwapGroup,
+    classifySwapWorsenWarning: classifySwapWorsenWarning,
+    swapDriverIdentityKey: swapDriverIdentityKey,
+    detectRouteDataAnomaly: detectRouteDataAnomaly,
     getAssignModeForCycle: getAssignModeForCycle,
     classifyRouteVehicleType: classifyRouteVehicleType,
     filterWorkersByVehicleType: filterWorkersByVehicleType,

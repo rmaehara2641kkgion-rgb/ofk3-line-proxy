@@ -590,8 +590,8 @@
         escapeHtml(ar.area) +
         '</div>' +
         '<div class="mt-1"><span class="font-bold">' +
-        ar.experienceDays +
-        '日</span>' +
+        escapeHtml(AssignSupportCore.formatExperienceDaysDisplay(ar.experienceDays)) +
+        '</span>' +
         ' <span class="text-ink-lighter">(' +
         escapeHtml(statusLabel) +
         ')</span></div>' +
@@ -645,6 +645,12 @@
         serviceType: row.serviceType || '',
         transportId: tid,
         isReserve: AssignSupportCore.isReserveServiceType(row.serviceType),
+        departure: row.departure || '',
+        predictedEnd: row.predictedEnd || '',
+        totalDeliveries: row.totalDeliveries,
+        allDestinations: row.allDestinations,
+        capability: row.capability,
+        routeDuration: row.routeDuration,
       };
     });
   }
@@ -657,12 +663,14 @@
     if (!title || !btn) return;
     var mode = cycle ? AssignSupportCore.getAssignModeForCycle(cycle) : null;
     if (mode === 'evaluate') {
-      title.textContent = 'Amazonアサイン最適化（Cycle ' + cycle + '）';
+      title.textContent = 'コース割最適化（Cycle ' + cycle + '）';
       if (desc) {
         desc.textContent =
-          'Amazon既存アサインを経験DBで評価し、変更した方がよい箇所だけ提案します（全員再配車しません）';
+          cycle === 2
+            ? 'Amazon現在アサインを維持し、DMX同士のコース交換で終了時間短縮が見込める組だけ提案します'
+            : 'Amazon現在アサインを維持し、DCX同士のコース交換で終了時間短縮が見込める組だけ提案します';
       }
-      btn.textContent = '⚡ アサイン評価・最適化';
+      btn.textContent = '⚡ コース割最適化を実行';
     } else if (mode === 'first_pick') {
       title.textContent = 'Cycle3 自力アサイン支援';
       if (desc) {
@@ -677,10 +685,14 @@
   }
 
   function buildPlanOptions(cycle) {
+    var loadingNode = typeof document !== 'undefined' ? document.getElementById('loading-time') : null;
+    var loadingTime = loadingNode ? parseInt(loadingNode.value, 10) : 15;
+    if (!isFinite(loadingTime)) loadingTime = 15;
     return {
       cycle: cycle,
       rescueReserveCount: state.rescueCount,
       amazonAssignments: getAmazonAssignmentsForPlan(),
+      loadingTime: loadingTime,
       getPackagesPerHour: function (driverName, transportId) {
         return getCapability(driverName, transportId);
       },
@@ -725,7 +737,10 @@
       }
       var mode = AssignSupportCore.getAssignModeForCycle(cycle);
       if (mode === 'evaluate') {
-        html += '<p class="text-xs mt-1 text-blue-800">モード：<strong>Amazonアサイン最適化</strong></p>';
+        html +=
+          '<p class="text-xs mt-1 text-blue-800">モード：<strong>' +
+          (cycle === 2 ? 'DMX' : 'DCX') +
+          'コース交換最適化（GDSアサイン対象）</strong></p>';
       } else if (mode === 'first_pick') {
         html += '<p class="text-xs mt-1 text-blue-800">モード：<strong>Cycle3 自力アサイン支援</strong></p>';
       }
@@ -908,7 +923,7 @@
     var mode = cycle ? AssignSupportCore.getAssignModeForCycle(cycle) : null;
     var msg =
       mode === 'evaluate'
-        ? '準備完了。「⚡ アサイン評価・最適化」を押してください（Amazonアサインデータ必要）'
+        ? '準備完了。「⚡ コース割最適化を実行」を押してください（Amazonアサインデータ必要）'
         : mode === 'first_pick'
           ? '準備完了。「⚡ 第一推奨アサイン生成」を押してください'
           : '準備完了。Cycleを確定後、生成ボタンを押してください';
@@ -918,12 +933,106 @@
   function formatAreaResults(areaResults) {
     return areaResults
       .map(function (ar) {
-        if (ar.experienced) {
-          return ar.area + ' ' + ar.experienceDays + '日';
-        }
-        return ar.area + ' 未経験';
+        return ar.area + ' ' + AssignSupportCore.formatExperienceDaysDisplay(ar.experienceDays);
       })
       .join(' / ');
+  }
+
+  function formatSignedMinutes(n) {
+    var v = Number(n) || 0;
+    if (v > 0) return v + '分短縮';
+    if (v < 0) return Math.abs(v) + '分増';
+    return '変化なし';
+  }
+
+  function formatFinishDeltaLabel(n) {
+    var v = Number(n) || 0;
+    if (v > 0) return v + '分改善';
+    if (v < 0) return Math.abs(v) + '分悪化';
+    return '変化なし';
+  }
+
+  function renderSwapDriverBlock(side, worsenWarning) {
+    var html = '<div class="mt-3 p-3 rounded bg-white border border-indigo-100">';
+    html +=
+      '<p class="text-sm font-bold text-slate-800">' +
+      escapeHtml(side.driverName || '?') +
+      '</p>';
+    html +=
+      '<p class="text-xs mt-1">' +
+      escapeHtml(side.fromArea || '?') +
+      ' → <strong>' +
+      escapeHtml(side.toArea || '?') +
+      '</strong></p>';
+    var delta = Number(side.improvementMinutes) || 0;
+    var finishClass = delta < 0 ? 'text-amber-800' : 'text-emerald-800';
+    html +=
+      '<p class="mt-1 font-mono text-sm ' +
+      finishClass +
+      '">' +
+      escapeHtml(side.fromPredictedFinishTime || side.fromFinishTime || '-') +
+      ' → ' +
+      escapeHtml(side.toPredictedFinishTime || side.toFinishTime || '-') +
+      '</p>';
+    html +=
+      '<p class="text-sm font-bold ' +
+      finishClass +
+      '">' +
+      formatFinishDeltaLabel(delta);
+    if (delta <= -10) html += ' ⚠️';
+    html += '</p>';
+    html += '<ul class="mt-2 text-xs text-slate-700 space-y-0.5 list-disc list-inside">';
+    html +=
+      '<li>現在経験：' +
+      escapeHtml(side.fromExperienceLabel || AssignSupportCore.formatExperienceDaysDisplay(side.fromExperienceDays)) +
+      '</li>';
+    html +=
+      '<li>変更後経験：' +
+      escapeHtml(side.toExperienceLabel || AssignSupportCore.formatExperienceDaysDisplay(side.toExperienceDays)) +
+      '</li>';
+    html += '<li>改善：' + formatSignedMinutes(side.improvementMinutes) + '</li>';
+    html += '</ul>';
+    html +=
+      '<details class="mt-2 text-xs text-slate-500"><summary class="cursor-pointer">内訳</summary><ul class="mt-1 space-y-0.5 list-disc list-inside">';
+    html +=
+      '<li>PPH：' +
+      (side.packagesPerHour != null ? Number(side.packagesPerHour).toFixed(1) : '-') +
+      '個/h</li>';
+    html +=
+      '<li>荷物：' +
+      (side.routePackagesFrom || 0) +
+      '個 → ' +
+      (side.routePackagesTo || 0) +
+      '個 / stops ' +
+      (side.routeStopsFrom || 0) +
+      ' → ' +
+      (side.routeStopsTo || 0) +
+      '</li>';
+    html +=
+      '<li>経験係数：' +
+      Number(side.fromExperienceSpeedFactor || 1).toFixed(2) +
+      ' → ' +
+      Number(side.toExperienceSpeedFactor || 1).toFixed(2) +
+      '</li>';
+    html +=
+      '<li>配送処理時間：' +
+      (side.fromDeliveryDurationMinutes || 0) +
+      '分 → ' +
+      (side.toDeliveryDurationMinutes || 0) +
+      '分</li>';
+    if (side.vehicleKind) {
+      html += '<li>車種/種別：' + escapeHtml(side.vehicleKind) + '</li>';
+    }
+    if (side.primaryConfidence || side.toPrimaryConfidence) {
+      html +=
+        '<li>confidence：' +
+        escapeHtml(side.primaryConfidence || 'なし') +
+        ' → ' +
+        escapeHtml(side.toPrimaryConfidence || 'なし') +
+        '</li>';
+    }
+    html += '</ul></details></div>';
+    return html;
   }
 
   function renderSuggestions() {
@@ -954,7 +1063,7 @@
         '<p class="font-bold">⚠ Amazonアサインデータが必要です</p>' +
         '<p class="mt-2 text-xs">Cycle ' +
         cycle +
-        ' はAmazon既存アサインの評価モードです。ダッシュボードで「ドライバー別配送データ」を読込んでから実行してください。</p>' +
+        ' はコース交換最適化です（Cycle 1=DCX / Cycle 2=DMX）。ダッシュボードでGDSの「ドライバー別配送データ」（ルート_OFK3）を読込んでから実行してください。</p>' +
         '</div>';
       return;
     }
@@ -980,61 +1089,212 @@
     var html = '';
 
     if (plan.mode === 'evaluate') {
-      html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
-      html += '<p class="font-bold text-slate-800 mb-1">Amazonアサイン評価（Cycle ' + cycle + '）</p>';
+      var swapList = plan.swaps || [];
+      var unchangedList = plan.unchangedRoutes || [];
+      var adminList = plan.adminReviewRoutes || [];
+      var missingList = plan.inputMissingRoutes || [];
+      var totalImprove = plan.summary.totalFinishImprovementMinutes || 0;
+      var prefix = plan.summary.optimizationPrefix || AssignSupportCore.optimizationRoutePrefixLabel(cycle);
+      var stationCount =
+        plan.summary.stationRouteCount != null ? plan.summary.stationRouteCount : 0;
+      var gdsCount =
+        plan.summary.gdsAssignmentCount != null
+          ? plan.summary.gdsAssignmentCount
+          : plan.summary.linkedAssignmentCount || 0;
+      var evalCount = plan.summary.evaluableCount || 0;
+      var outOfScopeCount = plan.summary.gdsOutOfScopeCount || 0;
+      var outOfScopeList = plan.gdsOutOfScopeRoutes || [];
+      html += '<div class="mb-4 p-4 rounded-lg bg-indigo-50 border border-indigo-200 text-sm">';
       html +=
-        '<p class="text-xs text-ink-lighter">変更不要：<strong>' +
-        plan.summary.okCount +
-        '</strong>コース　変更候補：<strong>' +
-        plan.summary.changeCandidateCount +
-        '</strong>コース　管理者判断：<strong>' +
-        plan.summary.adminReviewCount +
-        '</strong>コース</p></div>';
-
-      for (var ei = 0; ei < plan.routes.length; ei++) {
-        var er = plan.routes[ei];
-        var eAreas = (er.areas || [])
-          .map(function (a) {
-            return a.label + (a.role === 'primary' ? '(主)' : '(副)');
-          })
-          .join('・');
-        html += '<div class="card p-4 mb-3 border-l-4 border-blue-400">';
-        html += '<div class="font-mono font-bold text-base">' + escapeHtml(er.routeCode) + '</div>';
+        '<p class="font-bold text-indigo-900 mb-2">Cycle ' +
+        cycle +
+        ' 最適化対象</p>';
+      html +=
+        '<p class="text-xs text-indigo-900">ステーション全' +
+        escapeHtml(prefix) +
+        '：<strong>' +
+        stationCount +
+        '</strong></p>';
+      html +=
+        '<p class="text-xs text-indigo-900">GDSアサイン：<strong>' +
+        gdsCount +
+        '</strong>ルート</p>';
+      html +=
+        '<p class="text-xs text-indigo-900">最適化評価：<strong>' +
+        evalCount +
+        '</strong>ルート</p>';
+      html +=
+        '<p class="text-xs text-indigo-900">swap提案：<strong>' +
+        (plan.summary.swapPairCount || 0) +
+        '</strong>組</p>';
+      html +=
+        '<p class="text-xs text-indigo-900">変更不要：<strong>' +
+        (plan.summary.okCount || 0) +
+        '</strong></p>';
+      html +=
+        '<p class="text-xs text-indigo-900">管理者確認：<strong>' +
+        (plan.summary.adminReviewCount || 0) +
+        '</strong></p>';
+      html +=
+        '<p class="text-xs text-slate-600">GDS対象外：<strong>' +
+        outOfScopeCount +
+        '</strong></p>';
+      if ((plan.summary.inputMissingCount || 0) > 0) {
         html +=
-          '<div class="text-xs text-ink-lighter mt-1">エリア：' +
-          escapeHtml(eAreas) +
-          ' / Route種別：' +
-          escapeHtml(er.routeVehicleType || '?') +
-          '</div>';
+          '<p class="text-xs font-bold text-amber-800 mt-1">入力不足：<strong>' +
+          plan.summary.inputMissingCount +
+          '</strong>ルート（GDSアサイン行の必須データ欠損）</p>';
+      }
+      html +=
+        '<p class="text-xs text-indigo-900 mt-2">予測短縮：合計 <strong>' +
+        totalImprove +
+        '分</strong></p>';
+      html +=
+        '<p class="mt-2 text-xs text-slate-600">※ 最適化は現在GDSにアサインされているルートのみ対象です</p>';
+      html += '</div>';
 
-        if (er.evaluationStatus === 'ok') {
+      if (!swapList.length) {
+        html +=
+          '<div class="mb-4 p-3 rounded bg-emerald-50 border border-emerald-200 text-sm text-emerald-800">' +
+          '<p class="font-bold">現在のAmazonアサインから、明確に短縮できるコース交換はありません。</p></div>';
+      }
+
+      for (var si = 0; si < swapList.length; si++) {
+        var sw = swapList[si];
+        html += '<div class="card p-4 mb-3 border-l-4 border-indigo-500">';
+        html +=
+          '<p class="text-xs font-bold text-indigo-700 mb-1">交換提案' +
+          (sw.pairIndex || si + 1) +
+          '</p>';
+        html +=
+          '<p class="font-mono font-bold text-lg text-slate-900">' +
+          escapeHtml(sw.routeCodeA) +
+          ' ⇄ ' +
+          escapeHtml(sw.routeCodeB) +
+          '</p>';
+        html +=
+          '<p class="mt-1 text-xs text-slate-600">車種/種別：' +
+          escapeHtml(sw.vehicleKindA || '?') +
+          ' ⇄ ' +
+          escapeHtml(sw.vehicleKindB || '?') +
+          '</p>';
+        if (sw.worsenWarning && sw.worsenWarning.message) {
           html +=
-            '<div class="mt-3 p-3 rounded bg-emerald-50 border border-emerald-300 text-sm text-emerald-800">' +
-            '<p class="font-bold">✅ Amazonアサイン良好（変更不要）</p></div>';
-        } else if (er.evaluationStatus === 'change_candidate') {
-          html +=
-            '<div class="mt-3 p-3 rounded bg-amber-50 border border-amber-300 text-sm text-amber-900">' +
-            '<p class="font-bold">⚠ 変更候補</p>' +
-            '<p class="mt-1 text-xs">現在：' +
-            escapeHtml((er.amazonAssignment && er.amazonAssignment.driverName) || '?') +
-            '</p>' +
-            '<p class="text-xs">推奨：' +
-            escapeHtml((er.suggestedChange && er.suggestedChange.driverName) || '?') +
-            '</p></div>';
-        } else {
-          html +=
-            '<div class="mt-3 p-3 rounded bg-red-50 border border-red-300 text-sm text-red-800">' +
-            '<p class="font-bold">🚨 管理者判断</p></div>';
+            '<p class="mt-2 text-sm font-bold text-amber-800">' +
+            escapeHtml(sw.worsenWarning.message) +
+            '</p>';
         }
+        if (sw.routeDataAnomaly && sw.routeDataAnomaly.warningLabel) {
+          html +=
+            '<p class="mt-1 text-xs font-bold text-amber-800">' +
+            escapeHtml(sw.routeDataAnomaly.warningLabel) +
+            '</p>';
+        }
+        html += renderSwapDriverBlock(sw.driverA, sw.worsenWarning);
+        html += renderSwapDriverBlock(sw.driverB, sw.worsenWarning);
+        html +=
+          '<p class="mt-3 text-sm font-bold text-emerald-800">全体：' +
+          (sw.totalImprovementMinutes || 0) +
+          '分改善</p>';
+        html +=
+          '<p class="mt-1 text-sm font-bold text-indigo-800">推奨理由：' +
+          escapeHtml(sw.reason || '終了時間短縮') +
+          '</p>';
+        html +=
+          '<p class="mt-1 text-sm font-bold text-indigo-800">🔄 コース交換推奨</p>';
+        html += '</div>';
+      }
 
-        if (er.evaluationReasons && er.evaluationReasons.length) {
-          html += '<ul class="mt-2 text-xs text-slate-700 space-y-0.5 list-disc list-inside">';
-          for (var eri = 0; eri < er.evaluationReasons.length; eri++) {
-            html += '<li>' + escapeHtml(er.evaluationReasons[eri]) + '</li>';
-          }
-          html += '</ul>';
+      if (adminList.length) {
+        html += '<div class="mb-3">';
+        html +=
+          '<p class="text-sm font-bold text-amber-800 mb-2">管理者確認 ' +
+          adminList.length +
+          'ルート</p>';
+        for (var ai = 0; ai < adminList.length; ai++) {
+          var ar = adminList[ai];
+          html += '<div class="card p-3 mb-2 border-l-4 border-amber-400 text-sm">';
+          html +=
+            '<span class="font-mono font-bold">' +
+            escapeHtml(ar.routeCode) +
+            '</span>';
+          html +=
+            '<p class="text-xs text-amber-900 mt-1">' +
+            escapeHtml(ar.adminReviewReason || '自動判定不能') +
+            '</p></div>';
         }
         html += '</div>';
+      }
+
+      if (missingList.length) {
+        html += '<details class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">';
+        html +=
+          '<summary class="cursor-pointer text-sm font-bold text-amber-900">入力不足 ' +
+          missingList.length +
+          'ルート</summary>';
+        html += '<ul class="mt-2 text-xs text-amber-900 space-y-1">';
+        for (var mi = 0; mi < missingList.length; mi++) {
+          var mr = missingList[mi];
+          html +=
+            '<li><span class="font-mono font-bold">' +
+            escapeHtml(mr.routeCode) +
+            '</span> ' +
+            escapeHtml(mr.inputMissingReason || '入力不足') +
+            '</li>';
+        }
+        html += '</ul></details>';
+      }
+
+      if (unchangedList.length) {
+        html += '<details class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">';
+        html +=
+          '<summary class="cursor-pointer text-sm font-bold text-slate-700">変更不要 ' +
+          unchangedList.length +
+          'ルート</summary>';
+        html += '<ul class="mt-2 text-xs text-slate-600 space-y-1">';
+        for (var ui = 0; ui < unchangedList.length; ui++) {
+          var ur = unchangedList[ui];
+          var uname =
+            (ur.amazonAssignment && ur.amazonAssignment.driverName) ||
+            (ur.currentEvaluation && ur.currentEvaluation.driverName) ||
+            '';
+          var uarea = ur.currentEvaluation && ur.currentEvaluation.primaryArea
+            ? ur.currentEvaluation.primaryArea +
+              ' ' +
+              AssignSupportCore.formatExperienceDaysDisplay(ur.currentEvaluation.primaryExperienceDays || 0)
+            : '';
+          html +=
+            '<li><span class="font-mono font-bold">' +
+            escapeHtml(ur.routeCode) +
+            '</span> ' +
+            escapeHtml(uname) +
+            (uarea ? ' / ' + escapeHtml(uarea) : '') +
+            (ur.predictedFinishCurrent ? ' / 終了 ' + escapeHtml(ur.predictedFinishCurrent) : '') +
+            (ur.routeDataAnomaly && ur.routeDataAnomaly.warningLabel
+              ? ' / ' + escapeHtml(ur.routeDataAnomaly.warningLabel)
+              : '') +
+            '</li>';
+        }
+        html += '</ul></details>';
+      }
+
+      if (outOfScopeList.length) {
+        html += '<details class="mb-3 rounded-lg border border-slate-200 bg-white p-3">';
+        html +=
+          '<summary class="cursor-pointer text-sm font-medium text-slate-600">GDS対象外 ' +
+          outOfScopeList.length +
+          'ルート</summary>';
+        html +=
+          '<p class="mt-2 text-xs text-slate-500">ステーションマニフェストにあるが、現在のGDSアサイン一覧に含まれないルートです。エラーではありません。</p>';
+        html += '<ul class="mt-2 text-xs text-slate-500 space-y-1">';
+        for (var oi = 0; oi < outOfScopeList.length; oi++) {
+          var oroute = outOfScopeList[oi];
+          html +=
+            '<li><span class="font-mono">' +
+            escapeHtml(oroute.routeCode) +
+            '</span> GDSアサイン対象外</li>';
+        }
+        html += '</ul></details>';
       }
     } else {
       html += '<div class="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">';
@@ -1395,7 +1655,9 @@
           alert(
             'Cycle ' +
               genCycle +
-              ' はAmazonアサイン評価モードです。先にダッシュボードでドライバー別配送データを読込んでください'
+              ' は' +
+              (genCycle === 2 ? 'DMX' : 'DCX') +
+              'コース交換最適化です。先にダッシュボードでGDSのドライバー別配送データ（ルート_OFK3）を読込んでください'
           );
           return;
         }
