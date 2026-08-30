@@ -64,9 +64,8 @@
   }
 })();
 
-// CHAPPY OPS LINK Phase 1.2
-// Production-safe bridge: this file is already loaded by the Render index.
-// It only POSTs the current assignment snapshot to CHAPPY on this PC.
+// CHAPPY OPS LINK Phase 1.3
+// Production-safe bridge. Adds optional map hints when assignment rows already contain them.
 (function () {
   'use strict';
 
@@ -77,13 +76,37 @@
   var lastHash = '';
   var lastEmptyLog = false;
 
+  function finiteNumber(value) {
+    var n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function firstNumber(row, keys) {
+    for (var i = 0; i < keys.length; i++) {
+      if (row && row[keys[i]] != null && row[keys[i]] !== '') {
+        var n = finiteNumber(row[keys[i]]);
+        if (n != null) return n;
+      }
+    }
+    return null;
+  }
+
+  function firstText(row, keys) {
+    for (var i = 0; i < keys.length; i++) {
+      if (row && row[keys[i]] != null && String(row[keys[i]]).trim()) return String(row[keys[i]]).trim();
+    }
+    return '';
+  }
+
   function buildSnapshot() {
     var rows = (typeof assignmentData !== 'undefined' && Array.isArray(assignmentData)) ? assignmentData : [];
     return {
-      version: 1,
+      version: 2,
       source: 'OFK3_DELIVERY',
       updatedAt: new Date().toISOString(),
       routes: rows.map(function (r) {
+        var lat = firstNumber(r, ['lat', 'latitude', 'routeLat', 'areaLat', 'lastLat', 'endLat']);
+        var lon = firstNumber(r, ['lon', 'lng', 'longitude', 'routeLon', 'routeLng', 'areaLon', 'areaLng', 'lastLon', 'lastLng', 'endLon', 'endLng']);
         return {
           routeCode: r.routeCode || '',
           driverName: r.driverName || '',
@@ -94,7 +117,11 @@
           departure: r.departure || '',
           capability: r.capability == null ? null : Number(r.capability),
           predictedEnd: r.predictedEnd || '',
-          status: r.status || 'unknown'
+          status: r.status || 'unknown',
+          lat: lat,
+          lon: lon,
+          mapAddress: firstText(r, ['lastAddress', 'endAddress', 'routeAddress', 'address', 'primaryAddress']),
+          mapSource: lat != null && lon != null ? 'assignment-coordinate' : (r.area ? 'area-label' : 'none')
         };
       })
     };
