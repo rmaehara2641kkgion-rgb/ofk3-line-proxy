@@ -63,3 +63,95 @@
     startObserver();
   }
 })();
+
+// CHAPPY OPS LINK Phase 1.2
+// Production-safe bridge: this file is already loaded by the Render index.
+// It only POSTs the current assignment snapshot to CHAPPY on this PC.
+(function () {
+  'use strict';
+
+  var URLS = [
+    'http://127.0.0.1:3000/api/ops/snapshot',
+    'http://localhost:3000/api/ops/snapshot'
+  ];
+  var lastHash = '';
+  var lastEmptyLog = false;
+
+  function buildSnapshot() {
+    var rows = (typeof assignmentData !== 'undefined' && Array.isArray(assignmentData)) ? assignmentData : [];
+    return {
+      version: 1,
+      source: 'OFK3_DELIVERY',
+      updatedAt: new Date().toISOString(),
+      routes: rows.map(function (r) {
+        return {
+          routeCode: r.routeCode || '',
+          driverName: r.driverName || '',
+          area: r.area || '',
+          serviceType: r.serviceType || '',
+          totalDeliveries: Number(r.totalDeliveries) || 0,
+          allDestinations: Number(r.allDestinations) || 0,
+          departure: r.departure || '',
+          capability: r.capability == null ? null : Number(r.capability),
+          predictedEnd: r.predictedEnd || '',
+          status: r.status || 'unknown'
+        };
+      })
+    };
+  }
+
+  async function publish(force) {
+    var payload;
+    try {
+      payload = buildSnapshot();
+    } catch (e) {
+      console.warn('[CHAPPY OPS] snapshot build failed:', e.message || e);
+      return { ok: false, error: String(e.message || e) };
+    }
+
+    if (!payload.routes.length) {
+      if (!lastEmptyLog) {
+        console.log('[CHAPPY OPS] bridge ready; waiting for assignment data');
+        lastEmptyLog = true;
+      }
+      return { ok: false, standby: true };
+    }
+    lastEmptyLog = false;
+
+    var stable = JSON.stringify(payload.routes);
+    if (!force && stable === lastHash) return { ok: true, unchanged: true };
+
+    console.log('[CHAPPY OPS] sending ' + payload.routes.length + ' routes...');
+    var lastError = null;
+    for (var i = 0; i < URLS.length; i++) {
+      try {
+        var res = await fetch(URLS[i], {
+          method: 'POST',
+          mode: 'cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          cache: 'no-store'
+        });
+        if (!res.ok) throw new Error('CHAPPY HTTP ' + res.status);
+        var body = await res.json();
+        lastHash = stable;
+        console.log('[CHAPPY OPS] ONLINE via ' + URLS[i], body.summary || body);
+        return body;
+      } catch (e) {
+        lastError = e;
+        console.warn('[CHAPPY OPS] connection failed via ' + URLS[i] + ':', e.message || e);
+      }
+    }
+    console.warn('[CHAPPY OPS] STANDBY:', lastError ? (lastError.message || lastError) : 'connection failed');
+    return { ok: false, error: String(lastError && (lastError.message || lastError) || 'connection failed') };
+  }
+
+  window.CHAPPY_OPS_BRIDGE = {
+    publish: publish,
+    snapshot: buildSnapshot
+  };
+
+  console.log('[CHAPPY OPS] production bridge loaded');
+  setTimeout(function () { publish(true); }, 1200);
+  setInterval(function () { publish(false); }, 2000);
+})();
