@@ -32,9 +32,8 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver); else startObserver();
 })();
 
-// CHAPPY OPS LINK Phase 1.4
-// Sends the assignment snapshot plus route-level map centers already available
-// in the OFK3 delivery app. No external AI receives this data.
+// CHAPPY OPS LINK Phase 1.5
+// Waits for OFK3's real address master, then sends route centers to local CHAPPY.
 (function () {
   'use strict';
   var URLS = ['http://127.0.0.1:3000/api/ops/snapshot','http://localhost:3000/api/ops/snapshot'];
@@ -42,10 +41,32 @@
   var lastEmptyLog = false;
   var lastAssignmentRef = null;
   var loadSequence = 0;
+  var mapMasterPromise = null;
 
   function finiteNumber(value) { var n = Number(value); return Number.isFinite(n) ? n : null; }
   function firstNumber(row, keys) { for (var i=0;i<keys.length;i++) { if (row && row[keys[i]] != null && row[keys[i]] !== '') { var n=finiteNumber(row[keys[i]]); if (n != null) return n; } } return null; }
   function firstText(row, keys) { for (var i=0;i<keys.length;i++) { if (row && row[keys[i]] != null && String(row[keys[i]]).trim()) return String(row[keys[i]]).trim(); } return ''; }
+
+  async function ensureMapMaster() {
+    try {
+      if (typeof inMemoryAddrMaster !== 'undefined' && inMemoryAddrMaster && Object.keys(inMemoryAddrMaster).length > 0) return true;
+      if (typeof loadAddrMasterFromSheet !== 'function') return false;
+      if (!mapMasterPromise) {
+        console.log('[CHAPPY OPS] loading OFK3 address master for MAP...');
+        mapMasterPromise = Promise.resolve(loadAddrMasterFromSheet()).catch(function(e) {
+          console.warn('[CHAPPY OPS] map master load failed:', e && (e.message || e));
+          return null;
+        }).finally(function(){ mapMasterPromise = null; });
+      }
+      await mapMasterPromise;
+      var count = (typeof inMemoryAddrMaster !== 'undefined' && inMemoryAddrMaster) ? Object.keys(inMemoryAddrMaster).length : 0;
+      console.log('[CHAPPY OPS] MAP master ready:', count, 'entries');
+      return count > 0;
+    } catch (e) {
+      console.warn('[CHAPPY OPS] ensureMapMaster failed:', e.message || e);
+      return false;
+    }
+  }
 
   function routeMapCenter(route) {
     var directLat = firstNumber(route, ['lat','latitude','routeLat','areaLat','lastLat','endLat']);
@@ -76,7 +97,7 @@
     if (rows !== lastAssignmentRef) { lastAssignmentRef = rows; loadSequence++; }
     var eventId = 'assignment-' + loadSequence;
     return {
-      version: 3,
+      version: 4,
       source: 'OFK3_DELIVERY',
       eventId: eventId,
       updatedAt: new Date().toISOString(),
@@ -93,13 +114,15 @@
   }
 
   async function publish(force) {
+    await ensureMapMaster();
     var payload;
     try { payload = buildSnapshot(); } catch(e) { console.warn('[CHAPPY OPS] snapshot build failed:', e.message || e); return {ok:false,error:String(e.message||e)}; }
     if (!payload.routes.length) { if (!lastEmptyLog) { console.log('[CHAPPY OPS] bridge ready; waiting for assignment data'); lastEmptyLog=true; } return {ok:false,standby:true}; }
     lastEmptyLog=false;
     var stable = payload.eventId + '|' + JSON.stringify(payload.routes);
     if (!force && stable === lastHash) return {ok:true,unchanged:true};
-    console.log('[CHAPPY OPS] sending ' + payload.routes.length + ' routes / ' + payload.eventId + '...');
+    var mapped = payload.routes.filter(function(r){ return r.lat != null && r.lon != null; }).length;
+    console.log('[CHAPPY OPS] sending ' + payload.routes.length + ' routes / ' + payload.eventId + ' / MAP ' + mapped + '...');
     var lastError=null;
     for (var i=0;i<URLS.length;i++) {
       try {
@@ -114,7 +137,7 @@
   }
 
   window.CHAPPY_OPS_BRIDGE={publish:publish,snapshot:buildSnapshot};
-  console.log('[CHAPPY OPS] production bridge loaded // MAP v1.4');
+  console.log('[CHAPPY OPS] production bridge loaded // MAP v1.5');
   setTimeout(function(){publish(true);},1200);
   setInterval(function(){publish(false);},2000);
 })();
