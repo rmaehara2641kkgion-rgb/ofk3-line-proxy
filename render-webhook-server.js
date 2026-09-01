@@ -5,6 +5,7 @@ const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -20,11 +21,30 @@ var multer;
 try { multer = require('multer'); } catch(e) { multer = null; }
 var pdfUpload = multer ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }) : null;
 
-// CORS対応
+// /tenko-syncのみオリジンを限定する許可リスト。他の既存エンドポイントには影響しない。
+const TENKO_SYNC_ALLOWED_ORIGINS = (function() {
+  var origins = ['https://ofk3-line-proxy-1.onrender.com'];
+  if (process.env.NODE_ENV !== 'production') {
+    origins.push('http://localhost:3000', 'http://127.0.0.1:3000');
+  }
+  return origins;
+})();
+
+// CORS対応（/tenko-syncのみオリジン制限、他は既存どおり全許可のまま）
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.path === '/tenko-sync') {
+    var origin = req.headers.origin;
+    if (origin && TENKO_SYNC_ALLOWED_ORIGINS.indexOf(origin) >= 0) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+    }
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Tenko-Sync-Token');
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
   if (req.method === 'OPTIONS') {
     return res.status(200).json({ status: 'ok' });
   }
@@ -38,11 +58,78 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const GAS_URL = process.env.GAS_URL || '';
 console.log('GOOGLE_MAPS_API_KEY configured:', !!GOOGLE_MAPS_API_KEY);
 
+// /tenko-sync認証トークン（Render環境変数）。未設定時はfail-closed（503）。
+// 値そのものはログにも出さない。設定有無のみ起動時に表示する。
+const TENKO_SYNC_TOKEN = process.env.TENKO_SYNC_TOKEN || '';
+console.log('TENKO_SYNC_TOKEN configured:', !!TENKO_SYNC_TOKEN);
+
+// /tenko-syncの認証チェック。true=認証OK、false=既にレスポンス済み（呼び出し側はreturnするだけでよい）
+function checkTenkoSyncAuth(req, res) {
+  if (!TENKO_SYNC_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'sync not configured' });
+    return false;
+  }
+  var authHeader = req.headers['authorization'] || '';
+  var bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader);
+  var providedToken = (bearerMatch ? bearerMatch[1] : '') || req.headers['x-tenko-sync-token'] || '';
+  if (!providedToken || providedToken !== TENKO_SYNC_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
 
-// 点呼同期ストア（メモリ内、当日分のみ）
+// 点呼同期ストア（プロセス内メモリが正。ファイルは単純な再起動からの復旧用ベストエフォートのバックアップで、
+// Renderのディスクは再デプロイ時にリセットされるため永続保証はない。詳細はコード内コメント参照）
 var tenkoSyncStore = null;
+// driverDeltaの順序付けはクライアント時計(PCとタブレットの時計ズレの影響を受ける)ではなく、
+// サーバー側で単調増加させるこのカウンタ(serverSeq)を各deltaに付与して行う。
+var tenkoDeltaSeqCounter = 0;
+// サーバー「世代」ID。再デプロイ等でtenkoDeltaSeqCounterが1に巻き戻ると、
+// 端末側が保持する「前世代の大きなseq値」と比較して新しい更新を誤って古いと判定してしまう。
+// これを避けるため、世代が変わるたびに新しいIDを発行し、端末側はID変化を検知したら
+// 適用済みseqの追跡をリセットする（driverDB自体は削除しない）。
+// ディスクバックアップから正常復元できた単純な再起動では同じIDを維持する。
+var tenkoServerInstanceId = null;
+var TENKO_SYNC_STORE_PATH = path.join(os.tmpdir(), 'tenko-sync-store.json');
+(function loadTenkoSyncStoreFromDisk() {
+  try {
+    if (fs.existsSync(TENKO_SYNC_STORE_PATH)) {
+      var loaded = JSON.parse(fs.readFileSync(TENKO_SYNC_STORE_PATH, 'utf8'));
+      if (loaded && typeof loaded === 'object') {
+        tenkoSyncStore = loaded;
+        tenkoDeltaSeqCounter = loaded._deltaSeqCounter || 0;
+        tenkoServerInstanceId = loaded._serverInstanceId || null;
+        console.log('tenko-sync: restored from disk backup (' + TENKO_SYNC_STORE_PATH + ')');
+      }
+    }
+  } catch (e) {
+    console.warn('tenko-sync: disk backup restore failed (ignoring):', e.message);
+  }
+})();
+if (!tenkoServerInstanceId) {
+  tenkoServerInstanceId = crypto.randomBytes(12).toString('hex');
+  console.log('tenko-sync: no valid prior generation found - starting new server instance generation');
+}
+function ensureTenkoSyncStore() {
+  if (!tenkoSyncStore) {
+    tenkoSyncStore = { schedule: [], date: getTodayJst(), notifyDisabled: {}, driverDeltas: [] };
+  }
+  tenkoSyncStore.serverInstanceId = tenkoServerInstanceId;
+  return tenkoSyncStore;
+}
+function persistTenkoSyncStoreToDisk() {
+  try {
+    tenkoSyncStore._deltaSeqCounter = tenkoDeltaSeqCounter;
+    tenkoSyncStore._serverInstanceId = tenkoServerInstanceId;
+    fs.writeFileSync(TENKO_SYNC_STORE_PATH, JSON.stringify(tenkoSyncStore), 'utf8');
+  } catch (e) {
+    console.warn('tenko-sync: disk backup write failed (ignoring):', e.message);
+  }
+}
 
 // 静的ファイル配信（index.html, logo.pngなど）
 app.use(express.static(path.join(__dirname)));
@@ -868,16 +955,65 @@ app.post('/tenko-master', async (req, res) => {
 
 // ===== 点呼データ同期 =====
 app.post('/tenko-sync', function(req, res) {
+  if (!checkTenkoSyncAuth(req, res)) return;
   try {
     log('tenko-sync POST received');
     var today = getTodayJst();
-    tenkoSyncStore = {
-      schedule: req.body.schedule || [],
-      date: req.body.date || today,
-      timestamp: Date.now(),
-      source: req.body.source || 'unknown'
-    };
-    log('tenko-sync saved: ' + tenkoSyncStore.schedule.length + ' drivers for ' + tenkoSyncStore.date);
+    ensureTenkoSyncStore();
+    if (req.body.schedule !== undefined) {
+      tenkoSyncStore.schedule = req.body.schedule || [];
+      tenkoSyncStore.date = req.body.date || today;
+    }
+    // 点呼アラートの解除/有効化状態を端末間で共有。updatedAtが新しい方を採用するlast-write-wins
+    // （解除だけでなく再有効化も伝播するため、誤解除した端末を別端末から復旧できる）
+    if (req.body.notifyDisabled && typeof req.body.notifyDisabled === 'object') {
+      tenkoSyncStore.notifyDisabled = tenkoSyncStore.notifyDisabled || {};
+      for (var ndKey in req.body.notifyDisabled) {
+        var incomingRec = req.body.notifyDisabled[ndKey];
+        if (!incomingRec || typeof incomingRec.updatedAt !== 'number') continue;
+        var existingRec = tenkoSyncStore.notifyDisabled[ndKey];
+        if (!existingRec || incomingRec.updatedAt > existingRec.updatedAt) {
+          tenkoSyncStore.notifyDisabled[ndKey] = incomingRec;
+        }
+      }
+      // 2日以上前の解除情報は判定上は無害だが無期限に増え続けないよう間引く
+      var notifyCutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      for (var pruneKey in tenkoSyncStore.notifyDisabled) {
+        if (tenkoSyncStore.notifyDisabled[pruneKey].updatedAt < notifyCutoff) {
+          delete tenkoSyncStore.notifyDisabled[pruneKey];
+        }
+      }
+    }
+    // 新規登録ドライバー等のマスタ差分を端末間で共有（直近200件まで保持、無期限増加を防止）
+    // 各deltaにサーバー採番のserverSeqを付与（クライアント時計に依存しない、クロックスキュー耐性のある順序付け）
+    if (Array.isArray(req.body.driverDeltas) && req.body.driverDeltas.length > 0) {
+      tenkoSyncStore.driverDeltas = tenkoSyncStore.driverDeltas || [];
+      for (var dj = 0; dj < req.body.driverDeltas.length; dj++) {
+        var incomingDelta = req.body.driverDeltas[dj];
+        if (!incomingDelta || !incomingDelta.name) continue;
+        tenkoDeltaSeqCounter += 1;
+        var stamped = {
+          name: incomingDelta.name,
+          driverId: incomingDelta.driverId || '',
+          transportId: incomingDelta.transportId || '',
+          japaneseName: incomingDelta.japaneseName || '',
+          company: incomingDelta.company || '',
+          updatedAt: typeof incomingDelta.updatedAt === 'number' ? incomingDelta.updatedAt : null,
+          serverSeq: tenkoDeltaSeqCounter,
+          serverInstanceId: tenkoServerInstanceId
+        };
+        tenkoSyncStore.driverDeltas.push(stamped);
+      }
+      if (tenkoSyncStore.driverDeltas.length > 200) {
+        tenkoSyncStore.driverDeltas = tenkoSyncStore.driverDeltas.slice(-200);
+      }
+    }
+    tenkoSyncStore.timestamp = Date.now();
+    tenkoSyncStore.source = req.body.source || tenkoSyncStore.source || 'unknown';
+    persistTenkoSyncStoreToDisk();
+    log('tenko-sync saved: ' + tenkoSyncStore.schedule.length + ' drivers for ' + tenkoSyncStore.date +
+      ' / notifyDisabled=' + Object.keys(tenkoSyncStore.notifyDisabled || {}).length +
+      ' / driverDeltas=' + (tenkoSyncStore.driverDeltas || []).length);
     res.json({ status: 'ok', count: tenkoSyncStore.schedule.length, timestamp: tenkoSyncStore.timestamp });
   } catch (e) {
     log('tenko-sync POST error: ' + e.message);
@@ -886,12 +1022,13 @@ app.post('/tenko-sync', function(req, res) {
 });
 
 app.get('/tenko-sync', function(req, res) {
+  if (!checkTenkoSyncAuth(req, res)) return;
   if (!tenkoSyncStore) {
-    return res.json({ status: 'empty' });
+    return res.json({ status: 'empty', serverInstanceId: tenkoServerInstanceId });
   }
   var since = parseInt(req.query.since) || 0;
   if (since && tenkoSyncStore.timestamp <= since) {
-    return res.json({ status: 'no_update' });
+    return res.json({ status: 'no_update', serverInstanceId: tenkoServerInstanceId });
   }
   res.json({ status: 'ok', data: tenkoSyncStore });
 });
