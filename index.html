@@ -1723,6 +1723,7 @@
           <div class="flex gap-2">
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportDnrResult()" id="dnr-export-btn" disabled>DNR エクスポート</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportLatResult()" id="lat-export-btn" disabled>LAT エクスポート</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportTwcResult()" id="twc-export-btn" disabled>時間指定違反 エクスポート</button>
           </div>
         </div>
 
@@ -1752,8 +1753,8 @@
           </div>
         </div>
 
-        <!-- ドロップゾーン（DNR + LOW/LAT単独） -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <!-- ドロップゾーン（DNR + LOW/LAT単独 + 週次TWC） -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
           <div id="dnr-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-yellow-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#eab308'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleDnrDrop(event)">
             <p class="text-sm text-ink-lighter mb-1">🚫 DNRデータ</p>
             <p class="text-xs text-ink-lighter">xlsxドロップ</p>
@@ -1767,6 +1768,13 @@
             <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="lat-file-input">
             <button type="button" class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="document.getElementById('lat-file-input').click()">ファイルを選択</button>
             <p id="lat-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
+          </div>
+          <div id="twc-drop-zone" class="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-blue-500 transition-colors" ondragover="event.preventDefault();this.style.borderColor='#3b82f6'" ondragleave="this.style.borderColor=''" ondrop="event.preventDefault();this.style.borderColor='';handleTwcDrop(event)" onclick="document.getElementById('twc-file-input').click()">
+            <p class="text-sm text-ink-lighter mb-1">📦 週次TWC（時間指定）データ</p>
+            <p class="text-xs text-ink-lighter">Amazon週次TWC生データ（.xlsx / .xls / .csv）</p>
+            <input type="file" accept=".xlsx,.xls,.csv" class="hidden" id="twc-file-input" onchange="handleTwcFile(this.files[0])">
+            <button type="button" class="btn-secondary text-xs px-3 py-1 mt-2 rounded" onclick="event.stopPropagation();document.getElementById('twc-file-input').click()">選択</button>
+            <p id="twc-loaded-msg" class="text-xs text-green-400 mt-1 hidden"></p>
           </div>
         </div>
 
@@ -1928,6 +1936,89 @@
         <div id="lat-timeline-visual" class="hidden mb-4">
           <h3 class="text-sm font-medium mb-2">⏱ タイムライン視覚化</h3>
           <div class="card p-4" id="lat-timeline-bars"></div>
+        </div>
+
+        <!-- ========== 時間指定（TWC）違反分析セクション ========== -->
+        <hr class="my-6 border-border">
+
+        <div id="twc-dashboard" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">📦 時間指定（TWC）違反分析<span id="twc-window-label" class="ml-2 text-xs text-ink-lighter font-normal"></span></h3>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">違反件数</div>
+              <div class="text-2xl font-bold text-blue-600" id="twc-total">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">対象ドライバー</div>
+              <div class="text-2xl font-bold" id="twc-driver-count">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">最重点</div>
+              <div class="text-2xl font-bold text-red-600" id="twc-critical-count">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">ドライバー特定率</div>
+              <div class="text-2xl font-bold text-emerald-600" id="twc-matched-rate">0%</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="twc-driver-section" class="hidden mb-4">
+          <h3 class="text-sm font-medium mb-2">👤 DA別 時間指定違反（優先順位順）</h3>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto" style="max-height:500px; overflow-y:auto;">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-surface z-10">
+                  <tr class="border-b border-border">
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">優先</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DA</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">件数</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">発生日</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">実際の配達試行</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">最大13時超過</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">判定</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">評価・確認ポイント</th>
+                  </tr>
+                </thead>
+                <tbody id="twc-driver-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="twc-detail-section" class="hidden mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-medium">📋 違反明細（日別）</h3>
+            <select id="twc-detail-filter" class="text-xs p-1 rounded bg-surface-secondary text-ink" onchange="renderTwcDetailTable()">
+              <option value="">全DA</option>
+            </select>
+          </div>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto" style="max-height:400px; overflow-y:auto;">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-surface z-10">
+                  <tr class="border-b border-border">
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">配送日</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DA</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">TransportID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">時間指定枠</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">計画上の到着</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">実際の配達時刻</th>
+                    <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">超過</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">成否</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">違反内容</th>
+                  </tr>
+                </thead>
+                <tbody id="twc-detail-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ヒーロー画像（TWCデータ未読込時） -->
+        <div id="twc-hero" class="flex justify-center my-6">
+          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:200px; object-fit:contain;">
+          <p class="sr-only">週次TWCデータ未読込</p>
         </div>
 
       </div>
@@ -4216,9 +4307,11 @@ var driverDB = {
 
       // driverDBに集積（上書きではなく蓄積）
       var today = new Date().toLocaleDateString('ja-JP');
+      var newlyRegisteredNames = []; // このインポートで初めて登録されたドライバー（タブレット同期用）
       for (var j = 0; j < aggResult.length; j++) {
         var r = aggResult[j];
         var existing = driverDB[r.name] || {};
+        if (!existing.driverId) newlyRegisteredNames.push(r.name);
         var prevHistory = existing.history || [];
         var prevWorkDays = existing.workDays || 0;
         var prevTotalHours = existing.totalHours || 0;
@@ -4281,6 +4374,8 @@ var driverDB = {
           history: newHistory
         };
       }
+      // 新規ドライバーを他端末（点呼タブレット等）へ共有。driverId未同期のまま残ると当該ドライバーのQRが不安定になるため
+      if (newlyRegisteredNames.length && typeof pushDriverDeltasToTablet === 'function') pushDriverDeltasToTablet(newlyRegisteredNames);
       // 旧フォーマットのhaikanRateHistory配列を削除（全ドライバー）
       var allKeys = Object.keys(driverDB);
       for (var k = 0; k < allKeys.length; k++) {
@@ -4464,6 +4559,7 @@ var driverDB = {
 
     function processDriverData(data) {
       const today = new Date().toLocaleDateString('ja-JP');
+      var newlyRegisteredNames = []; // このインポートで初めて登録されたドライバー（タブレット同期用）
 
       data.forEach(row => {
         const name = row['配達アソシエート'] || '';
@@ -4542,12 +4638,15 @@ var driverDB = {
             lastUpdated: today,
             history: [{ date: today, pph: packagesPerHour, days: workDays }]
           };
+          newlyRegisteredNames.push(name);
         }
       });
 
       // Save to localStorage
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
+      // 新規ドライバーを他端末（点呼タブレット等）へ共有。driverId未同期のまま残ると当該ドライバーのQRが不安定になるため
+      if (newlyRegisteredNames.length && typeof pushDriverDeltasToTablet === 'function') pushDriverDeltasToTablet(newlyRegisteredNames);
       renderDriverTable();
 
       // Re-calculate predictions if assignment data exists
@@ -5501,7 +5600,7 @@ var driverDB = {
         if (bothDone) {
           // 完了: ステータス表示（デフォルト正常）
           const st = attStatus || '正常';
-          const stColor = st === '正常' ? 'text-emerald-600' : st === '遅刻' ? 'text-amber-500' : st === '欠勤' ? 'text-red-500' : 'text-ink-lighter';
+          const stColor = st === '正常' ? 'text-emerald-600' : st === '遅刻' ? 'text-amber-500' : st === '欠勤' ? 'text-red-500' : st === '他拠点' ? 'text-blue-500' : 'text-ink-lighter';
           attCell = '<span class="text-xs font-bold ' + stColor + '">' + st + '</span>';
         } else if (overdue) {
           // 超過中: プルダウン表示
@@ -5509,6 +5608,7 @@ var driverDB = {
             + '<option value=""' + (!attStatus ? ' selected' : '') + '>-- 選択 --</option>'
             + '<option value="遅刻"' + (attStatus === '遅刻' ? ' selected' : '') + '>遅刻</option>'
             + '<option value="欠勤"' + (attStatus === '欠勤' ? ' selected' : '') + '>欠勤</option>'
+            + '<option value="他拠点"' + (attStatus === '他拠点' ? ' selected' : '') + '>他拠点</option>'
             + '<option value="正常"' + (attStatus === '正常' ? ' selected' : '') + '>正常</option>'
             + '</select>';
         } else {
@@ -5872,17 +5972,28 @@ var driverDB = {
     // 新規登録ドライバーを他端末（点呼タブレット等）へ即時共有する
     function pushDriverDeltaToTablet(name) {
       if (!name) return;
-      var db = driverDB[name] || {};
-      pushTenkoSyncState({
-        driverDeltas: [{
+      pushDriverDeltasToTablet([name]);
+    }
+
+    // 複数ドライバーのdeltaを1リクエストにまとめて送信（xlsx一括取込等での連続送信を防止）
+    function pushDriverDeltasToTablet(names) {
+      if (!names || !names.length) return;
+      var deltas = [];
+      for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (!name) continue;
+        var db = driverDB[name] || {};
+        deltas.push({
           name: name,
           driverId: db.driverId ? String(db.driverId) : '',
           transportId: transportIDs[name] || '',
           japaneseName: driverJapaneseNames[name] || '',
           company: driverDepartments[name] || '',
           updatedAt: Date.now() // 参考情報。競合解決自体はサーバー採番のserverSeqを使用（端末間の時計ズレの影響を受けないため）
-        }]
-      });
+        });
+      }
+      if (!deltas.length) return;
+      pushTenkoSyncState({ driverDeltas: deltas });
     }
 
     // 通知音（Web Audio API）
@@ -5945,18 +6056,36 @@ var driverDB = {
       // 連続変更を束ねるため2秒デバウンス
       if (_autoSyncTimer) clearTimeout(_autoSyncTimer);
       _autoSyncTimer = setTimeout(function() {
+        // 同期キー未設定の端末では送信しない（他の/tenko-sync送信関数と同じガード）
+        var token = getTenkoSyncToken();
+        if (!token) {
+          updateTenkoSyncStatusIndicator('no-token');
+          return;
+        }
         var today = getTodayJst();
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/tenko-sync');
         xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('X-Tenko-Sync-Token', token); // 認証ヘッダ未送信だとサーバーに401で拒否され続け、自動同期が無音で失敗していたための修正
         xhr.onload = function() {
           if (xhr.status === 200) {
             var res = JSON.parse(xhr.responseText);
             tenkoLastSyncTs = res.timestamp || Date.now();
             console.log('双方向同期OK: ' + tenkoSchedule.length + '名');
+            updateTenkoSyncStatusIndicator('ok');
+          } else if (xhr.status === 401 || xhr.status === 403) {
+            console.warn('双方向同期エラー: 同期キーが正しくありません');
+            updateTenkoSyncStatusIndicator('auth-failed');
+          } else if (xhr.status === 503) {
+            updateTenkoSyncStatusIndicator('server-not-configured');
+          } else {
+            console.warn('双方向同期エラー:', xhr.status);
+            updateTenkoSyncStatusIndicator('error');
           }
         };
-        xhr.onerror = function() { /* オフライン時は無視 */ };
+        xhr.onerror = function() {
+          updateTenkoSyncStatusIndicator('network-error'); /* オフライン時は無視 */
+        };
         xhr.send(JSON.stringify({ schedule: tenkoSchedule, date: today, source: 'auto' }));
       }, 2000);
     }
@@ -7140,6 +7269,9 @@ var driverDB = {
     var currentQRInstance = null;
 
     function showDriverQR(name) {
+      // 自己修復: 一括インポート等でdriverId/TIDがタブレット未同期のまま残っている場合、
+      // QR表示のタイミングで再送し、そのQRが確実に他端末でも照合できるようにする
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
       var qrData = getQRData(name);
       var modal = document.getElementById('qr-modal');
       var tid = transportIDs[name];
@@ -7229,6 +7361,9 @@ var driverDB = {
       ])].sort((a, b) => a.localeCompare(b, 'ja'));
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
+      // 自己修復: 一括印刷対象全員のdriverId/TIDをタブレットへ再同期（未同期のまま印刷されるのを防止）
+      if (typeof pushDriverDeltasToTablet === 'function') pushDriverDeltasToTablet(drivers);
+
       // 一時的にQRを生成して画像を収集
       var tempDiv = document.createElement('div');
       tempDiv.style.cssText = 'position:absolute;left:-9999px;top:-9999px';
@@ -7244,7 +7379,8 @@ var driverDB = {
           if (done === drivers.length) { finishPrintQR(cards, tempDiv); }
           return;
         }
-        var qrData = tid ? tid : 'OFK3_DRIVER:' + name;
+        // getQRData()と同じ優先順位（TID→driverId→氏名）を使用し、生成ロジックの重複・不整合を防止
+        var qrData = getQRData(name);
         var qrDiv = document.createElement('div');
         tempDiv.appendChild(qrDiv);
         try {
@@ -17473,6 +17609,403 @@ var driverDB = {
       wireLatLowUploadUi();
     }
 
+    // ===== 時間指定（TWC）違反分析 =====
+    // Amazon週次TWC生データ（time_window / planned_enter_time / actual_attempt_time 等）を取込み、
+    // 時間指定枠の終了時刻を超過した配達（＝違反）をドライバー別・日別に集計する。
+    // 既存のFTDS/CC/DNRと同じ取込UI・TID照合（resolveDriverNameFromTid）・xlsx出力（book_new/aoa_to_sheet）を再利用。
+    var twcViolations = [];      // 違反レコードのみ（1行=1違反）
+    var twcTotalRows = 0;        // 取込んだ有効行数（time_window+actual_attempt_time を持つ全行。違反率算出用）
+    var twcWindowLabel = '';     // 画面表示用（最頻出のtime_window）
+    var twcSourceMeta = null;    // { period, fileName }
+
+    var TWC_REQUIRED_COLS = ['transporter_id', 'time_window', 'planned_enter_time', 'actual_attempt_time'];
+
+    function handleTwcDrop(e) {
+      var files = e.dataTransfer.files;
+      if (files.length > 0) handleTwcFile(files[0]);
+    }
+
+    function findTwcHeaderRow(rows) {
+      for (var r = 0; r < Math.min(rows.length, 10); r++) {
+        var row = rows[r] || [];
+        var norm = row.map(function(c) { return String(c || '').trim().toLowerCase(); });
+        var hasAll = TWC_REQUIRED_COLS.every(function(col) { return norm.indexOf(col) >= 0; });
+        if (hasAll) return r;
+      }
+      return -1;
+    }
+
+    function mapTwcColumns(header) {
+      var map = {};
+      for (var c = 0; c < header.length; c++) {
+        var key = String(header[c] || '').trim().toLowerCase();
+        if (key) map[key] = c;
+      }
+      return map;
+    }
+
+    // "DW 05:00:00-13:00:00" 等から終了時刻(分)を抽出
+    function parseTwcWindowEndMinutes(text) {
+      var s = String(text || '');
+      var m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*[-–〜～]\s*(\d{1,2}):(\d{2})(?::\d{2})?/);
+      if (!m) return null;
+      return parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+    }
+    function parseTwcWindowStartMinutes(text) {
+      var s = String(text || '');
+      var m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*[-–〜～]\s*(\d{1,2}):(\d{2})(?::\d{2})?/);
+      if (!m) return null;
+      return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    }
+    function twcWindowDisplayLabel(text) {
+      var s = parseTwcWindowStartMinutes(text);
+      var e = parseTwcWindowEndMinutes(text);
+      if (s == null || e == null) return String(text || '');
+      return twcPad(Math.floor(s / 60)) + ':' + twcPad(s % 60) + '〜' + twcPad(Math.floor(e / 60)) + ':' + twcPad(e % 60);
+    }
+    function twcPad(n) { return (n < 10 ? '0' : '') + n; }
+
+    // 日付/日時セルをDateへ正規化。xlsxはcellDates:trueでDateオブジェクトになるが、
+    // CSVや一部フォーマットでは文字列("2026-08-28 10:59:12"等)のためフォールバックで解析する。
+    function parseTwcDateTimeCell(v) {
+      if (v instanceof Date && !isNaN(v.getTime())) return v;
+      if (!v) return null;
+      var s = String(v).trim();
+      var m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if (!m) return null;
+      return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), parseInt(m[4], 10), parseInt(m[5], 10), m[6] ? parseInt(m[6], 10) : 0);
+    }
+
+    function twcFormatDate(d) {
+      return (d.getMonth() + 1) + '/' + d.getDate();
+    }
+    function twcFormatTime(d) {
+      return twcPad(d.getHours()) + ':' + twcPad(d.getMinutes());
+    }
+    function twcFormatOverage(min) {
+      min = Math.round(min);
+      if (min < 60) return min + '分';
+      var h = Math.floor(min / 60), m = min % 60;
+      return h + '時間' + (m > 0 ? (m + '分') : '');
+    }
+
+    function handleTwcFile(file) {
+      if (!file) return;
+      var reader = new FileReader();
+      var fname = file.name || '';
+      reader.onload = function(e) {
+        var rows;
+        if (fname.toLowerCase().endsWith('.csv')) {
+          var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
+          rows = text.split(/\r\n|\n/).filter(function(l) { return l.length > 0; }).map(function(line) {
+            // 簡易CSVパース（ダブルクォート対応）。Amazon標準TWCエクスポートはxlsxのため、CSVは簡易対応。
+            var out = [], cur = '', inQ = false;
+            for (var i = 0; i < line.length; i++) {
+              var ch = line[i];
+              if (inQ) {
+                if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+                else if (ch === '"') { inQ = false; }
+                else { cur += ch; }
+              } else {
+                if (ch === '"') inQ = true;
+                else if (ch === ',') { out.push(cur); cur = ''; }
+                else cur += ch;
+              }
+            }
+            out.push(cur);
+            return out;
+          });
+        } else {
+          var data = new Uint8Array(e.target.result);
+          var wb = XLSX.read(data, { type: 'array', cellDates: true });
+          var sheetName = wb.SheetNames[0];
+          rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: true });
+        }
+        var info = processTwcData(rows, { fileName: fname });
+        if (!info) {
+          alert('TWCデータ形式を認識できませんでした。\n必須列（transporter_id / time_window / planned_enter_time / actual_attempt_time）を確認してください');
+          return;
+        }
+        var msg = document.getElementById('twc-loaded-msg');
+        if (msg) { msg.textContent = '✅ ' + info.period + ' / ' + info.violations + '件の違反を検出'; msg.classList.remove('hidden'); }
+      };
+      if (fname.toLowerCase().endsWith('.csv')) reader.readAsArrayBuffer(file);
+      else reader.readAsArrayBuffer(file);
+    }
+
+    function processTwcData(rows, meta) {
+      var headerIdx = findTwcHeaderRow(rows);
+      if (headerIdx < 0) return null;
+      var cols = mapTwcColumns(rows[headerIdx]);
+
+      var violations = [];
+      var totalRows = 0;
+      var windowCounts = {};
+      var tidToName = buildTidToNameLookup();
+
+      for (var r = headerIdx + 1; r < rows.length; r++) {
+        var row = rows[r];
+        if (!row || !row.length) continue;
+        var tid = String(row[cols.transporter_id] || '').trim();
+        var timeWindow = String(row[cols.time_window] || '').trim();
+        var actualAttempt = parseTwcDateTimeCell(row[cols.actual_attempt_time]);
+        if (!tid || !timeWindow || !actualAttempt) continue;
+
+        var windowEndMin = parseTwcWindowEndMinutes(timeWindow);
+        if (windowEndMin == null) continue;
+
+        totalRows++;
+        windowCounts[timeWindow] = (windowCounts[timeWindow] || 0) + 1;
+
+        var windowEndDt = new Date(actualAttempt.getFullYear(), actualAttempt.getMonth(), actualAttempt.getDate(), Math.floor(windowEndMin / 60), windowEndMin % 60, 0);
+        var overageMin = Math.round((actualAttempt.getTime() - windowEndDt.getTime()) / 60000);
+        if (overageMin <= 0) continue; // 時間指定内に完了＝違反ではない
+
+        var plannedEnter = cols.planned_enter_time !== undefined ? parseTwcDateTimeCell(row[cols.planned_enter_time]) : null;
+        var driverName = resolveDriverNameFromTid(tid, '');
+
+        violations.push({
+          date: actualAttempt,
+          driverName: driverName || '',
+          transportId: tid,
+          scannableId: cols.scannable_id !== undefined ? String(row[cols.scannable_id] || '').trim() : '',
+          timeWindow: timeWindow,
+          plannedEnter: plannedEnter,
+          actualAttempt: actualAttempt,
+          overageMin: overageMin,
+          failureBridge: cols.failure_bridge !== undefined ? String(row[cols.failure_bridge] || '').trim() : ''
+        });
+      }
+
+      if (!totalRows) return null;
+
+      twcViolations = violations;
+      twcTotalRows = totalRows;
+      var topWindow = '';
+      var topCount = -1;
+      for (var w in windowCounts) { if (windowCounts[w] > topCount) { topCount = windowCounts[w]; topWindow = w; } }
+      twcWindowLabel = twcWindowDisplayLabel(topWindow);
+      var period = extractReportPeriodLabel('', meta && meta.fileName);
+      twcSourceMeta = { period: period, fileName: meta && meta.fileName };
+
+      renderTwcDashboard();
+      var btn = document.getElementById('twc-export-btn');
+      if (btn) btn.disabled = violations.length === 0;
+
+      return { period: period, violations: violations.length, totalRows: totalRows };
+    }
+
+    // ドライバー単位に集計（優先順位付け・判定はW35_時間指定違反_分析と同じ規則で算出）
+    function groupTwcByDriver(violations) {
+      var byName = {};
+      for (var i = 0; i < violations.length; i++) {
+        var v = violations[i];
+        var key = v.driverName || ('不明 (' + v.transportId + ')');
+        if (!byName[key]) {
+          byName[key] = { driverName: key, transportId: v.transportId, count: 0, dates: {}, maxOverageMin: 0, attemptTimes: [], records: [] };
+        }
+        var s = byName[key];
+        s.count++;
+        s.dates[twcFormatDate(v.date)] = v.date.getTime();
+        if (v.overageMin > s.maxOverageMin) s.maxOverageMin = v.overageMin;
+        s.attemptTimes.push(v.actualAttempt);
+        s.records.push(v);
+      }
+      var list = Object.keys(byName).map(function(k) { return byName[k]; });
+      list.sort(function(a, b) {
+        if (b.count !== a.count) return b.count - a.count;
+        return b.maxOverageMin - a.maxOverageMin;
+      });
+      for (var i2 = 0; i2 < list.length; i2++) list[i2].rank = i2 + 1;
+      return list;
+    }
+
+    // 判定規則（W35_時間指定違反_分析の実データから逆算し19/19件で一致確認済み）:
+    //   件数>=6 かつ 最大超過>=60分 → 最重点
+    //   最大超過>=60分 または 件数>=3        → 要確認
+    //   それ以外                              → 経過確認
+    function classifyTwcJudgment(count, maxOverageMin) {
+      if (count >= 6 && maxOverageMin >= 60) return '最重点';
+      if (maxOverageMin >= 60 || count >= 3) return '要確認';
+      return '経過確認';
+    }
+
+    function twcMultiDayCount(dates) { return Object.keys(dates).length; }
+
+    // 「評価・確認ポイント」列の文言生成（上位5位までは全体構成比＋フラグ、6位以降は超過幅・複数日の有無で簡潔なコメント）
+    function buildTwcDaComment(rank, count, maxOverageMin, dateCount, totalViolations) {
+      var multiDay = dateCount > 1;
+      if (rank <= 5) {
+        var pct = totalViolations > 0 ? (count / totalViolations * 100).toFixed(1) + '%' : '-';
+        var s = '全体' + pct;
+        if (multiDay) s += '。複数日に発生';
+        if (maxOverageMin >= 60) s += '。1時間以上の超過あり';
+        return s;
+      }
+      if (maxOverageMin >= 60) return '1時間以上の超過あり';
+      if (multiDay) return '複数日に発生';
+      if (maxOverageMin < 30) return '軽度超過中心';
+      return '単発または超過幅小';
+    }
+
+    function twcAttemptRangeLabel(times) {
+      var sorted = times.slice().sort(function(a, b) { return a.getTime() - b.getTime(); });
+      if (sorted.length === 1) return twcFormatTime(sorted[0]);
+      return twcFormatTime(sorted[0]) + '〜' + twcFormatTime(sorted[sorted.length - 1]);
+    }
+
+    function twcDatesLabel(dates) {
+      var keys = Object.keys(dates).sort(function(a, b) { return dates[a] - dates[b]; });
+      return keys.join('・');
+    }
+
+    function renderTwcDashboard() {
+      if (!twcViolations.length) return;
+      var driverStats = groupTwcByDriver(twcViolations);
+      var matched = driverStats.filter(function(s) { return s.driverName.indexOf('不明') !== 0; }).length;
+      var critical = driverStats.filter(function(s) { return classifyTwcJudgment(s.count, s.maxOverageMin) === '最重点'; }).length;
+
+      document.getElementById('twc-window-label').textContent = twcWindowLabel ? ('対象: ' + twcWindowLabel + ' 時間指定') : '';
+      document.getElementById('twc-total').textContent = twcViolations.length;
+      document.getElementById('twc-driver-count').textContent = driverStats.length;
+      document.getElementById('twc-critical-count').textContent = critical;
+      document.getElementById('twc-matched-rate').textContent = driverStats.length > 0 ? Math.round(matched / driverStats.length * 100) + '%' : '0%';
+      document.getElementById('twc-dashboard').classList.remove('hidden');
+      document.getElementById('twc-hero').classList.add('hidden');
+
+      var tbody = document.getElementById('twc-driver-tbody');
+      var html = '';
+      for (var i = 0; i < driverStats.length; i++) {
+        var s = driverStats[i];
+        var judgment = classifyTwcJudgment(s.count, s.maxOverageMin);
+        var comment = buildTwcDaComment(s.rank, s.count, s.maxOverageMin, twcMultiDayCount(s.dates), twcViolations.length);
+        var jColor = judgment === '最重点' ? 'text-red-600' : judgment === '要確認' ? 'text-amber-500' : 'text-ink-lighter';
+        html += '<tr class="border-b border-border">';
+        html += '<td class="px-2 py-1.5 text-center text-xs font-bold">' + s.rank + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + escapeTwcHtml(s.driverName) + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs">' + s.count + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + escapeTwcHtml(twcDatesLabel(s.dates)) + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + twcAttemptRangeLabel(s.attemptTimes) + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs">' + twcFormatOverage(s.maxOverageMin) + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs font-bold ' + jColor + '">' + judgment + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs text-ink-lighter">' + escapeTwcHtml(comment) + '</td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+      document.getElementById('twc-driver-section').classList.remove('hidden');
+
+      var filterSel = document.getElementById('twc-detail-filter');
+      var optHtml = '<option value="">全DA</option>';
+      for (var j = 0; j < driverStats.length; j++) {
+        optHtml += '<option value="' + escapeTwcHtml(driverStats[j].driverName) + '">' + escapeTwcHtml(driverStats[j].driverName) + '</option>';
+      }
+      filterSel.innerHTML = optHtml;
+
+      renderTwcDetailTable();
+    }
+
+    function escapeTwcHtml(v) {
+      return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function renderTwcDetailTable() {
+      var filter = (document.getElementById('twc-detail-filter') || {}).value || '';
+      var list = twcViolations.filter(function(v) { return !filter || v.driverName === filter; });
+      list = list.slice().sort(function(a, b) { return a.actualAttempt.getTime() - b.actualAttempt.getTime(); });
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var v = list[i];
+        html += '<tr class="border-b border-border">';
+        html += '<td class="px-2 py-1.5 text-xs">' + twcFormatDate(v.date) + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + escapeTwcHtml(v.driverName || '(未特定)') + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + escapeTwcHtml(v.transportId) + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs">' + escapeTwcHtml(twcWindowDisplayLabel(v.timeWindow)) + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs">' + (v.plannedEnter ? twcFormatTime(v.plannedEnter) : '-') + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs font-bold text-red-600">' + twcFormatTime(v.actualAttempt) + '</td>';
+        html += '<td class="px-2 py-1.5 text-center text-xs">+' + twcFormatOverage(v.overageMin) + '</td>';
+        html += '<td class="px-2 py-1.5 text-xs text-red-600">違反</td>';
+        html += '<td class="px-2 py-1.5 text-xs text-ink-lighter">時間指定超過' + (v.failureBridge ? '（' + escapeTwcHtml(translateReason(v.failureBridge)) + '）' : '') + '</td>';
+        html += '</tr>';
+      }
+      document.getElementById('twc-detail-tbody').innerHTML = html;
+      document.getElementById('twc-detail-section').classList.remove('hidden');
+    }
+
+    // ===== TWC 3シートExcel出力（W35_時間指定違反_分析 と同一書式） =====
+    function styleTwcSheet(ws, headerRow, colCount, widths) {
+      if (!ws['!cols']) ws['!cols'] = [];
+      for (var ci = 0; ci < widths.length; ci++) ws['!cols'][ci] = { wch: widths[ci] };
+      var titleAddr = XLSX.utils.encode_cell({ r: 0, c: 0 });
+      if (ws[titleAddr]) { if (!ws[titleAddr].s) ws[titleAddr].s = {}; ws[titleAddr].s.font = { bold: true, sz: 14 }; }
+      for (var hi = 0; hi < colCount; hi++) {
+        var addr = XLSX.utils.encode_cell({ r: headerRow, c: hi });
+        if (ws[addr]) { if (!ws[addr].s) ws[addr].s = {}; ws[addr].s.font = { bold: true }; }
+      }
+      return ws;
+    }
+
+    function exportTwcResult() {
+      if (!twcViolations.length) { alert('TWC違反データがありません'); return; }
+      var driverStats = groupTwcByDriver(twcViolations);
+      var period = (twcSourceMeta && twcSourceMeta.period) || getTodayJst();
+
+      var wb = XLSX.utils.book_new();
+
+      // --- シート1: 時間指定_サマリー ---
+      var s1 = [];
+      s1.push([period + ' 時間指定違反 分析サマリー', '', '', '', '', '']);
+      s1.push(['対象', twcWindowLabel + ' 時間指定', '違反件数', twcViolations.length, '分析方針', '時間指定終了超過・件数・複数日発生を重点評価']);
+      s1.push([]);
+      s1.push(['優先順位', 'DA', '件数', '発生日', '最大時間指定超過', '判定']);
+      for (var i = 0; i < driverStats.length; i++) {
+        var s = driverStats[i];
+        s1.push([s.rank, s.driverName, s.count, twcDatesLabel(s.dates), twcFormatOverage(s.maxOverageMin), classifyTwcJudgment(s.count, s.maxOverageMin)]);
+      }
+      var ws1 = XLSX.utils.aoa_to_sheet(s1);
+      styleTwcSheet(ws1, 3, 6, [10, 22, 8, 20, 16, 10]);
+      XLSX.utils.book_append_sheet(wb, ws1, '時間指定_サマリー');
+
+      // --- シート2: DA別_詳細 ---
+      var s2 = [];
+      s2.push(['DA', '件数', '発生日', '実際の配達試行', '最大時間指定超過', '評価・確認ポイント']);
+      for (var j = 0; j < driverStats.length; j++) {
+        var s2r = driverStats[j];
+        s2.push([s2r.driverName, s2r.count, twcDatesLabel(s2r.dates), twcAttemptRangeLabel(s2r.attemptTimes), twcFormatOverage(s2r.maxOverageMin), buildTwcDaComment(s2r.rank, s2r.count, s2r.maxOverageMin, twcMultiDayCount(s2r.dates), twcViolations.length)]);
+      }
+      var ws2 = XLSX.utils.aoa_to_sheet(s2);
+      styleTwcSheet(ws2, 0, 6, [22, 8, 20, 16, 16, 30]);
+      XLSX.utils.book_append_sheet(wb, ws2, 'DA別_詳細');
+
+      // --- シート3: 最優先ドライバーの重点確認 ---
+      if (driverStats.length > 0) {
+        var top = driverStats[0];
+        var s3 = [];
+        s3.push([top.driverName + ' 重点確認', '', '', '']);
+        s3.push(['発生日', '計画上の到着', '実際の配達試行', '計画比']);
+        var recs = top.records.slice().sort(function(a, b) { return a.actualAttempt.getTime() - b.actualAttempt.getTime(); });
+        for (var k = 0; k < recs.length; k++) {
+          var rec = recs[k];
+          var planLabel = rec.plannedEnter ? twcFormatTime(rec.plannedEnter) : '-';
+          var diffLabel = '-';
+          if (rec.plannedEnter) {
+            var diffMin = Math.round((rec.actualAttempt.getTime() - rec.plannedEnter.getTime()) / 60000);
+            diffLabel = (diffMin >= 0 ? '+' : '') + diffMin + '分';
+          }
+          s3.push([twcFormatDate(rec.date), planLabel, twcFormatTime(rec.actualAttempt), diffLabel]);
+        }
+        s3.push([]);
+        var pct = twcViolations.length > 0 ? (top.count / twcViolations.length * 100).toFixed(1) + '%' : '-';
+        s3.push(['判定', top.count + '件発生。最大時間指定超過は' + twcFormatOverage(top.maxOverageMin) + '。全体' + pct + 'のため、優先して原因確認。', '', '']);
+        s3.push(['確認候補', 'ルート設計／荷物量／積込遅延／救済・ルート移管／時間指定を後回しにした可能性', '', '']);
+        var ws3 = XLSX.utils.aoa_to_sheet(s3);
+        styleTwcSheet(ws3, 1, 4, [10, 16, 16, 12]);
+        var sheet3Name = (top.driverName.split(/\s+/)[0] || top.driverName).replace(/[\[\]\\\/\?\*]/g, '_').substring(0, 20) + '_重点確認';
+        XLSX.utils.book_append_sheet(wb, ws3, sheet3Name);
+      }
+
+      XLSX.writeFile(wb, 'OFK3_時間指定違反分析_' + period + '_' + getTodayJst() + '.xlsx');
+    }
+
     // ===== DNR分析 =====
     var dnrResultData = [];
     var dnrMap = null; // Leaflet map
@@ -17545,7 +18078,12 @@ var driverDB = {
       'RECIPIENT_UNAVAILABLE': '受取人不在',
       'ACCESS_PROBLEM': 'アクセス問題',
       'PACKAGE_TOO_LARGE': '荷物サイズ超過',
-      'INCOMPLETE_ADDRESS': '住所不完全'
+      'INCOMPLETE_ADDRESS': '住所不完全',
+      // FTDS/CC「Bad Weather」ステータスの日本語表示（元データは書き換えず表示のみ変換）
+      'Bad Weather': '悪天候',
+      'BAD_WEATHER': '悪天候',
+      'bad weather': '悪天候',
+      'Bad weather': '悪天候'
     };
 
     function translateReason(reason) {
