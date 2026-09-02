@@ -1,0 +1,7 @@
+date,delivery_station_code,delivery_station_country_code,service_type,wave,provider_type,provider_company_code,route_id,planned_arrival,planned_departure,route_actual_departure,route_start_time_source,on_time_departure,diff_plan_vs_actual_mins,beacon_entrance,employee_id,wave_duration,planned_service_type,country
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_3,DSP,GDS,2789048-15,2026/8/4 17:50,2026/8/4 18:10,2026/8/4 18:31:02,Beacon,1,21,2026/8/4 18:00:00,A3NIVS2X2584EM,20,Standard Parcel,JP
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_1,DSP,GDS,2789048-01,2026/8/4 08:45,2026/8/4 09:05,2026/8/4 09:15:00,Beacon,1,10,2026/8/4 08:55:00,A3NIVS2X2584EM,20,Standard Parcel,JP
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_2,DSP,GDS,2789048-08,2026/8/4 14:15,2026/8/4 14:35,2026/8/4 14:45:00,Beacon,1,10,2026/8/4 14:25:00,A3NIVS2X2584EM,20,Standard Parcel,JP
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_4,DSP,GDS,2789048-99,2026/8/4 09:35,2026/8/4 09:55,2026/8/4 10:00:00,Beacon,1,5,2026/8/4 09:45:00,A3NIVS2X2584EM,20,Standard Parcel,JP
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_4,DSP,GDS,2789048-99,2026/8/4 09:00,2026/8/4 09:20,2026/8/4 09:25:00,Beacon,1,5,2026/8/4 09:10:00,A1DIFFERENT,20,Standard Parcel,JP
+2026/8/4,DSX,JP,Standard Parcel,CYCLE_1,DSP,GDS,2789048-55,2026/8/4 08:00,2026/8/4 08:20,2026/8/4 08:25:00,Beacon,1,5,2026/8/4 08:10:00,A9EXTRAROUTE,20,Standard Parcel,JP

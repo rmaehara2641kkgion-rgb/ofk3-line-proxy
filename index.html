@@ -16859,6 +16859,12 @@ var driverDB = {
     window.dspRouteMap = window.dspRouteMap || {};
     var dspRouteMap = window.dspRouteMap; // mergeAndRender と強化loaderが同一オブジェクトを参照
     var latBeaconMap = {}; // route_id -> { arrival, entrance, departure, exit, firstScan, lastScan, turnover }
+    // RAW入力（Loading Area Turnover + Total Number of DSP Routes）の一時保持。
+    // 両方揃うまではlatBeaconMap/ダッシュボードには一切反映しない（片方のみでの中途半端な描画を防止）。
+    var latRawTurnoverRows = null; // route_id -> {date, wave, routeCode, turnover, arrival, entrance, departure, exit, firstScan, lastScan}
+    var latRawTurnoverInfo = null; // {count, duplicateRouteIdCount, headers}
+    var latRawRoutesRows = null;   // route_id -> {employeeId, plannedDeparture}
+    var latRawRoutesInfo = null;   // {count, duplicateRouteIdCount, headers}
     var latResultData = [];
 
     function normalizeLatDspHeader(h) {
@@ -17049,6 +17055,147 @@ var driverDB = {
       window.__latLowUiWired = true;
     }
 
+    // ===== RAW（Amazon Dive Deep Data）アダプター =====
+    // 目的: 既存LAT分析エンジン（mergeAndRender以降）は一切変更せず、
+    // 「Loading Area Turnover」RAW + 「Total Number of DSP Routes」RAWをroute_idで結合して
+    // 既存LOWファイルと同じ形状（latBeaconMapの1エントリ）に変換してから既存処理へ渡す。
+    //
+    // 入力形式判定（ファイル名では判定しない。列名の組み合わせのみで判定）:
+    //   loading_area_turnover あり + employee_id あり            → LOW（既存処理、無変更）
+    //   loading_area_turnover あり + employee_id なし             → RAW Loading Area Turnover
+    //   loading_area_turnover なし + employee_id あり + (planned_departure or planned_arrival) あり → RAW Total Number of DSP Routes
+    //   route_id列が無い、またはどれにも当てはまらない            → LOW側の既存フォールバック処理に委ねる（挙動変更なし）
+    function latDetectInputFormat(colMap) {
+      if (colMap['route_id'] === undefined) return 'low'; // 既存のroute_idフォールバック探索・既存エラーメッセージへ委ねる
+      var hasTurnover = colMap['loading_area_turnover'] !== undefined;
+      var hasEmployee = colMap['employee_id'] !== undefined;
+      var hasPlannedDep = colMap['planned_departure'] !== undefined;
+      var hasPlannedArr = colMap['planned_arrival'] !== undefined;
+      if (hasTurnover && !hasEmployee) return 'raw_turnover';
+      if (!hasTurnover && hasEmployee && (hasPlannedDep || hasPlannedArr)) return 'raw_routes';
+      return 'low';
+    }
+
+    function latRawColIdx(colMap, key) {
+      return colMap[key] !== undefined ? colMap[key] : -1;
+    }
+
+    // RAW Loading Area Turnover を route_id をキーに保持（既存latBeaconMapの該当フィールドと同一形状）
+    function latParseRawTurnoverRows(json, colMap) {
+      var routeIdx = latRawColIdx(colMap, 'route_id');
+      var dateIdx = latRawColIdx(colMap, 'date');
+      var waveIdx = latRawColIdx(colMap, 'wave');
+      var rcIdx = latRawColIdx(colMap, 'route_code');
+      var toIdx = latRawColIdx(colMap, 'loading_area_turnover');
+      var baIdx = latRawColIdx(colMap, 'beacon_arrival');
+      var benIdx = latRawColIdx(colMap, 'beacon_entrance');
+      var bdIdx = latRawColIdx(colMap, 'beacon_departure');
+      var bexIdx = latRawColIdx(colMap, 'beacon_exit');
+      var fsIdx = latRawColIdx(colMap, 'beacon_firstpackagescan');
+      var lsIdx = latRawColIdx(colMap, 'beacon_lastpackagescan');
+
+      var rows = {};
+      var duplicateCount = 0;
+      for (var i = 1; i < json.length; i++) {
+        var row = json[i];
+        var rid = row && row[routeIdx] ? String(row[routeIdx]).trim() : '';
+        if (!rid) continue;
+        if (rows[rid]) { duplicateCount++; continue; } // 重複route_idは最初の行を正とし、件数のみ記録（黙って上書き・展開しない）
+        rows[rid] = {
+          date: dateIdx >= 0 && row[dateIdx] ? String(row[dateIdx]).trim() : '',
+          wave: waveIdx >= 0 && row[waveIdx] ? String(row[waveIdx]).trim() : '',
+          routeCode: rcIdx >= 0 && row[rcIdx] ? String(row[rcIdx]).trim() : '',
+          turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : '',
+          arrival: baIdx >= 0 && row[baIdx] ? latExtractTime(String(row[baIdx])) : '',
+          entrance: benIdx >= 0 && row[benIdx] ? latExtractTime(String(row[benIdx])) : '',
+          departure: bdIdx >= 0 && row[bdIdx] ? latExtractTime(String(row[bdIdx])) : '',
+          exit: bexIdx >= 0 && row[bexIdx] ? latExtractTime(String(row[bexIdx])) : '',
+          firstScan: fsIdx >= 0 && row[fsIdx] ? latExtractTime(String(row[fsIdx])) : '',
+          lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : ''
+        };
+      }
+      return { rows: rows, count: Object.keys(rows).length, duplicateRouteIdCount: duplicateCount };
+    }
+
+    // RAW Total Number of DSP Routes を route_id をキーに保持（employee_id / planned_departureの供給元）
+    function latParseRawRoutesRows(json, colMap) {
+      var routeIdx = latRawColIdx(colMap, 'route_id');
+      var empIdx = latRawColIdx(colMap, 'employee_id');
+      var pdIdx = latRawColIdx(colMap, 'planned_departure');
+
+      var rows = {};
+      var duplicateCount = 0;
+      for (var i = 1; i < json.length; i++) {
+        var row = json[i];
+        var rid = row && row[routeIdx] ? String(row[routeIdx]).trim() : '';
+        if (!rid) continue;
+        if (rows[rid]) { duplicateCount++; continue; } // 重複route_idは最初の行を正とし、件数のみ記録
+        rows[rid] = {
+          employeeId: empIdx >= 0 && row[empIdx] ? String(row[empIdx]).trim() : '',
+          plannedDeparture: pdIdx >= 0 && row[pdIdx] != null && row[pdIdx] !== '' ? latExtractTime(String(row[pdIdx])) : ''
+        };
+      }
+      return { rows: rows, count: Object.keys(rows).length, duplicateRouteIdCount: duplicateCount };
+    }
+
+    // 2つのRAWが揃うまでは既存latBeaconMap/ダッシュボードに一切触れない。
+    // 揃った時点でroute_id結合し、既存LOWと同一形状のlatBeaconMapへ変換してmergeAndRender()へ合流させる。
+    function latTryCombineRaw() {
+      var msg = document.getElementById('lat-loaded-msg');
+      if (!latRawTurnoverRows && !latRawRoutesRows) return;
+
+      if (!latRawTurnoverRows || !latRawRoutesRows) {
+        if (msg) {
+          msg.classList.remove('hidden');
+          var parts = [];
+          if (latRawTurnoverRows) parts.push('Loading Area Turnover読込済み(' + latRawTurnoverInfo.count + '件)');
+          if (latRawRoutesRows) parts.push('Total Number of DSP Routes読込済み(' + latRawRoutesInfo.count + '件)');
+          msg.textContent = '⏳ ' + parts.join(' / ') + ' — もう一方のRAWファイルを投入すると分析されます';
+        }
+        return; // 片方のみ: 既存latBeaconMap/latResultDataは変更せず、直前の描画をそのまま維持
+      }
+
+      var beaconMap = {};
+      var matchedEmployeeCount = 0;
+      var unmatchedEmployeeCount = 0;
+      for (var rid in latRawTurnoverRows) {
+        var t = latRawTurnoverRows[rid];
+        var r = latRawRoutesRows[rid];
+        if (r && r.employeeId) matchedEmployeeCount++; else unmatchedEmployeeCount++;
+        beaconMap[rid] = {
+          arrival: t.arrival, entrance: t.entrance, departure: t.departure, exit: t.exit,
+          firstScan: t.firstScan, lastScan: t.lastScan, turnover: t.turnover,
+          date: t.date, wave: t.wave, routeCode: t.routeCode,
+          employeeId: r ? r.employeeId : '',
+          plannedDeparture: r ? r.plannedDeparture : ''
+        };
+      }
+      var routesOnlyCount = 0; // Total Number of DSP Routesには存在するがLoading Area Turnoverに無いroute_id（=当該ルートは今回のLOW相当データには含めない。LOW原本も元々ターンオーバーがあるルートのみを持つため）
+      for (var rid2 in latRawRoutesRows) { if (!latRawTurnoverRows[rid2]) routesOnlyCount++; }
+
+      latBeaconMap = beaconMap;
+
+      window.__latRawJoinDiagnosis = {
+        turnoverCount: latRawTurnoverInfo.count,
+        routesCount: latRawRoutesInfo.count,
+        turnoverDuplicateRouteIdCount: latRawTurnoverInfo.duplicateRouteIdCount,
+        routesDuplicateRouteIdCount: latRawRoutesInfo.duplicateRouteIdCount,
+        matchedEmployeeCount: matchedEmployeeCount,
+        unmatchedEmployeeCount: unmatchedEmployeeCount,
+        routesOnlyCount: routesOnlyCount,
+        beaconMapCount: Object.keys(beaconMap).length
+      };
+
+      if (msg) {
+        msg.classList.remove('hidden');
+        msg.textContent = '✅ RAWから' + Object.keys(beaconMap).length + 'ルート変換完了（ドライバー結合: ' + matchedEmployeeCount + '件 / 未結合: ' + unmatchedEmployeeCount + '件）';
+      }
+      var zone = document.getElementById('lat-drop-zone');
+      if (zone) zone.style.borderColor = '#a855f7';
+
+      mergeAndRender();
+    }
+
     function handleLatFile(file) {
       if (!file) return;
       var reader = new FileReader();
@@ -17078,6 +17225,27 @@ var driverDB = {
         for (var h = 0; h < headers.length; h++) {
           colMap[String(headers[h]).toLowerCase().trim()] = h;
         }
+
+        var inputFormat = latDetectInputFormat(colMap);
+        if (inputFormat === 'raw_turnover') {
+          var parsedTurnover = latParseRawTurnoverRows(json, colMap);
+          latRawTurnoverRows = parsedTurnover.rows;
+          latRawTurnoverInfo = { count: parsedTurnover.count, duplicateRouteIdCount: parsedTurnover.duplicateRouteIdCount, headers: headers };
+          latTryCombineRaw();
+          return;
+        }
+        if (inputFormat === 'raw_routes') {
+          var parsedRoutes = latParseRawRoutesRows(json, colMap);
+          latRawRoutesRows = parsedRoutes.rows;
+          latRawRoutesInfo = { count: parsedRoutes.count, duplicateRouteIdCount: parsedRoutes.duplicateRouteIdCount, headers: headers };
+          latTryCombineRaw();
+          return;
+        }
+
+        // LOW（既存処理・無変更）。RAWの保留状態は次回のLOW再読込に持ち越さない。
+        latRawTurnoverRows = null; latRawTurnoverInfo = null;
+        latRawRoutesRows = null; latRawRoutesInfo = null;
+        window.__latRawJoinDiagnosis = null;
 
         var routeIdx = colMap['route_id'] !== undefined ? colMap['route_id'] : -1;
         // フォールバック検索
