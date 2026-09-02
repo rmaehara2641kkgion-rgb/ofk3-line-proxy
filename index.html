@@ -929,6 +929,24 @@
           </div>
         </div>
 
+        <!-- 点呼同期キー設定（PC/タブレット間の/tenko-sync認証） -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-bold flex items-center gap-2">🔑 端末間同期キー</h3>
+            <span id="tenko-sync-token-status" class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未設定</span>
+          </div>
+          <p class="text-xs text-ink-lighter mb-2">PCとタブレット間の点呼データ同期（アラート解除・新規ドライバー共有）に使用する認証キーです。管理者から共有されたキーを、PC・タブレットそれぞれで1回だけ入力してください。入力内容は保存後、画面には表示されません。</p>
+          <div class="flex gap-2 items-center" id="tenko-sync-token-input-row">
+            <input type="password" id="tenko-sync-token-input" placeholder="同期キーを入力" autocomplete="off" class="flex-1 px-3 py-1.5 border border-border rounded text-sm">
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="saveTenkoSyncToken()">保存</button>
+          </div>
+          <div class="flex items-center justify-between hidden" id="tenko-sync-token-saved-row">
+            <span class="text-xs text-ink-lighter">同期キーは保存済みです</span>
+            <button class="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200" onclick="clearTenkoSyncToken()">変更・削除</button>
+          </div>
+          <div class="mt-2" id="tenko-sync-status-indicator"></div>
+        </div>
+
         <!-- LINE自動通知コントロール -->
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
@@ -942,6 +960,7 @@
             <div id="line-notify-log-entries" class="space-y-1"></div>
           </div>
         </div>
+
 
         <!-- Tenko Schedule Table -->
         <div class="card overflow-hidden">
@@ -3345,7 +3364,7 @@ var driverDB = {
       CameraManager.stop();
     });
 
-    var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6'];
+    var DEPARTMENTS = ['GDSダイレクト', 'GDS管理', 'GDSパート', 'JHS', 'AE物流', 'ファンタジスタ', 'LINGｓ', 'OFK6', 'AGENTLINE'];
 
     // LINE profile cache
     let lineProfileCache = JSON.parse(localStorage.getItem('lineProfileCache') || '{}');
@@ -3438,6 +3457,7 @@ var driverDB = {
         refreshAllLineProfiles();
       }
       if (tab === 'tenko-match') { renderTenkoMatchTable(); renderShiftAggregation(); }
+      if (tab === 'tenko') { if (typeof renderTenkoSyncTokenUI === 'function') renderTenkoSyncTokenUI(); }
       if (tab === 'scan') { updateScanStatus(); document.getElementById('scan-input') && document.getElementById('scan-input').focus(); }
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
@@ -5539,10 +5559,77 @@ var driverDB = {
     var tenkoLastSyncTs = 0;
     var tenkoPollingActive = false;
 
+    // ---- 点呼同期キー（端末ごとにlocalStorageへ保存。ソースコードへは埋め込まない） ----
+    function getTenkoSyncToken() {
+      return localStorage.getItem('tenkoSyncToken') || '';
+    }
+
+    function saveTenkoSyncToken() {
+      var el = document.getElementById('tenko-sync-token-input');
+      if (!el) return;
+      var val = (el.value || '').trim();
+      if (!val) { alert('同期キーを入力してください'); return; }
+      localStorage.setItem('tenkoSyncToken', val);
+      el.value = '';
+      renderTenkoSyncTokenUI();
+      updateTenkoSyncStatusIndicator('unknown');
+      addNotifyLog('system', '🔑', '点呼同期キーを設定しました');
+    }
+
+    function clearTenkoSyncToken() {
+      if (!confirm('保存済みの同期キーを削除しますか？\n削除するとこの端末は他端末との点呼データ同期ができなくなります。')) return;
+      localStorage.removeItem('tenkoSyncToken');
+      renderTenkoSyncTokenUI();
+      updateTenkoSyncStatusIndicator('no-token');
+      addNotifyLog('system', '🔑', '点呼同期キーを削除しました');
+    }
+
+    function renderTenkoSyncTokenUI() {
+      var token = getTenkoSyncToken();
+      var statusEl = document.getElementById('tenko-sync-token-status');
+      var inputRow = document.getElementById('tenko-sync-token-input-row');
+      var savedRow = document.getElementById('tenko-sync-token-saved-row');
+      if (!statusEl || !inputRow || !savedRow) return;
+      if (token) {
+        statusEl.textContent = '設定済み';
+        statusEl.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700';
+        inputRow.classList.add('hidden');
+        savedRow.classList.remove('hidden');
+      } else {
+        statusEl.textContent = '未設定';
+        statusEl.className = 'text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500';
+        inputRow.classList.remove('hidden');
+        savedRow.classList.add('hidden');
+      }
+    }
+
+    function updateTenkoSyncStatusIndicator(state) {
+      var el = document.getElementById('tenko-sync-status-indicator');
+      if (!el) return;
+      var map = {
+        'no-token': ['⚪ 点呼同期キーが未設定です', 'text-xs text-gray-400'],
+        'auth-failed': ['🔴 同期キーが正しくありません（同期停止中・データは保持されています）', 'text-xs text-red-500'],
+        'server-not-configured': ['🔴 サーバー側の同期設定が未完了です', 'text-xs text-red-500'],
+        'network-error': ['🟡 通信エラー（同期一時停止・データは保持されています）', 'text-xs text-amber-500'],
+        'error': ['🟡 同期エラー', 'text-xs text-amber-500'],
+        'ok': ['🟢 同期OK', 'text-xs text-emerald-600'],
+        'unknown': ['', 'text-xs text-ink-lighter']
+      };
+      var entry = map[state] || ['', 'text-xs text-ink-lighter'];
+      el.textContent = entry[0];
+      el.className = entry[1];
+    }
+
     // PC側: tenkoScheduleをサーバーに送信
     function syncTenkoToServer() {
       if (tenkoSchedule.length === 0) {
         alert('点呼スケジュールがありません。シフトデータを先に読み込んでください。');
+        return;
+      }
+      var token = getTenkoSyncToken();
+      if (!token) {
+        alert('点呼同期キーが未設定です。点呼管理タブの「端末間同期キー」から設定してください。');
+        updateTenkoSyncStatusIndicator('no-token');
         return;
       }
       var btn = document.getElementById('tenko-sync-btn');
@@ -5552,19 +5639,31 @@ var driverDB = {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/tenko-sync');
       xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('X-Tenko-Sync-Token', token);
       xhr.onload = function() {
         if (xhr.status === 200) {
           var res = JSON.parse(xhr.responseText);
           if (btn) { btn.textContent = '✅ 同期完了（' + res.count + '名）'; }
           tenkoLastSyncTs = res.timestamp || Date.now();
+          updateTenkoSyncStatusIndicator('ok');
           setTimeout(function() { if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; } }, 3000);
+        } else if (xhr.status === 401 || xhr.status === 403) {
+          alert('同期キーが正しくありません。設定を確認してください。（ローカルデータは変更されていません）');
+          updateTenkoSyncStatusIndicator('auth-failed');
+          if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
+        } else if (xhr.status === 503) {
+          alert('サーバー側の同期設定が未完了です。管理者にご確認ください。');
+          updateTenkoSyncStatusIndicator('server-not-configured');
+          if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
         } else {
           alert('同期エラー: ' + xhr.status);
+          updateTenkoSyncStatusIndicator('error');
           if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
         }
       };
       xhr.onerror = function() {
-        alert('通信エラー: サーバーに接続できません');
+        alert('通信エラー: サーバーに接続できません（ローカルデータは変更されていません）');
+        updateTenkoSyncStatusIndicator('network-error');
         if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
       };
       xhr.send(JSON.stringify({ schedule: tenkoSchedule, date: today, source: 'pc' }));
@@ -5572,15 +5671,102 @@ var driverDB = {
 
     // タブレット/PC共通: サーバーからデータをポーリング
     function pollTenkoSync() {
+      var token = getTenkoSyncToken();
+      if (!token) {
+        updateTenkoSyncStatusIndicator('no-token');
+        return; // キー未設定時はリクエストを送らない
+      }
       var xhr = new XMLHttpRequest();
       var url = '/tenko-sync';
       if (tenkoLastSyncTs) { url = url + '?since=' + tenkoLastSyncTs; }
       xhr.open('GET', url);
+      xhr.setRequestHeader('X-Tenko-Sync-Token', token);
       xhr.onload = function() {
-        if (xhr.status !== 200) return;
+        if (xhr.status === 401 || xhr.status === 403) {
+          updateTenkoSyncStatusIndicator('auth-failed'); // ローカルデータには一切触れない
+          return;
+        }
+        if (xhr.status === 503) {
+          updateTenkoSyncStatusIndicator('server-not-configured');
+          return;
+        }
+        if (xhr.status !== 200) { updateTenkoSyncStatusIndicator('error'); return; }
         var res;
-        try { res = JSON.parse(xhr.responseText); } catch(e) { return; }
-        if (res.status === 'ok' && res.data && res.data.schedule) {
+        try { res = JSON.parse(xhr.responseText); } catch(e) { updateTenkoSyncStatusIndicator('error'); return; }
+
+        // サーバー「世代」検知（再デプロイ等でサーバーのserverSeqカウンタが巻き戻った場合の対策）。
+        // 世代IDが前回と違えば、適用済みseq履歴だけをリセットする（driverDB自体は一切変更しない）。
+        // status='empty'/'no_update'でもserverInstanceIdは載っているので、ここで先に処理する。
+        var reportedInstanceId = (res && res.data && res.data.serverInstanceId) || (res && res.serverInstanceId) || null;
+        if (reportedInstanceId && reportedInstanceId !== driverDeltaAppliedState.serverInstanceId) {
+          driverDeltaAppliedState.serverInstanceId = reportedInstanceId;
+          driverDeltaAppliedState.appliedSeqByDriver = {};
+          persistDriverDeltaAppliedState();
+        }
+
+        if (res.status !== 'ok' || !res.data) { updateTenkoSyncStatusIndicator('ok'); return; } // 'empty'/'no_update'も正常応答として扱う
+        updateTenkoSyncStatusIndicator('ok');
+
+        // 11時アラート等の「解除/有効化」状態をマージ（updatedAtが新しい方を採用するlast-write-wins。誤操作した端末側も他端末の再有効化を受け取れる）
+        if (res.data.notifyDisabled) {
+          var remoteDisabled = res.data.notifyDisabled;
+          var disabledChanged = false;
+          for (var ndKey in remoteDisabled) {
+            var remoteRec = remoteDisabled[ndKey];
+            if (!remoteRec || typeof remoteRec.updatedAt !== 'number') continue;
+            var localRec = tenkoNotifyDisabled[ndKey];
+            if (!localRec || remoteRec.updatedAt > localRec.updatedAt) {
+              tenkoNotifyDisabled[ndKey] = remoteRec;
+              disabledChanged = true;
+            }
+          }
+          if (disabledChanged) {
+            localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+            if (typeof pruneOldNotifyDisabledEntries === 'function') pruneOldNotifyDisabledEntries();
+            if (typeof renderNotifySlots === 'function') renderNotifySlots();
+          }
+        }
+
+        // 新規登録ドライバー等のマスタ差分をマージ（当該端末のdriverDB/transportIDs等に反映。既存値は尊重し空値では上書きしない）
+        // 競合解決はクライアント時計(updatedAt)ではなくサーバーが採番するserverSeq（単調増加・時計ズレの影響を受けない）を使用。
+        // 適用済みseqはサーバー世代(serverInstanceId)ごとに管理し、driverId優先（リネームに強い）・driverId未設定時は氏名にフォールバックして追跡する。
+        if (Array.isArray(res.data.driverDeltas) && res.data.driverDeltas.length > 0) {
+          var deltaApplied = false;
+          for (var di = 0; di < res.data.driverDeltas.length; di++) {
+            var delta = res.data.driverDeltas[di];
+            if (!delta || !delta.name) continue;
+            var mergeKey = delta.driverId ? ('id:' + String(delta.driverId)) : ('name:' + delta.name);
+            var deltaSeq = typeof delta.serverSeq === 'number' ? delta.serverSeq : 0;
+            var lastSeq = driverDeltaAppliedState.appliedSeqByDriver[mergeKey] || 0;
+            if (deltaSeq < lastSeq) continue; // 古いdeltaは無視（同一seqの再受信は許容＝冪等）
+            driverDeltaAppliedState.appliedSeqByDriver[mergeKey] = deltaSeq;
+
+            if (!driverDB[delta.name]) {
+              driverDB[delta.name] = { packagesPerHour: null, deliveryRate: null, workDays: 0, totalPackages: 0, incidents: 0, lastUpdated: getTodayJst(), history: [] };
+              deltaApplied = true;
+            }
+            if (delta.driverId) {
+              driverDB[delta.name].driverId = String(delta.driverId); // 文字列に正規化（数値/文字列不一致を防ぐ）
+              deltaApplied = true;
+            }
+            if (delta.transportId) { transportIDs[delta.name] = delta.transportId; deltaApplied = true; }
+            if (delta.japaneseName) { driverJapaneseNames[delta.name] = delta.japaneseName; deltaApplied = true; }
+            if (delta.company) { driverDepartments[delta.name] = delta.company; deltaApplied = true; }
+          }
+          if (deltaApplied) {
+            saveDriverDBOverlay();
+            localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
+            localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
+            localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
+            persistDriverDeltaAppliedState();
+            // masterタブ表示中かつ入力中でなければ再描画（入力中に再描画するとフォーカス・入力途中の内容を壊すため）
+            if (typeof currentTab !== 'undefined' && currentTab === 'master' && typeof renderMasterTable === 'function' && !isMasterInputFocused()) {
+              renderMasterTable();
+            }
+          }
+        }
+
+        if (res.data.schedule) {
           tenkoLastSyncTs = res.data.timestamp || Date.now();
           var incoming = res.data.schedule;
 
@@ -5620,8 +5806,83 @@ var driverDB = {
           if (currentTab !== 'tenko') { switchTab('tenko'); }
         }
       };
-      xhr.onerror = function() { /* サーバー接続失敗は無視 */ };
+      xhr.onerror = function() {
+        updateTenkoSyncStatusIndicator('network-error'); // ローカルデータには一切触れない
+      };
       xhr.send();
+    }
+
+    // PC/タブレット共通: notifyDisabled・driverDeltas等の部分状態をサーバーへ送信（スケジュール全体は送らない軽量版）
+    function pushTenkoSyncState(partial) {
+      var token = getTenkoSyncToken();
+      if (!token) {
+        updateTenkoSyncStatusIndicator('no-token');
+        return; // キー未設定時はリクエストを送らない
+      }
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/tenko-sync');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('X-Tenko-Sync-Token', token);
+        xhr.onload = function() {
+          if (xhr.status === 401 || xhr.status === 403) { updateTenkoSyncStatusIndicator('auth-failed'); }
+          else if (xhr.status === 503) { updateTenkoSyncStatusIndicator('server-not-configured'); }
+          else if (xhr.status === 200) { updateTenkoSyncStatusIndicator('ok'); }
+          else { updateTenkoSyncStatusIndicator('error'); }
+        };
+        xhr.onerror = function() { updateTenkoSyncStatusIndicator('network-error'); };
+        var payload = partial || {};
+        if (!payload.source) payload.source = 'pc';
+        xhr.send(JSON.stringify(payload));
+      } catch (e) {
+        console.warn('tenko-sync 部分同期送信失敗:', e);
+      }
+    }
+
+    // driverDelta適用済み履歴（サーバー世代ID + ドライバー単位のseq、driverId優先・氏名フォールバック）。
+    // サーバー世代（serverInstanceId）が変わった場合はappliedSeqByDriverだけをリセットし、driverDB等の実データには触れない。
+    // ページ再読込をまたいでも安全なようlocalStorageに永続化。
+    var driverDeltaAppliedState = (function() {
+      try {
+        var raw = JSON.parse(localStorage.getItem('driverDeltaAppliedState') || 'null');
+        if (raw && typeof raw === 'object' && raw.appliedSeqByDriver && typeof raw.appliedSeqByDriver === 'object') {
+          return raw;
+        }
+      } catch (e) { /* ignore corrupt localStorage */ }
+      return { serverInstanceId: null, appliedSeqByDriver: {} };
+    })();
+
+    function persistDriverDeltaAppliedState() {
+      localStorage.setItem('driverDeltaAppliedState', JSON.stringify(driverDeltaAppliedState));
+    }
+
+    // masterタブの入力欄（TID/所属/氏名等）に現在フォーカスがあるかを判定。
+    // 背景ポーリングによる自動再描画で入力途中の内容を壊さないための安全弁。
+    function isMasterInputFocused() {
+      try {
+        var panel = document.getElementById('panel-master');
+        var active = document.activeElement;
+        if (!panel || !active || active === document.body) return false;
+        return panel.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA');
+      } catch (e) {
+        return true; // 判定に失敗した場合は安全側（再描画しない）に倒す
+      }
+    }
+
+    // 新規登録ドライバーを他端末（点呼タブレット等）へ即時共有する
+    function pushDriverDeltaToTablet(name) {
+      if (!name) return;
+      var db = driverDB[name] || {};
+      pushTenkoSyncState({
+        driverDeltas: [{
+          name: name,
+          driverId: db.driverId ? String(db.driverId) : '',
+          transportId: transportIDs[name] || '',
+          japaneseName: driverJapaneseNames[name] || '',
+          company: driverDepartments[name] || '',
+          updatedAt: Date.now() // 参考情報。競合解決自体はサーバー採番のserverSeqを使用（端末間の時計ズレの影響を受けないため）
+        }]
+      });
     }
 
     // 通知音（Web Audio API）
@@ -6697,6 +6958,7 @@ var driverDB = {
       localStorage.setItem('transportIDs', JSON.stringify(transportIDs));
       localStorage.setItem('transportIDs_backup', JSON.stringify(transportIDs));
       debouncedMasterSync(name, 'transportId', value);
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
     }
 
     function updateDepartment(name, value) {
@@ -6708,6 +6970,7 @@ var driverDB = {
       }
       localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
       debouncedMasterSync(name, 'company', value);
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
     }
 
     function updateJapaneseName(name, value) {
@@ -6719,6 +6982,7 @@ var driverDB = {
       }
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       debouncedMasterSync(name, 'japaneseName', value);
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
     }
 
     // ===== LINE Profile Cache =====
@@ -7601,6 +7865,7 @@ var driverDB = {
         return;
       }
       driverDB[trimmed] = {
+        driverId: getNextDriverId(),
         packagesPerHour: null,
         deliveryRate: null,
         workDays: 0,
@@ -7611,6 +7876,7 @@ var driverDB = {
       };
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(trimmed);
       renderMasterTable();
     }
 
@@ -7636,6 +7902,7 @@ var driverDB = {
       };
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
       el.value = '';
       renderMasterTable();
     }
@@ -8648,8 +8915,47 @@ var driverDB = {
     ];
 
     var tenkoNotifySent = {};
-    var tenkoNotifyDisabled = JSON.parse(localStorage.getItem('tenkoNotifyDisabled') || '{}');
+    // 解除状態は「YYYY-MM-DD|HH:MM」キーで日付単位管理。値は {disabled, updatedAt} で他端末とのlast-write-wins同期に対応。
+    // 旧形式（日付なしキー、例:"11:00":true）は「いつ解除されたか」を復元できないため当日分と断定せず破棄（自動的に翌日以降と同じ「未解除」扱いに収束）。
+    var tenkoNotifyDisabled = (function() {
+      var migrated = {};
+      try {
+        var raw = JSON.parse(localStorage.getItem('tenkoNotifyDisabled') || '{}');
+        for (var k in raw) {
+          if (k.indexOf('|') >= 0 && raw[k] && typeof raw[k] === 'object' && typeof raw[k].updatedAt === 'number') {
+            migrated[k] = raw[k];
+          }
+        }
+      } catch (e) { /* ignore corrupt localStorage */ }
+      return migrated;
+    })();
     var tenkoNotifyLogs = JSON.parse(localStorage.getItem('tenkoNotifyLogs') || '[]');
+
+    function notifyDisabledKey(time, dateStr) {
+      return (dateStr || getTodayJst()) + '|' + time;
+    }
+
+    function isNotifySlotDisabled(time) {
+      var rec = tenkoNotifyDisabled[notifyDisabledKey(time)];
+      return !!(rec && rec.disabled);
+    }
+
+    // 当日分だけ残してlocalStorage肥大化を防ぐ（判定は日付付きキーで既に安全なため、これは容量対策のみ）
+    function pruneOldNotifyDisabledEntries() {
+      var today = getTodayJst();
+      var kept = {};
+      for (var k in tenkoNotifyDisabled) {
+        if (k.indexOf(today + '|') === 0) kept[k] = tenkoNotifyDisabled[k];
+      }
+      tenkoNotifyDisabled = kept;
+      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+    }
+
+    function setNotifySlotDisabled(time, disabled) {
+      var key = notifyDisabledKey(time);
+      tenkoNotifyDisabled[key] = { disabled: disabled, updatedAt: Date.now() };
+      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+    }
 
     function renderNotifySlots() {
       var container = document.getElementById('line-notify-slots');
@@ -8659,7 +8965,7 @@ var driverDB = {
       var currentMinutes = now.getHours() * 60 + now.getMinutes();
 
       container.innerHTML = NOTIFY_SLOTS.map(function(slot) {
-        var disabled = tenkoNotifyDisabled[slot.time];
+        var disabled = isNotifySlotDisabled(slot.time);
         var sent = tenkoNotifySent['admin_' + slot.time];
         var isPast = currentMinutes >= slot.minutes;
 
@@ -8710,15 +9016,15 @@ var driverDB = {
     }
 
     function disableNotifySlot(time) {
-      tenkoNotifyDisabled[time] = true;
-      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+      setNotifySlotDisabled(time, true);
+      if (typeof pushTenkoSyncState === 'function') pushTenkoSyncState({ notifyDisabled: tenkoNotifyDisabled });
       addNotifyLog('system', '🚫', time + ' の自動通知を解除しました');
       renderNotifySlots();
     }
 
     function enableNotifySlot(time) {
-      delete tenkoNotifyDisabled[time];
-      localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
+      setNotifySlotDisabled(time, false);
+      if (typeof pushTenkoSyncState === 'function') pushTenkoSyncState({ notifyDisabled: tenkoNotifyDisabled });
       addNotifyLog('system', '✅', time + ' の自動通知を有効化しました');
       renderNotifySlots();
     }
@@ -8748,18 +9054,19 @@ var driverDB = {
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) return;
 
-      // 日付変更でsent フラグリセット
+      // 日付変更でsent フラグリセット + 前日分の解除情報を掃除（判定は日付付きキーで既に安全、これは容量対策）
       var _notifyDateKey = getTodayJst();
       if (window._tenkoNotifyDate !== _notifyDateKey) {
         tenkoNotifySent = {};
         window._tenkoNotifyDate = _notifyDateKey;
+        pruneOldNotifyDisabledEntries();
       }
 
       var now = new Date();
       var currentMinutes = now.getHours() * 60 + now.getMinutes();
 
       NOTIFY_SLOTS.forEach(function(slot) {
-        if (tenkoNotifyDisabled[slot.time]) return;
+        if (isNotifySlotDisabled(slot.time)) return;
 
         var driversAtSlot = tenkoSchedule.filter(function(d) { return d.arrivalTime === slot.time; });
         var incomplete = driversAtSlot.filter(function(d) { return !d.licenseAuth || !d.mentorAuth; });
@@ -8819,7 +9126,13 @@ var driverDB = {
     initLineSettings();
     loadTenkoData();
     // 起動時にUI描画 + 3秒後にチェック
-    setTimeout(function() { renderNotifySlots(); checkTenkoLineNotify(); refreshAllLineProfiles(); }, 3000);
+    setTimeout(function() {
+      renderNotifySlots();
+      checkTenkoLineNotify();
+      refreshAllLineProfiles();
+      renderTenkoSyncTokenUI();
+      updateTenkoSyncStatusIndicator(getTenkoSyncToken() ? 'unknown' : 'no-token');
+    }, 3000);
 
     // ===== 点呼照合機能 =====
 
@@ -15491,24 +15804,41 @@ var driverDB = {
       return n;
     }
 
+    // \u67b6\u96fb\u4ef6\u6570\u5217\u5224\u5b9a: \u300c\u7387/%/\uff05\u300d\u3092\u542b\u3080\u5217\u306f\u4ef6\u6570\u5019\u88dc\u304b\u3089\u9664\u5916\u3057\u3001
+    // \u4e00\u5ea6\u78ba\u5b9a\u3057\u305f\u5217\u3092\u5f8c\u7d9a\u5217\u3067\u4e0a\u66f8\u304d\u3057\u306a\u3044\uff08req/act/rate\u3092\u5225\u3005\u306b\u7ba1\u7406\uff09\u3002
+    // \u5217\u9806\u304c\u5909\u308f\u3063\u3066\u3082\u6b63\u3057\u304f\u5224\u5b9a\u3067\u304d\u308b\u3088\u3046\u3001\u30d8\u30c3\u30c0\u30fc\u3092\u5168\u5217\u8d70\u67fb\u3057\u3066\u304b\u3089\u78ba\u5b9a\u3055\u305b\u308b\u3002
     function findCcSummaryColumns(headerRow) {
       var colReq = -1;
       var colAct = -1;
+      var colRate = -1;
+      var fallbackCount = -1;
       for (var hi = 0; hi < headerRow.length; hi++) {
-        var h = normalizeReportHeader(headerRow[hi]);
-        if (h.indexOf('\u3079\u304d') >= 0 || h.indexOf('\u30d9\u30ad') >= 0 || (h.indexOf('\u67b6\u96fb') >= 0 && h.indexOf('\u5b9f') < 0)) {
-          colReq = hi;
-        } else if (h.indexOf('\u5b9f') >= 0 && h.indexOf('\u67b6') >= 0) {
-          colAct = hi;
-        } else if (h.indexOf('\u901a\u8a71') >= 0 && h.indexOf('\u56de') >= 0) {
+        var h = normalizeReportHeader(headerRow[hi]).replace(/\uff05/g, '%');
+        var isRateColumn = h.indexOf('\u7387') >= 0 || h.indexOf('%') >= 0;
+        if (isRateColumn) {
+          // \u300c\u5b9f\u67b6\u96fb\u7387\u300d\u300c\u67b6\u96fb\u7387(%)\u300d\u306a\u3069\u3001\u7387\u5217\u306f\u4ef6\u6570\u5217\u306e\u5019\u88dc\u306b\u3057\u306a\u3044
+          if (colRate < 0) colRate = hi;
+          continue;
+        }
+        var isReqCandidate = h.indexOf('\u3079\u304d') >= 0 || h.indexOf('\u30d9\u30ad') >= 0;
+        var isActCandidate = h.indexOf('\u5b9f') >= 0 && (h.indexOf('\u67b6\u96fb') >= 0 || h.indexOf('\u67b6') >= 0 || h.indexOf('\u901a\u8a71') >= 0);
+        if (isReqCandidate) {
+          if (colReq < 0) colReq = hi; // \u4e00\u5ea6\u78ba\u5b9a\u3057\u305f\u3089\u4e0a\u66f8\u304d\u3057\u306a\u3044
+          continue;
+        }
+        if (isActCandidate) {
           if (colAct < 0) colAct = hi;
-        } else if (h === '\u4ef6\u6570' || h.indexOf('\u4ef6\u6570') >= 0) {
-          if (colReq < 0) colReq = hi;
+          continue;
+        }
+        // \u300c\u3079\u304d\u300d\u300c\u5b9f\u300d\u306e\u4fee\u98fe\u8a9e\u304c\u306a\u3044\u5358\u306a\u308b\u300c\u4ef6\u6570\u300d\u5217\u306f\u6700\u7d42\u624b\u6bb5\u306e\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af\u306e\u307f\u3067\u4f7f\u3046
+        if (fallbackCount < 0 && (h === '\u4ef6\u6570' || h.indexOf('\u4ef6\u6570') >= 0)) {
+          fallbackCount = hi;
         }
       }
+      if (colReq < 0 && fallbackCount >= 0) colReq = fallbackCount;
       if (colReq < 0) colReq = 2;
       if (colAct < 0) colAct = 3;
-      return { req: colReq, act: colAct };
+      return { req: colReq, act: colAct, rate: colRate };
     }
 
     function calcCcCallRate(required, actual) {
@@ -19335,8 +19665,8 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260818-6"></script>
-  <script src="/assign-support.js?v=20260818-6"></script>
+  <script src="/assign-support-core.js?v=20260826-5"></script>
+  <script src="/assign-support.js?v=20260826-5"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
 </body>
