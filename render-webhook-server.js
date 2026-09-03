@@ -139,6 +139,33 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// ===== LINE通知 一時停止スイッチ（緊急対応） =====
+// タブレット→PCの点呼同期が完全に安定するまで、LINEへの実送信のみを止めるための安全スイッチ。
+// 点呼処理・QR認証・点呼データ保存・tenko-sync・driverDB・シフト等の他機能には一切影響しない。
+//
+// 停止/再開は、Renderの環境変数 LINE_NOTIFICATIONS_ENABLED を 'true' にするだけ（コード変更不要）。
+// 未設定、または 'true' 以外の値の場合は「送信しない」がデフォルト＝安全側。
+const LINE_NOTIFICATIONS_ENABLED = process.env.LINE_NOTIFICATIONS_ENABLED === 'true';
+console.log('LINE_NOTIFICATIONS_ENABLED:', LINE_NOTIFICATIONS_ENABLED);
+
+// LINE Messaging APIへの実送信は、必ずこの関数を経由させる（送信処理の唯一の入口）。
+// フラグOFFの間はLINE APIを一切呼び出さず、個人情報やトークンを含まない簡易ログだけを残す。
+async function sendLinePushMessage(to, messages) {
+  if (!LINE_NOTIFICATIONS_ENABLED) {
+    console.log('[LINE通知停止中] 送信をスキップしました');
+    return { skipped: true };
+  }
+  return axios.post('https://api.line.me/v2/bot/message/push', {
+    to: to,
+    messages: messages
+  }, {
+    headers: {
+      'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
 // JST日付ヘルパー（UTC+9補正）
 function getTodayJst() {
   var now = new Date();
@@ -587,15 +614,7 @@ app.post('/mentor-alert', async (req, res) => {
     var sent = 0;
     for (var i = 0; i < MENTOR_ADMIN_IDS.length; i++) {
       try {
-        await axios.post('https://api.line.me/v2/bot/message/push', {
-          to: MENTOR_ADMIN_IDS[i],
-          messages: [{ type: 'text', text: alertText }]
-        }, {
-          headers: {
-            'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-            'Content-Type': 'application/json'
-          }
-        });
+        await sendLinePushMessage(MENTOR_ADMIN_IDS[i], [{ type: 'text', text: alertText }]);
         sent++;
       } catch (e) {
         console.log('[mentor-alert] LINE error for ' + MENTOR_ADMIN_IDS[i] + ':', e.response ? e.response.status : e.message);
@@ -659,18 +678,13 @@ app.post('/proxy', async (req, res) => {
       console.log('messages[' + mi + ']:', JSON.stringify(messages[mi]).substring(0, 500));
     }
 
-    const response = await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: target,
-      messages: messages
-    }, {
-      headers: {
-        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-        'Content-Type': 'application/json'
-      }
-    });
+    const result = await sendLinePushMessage(target, messages);
+    if (result && result.skipped) {
+      return res.json({ status: 'ok', lineSkipped: true });
+    }
 
-    log('LINE push success:', target, response.status);
-    res.json({ status: 'ok', lineStatus: response.status });
+    log('LINE push success:', target, result.status);
+    res.json({ status: 'ok', lineStatus: result.status });
   } catch (err) {
     console.error('===== LINE PUSH ERROR =====');
     console.error('Error details:', JSON.stringify(err.response && err.response.data ? err.response.data : err.message, null, 2));
@@ -680,16 +694,10 @@ app.post('/proxy', async (req, res) => {
 
 async function sendWelcomeMessage(userId) {
   try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: userId,
-      messages: [{ type: 'text', text: '友だち追加ありがとうございます。\n配送通知の設定は管理者画面から行ってください。' }]
-    }, {
-      headers: {
-        'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    log('Welcome message sent to', userId);
+    const result = await sendLinePushMessage(userId, [{ type: 'text', text: '友だち追加ありがとうございます。\n配送通知の設定は管理者画面から行ってください。' }]);
+    if (!(result && result.skipped)) {
+      log('Welcome message sent to', userId);
+    }
   } catch (err) {
     log('Welcome message error:', err.response?.data || err.message);
   }
@@ -820,15 +828,7 @@ function wh60AutoCheck() {
 async function wh60SendLine(to, text) {
   if (!to || !CHANNEL_ACCESS_TOKEN) return;
   try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: to,
-      messages: [{ type: 'text', text: text }]
-    }, {
-      headers: {
-        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-        'Content-Type': 'application/json'
-      }
-    });
+    await sendLinePushMessage(to, [{ type: 'text', text: text }]);
   } catch (err) {
     log('WH60 LINE send error:', err.response ? err.response.data : err.message);
   }
