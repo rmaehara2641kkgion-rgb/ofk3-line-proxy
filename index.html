@@ -864,11 +864,19 @@
           <p class="text-xs text-ink-lighter mt-1">Amazon Cortexへの手動アサイン作業の「コピー」部分だけを高速化します。Route→担当者の決定は行いません。Cortexの自動操作も行いません。</p>
         </div>
 
-        <div class="card p-4 mb-4 text-center cursor-pointer border-2 border-dashed border-border rounded-lg hover:border-amber-400 transition-colors" id="mab-manifest-dropzone" onclick="document.getElementById('mab-manifest-input').click()">
-          <input type="file" id="mab-manifest-input" accept=".xlsx,.xls" class="hidden" onchange="handleManualAssignManifestUpload(event)">
-          <p class="text-sm font-medium text-ink mb-1">📂 マニフェスト（xlsx）をドロップ / クリックして選択</p>
-          <p class="text-xs text-ink-lighter">OFK3_CYCLE_*...xlsx（sequencedRoute_* シートを自動検出）</p>
-          <p class="text-xs mt-1" id="mab-manifest-status"></p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <div class="card p-4 text-center cursor-pointer border-2 border-dashed border-border rounded-lg hover:border-amber-400 transition-colors" id="mab-manifest-dropzone" onclick="document.getElementById('mab-manifest-input').click()">
+            <input type="file" id="mab-manifest-input" accept=".xlsx,.xls" class="hidden" onchange="handleManualAssignManifestUpload(event)">
+            <p class="text-sm font-medium text-ink mb-1">📂 マニフェスト（xlsx）</p>
+            <p class="text-xs text-ink-lighter">OFK3_CYCLE_*...xlsx（sequencedRoute_* シートを自動検出）</p>
+            <p class="text-xs mt-1" id="mab-manifest-status"></p>
+          </div>
+          <div class="card p-4 text-center cursor-pointer border-2 border-dashed border-border rounded-lg hover:border-amber-400 transition-colors" id="mab-roster-dropzone" onclick="document.getElementById('mab-roster-input').click()">
+            <input type="file" id="mab-roster-input" accept=".xlsx,.xls" class="hidden" onchange="handleManualAssignRosterUpload(event)">
+            <p class="text-sm font-medium text-ink mb-1">📂 シフト表（xlsx）</p>
+            <p class="text-xs text-ink-lighter">「点呼表」シートを自動検出（Amazon Name用）</p>
+            <p class="text-xs mt-1" id="mab-roster-status"></p>
+          </div>
         </div>
 
         <div id="mab-empty" class="text-center py-16">
@@ -892,12 +900,18 @@
               <div id="mab-routes-list"></div>
             </section>
 
-            <!-- 右: AMAZON NAME（シフト表対応まで未実装） -->
+            <!-- 右: AMAZON NAME -->
             <section class="card p-3">
-              <h3 class="text-xs font-bold text-ink-lighter mb-2 px-1">AMAZON NAME</h3>
-              <div class="text-center py-10 px-2">
-                <p class="text-xs text-ink-lighter">シフト表未対応のため、この欄は現在準備中です。<br>Route側のDA番号コピーは左側で利用できます。</p>
+              <div class="flex items-center justify-between mb-1 px-1 flex-wrap gap-1">
+                <h3 class="text-xs font-bold text-ink-lighter">AMAZON NAME</h3>
+                <div id="mab-tenko-date-wrap"></div>
               </div>
+              <p class="text-xs text-ink-lighter mb-2 px-1" id="mab-tenko-header"></p>
+              <div class="mb-2 px-1 hidden" id="mab-tenko-search-wrap">
+                <input type="text" id="mab-tenko-search-input" placeholder="名前で絞り込み" class="text-xs px-2 py-1 rounded border border-border w-full" oninput="renderAmazonNamePane()">
+              </div>
+              <p class="text-xs text-ink-lighter px-2 py-4 text-center hidden" id="mab-tenko-empty"></p>
+              <div id="mab-tenko-list"></div>
             </section>
           </div>
         </div>
@@ -20420,8 +20434,8 @@ var driverDB = {
   </script>
   <script src="/assign-support-core.js?v=20260826-5"></script>
   <script src="/assign-support.js?v=20260826-5"></script>
-  <script src="/manual-assign-board-core.js?v=20260903-1"></script>
-  <script src="/manual-assign-board.js?v=20260903-1"></script>
+  <script src="/manual-assign-board-core.js?v=20260903-2"></script>
+  <script src="/manual-assign-board.js?v=20260903-2"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
 </body>
