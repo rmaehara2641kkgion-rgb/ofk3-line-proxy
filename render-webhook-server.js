@@ -1290,7 +1290,9 @@ function ftdsMapHeaderColumns(headerRow) {
     else if (h.indexOf('ドライバ') >= 0 || h.indexOf('driver') >= 0) cols.driver = i;
     else if (h.indexOf('件数合計') >= 0) cols.count = i;
     else if ((h === '件数' || h.indexOf('件数') >= 0) && cols.count === undefined) cols.count = i;
+    else if (h === 'カウント' && cols.count === undefined) cols.count = i; // Amazon生データの「カウント」列（修正1件目: 件数列として認識）
     else if (h.indexOf('日付') >= 0) cols.date = i;
+    else if ((h === 'event_date' || h === 'event date') && cols.date === undefined) cols.date = i; // 修正1件目: event_dateを日付列として認識（既存の「日付」列より優先度は下げる）
     else if (h.indexOf('失敗理由') >= 0 && h.indexOf('内訳') >= 0) cols.reasonBreakdown = i;
     else if (h.indexOf('理由内訳') >= 0) cols.reasonBreakdown = i;
     else if (h.indexOf('対象週') >= 0) cols.weekCount = i;
@@ -1460,6 +1462,30 @@ function ftdsRecordWeightSrv(rec) {
   return rec && rec.summaryCount ? rec.summaryCount : 1;
 }
 
+// 修正1件目: 日付セルの整形。xlsxLib.read()にcellDates:trueを渡した場合、日付型セルは
+// JS Dateオブジェクトとして渡ってくるためUTCの年月日から直接YYYY-MM-DDを組み立てる。
+// 文字列セル（"2026-08-29 00:00:00"等）は既存どおりスペース区切りの前半のみを使う。
+function ftdsFormatDateValue(val) {
+  if (val instanceof Date) {
+    var y = val.getUTCFullYear();
+    var m = String(val.getUTCMonth() + 1).padStart(2, '0');
+    var d = String(val.getUTCDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+  }
+  var s = String(val || '');
+  if (s.indexOf(' ') > 0) s = s.split(' ')[0];
+  return s;
+}
+
+// 修正4件目: 件数列（カウント/件数等）の値をそのまま集計件数として使う。
+// 有効な正の整数のときだけその値、それ以外（列が無い/空/0以下/数値でない）は1件として扱う。
+function ftdsResolveWeight(rawCountVal) {
+  if (rawCountVal === undefined || rawCountVal === null || String(rawCountVal).trim() === '') return 1;
+  var n = parseInt(rawCountVal, 10);
+  if (isNaN(n) || n <= 0) return 1;
+  return n;
+}
+
 // index.html: processFtdsData の本体ロジック（列マッピング〜行ごとの正規化）を移植。
 // ドライバー名解決（TID→氏名）はマスタ取得後に別途行うため、ここではTID列・rowNameのみ抽出する。
 function ftdsProcessRows(rows) {
@@ -1478,15 +1504,13 @@ function ftdsProcessRows(rows) {
     var tid = String(row[colMap.tid] || '').trim();
     if (!tid) continue;
     var rowName = colMap.driver !== undefined ? String(row[colMap.driver] || '').trim() : '';
-    var dateVal = colMap.date !== undefined ? String(row[colMap.date] || '') : '';
-    if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
+    var dateVal = colMap.date !== undefined ? ftdsFormatDateValue(row[colMap.date]) : '';
     var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : (colMap.reasonBreakdown !== undefined ? String(row[colMap.reasonBreakdown] || '') : '');
     var cycle = colMap.cycle !== undefined ? String(row[colMap.cycle] || '') : '';
     var route = colMap.route !== undefined ? String(row[colMap.route] || '') : '';
     var tracking = colMap.tracking !== undefined ? String(row[colMap.tracking] || '') : '';
     var zip = colMap.zip !== undefined ? String(row[colMap.zip] || '') : '';
-    var summaryCount = colMap.count !== undefined ? (parseInt(row[colMap.count], 10) || 0) : 0;
-    var isSummary = summaryCount > 0 && !tracking && !route;
+    var weight = ftdsResolveWeight(colMap.count !== undefined ? row[colMap.count] : undefined);
 
     var rec = {
       date: dateVal,
@@ -1496,45 +1520,47 @@ function ftdsProcessRows(rows) {
       route: route,
       tracking: tracking,
       zip: zip,
-      reason: reason
+      reason: reason,
+      weight: weight // 修正4件目: 件数列の値（無効/欠落時は1）。集計時の重みとして使用
     };
-    if (isSummary) {
-      rec.summaryCount = summaryCount;
-      rec.isSummary = true;
-      rec.reasonBreakdown = ftdsParseReasonBreakdownPipe(reason);
-    }
     results.push(rec);
   }
   return { results: results };
 }
 
-// index.html: exportFtdsResult のCSV生成ロジックを移植（ドライバー別集計は行数++でカウント、
-// summaryCountによる重み付けはしない — 既存exportFtdsResult(16521-16574)と同じ挙動）
+// index.html: exportFtdsResult のCSV生成ロジックを移植したもの（列構成・2ブロック構成は同一）。
+// 以下3点は既存のバグ修正として今回変更:
+//  修正2件目: 未特定（driverName空）行は「(未特定)::TransportID」を内部集約キーとし、TID単位で別行にする
+//             （登録済みドライバーはdriverNameのみで集約する既存挙動を維持）
+//  修正3件目: 失敗理由の集計キーをftdsTranslateReason()後の日本語にし、表記ゆれ（Bad Weather/BAD_WEATHER等）を合算
+//  修正4件目: 行数++ではなくr.weight（カウント等の件数列。無ければ1）を集計値として加算
 function ftdsBuildExportCsv(results) {
   var driverStats = {};
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     var dName = r.driverName || '(未特定)';
-    if (!driverStats[dName]) driverStats[dName] = { tid: r.transporterId, count: 0, reasons: {}, dates: {} };
-    driverStats[dName].count++;
+    // 登録済みドライバー: driverNameのみで集約（既存挙動維持）。未特定: driverName+TIDで集約（TIDごとに別行）
+    var groupKey = r.driverName ? dName : (dName + '::' + r.transporterId);
+    if (!driverStats[groupKey]) driverStats[groupKey] = { displayName: dName, tid: r.transporterId, count: 0, reasons: {}, dates: {} };
+    driverStats[groupKey].count += r.weight;
     if (r.reason) {
-      driverStats[dName].reasons[r.reason] = (driverStats[dName].reasons[r.reason] || 0) + 1;
+      var reasonJa = ftdsTranslateReason(r.reason);
+      driverStats[groupKey].reasons[reasonJa] = (driverStats[groupKey].reasons[reasonJa] || 0) + r.weight;
     }
-    if (r.date) driverStats[dName].dates[r.date] = true;
+    if (r.date) driverStats[groupKey].dates[r.date] = true;
   }
 
   var csvRows = [['ドライバー名', 'TransportID', '件数', '日付', '失敗理由内訳']];
   var dKeys = Object.keys(driverStats).sort(function(a, b) { return driverStats[b].count - driverStats[a].count; });
   for (var d = 0; d < dKeys.length; d++) {
-    var dk = dKeys[d];
-    var ds = driverStats[dk];
+    var ds = driverStats[dKeys[d]];
     var reasonParts = [];
-    var rKeys = Object.keys(ds.reasons);
+    var rKeys = Object.keys(ds.reasons); // 既に日本語翻訳済みキーのため再翻訳は不要
     for (var ri = 0; ri < rKeys.length; ri++) {
-      reasonParts.push(ftdsTranslateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
+      reasonParts.push(rKeys[ri] + ':' + ds.reasons[rKeys[ri]]);
     }
     var dateList = Object.keys(ds.dates).sort().join(' / ');
-    csvRows.push([dk, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
+    csvRows.push([ds.displayName, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
   }
 
   csvRows.push([]);
@@ -1585,7 +1611,8 @@ app.post('/ftds-export', function(req, res) {
 
     var wb;
     try {
-      wb = xlsxLib.read(file.buffer, { type: 'buffer' });
+      // 修正1件目: cellDates:trueでExcelの日付型セルをJS Dateとして受け取る（文字列日付はそのままString）
+      wb = xlsxLib.read(file.buffer, { type: 'buffer', cellDates: true });
     } catch (parseErr) {
       return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parseErr.message });
     }
