@@ -2827,6 +2827,7 @@
 
       var packages = 0;
       var addresses = [];
+      var daNumbers = [];
       var seen = {};
       for (var i = 1; i < json.length; i++) {
         var row = json[i];
@@ -2834,6 +2835,7 @@
         var da = String(row[1]).trim();
         if (da === 'Tracking ID' || da === 'DA' || !da) continue;
         packages++;
+        daNumbers.push(da);
         if (row[5] && String(row[5]).trim()) {
           var addr = String(row[5]).trim();
           if (addr.indexOf('OFK') < 0 && !seen[addr]) {
@@ -2849,6 +2851,7 @@
           packages: packages,
           stops: addresses.length,
           areas: extractAreaLabelsFromAddresses(addresses),
+          daNumbers: daNumbers, // MANUAL ASSIGN BOARD用の追加フィールド（既存フィールドは変更なし）
         });
       }
     }
