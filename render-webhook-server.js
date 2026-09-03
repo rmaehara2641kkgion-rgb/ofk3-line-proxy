@@ -1232,6 +1232,416 @@ app.post('/decrypt-zip', function(req, res) {
   });
 });
 
+// ===== FTDS Excel解析API（n8n連携用） =====
+// index.htmlの既存FTDS処理（normalizeReportHeader/isTransporterHeader/mapAnalysisHeaderColumns/
+// findAnalysisHeaderRow/findReportSheet/processFtdsData/parseReasonBreakdownPipe/REASON_JA/
+// translateReason/exportFtdsResult、index.html内 15701-16574行・18243-18327行付近）と
+// 同じ判定・変換・集計・出力仕様をNode側に移植したもの。index.html側のロジックは無変更。
+// ドライバーマスタは既存の GET /tenko-master?action=getMaster をサーバー内部から呼び出して取得する
+// （/tenko-masterルート自体は無変更）。
+
+const FTDS_API_TOKEN = process.env.FTDS_API_TOKEN || '';
+console.log('FTDS_API_TOKEN configured:', !!FTDS_API_TOKEN);
+
+// /ftds-exportの認証チェック。true=認証OK、false=既にレスポンス済み（呼び出し側はreturnするだけでよい）
+// /tenko-syncのcheckTenkoSyncAuthと同じfail-closed方針（未設定時503、不一致時401）
+function checkFtdsApiAuth(req, res) {
+  if (!FTDS_API_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'FTDS_API_TOKEN not configured' });
+    return false;
+  }
+  var provided = req.headers['x-ftds-api-token'] || '';
+  if (!provided || provided !== FTDS_API_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// xlsxライブラリの遅延読込（archiver-zip-encrypted/unzipperと同じ遅延require方式）
+var xlsxLibCache = null;
+function getXlsxLib() {
+  if (xlsxLibCache) return xlsxLibCache;
+  try {
+    xlsxLibCache = require('xlsx');
+  } catch (e) {
+    log('xlsx lazy init failed: ' + e.message);
+    xlsxLibCache = null;
+  }
+  return xlsxLibCache;
+}
+
+// --- 列名判定（index.html: normalizeReportHeader/isTransporterHeader/mapAnalysisHeaderColumns の
+//     FTDS該当部分を移植。CC専用列(ベき架電/実架電/通話時間等)は本APIの対象外のため含めない） ---
+function ftdsNormalizeHeader(h) {
+  return String(h || '').replace(/^﻿/, '').toLowerCase().trim().replace(/[\s_]+/g, ' ');
+}
+function ftdsIsTransporterHeader(h) {
+  var n = ftdsNormalizeHeader(h);
+  var compact = n.replace(/\s/g, '');
+  return n === 'transporter id' || n === 'transporter_id' || compact === 'transporterid' || compact === 'transportid';
+}
+function ftdsMapHeaderColumns(headerRow) {
+  var cols = {};
+  for (var i = 0; i < headerRow.length; i++) {
+    var h = ftdsNormalizeHeader(headerRow[i]);
+    var raw = String(headerRow[i] || '').trim();
+    if (ftdsIsTransporterHeader(raw)) cols.tid = i;
+    else if (h.indexOf('ドライバ') >= 0 || h.indexOf('driver') >= 0) cols.driver = i;
+    else if (h.indexOf('件数合計') >= 0) cols.count = i;
+    else if ((h === '件数' || h.indexOf('件数') >= 0) && cols.count === undefined) cols.count = i;
+    else if (h.indexOf('日付') >= 0) cols.date = i;
+    else if (h.indexOf('失敗理由') >= 0 && h.indexOf('内訳') >= 0) cols.reasonBreakdown = i;
+    else if (h.indexOf('理由内訳') >= 0) cols.reasonBreakdown = i;
+    else if (h.indexOf('対象週') >= 0) cols.weekCount = i;
+    else if (h === 'failure reason' || h === 'failure_reason') cols.reason = i;
+    else if (h === 'cycle name' || h === 'cycle_name') cols.cycle = i;
+    else if (h === 'route code' || h === 'route_code') cols.route = i;
+    else if (h === 'tracking id' || h === 'tracking_id') cols.tracking = i;
+    else if (h === 'scannable id' || h === 'scannable_id') cols.tracking = i;
+    else if (h.indexOf('postal') >= 0 || h === 'zip') cols.zip = i;
+    else if (h === 'shipment reason' || h === 'shipment_reason') cols.reason = i;
+    else if (h === 'ship method' || h === 'ship_method') cols.method = i;
+  }
+  return cols;
+}
+
+// index.html: findAnalysisHeaderRow(rows, 'ftds') のftds分岐のみを移植
+function ftdsFindHeaderRow(rows) {
+  for (var ri = 0; ri < Math.min(rows.length, 15); ri++) {
+    var cols = ftdsMapHeaderColumns(rows[ri]);
+    if (cols.tid === undefined) continue;
+    if (cols.count !== undefined || cols.reasonBreakdown !== undefined || cols.reason !== undefined) return ri;
+  }
+  return -1;
+}
+
+// index.html: findReportSheet(wb, 'ftds') のftds分岐のみを移植。
+// 「累計」始まりのシートは既存同様スキップ（累計レポート取込は本APIの対象外）。
+function ftdsFindReportSheet(wb, XLSX) {
+  var best = null;
+  var bestName = null;
+  var bestScore = 0;
+  for (var si = 0; si < wb.SheetNames.length; si++) {
+    if (wb.SheetNames[si].indexOf('累計') === 0) continue;
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], { header: 1, defval: '' });
+    if (!rows || rows.length < 2) continue;
+    var hdr = rows[0];
+    var score = 0;
+    var hasTransporter = false;
+    for (var hi = 0; hi < hdr.length; hi++) {
+      var h = ftdsNormalizeHeader(hdr[hi]);
+      if (ftdsIsTransporterHeader(hdr[hi])) { hasTransporter = true; score += 3; }
+      if (h.indexOf('failure') >= 0 && h.indexOf('reason') >= 0) score += 4;
+      if (h.indexOf('cycle') >= 0 && h.indexOf('name') >= 0) score += 2;
+      if (h.indexOf('route') >= 0 && h.indexOf('code') >= 0) score += 2;
+    }
+    if (hasTransporter && score > bestScore) {
+      bestScore = score;
+      best = rows;
+      bestName = wb.SheetNames[si];
+    }
+  }
+  return { rows: best, sheetName: bestName };
+}
+
+// index.html: extractReportPeriodLabel を移植（ファイル名の週ラベル抽出用）
+function ftdsExtractPeriodLabel(sheetName, fileName) {
+  var src = (sheetName || '') + ' ' + (fileName || '');
+  var m = src.match(/W\d+\s*[-–~]\s*W\d+/i);
+  if (m) return m[0].replace(/\s/g, '');
+  m = src.match(/W\d+/i);
+  return m ? m[0] : '';
+}
+
+// index.html: parseReasonBreakdownPipe を移植
+function ftdsParseReasonBreakdownPipe(text) {
+  var out = {};
+  var s = String(text || '').trim();
+  if (!s) return out;
+  var parts = s.split('|');
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (!p) continue;
+    var idx = p.lastIndexOf(':');
+    if (idx <= 0) continue;
+    var reason = p.slice(0, idx).trim();
+    var cnt = parseInt(p.slice(idx + 1).trim(), 10);
+    if (reason && !isNaN(cnt)) out[reason] = cnt;
+  }
+  return out;
+}
+
+// index.html: REASON_JA / translateReason を値そのまま移植（Bad Weather表記ゆれ4種含む）
+var FTDS_REASON_JA = {
+  'CUSTOMER_UNAVAILABLE': '不在',
+  'CUSTOMER_MOVED': '転居済み',
+  'ADDRESS_NOT_FOUND': '住所不明',
+  'INACCESSIBLE_DELIVERY_LOCATION': '配達先アクセス不可',
+  'NOT_ATTEMPT': '配達未試行',
+  'BUSINESS_CLOSED': '営業時間外',
+  'OBJECT_MISSING': '荷物紛失',
+  'NO_SECURE_LOCATION': '安全な置場所なし',
+  'REFUSED_DELIVERY': '受取拒否',
+  'UNDELIVERABLE': '配達不能',
+  'PACKAGE_DAMAGED': '荷物破損',
+  'MISSING_PACKAGE': '荷物不明',
+  'WRONG_ADDRESS': '住所間違い',
+  'DELIVERY_ATTEMPTED': '配達試行済',
+  'OTHER': 'その他',
+  'UNSAFE_DUE_TO_DOG': '犬がいて危険',
+  'LOCKER_ISSUE': 'ロッカー不具合',
+  'NO_LOCKER_AVAILABLE': 'ロッカー空きなし',
+  'DELIVERED_TO_FRONT_DOOR': '玄関前置き',
+  'DELIVERED_TO_OTHER_AS_INSTRUCTED': '指示先へ配達済',
+  'DELIVERED_TO_MAIL_SLOT': '郵便受け投函',
+  'DELIVERED_TO_DELIVERY_BOX': '宅配ボックス投函',
+  'DELIVERED_TO_NEIGHBOR': '隣人渡し',
+  'DELIVERED_TO_RECEPTION_LOBBY': '受付/ロビー渡し',
+  'DELIVERED_TO_HOUSEHOLD_MEMBER': '同居人渡し',
+  'DELIVERED_TO_GAS_METER': 'ガスメーター置き',
+  'DELIVERED_TO_BICYCLE_BASKET': '自転車カゴ置き',
+  'DELIVERED_TO_RECEPTIONIST': '受付人渡し',
+  'DELIVERED_TO_SAFE_LOCATION': '安全な場所に置き配',
+  'DELIVERED_TO_EVERYWHERE_LOCKER': '宅配ロッカー（PUDO等）',
+  'Calls to Customer': '顧客への電話',
+  'Text to Customer': '顧客へのSMS',
+  'Attempt within 8AM to 8PM': '8時〜20時内に試行',
+  'CANT_FIND_ADDRESS': '住所が見つからない',
+  'CANT_FIND_SAFE_LOCATION': '安全な置場所が見つからない',
+  'CANT_GET_ACCESS': 'アクセスできない',
+  'Missing/Wrong Delivery Box Number or PIN code': '宅配BOX番号/暗証番号間違い',
+  'No Item_delivery box': '宅配BOXに荷物なし',
+  'No Item_reception/front_desk/mail room': '受付/フロント/メールルームに荷物なし',
+  'No Item_neighbor': '隣人渡し先に荷物なし',
+  'No Item_safe place': '安全な場所に荷物なし',
+  'Driver - Controllable': 'ドライバー起因（管理可能）',
+  'Driver - Not Controllable': 'ドライバー起因（管理不可）',
+  'Non-Driver': 'ドライバー以外',
+  'Uncategorized': '未分類',
+  'NONE': 'なし',
+  'None': 'なし',
+  'none': 'なし',
+  'DNR': '受取否認（DNR）',
+  'FTDS': '未配達（FTDS）',
+  'NO_ANSWER': '応答なし',
+  'LATE_DELIVERY': '遅延配達',
+  'EARLY_DELIVERY': '早期配達',
+  'WRONG_ITEM': '商品間違い',
+  'PARTIAL_DELIVERY': '一部未配達',
+  'WEATHER': '天候不良',
+  'VEHICLE_ISSUE': '車両トラブル',
+  'TRAFFIC': '交通渋滞',
+  'SAFETY_CONCERN': '安全上の問題',
+  'CUSTOMER_CANCELLED': '顧客キャンセル',
+  'DUPLICATE_DELIVERY': '重複配達',
+  'SYSTEM_ERROR': 'システムエラー',
+  'NO_SUCH_PLACE': '該当場所なし',
+  'RECIPIENT_UNAVAILABLE': '受取人不在',
+  'ACCESS_PROBLEM': 'アクセス問題',
+  'PACKAGE_TOO_LARGE': '荷物サイズ超過',
+  'INCOMPLETE_ADDRESS': '住所不完全',
+  // FTDS/CC「Bad Weather」ステータスの日本語表示（元データは書き換えず表示のみ変換）
+  'Bad Weather': '悪天候',
+  'BAD_WEATHER': '悪天候',
+  'bad weather': '悪天候',
+  'Bad weather': '悪天候'
+};
+function ftdsTranslateReason(reason) {
+  if (!reason) return '';
+  if (FTDS_REASON_JA[reason]) return FTDS_REASON_JA[reason];
+  var ja = reason.replace(/\s*[A-Za-z].*$/, '').trim();
+  if (ja && ja !== reason) return ja;
+  return reason.replace(/_/g, ' ');
+}
+
+// index.html: ftdsRecordWeight を移植
+function ftdsRecordWeightSrv(rec) {
+  return rec && rec.summaryCount ? rec.summaryCount : 1;
+}
+
+// index.html: processFtdsData の本体ロジック（列マッピング〜行ごとの正規化）を移植。
+// ドライバー名解決（TID→氏名）はマスタ取得後に別途行うため、ここではTID列・rowNameのみ抽出する。
+function ftdsProcessRows(rows) {
+  var headerIdx = ftdsFindHeaderRow(rows);
+  if (headerIdx < 0) headerIdx = 0;
+  var header = rows[headerIdx];
+  var colMap = ftdsMapHeaderColumns(header);
+  if (colMap.tid === undefined) {
+    return { error: 'TransportID列が見つかりません' };
+  }
+
+  var results = [];
+  for (var r = headerIdx + 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row) continue;
+    var tid = String(row[colMap.tid] || '').trim();
+    if (!tid) continue;
+    var rowName = colMap.driver !== undefined ? String(row[colMap.driver] || '').trim() : '';
+    var dateVal = colMap.date !== undefined ? String(row[colMap.date] || '') : '';
+    if (dateVal.indexOf(' ') > 0) dateVal = dateVal.split(' ')[0];
+    var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : (colMap.reasonBreakdown !== undefined ? String(row[colMap.reasonBreakdown] || '') : '');
+    var cycle = colMap.cycle !== undefined ? String(row[colMap.cycle] || '') : '';
+    var route = colMap.route !== undefined ? String(row[colMap.route] || '') : '';
+    var tracking = colMap.tracking !== undefined ? String(row[colMap.tracking] || '') : '';
+    var zip = colMap.zip !== undefined ? String(row[colMap.zip] || '') : '';
+    var summaryCount = colMap.count !== undefined ? (parseInt(row[colMap.count], 10) || 0) : 0;
+    var isSummary = summaryCount > 0 && !tracking && !route;
+
+    var rec = {
+      date: dateVal,
+      driverName: rowName, // TID未一致時のフォールバック値。マスタ照合後に上書きされる
+      transporterId: tid,
+      cycle: cycle,
+      route: route,
+      tracking: tracking,
+      zip: zip,
+      reason: reason
+    };
+    if (isSummary) {
+      rec.summaryCount = summaryCount;
+      rec.isSummary = true;
+      rec.reasonBreakdown = ftdsParseReasonBreakdownPipe(reason);
+    }
+    results.push(rec);
+  }
+  return { results: results };
+}
+
+// index.html: exportFtdsResult のCSV生成ロジックを移植（ドライバー別集計は行数++でカウント、
+// summaryCountによる重み付けはしない — 既存exportFtdsResult(16521-16574)と同じ挙動）
+function ftdsBuildExportCsv(results) {
+  var driverStats = {};
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var dName = r.driverName || '(未特定)';
+    if (!driverStats[dName]) driverStats[dName] = { tid: r.transporterId, count: 0, reasons: {}, dates: {} };
+    driverStats[dName].count++;
+    if (r.reason) {
+      driverStats[dName].reasons[r.reason] = (driverStats[dName].reasons[r.reason] || 0) + 1;
+    }
+    if (r.date) driverStats[dName].dates[r.date] = true;
+  }
+
+  var csvRows = [['ドライバー名', 'TransportID', '件数', '日付', '失敗理由内訳']];
+  var dKeys = Object.keys(driverStats).sort(function(a, b) { return driverStats[b].count - driverStats[a].count; });
+  for (var d = 0; d < dKeys.length; d++) {
+    var dk = dKeys[d];
+    var ds = driverStats[dk];
+    var reasonParts = [];
+    var rKeys = Object.keys(ds.reasons);
+    for (var ri = 0; ri < rKeys.length; ri++) {
+      reasonParts.push(ftdsTranslateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
+    }
+    var dateList = Object.keys(ds.dates).sort().join(' / ');
+    csvRows.push([dk, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
+  }
+
+  csvRows.push([]);
+  csvRows.push(['=== 詳細データ ===']);
+  csvRows.push(['日付', 'ドライバー名', 'TransportID', 'サイクル', 'ルートコード', 'TrackingID', '郵便番号', '失敗理由']);
+  for (var j = 0; j < results.length; j++) {
+    var rec = results[j];
+    csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, ftdsTranslateReason(rec.reason)]);
+  }
+
+  return csvRows.map(function(row) {
+    return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
+  }).join('\n');
+}
+
+// ドライバーマスタ取得: 既存の GET /tenko-master?action=getMaster をサーバー内部からループバック呼出
+// （/tenko-masterルート自体は無変更。GAS未設定時はstatus!=='ok'となるため空配列を返し、
+//   全行が「未特定」として処理を継続する＝呼び出し不能で/ftds-export全体を落とさない）
+function fetchFtdsDriverMaster() {
+  var url = 'http://127.0.0.1:' + PORT + '/tenko-master?action=getMaster';
+  // validateStatus:常にtrue → /tenko-masterが4xx/5xx(例: TENKO_MASTER_GAS_URL未設定時の500)を返しても
+  // axiosの例外にせず、下のstatus!=='ok'判定で空配列（＝全行「未特定」）にフォールバックする。
+  // 接続自体が失敗した場合（サーバー未起動等）のみPromiseがrejectされ、呼び出し元で502として扱われる。
+  return axios.get(url, { timeout: 30000, validateStatus: function() { return true; } }).then(function(response) {
+    var data = response.data;
+    if (!data || data.status !== 'ok' || !Array.isArray(data.drivers)) return [];
+    return data.drivers;
+  });
+}
+
+app.post('/ftds-export', function(req, res) {
+  if (!checkFtdsApiAuth(req, res)) return;
+
+  var xlsxLib = getXlsxLib();
+  var zipMulter = getZipMulter(); // /encrypt-zip・/decrypt-zipと同じ multer(memoryStorage, 10MB上限) を再利用
+  if (!xlsxLib || !zipMulter) {
+    return res.status(500).json({ status: 'error', message: 'server modules not ready' });
+  }
+
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) {
+      log('ftds-export multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ status: 'error', message: err.message || 'upload error' });
+    }
+
+    var file = req.file;
+    if (!file) return res.status(400).json({ status: 'error', message: 'file required (field name: file)' });
+
+    var wb;
+    try {
+      wb = xlsxLib.read(file.buffer, { type: 'buffer' });
+    } catch (parseErr) {
+      return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parseErr.message });
+    }
+
+    var sheetInfo = ftdsFindReportSheet(wb, xlsxLib);
+    if (!sheetInfo.rows || sheetInfo.rows.length < 2) {
+      return res.status(422).json({ status: 'error', message: 'FTDS形式のシートが見つかりません（transporter_id列を含むシートが必要です）' });
+    }
+
+    var processed = ftdsProcessRows(sheetInfo.rows);
+    if (processed.error) {
+      return res.status(422).json({ status: 'error', message: processed.error });
+    }
+    if (processed.results.length === 0) {
+      return res.status(422).json({ status: 'error', message: 'TransportIDを持つ行が見つかりませんでした' });
+    }
+
+    fetchFtdsDriverMaster().then(function(master) {
+      var tidToName = {};
+      for (var mi = 0; mi < master.length; mi++) {
+        var mtid = String(master[mi].transportId || '').trim();
+        if (!mtid) continue;
+        tidToName[mtid] = master[mi].englishName || '';
+      }
+
+      var results = processed.results;
+      for (var ri2 = 0; ri2 < results.length; ri2++) {
+        var rec = results[ri2];
+        // 優先順位: マスタのTID一致 > ファイル内のドライバー名列 > 未特定（空文字のまま）
+        if (tidToName[rec.transporterId]) rec.driverName = tidToName[rec.transporterId];
+      }
+
+      var csv = ftdsBuildExportCsv(results);
+      var periodLabel = ftdsExtractPeriodLabel(sheetInfo.sheetName, file.originalname);
+      var outFileName = 'FTDS分析_' + (periodLabel || getTodayJst()) + '.csv';
+
+      log('ftds-export: ' + results.length + ' rows, master=' + master.length + ' drivers, file=' + outFileName);
+
+      // Content-Dispositionのヘッダー値はASCII範囲外の文字を直接入れられない（Node/Expressが
+      // 「Invalid character in header content」で例外を投げる）ため、/encrypt-zip・/decrypt-zip
+      // と同じ RFC 5987 形式（filename*=UTF-8''...）で日本語ファイル名を渡す。
+      // 対応クライアント向けに素のfilename=にはASCII安全なフォールバック名を入れる。
+      var asciiFallbackName = 'FTDS_export_' + (periodLabel || getTodayJst()).replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
+      var encodedOutFileName = encodeURIComponent(outFileName);
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="' + asciiFallbackName + '"; filename*=UTF-8\'\'' + encodedOutFileName);
+      res.send('﻿' + csv);
+    }).catch(function(masterErr) {
+      log('ftds-export driver master fetch error: ' + masterErr.message);
+      if (!res.headersSent) {
+        res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
+      }
+    });
+  });
+});
+
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
 });
