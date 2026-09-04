@@ -149,26 +149,34 @@ function log(...args) {
 //      （Renderダッシュボードでの変更のみが有効）。
 //   2) アプリ側 非常停止スイッチ（管理画面から即時ON/OFF可能） … 下記 lineAppSwitchState。
 //      日常運用の非常停止用。ローカルディスクに永続化し、サーバープロセス再起動後も
-//      状態を保持する（コンテナごと作り直す再デプロイでは初期値=ON＝安全側にリセットされる。
-//      その場合も1)のRender環境変数がOFFなら実送信は行われない）。
+//      状態を保持する。
+//      フェイルセーフ設計: 保存状態が「存在しない／読み込みに失敗する／JSONが破損している／
+//      再デプロイ等で状態ファイル自体が消失している」場合は、既定値を enabled:false
+//      （＝送信禁止）とする。「状態が不明ならLINE送信禁止」を徹底し、状態不明のまま
+//      安全側に倒れない事故（既定でON復帰）を防ぐ。管理者が設定画面から明示的に
+//      「送信を再開する」を押した場合のみ enabled:true になる。
 // 実送信は「1)と2)の両方がONのときだけ」有効（どちらか一方でもOFFなら送信禁止）。
 const LINE_NOTIFICATIONS_ENABLED = process.env.LINE_NOTIFICATIONS_ENABLED === 'true';
 console.log('LINE_NOTIFICATIONS_ENABLED (Render env, マスターキルスイッチ):', LINE_NOTIFICATIONS_ENABLED);
 
 var LINE_APP_SWITCH_STORE_PATH = path.join(os.tmpdir(), 'line-app-switch-store.json');
-// 既定値は enabled:true（＝制限しない）。実際に送信されるかどうかは最終的に
-// LINE_NOTIFICATIONS_ENABLED との論理積で決まるため、この既定値だけでは送信は解禁されない。
-var lineAppSwitchState = { enabled: true, updatedAt: null, updatedBy: null };
+// 既定値は enabled:false（＝状態不明時は送信禁止のフェイルセーフ）。
+// 保存済みファイルが正しく読めた場合のみ、その内容（enabled:trueも含む）を採用する。
+var lineAppSwitchState = { enabled: false, updatedAt: null, updatedBy: null };
 (function loadLineAppSwitchState() {
   try {
-    if (fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
-      var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
-      if (loaded && typeof loaded.enabled === 'boolean') {
-        lineAppSwitchState = loaded;
-      }
+    if (!fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
+      console.log('LINE app switch (非常停止): 状態ファイルなし → フェイルセーフでenabled=false');
+      return;
+    }
+    var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
+    if (loaded && typeof loaded.enabled === 'boolean') {
+      lineAppSwitchState = loaded;
+    } else {
+      console.warn('line-app-switch-store: 内容が不正な形式のため無視（フェイルセーフでenabled=falseのまま）:', JSON.stringify(loaded));
     }
   } catch (e) {
-    console.warn('line-app-switch-store load failed (using default enabled=true):', e.message);
+    console.warn('line-app-switch-store load failed（破損/読込エラー。フェイルセーフでenabled=falseのまま）:', e.message);
   }
   console.log('LINE app switch (非常停止) loaded:', JSON.stringify(lineAppSwitchState));
 })();
