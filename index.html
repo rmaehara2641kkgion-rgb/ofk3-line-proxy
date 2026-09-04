@@ -11944,6 +11944,17 @@ var driverDB = {
     var inMemoryAddrMaster = {}; // 画面表示用一時キャッシュ（ローカルには保存しない）
     var batchGeocodeRunning = false;
 
+    // 過去バージョンが残した legacy な localStorage キー 'addrMaster' の掃除。
+    // 現行コードはこのキーへ一切setItem/getItemしておらず（住所マスターは上記
+    // inMemoryAddrMasterとしてメモリ保持し、必要な都度 /addr-master 経由でGASから
+    // 再取得する設計）、本番実測で5.6MB超を占有し容量超過の主因となっていたため
+    // 削除する。他のキーには一切触れないbest-effort処理（失敗しても起動を止めない）。
+    try {
+      localStorage.removeItem('addrMaster');
+    } catch (e) {
+      console.warn('legacy addrMaster cleanup failed:', e);
+    }
+
     function normalizeAddress(addr) {
       if (!addr) return '';
       var s = String(addr)
