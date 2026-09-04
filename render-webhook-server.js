@@ -143,16 +143,58 @@ function log(...args) {
 // タブレット→PCの点呼同期が完全に安定するまで、LINEへの実送信のみを止めるための安全スイッチ。
 // 点呼処理・QR認証・点呼データ保存・tenko-sync・driverDB・シフト等の他機能には一切影響しない。
 //
-// 停止/再開は、Renderの環境変数 LINE_NOTIFICATIONS_ENABLED を 'true' にするだけ（コード変更不要）。
-// 未設定、または 'true' 以外の値の場合は「送信しない」がデフォルト＝安全側。
+// 2層構成:
+//   1) Render環境変数 LINE_NOTIFICATIONS_ENABLED … 最終マスターキルスイッチ。
+//      'true' 以外（未設定含む）は常に「送信しない」。これはコードでは変更できない
+//      （Renderダッシュボードでの変更のみが有効）。
+//   2) アプリ側 非常停止スイッチ（管理画面から即時ON/OFF可能） … 下記 lineAppSwitchState。
+//      日常運用の非常停止用。ローカルディスクに永続化し、サーバープロセス再起動後も
+//      状態を保持する（コンテナごと作り直す再デプロイでは初期値=ON＝安全側にリセットされる。
+//      その場合も1)のRender環境変数がOFFなら実送信は行われない）。
+// 実送信は「1)と2)の両方がONのときだけ」有効（どちらか一方でもOFFなら送信禁止）。
 const LINE_NOTIFICATIONS_ENABLED = process.env.LINE_NOTIFICATIONS_ENABLED === 'true';
-console.log('LINE_NOTIFICATIONS_ENABLED:', LINE_NOTIFICATIONS_ENABLED);
+console.log('LINE_NOTIFICATIONS_ENABLED (Render env, マスターキルスイッチ):', LINE_NOTIFICATIONS_ENABLED);
+
+var LINE_APP_SWITCH_STORE_PATH = path.join(os.tmpdir(), 'line-app-switch-store.json');
+// 既定値は enabled:true（＝制限しない）。実際に送信されるかどうかは最終的に
+// LINE_NOTIFICATIONS_ENABLED との論理積で決まるため、この既定値だけでは送信は解禁されない。
+var lineAppSwitchState = { enabled: true, updatedAt: null, updatedBy: null };
+(function loadLineAppSwitchState() {
+  try {
+    if (fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
+      var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
+      if (loaded && typeof loaded.enabled === 'boolean') {
+        lineAppSwitchState = loaded;
+      }
+    }
+  } catch (e) {
+    console.warn('line-app-switch-store load failed (using default enabled=true):', e.message);
+  }
+  console.log('LINE app switch (非常停止) loaded:', JSON.stringify(lineAppSwitchState));
+})();
+
+function persistLineAppSwitchState() {
+  try {
+    fs.writeFileSync(LINE_APP_SWITCH_STORE_PATH, JSON.stringify(lineAppSwitchState), 'utf8');
+    return true;
+  } catch (e) {
+    console.warn('line-app-switch-store persist failed:', e.message);
+    return false;
+  }
+}
+
+function isLineSendEffectivelyEnabled() {
+  return LINE_NOTIFICATIONS_ENABLED && lineAppSwitchState.enabled;
+}
 
 // LINE Messaging APIへの実送信は、必ずこの関数を経由させる（送信処理の唯一の入口）。
 // フラグOFFの間はLINE APIを一切呼び出さず、個人情報やトークンを含まない簡易ログだけを残す。
+// 点呼・WH60・メンター・ウェルカムメッセージ等、Render経由の全LINE push送信がこの関数を通る
+// （直下の sendLinePushMessage 呼び出し元一覧は本コミット時点で4箇所: /proxy, /mentor-alert,
+//  sendWelcomeMessage, wh60SendLine）。
 async function sendLinePushMessage(to, messages) {
-  if (!LINE_NOTIFICATIONS_ENABLED) {
-    console.log('[LINE通知停止中] 送信をスキップしました');
+  if (!isLineSendEffectivelyEnabled()) {
+    console.log('[LINE通知停止中] 送信をスキップしました (renderEnv=' + LINE_NOTIFICATIONS_ENABLED + ', appSwitch=' + lineAppSwitchState.enabled + ')');
     return { skipped: true };
   }
   return axios.post('https://api.line.me/v2/bot/message/push', {
@@ -653,6 +695,41 @@ app.post('/mentor-notified', (req, res) => {
 });
 
 const PROXY_SECRET = process.env.PROXY_SECRET || '';
+
+// ===== LINE全送信 非常停止（管理画面から操作） =====
+// 現在状態の確認用。認証不要（送信を行わない読み取り専用のため、他の /wh60/status 等と同様の扱い）。
+app.get('/line-notifications/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    renderEnabled: LINE_NOTIFICATIONS_ENABLED,
+    appEnabled: lineAppSwitchState.enabled,
+    effectiveEnabled: isLineSendEffectivelyEnabled(),
+    updatedAt: lineAppSwitchState.updatedAt,
+    updatedBy: lineAppSwitchState.updatedBy || null
+  });
+});
+
+// アプリ側の非常停止スイッチを切り替える。/proxy と同じ簡易認証(PROXY_SECRET)を適用する。
+app.post('/line-notifications/toggle', (req, res) => {
+  if (PROXY_SECRET && req.headers['x-proxy-secret'] !== PROXY_SECRET) {
+    return res.status(403).json({ status: 'error', message: 'Forbidden' });
+  }
+  var enabled = !!(req.body && req.body.enabled);
+  lineAppSwitchState = {
+    enabled: enabled,
+    updatedAt: new Date().toISOString(),
+    updatedBy: (req.body && typeof req.body.updatedBy === 'string') ? req.body.updatedBy.slice(0, 100) : null
+  };
+  var saved = persistLineAppSwitchState();
+  log('LINE app switch (非常停止) changed: enabled=' + enabled + ' saved=' + saved);
+  res.json({
+    status: 'ok',
+    saved: saved,
+    renderEnabled: LINE_NOTIFICATIONS_ENABLED,
+    appEnabled: lineAppSwitchState.enabled,
+    effectiveEnabled: isLineSendEffectivelyEnabled()
+  });
+});
 
 app.post('/proxy', async (req, res) => {
   try {

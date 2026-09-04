@@ -614,6 +614,7 @@
           </div>
         </div>
         <p class="text-xs text-ink-lighter mb-4">週次で更新されるドライバーの配送実績。予測エンジンの基礎データとして使用されます。</p>
+        <p id="driver-db-persist-status" class="text-xs text-ink-lighter mb-4"></p>
 
         <!-- 一斉LINE送信パネル -->
         <div id="bulk-line-panel" class="hidden mb-4">
@@ -1012,7 +1013,7 @@
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold flex items-center gap-2">📩 LINE自動通知</h3>
-            <span id="line-notify-master-status" class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">有効</span>
+            <button id="line-notify-master-status" onclick="toggleTenkoAlertMaster()" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 cursor-pointer" title="このセッション（このページを開いている間）だけ有効になります。ページ再読み込みや次回起動時は自動的にOFFに戻ります">🔴 OFF（起動時デフォルト）</button>
           </div>
           <div id="line-notify-slots" class="space-y-2">
           </div>
@@ -2843,6 +2844,21 @@
         <h3 class="text-base font-bold mb-4">設定</h3>
         <div class="space-y-6">
 
+          <!-- LINE全送信 非常停止（Renderの/proxy, /mentor-alert, ウェルカム, WH60自動送信を一括制御） -->
+          <div class="border-2 border-red-200 rounded-lg p-4 bg-red-50">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-sm font-bold">🚨 LINE全送信 非常停止</h4>
+              <span id="line-kill-switch-status" class="text-xs px-2 py-1 rounded-full font-bold bg-gray-200 text-gray-600">確認中...</span>
+            </div>
+            <p class="text-xs text-ink-lighter mb-3">点呼・WH60・メンター通知・ウェルカムメッセージ等、サーバー（Render）経由の全LINE push送信をこのボタンで即時停止・再開できます。</p>
+            <div class="flex gap-2 mb-2">
+              <button id="line-kill-switch-stop-btn" onclick="stopAllLineSending()" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700">⛔ 今すぐ全送信を停止</button>
+              <button id="line-kill-switch-resume-btn" onclick="resumeAllLineSending()" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700">▶ 送信を再開する</button>
+            </div>
+            <div id="line-kill-switch-detail" class="text-xs text-ink-lighter"></div>
+            <p class="text-xs text-orange-600 mt-2">⚠ 注意：Render環境変数 <code>LINE_NOTIFICATIONS_ENABLED</code> が最終マスタースイッチです。こちらがOFFの場合、このボタンをONにしても送信されません（安全側優先）。また、LINE Notify（トークン直接入力）やGoogle Apps Script経由の別ルートを使っている場合、このボタンでは止まりません。</p>
+          </div>
+
           <!-- LINE Messaging API Section -->
           <div class="border border-border rounded-lg p-4">
             <div class="flex items-center gap-2 mb-3">
@@ -3082,17 +3098,19 @@ var driverDB = {
       "百合香 筑紫": {"workDays": 4, "totalHours": 16.5, "totalPackages": 125, "packagesPerHour": 7.58, "totalPackagesAll": 155, "distanceKm": 43, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 97.71, "lastUpdated": "W22-W31"},
       "蒼汰 北野": {"workDays": 2, "totalHours": 17.0, "totalPackages": 127, "packagesPerHour": 7.47, "totalPackagesAll": 127, "distanceKm": 37, "incidents": 0, "misdeliveryRate": 0.0, "deliveryRate": 100.0, "lastUpdated": "W22-W31"}
     };
-    // driverDBオーバーレイ: 埋め込みにない/差分のあるエントリをlocalStorageから復元
-    var _driverDBEmbeddedKeys = {};
-    for (var _ek in driverDB) { _driverDBEmbeddedKeys[_ek] = true; }
+    // driverDBオーバーレイ: アップロード等で更新された最新データをlocalStorageから復元し、
+    // 埋め込み初期値（起動時のハードコード値）より常に優先する。
+    //
+    // 【修正前のバグ】以前は「埋め込み済みドライバーはdriverIdだけをオーバーレイに保存する」
+    // 実装になっており、アップロードで更新した稼働実績（packagesPerHour/workDays/
+    // totalPackages/deliveryRate/lastUpdated等）が保存されず、次回起動時に埋め込みの
+    // 初期値（古いスナップショット）へ戻ってしまっていた（新規ドライバーのみ正しく保存されていた）。
+    // 修正後はsaveDriverDBOverlay()が常に全ドライバーの全フィールドを保存するため、
+    // このマージ処理も無条件に「保存済みデータで上書き」する単純な形にしている。
     try {
       var _overlay = JSON.parse(localStorage.getItem('driverDBOverlay') || '{}');
       for (var _ok in _overlay) {
-        if (!driverDB[_ok]) {
-          driverDB[_ok] = _overlay[_ok];
-        } else if (_overlay[_ok].driverId && !driverDB[_ok].driverId) {
-          driverDB[_ok].driverId = _overlay[_ok].driverId;
-        }
+        driverDB[_ok] = _overlay[_ok];
       }
     } catch(e) { console.warn('driverDBOverlay parse error:', e.message); }
 
@@ -3123,20 +3141,63 @@ var driverDB = {
       localStorage.setItem('deletedDrivers', JSON.stringify(Object.keys(deletedDrivers)));
     }
 
+    // ドライバー能力DBの永続化。常に driverDB の全件・全フィールドをそのまま保存する
+    // （以前のバグ: 埋め込み済みドライバーはdriverIdしか保存せず、稼働実績の更新が消えていた）。
+    // 呼び出し元は戻り値(true/false)を見て、保存に失敗した場合は「保存できた」という
+    // 表示をしないこと（アップロード直後に成功表示 → 実は失われている、という事態を防ぐ）。
+    // 新しい保存を行う直前に、直前の保存内容を1世代だけバックアップとして退避する
+    // （restoreDriverDBOverlayBackup() で復元可能）。
     function saveDriverDBOverlay() {
       var overlay = {};
       for (var k in driverDB) {
-        if (!_driverDBEmbeddedKeys[k]) {
-          overlay[k] = driverDB[k];
-        } else if (driverDB[k].driverId) {
-          overlay[k] = { driverId: driverDB[k].driverId };
-        }
+        overlay[k] = driverDB[k];
       }
       try {
-        localStorage.setItem('driverDBOverlay', JSON.stringify(overlay));
+        var serialized = JSON.stringify(overlay);
+        var previous = localStorage.getItem('driverDBOverlay');
+        if (previous !== null && previous !== serialized) {
+          localStorage.setItem('driverDBOverlayBackup', previous);
+        }
+        localStorage.setItem('driverDBOverlay', serialized);
+        localStorage.setItem('driverDBOverlaySavedAt', new Date().toISOString());
+        return true;
       } catch(e) {
         console.warn('driverDBOverlay save failed (storage full?):', e.message);
+        return false;
       }
+    }
+
+    // 直前の保存内容（1世代前）に復元する。誤ったアップロード等からのロールバック用。
+    function restoreDriverDBOverlayBackup() {
+      var backup = localStorage.getItem('driverDBOverlayBackup');
+      if (!backup) { alert('復元できるバックアップがありません（保存は1回のみ、または既にバックアップがありません）。'); return; }
+      if (!confirm('ドライバー能力データベースを、1つ前に保存した内容へ復元します。よろしいですか？')) return;
+      try {
+        var restored = JSON.parse(backup);
+        for (var k in restored) { driverDB[k] = restored[k]; }
+        localStorage.setItem('driverDBOverlay', backup);
+        localStorage.setItem('driverDBOverlaySavedAt', new Date().toISOString());
+        if (typeof renderDriverTable === 'function') renderDriverTable();
+        if (typeof renderDriverDBPersistStatus === 'function') renderDriverDBPersistStatus();
+        alert('1つ前の保存内容に復元しました（' + Object.keys(driverDB).length + '名）');
+      } catch(e) {
+        alert('復元に失敗しました: ' + e.message);
+      }
+    }
+
+    // ドライバー能力DBの保存状態表示（件数・最終保存日時・ロールバック導線）
+    function renderDriverDBPersistStatus() {
+      var el = document.getElementById('driver-db-persist-status');
+      if (!el) return;
+      var savedAt = localStorage.getItem('driverDBOverlaySavedAt');
+      var hasBackup = !!localStorage.getItem('driverDBOverlayBackup');
+      var count = Object.keys(driverDB).length;
+      var html = 'ドライバー数: ' + count + '名　/　保存先: ブラウザ内(localStorage)　/　最終保存: ' +
+        (savedAt ? new Date(savedAt).toLocaleString('ja-JP') : '未保存（初期データのまま）');
+      if (hasBackup) {
+        html += '　<button onclick="restoreDriverDBOverlayBackup()" class="text-accent underline ml-1">↩ 1つ前の保存に戻す</button>';
+      }
+      el.innerHTML = html;
     }
 
     var driverIdCounter = parseInt(localStorage.getItem('driverIdCounter') || '0', 10);
@@ -3577,8 +3638,9 @@ var driverDB = {
     // Initialize
     document.getElementById('today-date').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 
-    // driverDBは埋め込み済み — localStorage読み込み不要
+    // driverDBは埋め込み済み — localStorage読み込み不要（保存済みオーバーレイは上でマージ済み）
     renderDriverTable();
+    if (typeof renderDriverDBPersistStatus === 'function') renderDriverDBPersistStatus();
 
     function getNextDriverId() {
       var maxId = driverIdCounter || 0;
@@ -4718,11 +4780,12 @@ var driverDB = {
       });
 
       // Save to localStorage
-      // driverDBオーバーレイ保存
-      saveDriverDBOverlay();
+      // driverDBオーバーレイ保存（戻り値を確認し、失敗時は成功表示をしない）
+      var _driverDbSaveOk = saveDriverDBOverlay();
       // 新規ドライバーを他端末（点呼タブレット等）へ共有。driverId未同期のまま残ると当該ドライバーのQRが不安定になるため
       if (newlyRegisteredNames.length && typeof pushDriverDeltasToTablet === 'function') pushDriverDeltasToTablet(newlyRegisteredNames);
       renderDriverTable();
+      renderDriverDBPersistStatus();
 
       // Re-calculate predictions if assignment data exists
       if (assignmentData.length) {
@@ -4737,7 +4800,11 @@ var driverDB = {
         })));
       }
 
-      alert(`${Object.keys(driverDB).length}名のドライバーデータを更新しました`);
+      if (_driverDbSaveOk) {
+        alert(`${Object.keys(driverDB).length}名のドライバーデータを更新しました（保存完了: ${new Date().toLocaleString('ja-JP')}）`);
+      } else {
+        alert('⚠ データは画面には反映しましたが、永続保存に失敗しました（ブラウザのストレージ容量不足の可能性があります）。このままページを再読み込みすると変更が失われます。他の不要データの削除や別ブラウザでの再試行をご検討ください。');
+      }
     }
 
     function renderDriverTable() {
@@ -6947,11 +7014,87 @@ var driverDB = {
 
     function showSettings() {
       document.getElementById('settings-modal').classList.remove('hidden');
+      fetchLineNotificationsStatus();
     }
 
     function closeSettings() {
       document.getElementById('settings-modal').classList.add('hidden');
       saveLineSettings();
+    }
+
+    // ===== LINE全送信 非常停止（管理画面操作） =====
+    // サーバー側の LINE_NOTIFICATIONS_ENABLED（Render環境変数・最終マスタースイッチ）と
+    // アプリ側スイッチ（本関数群が操作するもの）の両方がONの時だけ実送信される。
+    // このAPIは常に自アプリを配信しているサーバー（相対パス）を叩く。lineSettings.gasProxyUrlが
+    // 別サーバーを指していても、そのサーバー自体にこのエンドポイントは存在しないため影響しない。
+    async function fetchLineNotificationsStatus() {
+      try {
+        const res = await fetch('/line-notifications/status');
+        const data = await res.json();
+        renderLineKillSwitchUI(data);
+      } catch (e) {
+        var statusEl = document.getElementById('line-kill-switch-status');
+        if (statusEl) { statusEl.textContent = '取得失敗'; statusEl.className = 'text-xs px-2 py-1 rounded-full font-bold bg-gray-300 text-gray-700'; }
+      }
+    }
+
+    function renderLineKillSwitchUI(data) {
+      var statusEl = document.getElementById('line-kill-switch-status');
+      var detailEl = document.getElementById('line-kill-switch-detail');
+      var stopBtn = document.getElementById('line-kill-switch-stop-btn');
+      var resumeBtn = document.getElementById('line-kill-switch-resume-btn');
+      if (!statusEl) return;
+
+      if (data.effectiveEnabled) {
+        statusEl.textContent = '🟢 LINE送信 稼働中';
+        statusEl.className = 'text-xs px-2 py-1 rounded-full font-bold bg-green-100 text-green-700';
+      } else {
+        statusEl.textContent = '🔴 LINE送信 停止中';
+        statusEl.className = 'text-xs px-2 py-1 rounded-full font-bold bg-red-100 text-red-700';
+      }
+      if (resumeBtn) resumeBtn.classList.toggle('hidden', data.appEnabled === true);
+      if (stopBtn) stopBtn.classList.toggle('hidden', data.appEnabled === false);
+
+      var lines = [];
+      lines.push('アプリ側スイッチ: ' + (data.appEnabled ? 'ON' : 'OFF（非常停止中）'));
+      lines.push('Render環境変数(LINE_NOTIFICATIONS_ENABLED): ' + (data.renderEnabled ? 'ON' : 'OFF'));
+      if (data.updatedAt) {
+        lines.push('最終変更: ' + new Date(data.updatedAt).toLocaleString('ja-JP') + (data.updatedBy ? '（' + data.updatedBy + '）' : ''));
+      }
+      if (!data.renderEnabled) {
+        lines.push('※ Render環境変数がOFFのため、アプリ側スイッチをONにしても送信は行われません。');
+      }
+      if (detailEl) detailEl.innerHTML = lines.join('<br>');
+    }
+
+    async function postLineToggle(enabled) {
+      try {
+        const res = await fetch('/line-notifications/toggle', {
+          method: 'POST',
+          headers: getProxyHeaders(),
+          body: JSON.stringify({ enabled: enabled, updatedBy: '管理画面' })
+        });
+        const data = await res.json();
+        renderLineKillSwitchUI(data);
+        if (!data.saved) {
+          alert('⚠ 状態の永続保存に失敗しました（サーバー側の一時領域書き込みエラー）。この操作はサーバーが再起動すると元に戻る可能性があります。');
+        }
+        return data;
+      } catch (e) {
+        alert('LINE送信状態の変更に失敗しました: ' + e.message);
+        return null;
+      }
+    }
+
+    // 即時停止（確認ダイアログなし。緊急停止のため）
+    async function stopAllLineSending() {
+      await postLineToggle(false);
+    }
+
+    // 再開は誤操作防止のため確認ダイアログを必須にする
+    async function resumeAllLineSending() {
+      if (!confirm('LINE送信を再開します。点呼・WH60・メンター通知・ウェルカムメッセージ等、全ての自動LINE送信が有効になります。よろしいですか？')) return;
+      await postLineToggle(true);
     }
 
     // ===== Master Management =====
@@ -9168,9 +9311,40 @@ var driverDB = {
       localStorage.setItem('tenkoNotifyDisabled', JSON.stringify(tenkoNotifyDisabled));
     }
 
+    // ===== 点呼自動アラート マスタースイッチ（起動時デフォルトOFF・セッション限定） =====
+    // 要件: アプリ起動時・ページ再読み込み時は必ずOFF。ユーザーが手動でONにした場合のみ
+    // そのセッションで稼働する。前回ON状態を引き継がないよう、localStorage等には一切保存しない
+    // （ページを閉じる/再読み込みすると必ずOFFへ戻る＝意図的な仕様）。
+    // 既存の点呼記録・点呼ロジック・タブレット同期・個別スロットの解除/有効化機能とは独立しており、
+    // 本スイッチが制御するのはLINEへの実際の送信（pushTenkoNotify呼び出し）の実行可否のみ。
+    // LINE全送信の非常停止（アプリ側/Render側）がOFFの場合は、本スイッチをONにしても
+    // サーバー側 sendLinePushMessage() の共通ゲートで実送信されない。
+    var tenkoAlertSessionEnabled = false;
+
+    function renderTenkoAlertMasterStatus() {
+      var el = document.getElementById('line-notify-master-status');
+      if (!el) return;
+      if (tenkoAlertSessionEnabled) {
+        el.textContent = '🟢 ON（このセッションのみ）';
+        el.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 cursor-pointer';
+      } else {
+        el.textContent = '🔴 OFF（起動時デフォルト）';
+        el.className = 'text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 cursor-pointer';
+      }
+    }
+
+    function toggleTenkoAlertMaster() {
+      tenkoAlertSessionEnabled = !tenkoAlertSessionEnabled;
+      renderTenkoAlertMasterStatus();
+      addNotifyLog('system', tenkoAlertSessionEnabled ? '🟢' : '🔴', '点呼自動アラートを' + (tenkoAlertSessionEnabled ? '有効化' : '無効化') + 'しました（このセッションのみ有効）');
+      // OFF→ONにした直後にも即座に判定させる（60秒待たせない）
+      if (tenkoAlertSessionEnabled) checkTenkoLineNotify();
+    }
+
     function renderNotifySlots() {
       var container = document.getElementById('line-notify-slots');
       if (!container) return;
+      renderTenkoAlertMasterStatus();
 
       var now = new Date();
       var currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -9262,6 +9436,9 @@ var driverDB = {
 
     function checkTenkoLineNotify() {
       if (tenkoSchedule.length === 0) return;
+      // 起動時デフォルトOFF・セッション限定のマスタースイッチ。OFFの間は実送信のみ止め、
+      // スロット表示（待機中/対象者なし等）の更新はそのまま行う（点呼記録・同期は無関係に継続）。
+      if (!tenkoAlertSessionEnabled) { renderNotifySlots(); return; }
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) return;
 
@@ -9334,6 +9511,7 @@ var driverDB = {
 
     // Initialize
     renderDriverTable();
+    if (typeof renderDriverDBPersistStatus === 'function') renderDriverDBPersistStatus();
     initLineSettings();
     loadTenkoData();
     // 起動時にUI描画 + 3秒後にチェック
