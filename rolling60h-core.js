@@ -337,6 +337,55 @@
     return merged;
   }
 
+  /**
+   * 複数の月間シフト読込結果（例: 8月分ファイル＋9月分ファイル、または同一
+   * ワークブック内の複数DSPシート）を、1ドライバー分の {date: blocks[]} へ
+   * 日付単位でマージする。
+   *
+   * 「最大2か月分」等、複数ソースを読み込む場合の入力タイムライン生成専用の
+   * 関数であり、computeRolling60h() 自体は一切変更していない
+   * （parseMonthlyRosterSheetRows() が空白セルも「範囲内だが勤務なし＝0h」の
+   * 明示レコードとして返すようになったため、日付が存在しない＝そのソースの
+   * 読み込み範囲外、と一意に判定できる。これにより buildContinuousDailySeries()
+   * の既存ロジックだけで「隣接月データが無い日を推測で0h扱いにしない」を実現する）。
+   *
+   * 重複日付（同一ドライバー・同一日付が複数ソースに存在する場合）は
+   * 黙って合算せず、後から渡されたソース（sources配列の後方＝より新しく
+   * 読み込まれたもの）を採用し、duplicates配列にどちらを採用/破棄したかを記録する。
+   *
+   * @param {Array<{label:string, blocksByDate:Object}>} sources 読み込み順（古い→新しい）
+   * @return {{merged:Object, duplicates:Array}}
+   */
+  function mergeRosterBlocksByDateAcrossSources(sources) {
+    var merged = {};
+    var sourceLabelByDate = {};
+    var duplicates = [];
+
+    (sources || []).forEach(function (src) {
+      var blocksByDate = src.blocksByDate || {};
+      Object.keys(blocksByDate).forEach(function (date) {
+        if (Object.prototype.hasOwnProperty.call(merged, date)) {
+          var prevBlocks = merged[date];
+          var newBlocks = blocksByDate[date];
+          var prevRaw = prevBlocks.map(function (b) { return b.rawCode; }).join('+') || '(空)';
+          var newRaw = newBlocks.map(function (b) { return b.rawCode; }).join('+') || '(空)';
+          duplicates.push({
+            date: date,
+            keptLabel: src.label,
+            keptRawCode: newRaw,
+            discardedLabel: sourceLabelByDate[date],
+            discardedRawCode: prevRaw,
+            valuesDiffer: prevRaw !== newRaw,
+          });
+        }
+        merged[date] = blocksByDate[date];
+        sourceLabelByDate[date] = src.label;
+      });
+    });
+
+    return { merged: merged, duplicates: duplicates };
+  }
+
   // ===========================================================================
   // 6. Rolling 7 Days 純粋計算関数
   // ===========================================================================
@@ -393,8 +442,15 @@
         if (d.hasUndefinedHours) undefinedDates.push(d.date);
         if (d.noData) noDataDates.push(d.date);
       });
-      var over = total > limitHours;
-      var warning = !over && total >= warningHours;
+      // complete=false（このウィンドウ内に noData 日を含む＝隣接月データ未読込等で
+      // 7日分が揃っていない）の場合、over/warningは「完全なRolling判定」としては
+      // 扱わない（隣接月データが無い日を推測で0h扱いにして安全側判定を出さないため）。
+      // totalHours等は参考値として「取得できている日数分の合計」をそのまま返す。
+      var complete = noDataDates.length === 0;
+      var rawOver = total > limitHours;
+      var rawWarning = !rawOver && total >= warningHours;
+      var over = complete && rawOver;
+      var warning = complete && rawWarning;
       results.push({
         startDate: windowDays[0].date,
         endDate: windowDays[6].date,
@@ -406,6 +462,8 @@
         over: over,
         overBy: over ? total - limitHours : 0,
         warning: warning,
+        complete: complete,
+        availableDays: 7 - noDataDates.length,
         undefinedDates: undefinedDates,
         noDataDates: noDataDates,
         hasUndefinedHours: undefinedDates.length > 0,
@@ -525,7 +583,9 @@
         endTime: col.end >= 0 ? row[col.end] : null,
       });
     }
-    return { records: records, warnings: warnings };
+    var actualDates = records.map(function (r) { return r.date; }).sort();
+    var dateRange = actualDates.length > 0 ? { min: actualDates[0], max: actualDates[actualDates.length - 1] } : null;
+    return { records: records, warnings: warnings, dateRange: dateRange };
   }
 
   /**
@@ -642,7 +702,13 @@
     });
 
     // 5) データ行を走査してレコード化
+    // 空白セル（≠未読み込み日付）を「日付は読み込み範囲内だが勤務なし＝0h」の
+    // 明示レコードとして残す（rawCode:''）。これにより、後段の
+    // buildContinuousDailySeries()で「レコードが無い日付」＝「このシートの
+    // 読み込み範囲外（＝月またぎ時に隣接月データが無い日）」と一意に区別できる
+    // （月端の日付を推測で0h扱いにしないための土台。§複数月マージで利用）。
     var records = [];
+    var allDateKeys = Object.keys(codeColByDate);
     for (var r3 = dataStartRow; r3 < rows.length; r3++) {
       var drow = rows[r3];
       if (!drow) continue;
@@ -653,19 +719,21 @@
       var company = companyCol >= 0 ? String(drow[companyCol] || '').trim() : '';
       var transportId = tidCol >= 0 ? String(drow[tidCol] || '').trim() : '';
 
-      Object.keys(codeColByDate).forEach(function (dateKey) {
+      allDateKeys.forEach(function (dateKey) {
         var col = codeColByDate[dateKey];
         var cellVal = drow[col];
-        if (cellVal === undefined || cellVal === null || cellVal === '') return;
+        var isBlank = cellVal === undefined || cellVal === null || cellVal === '';
         records.push({
           name: name,
           company: company,
           transportId: transportId,
           date: dateKey,
-          rawCode: cellVal,
+          rawCode: isBlank ? '' : cellVal,
         });
       });
     }
+
+    var sortedDates = allDateKeys.slice().sort();
 
     return {
       records: records,
@@ -675,7 +743,8 @@
         nameCol: nameCol,
         companyCol: companyCol,
         tidCol: tidCol,
-        dateCount: Object.keys(dateGroups).length,
+        dateCount: sortedDates.length,
+        dateRange: sortedDates.length > 0 ? { min: sortedDates[0], max: sortedDates[sortedDates.length - 1] } : null,
       },
     };
   }
@@ -756,6 +825,7 @@
     // 系列構築・合成
     buildContinuousDailySeries: buildContinuousDailySeries,
     mergeActualAndRoster: mergeActualAndRoster,
+    mergeRosterBlocksByDateAcrossSources: mergeRosterBlocksByDateAcrossSources,
 
     // Rolling計算コア
     computeRolling60h: computeRolling60h,

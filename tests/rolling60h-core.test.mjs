@@ -143,8 +143,10 @@ function runTests() {
   var sGap = daySeries(mGap, '2026-09-01', '2026-09-07');
   assert(sGap[1].noData === true, '9/2はデータ欠損としてnoData=trueになる');
   var rGap = RollingCore.computeRolling60h(sGap);
-  assertClose(rGap[0].totalHours, 10, '欠損日は0hとして扱われる（合計には10hのみ計上）');
+  assertClose(rGap[0].totalHours, 10, '欠損日は合計には参考値として10hのみ計上される');
   assert(rGap[0].noDataDates.length === 6, '欠損日6日分がnoDataDatesとして検知される');
+  assert(rGap[0].complete === false, '欠損日を含むウィンドウはcomplete:falseになる');
+  assert(rGap[0].over === false && rGap[0].warning === false, '不完全なウィンドウはover/warningとも強制的にfalse（完全なRolling判定として扱わない）');
 
   // =========================================================================
   // 6. 未定義勤務記号がRolling対象データに含まれる場合の検知
@@ -324,6 +326,161 @@ function runTests() {
   assertClose(afterOverride[0].totalHours, 11 * 6 + 6.5, '9/20を○→C1へ仮変更した場合の再計算結果');
   // 元のseriesが破壊されていないことを確認（非破壊）
   assertClose(RollingCore.buildDayRecord('2026-09-20', baseSeries[6].blocks).dailyTotalHours, 11, 'overrideは元のseriesを破壊しない');
+
+  // =========================================================================
+  // 12. 最大2か月分の月間シフト読込・月またぎ／年またぎRolling判定
+  // =========================================================================
+
+  // 1シート分の月間シフト表rows（高橋さんExcel相当の構造）を合成するヘルパー。
+  // ヘッダー行に「社名/名前/Transport ID」ラベルと日付を同居させる
+  // （実データのGDS等シートと同じ構造）。
+  function buildSyntheticRosterRows(year, month, daysInMonth, driverName, tid, codeByDay) {
+    var header = ['社名', '名前', 'Transport ID'];
+    for (var d = 1; d <= daysInMonth; d++) header.push(new Date(year, month - 1, d));
+    var row = ['GDS', driverName, tid];
+    for (var d2 = 1; d2 <= daysInMonth; d2++) row.push(codeByDay[d2] || '');
+    return [header, row];
+  }
+
+  function parseRosterSourceForDriver(rows, label) {
+    var parsed = RollingCore.parseMonthlyRosterSheetRows(rows);
+    var grouped = RollingCore.groupRosterRecordsByDriver(parsed.records);
+    return { label: label, parsed: parsed, grouped: grouped };
+  }
+
+  // --- 1か月のみ読み込んだ場合: そのファイル内の日付範囲だけで判定する ---
+  {
+    var sepRows = buildSyntheticRosterRows(2026, 9, 30, 'Aドライバー', 'TID-A', {
+      1: 'bike', 2: 'bike', 3: 'bike', 4: 'bike', 5: 'bike', 6: 'bike', 7: 'bike',
+    }); // 9/1-9/7は bike(10h)×7=70h（超過ケースとして分かりやすくする）
+    var src = parseRosterSourceForDriver(sepRows, '9月ファイル');
+    var driver = src.grouped['TID-A'];
+    var dates = Object.keys(driver.blocksByDate).sort();
+    assert(dates[0] === '2026-09-01' && dates[dates.length - 1] === '2026-09-30', '1か月のみ読込時、日付範囲はそのファイル内(9/1〜9/30)に閉じる');
+    var series1mo = RollingCore.buildContinuousDailySeries(driver.blocksByDate, dates[0], dates[dates.length - 1]);
+    var results1mo = RollingCore.computeRolling60h(series1mo);
+    var firstWindow = results1mo[0];
+    assert(firstWindow.startDate === '2026-09-01' && firstWindow.endDate === '2026-09-07', '9月のみ読込時、最初のウィンドウは9/1〜9/7');
+    assert(firstWindow.complete === true, '9月ファイル内で完結する9/1〜9/7ウィンドウはcomplete:true');
+    assertClose(firstWindow.totalHours, 70, '9/1〜9/7はbike×7=70h');
+    assert(firstWindow.over === true, '70hは正式に超過(completeかつ over)');
+  }
+
+  // --- 隣接月データなし: 9月のみ読込の場合、8月末との月またぎウィンドウはcomplete:falseで
+  //     「休=0h」等の推測を行わない（安全側の"超過なし"にもしない＝over/warningともfalse） ---
+  {
+    var sepOnlyRows = buildSyntheticRosterRows(2026, 9, 30, 'Bドライバー', 'TID-B', {
+      1: 'bike', 2: 'bike', 3: 'bike', 4: 'bike', 5: 'bike',
+    });
+    var srcSepOnly = parseRosterSourceForDriver(sepOnlyRows, '9月ファイルのみ');
+    var driverB = srcSepOnly.grouped['TID-B'];
+    // あえて8/28〜9/3という「8月側データが無い」月またぎ範囲でseriesを作る
+    var seriesAdjacentMissing = RollingCore.buildContinuousDailySeries(driverB.blocksByDate, '2026-08-28', '2026-09-03');
+    var resultsAdjacentMissing = RollingCore.computeRolling60h(seriesAdjacentMissing);
+    var w = resultsAdjacentMissing[0]; // 8/28-9/3
+    assert(w.complete === false, '隣接月(8月)データが無い月またぎウィンドウはcomplete:false');
+    assert(w.noDataDates.length === 4, '8/28〜8/31の4日分がnoDataとして検知される（休=0hと推測しない）');
+    assert(w.over === false && w.warning === false, '不完全なウィンドウはover/warningとも強制falseになる（安全側の断定もしない）');
+  }
+
+  // --- 前月＋当月（8月ファイル＋9月ファイルをマージ）: 月またぎウィンドウも通常どおり判定 ---
+  {
+    var augRows = buildSyntheticRosterRows(2026, 8, 31, 'Cドライバー', 'TID-C', {
+      28: 'bike', 29: 'bike', 30: 'bike', 31: 'bike', // 8/28-8/31
+    });
+    var sepRowsC = buildSyntheticRosterRows(2026, 9, 30, 'Cドライバー', 'TID-C', {
+      1: 'bike', 2: 'bike', 3: 'bike', // 9/1-9/3
+    });
+    var srcAug = parseRosterSourceForDriver(augRows, '8月ファイル');
+    var srcSep = parseRosterSourceForDriver(sepRowsC, '9月ファイル');
+    var merge = RollingCore.mergeRosterBlocksByDateAcrossSources([
+      { label: srcAug.label, blocksByDate: srcAug.grouped['TID-C'].blocksByDate },
+      { label: srcSep.label, blocksByDate: srcSep.grouped['TID-C'].blocksByDate },
+    ]);
+    assert(merge.duplicates.length === 0, '8月と9月で日付が重複しないため重複検知は0件');
+    var allDates = Object.keys(merge.merged).sort();
+    var seriesCross = RollingCore.buildContinuousDailySeries(merge.merged, allDates[0], allDates[allDates.length - 1]);
+    var resultsCross = RollingCore.computeRolling60h(seriesCross);
+    var crossWindow = resultsCross.filter(function (r) { return r.startDate === '2026-08-28' && r.endDate === '2026-09-03'; })[0];
+    assert(crossWindow, '8/28〜9/3（月またぎ）のウィンドウが計算されている');
+    assert(crossWindow.complete === true, '前月＋当月をマージ済みなら月またぎウィンドウもcomplete:true');
+    assertClose(crossWindow.totalHours, 10 * 7, '8/28〜9/3の合計はbike×7=70h（前月＋当月ファイルのマージ結果）');
+    assert(crossWindow.over === true, '70hは正式な超過（前月＋当月マージにより正しく判定される）');
+  }
+
+  // --- 当月＋翌月（9月ファイル＋10月ファイルをマージ）: 9/28→10/1のようなウィンドウも判定 ---
+  {
+    var sepRowsD = buildSyntheticRosterRows(2026, 9, 30, 'Dドライバー', 'TID-D', {
+      28: 'bike', 29: 'bike', 30: 'bike',
+    });
+    var octRowsD = buildSyntheticRosterRows(2026, 10, 31, 'Dドライバー', 'TID-D', {
+      1: 'bike', 2: 'bike', 3: 'bike', 4: 'bike',
+    });
+    var srcSepD = parseRosterSourceForDriver(sepRowsD, '9月ファイル');
+    var srcOctD = parseRosterSourceForDriver(octRowsD, '10月ファイル');
+    var mergeD = RollingCore.mergeRosterBlocksByDateAcrossSources([
+      { label: srcSepD.label, blocksByDate: srcSepD.grouped['TID-D'].blocksByDate },
+      { label: srcOctD.label, blocksByDate: srcOctD.grouped['TID-D'].blocksByDate },
+    ]);
+    var allDatesD = Object.keys(mergeD.merged).sort();
+    var seriesD = RollingCore.buildContinuousDailySeries(mergeD.merged, allDatesD[0], allDatesD[allDatesD.length - 1]);
+    var resultsD = RollingCore.computeRolling60h(seriesD);
+    var windowD = resultsD.filter(function (r) { return r.startDate === '2026-09-28' && r.endDate === '2026-10-04'; })[0];
+    assert(windowD, '9/28〜10/4（当月＋翌月の月またぎ）のウィンドウが計算されている');
+    assert(windowD.complete === true, '当月＋翌月をマージ済みなら月またぎウィンドウもcomplete:true');
+    assertClose(windowD.totalHours, 10 * 7, '9/28〜10/4の合計はbike×7=70h');
+  }
+
+  // --- 12/31→1/1 年またぎ ---
+  {
+    var decRows = buildSyntheticRosterRows(2026, 12, 31, 'Eドライバー', 'TID-E', {
+      28: 'bike', 29: 'bike', 30: 'bike', 31: 'bike',
+    });
+    var janRows = buildSyntheticRosterRows(2027, 1, 31, 'Eドライバー', 'TID-E', {
+      1: 'bike', 2: 'bike', 3: 'bike',
+    });
+    var srcDec = parseRosterSourceForDriver(decRows, '12月ファイル');
+    var srcJan = parseRosterSourceForDriver(janRows, '1月ファイル');
+    var mergeE = RollingCore.mergeRosterBlocksByDateAcrossSources([
+      { label: srcDec.label, blocksByDate: srcDec.grouped['TID-E'].blocksByDate },
+      { label: srcJan.label, blocksByDate: srcJan.grouped['TID-E'].blocksByDate },
+    ]);
+    var allDatesE = Object.keys(mergeE.merged).sort();
+    assert(allDatesE.indexOf('2026-12-31') !== -1 && allDatesE.indexOf('2027-01-01') !== -1, '年またぎの日付(12/31, 1/1)が両方ともマージ結果に存在する');
+    var seriesE = RollingCore.buildContinuousDailySeries(mergeE.merged, allDatesE[0], allDatesE[allDatesE.length - 1]);
+    var resultsE = RollingCore.computeRolling60h(seriesE);
+    var windowE = resultsE.filter(function (r) { return r.startDate === '2026-12-28' && r.endDate === '2027-01-03'; })[0];
+    assert(windowE, '12/28〜1/3（年またぎ）のウィンドウが計算されている');
+    assert(windowE.complete === true, '12月＋1月をマージ済みなら年またぎウィンドウもcomplete:true');
+    assertClose(windowE.totalHours, 10 * 7, '12/28〜1/3の合計はbike×7=70h（年またぎでも正しく合算）');
+  }
+
+  // --- 同一日付重複: 同一Transport ID・同一日付が2つのシフトファイルに存在する場合 ---
+  {
+    var fileA = buildSyntheticRosterRows(2026, 9, 30, 'Fドライバー', 'TID-F', {
+      10: '○', 11: 'bike',
+    });
+    var fileB = buildSyntheticRosterRows(2026, 9, 30, 'Fドライバー', 'TID-F', {
+      10: 'C1', 12: 'b1', // 9/10がfileAと重複（値も異なる: ○ vs C1）
+    });
+    var srcA = parseRosterSourceForDriver(fileA, 'ファイルA(先に読込)');
+    var srcB = parseRosterSourceForDriver(fileB, 'ファイルB(後に読込)');
+    var mergeDup = RollingCore.mergeRosterBlocksByDateAcrossSources([
+      { label: srcA.label, blocksByDate: srcA.grouped['TID-F'].blocksByDate },
+      { label: srcB.label, blocksByDate: srcB.grouped['TID-F'].blocksByDate },
+    ]);
+    var dupsOn0910 = mergeDup.duplicates.filter(function (d) { return d.date === '2026-09-10'; });
+    assert(dupsOn0910.length === 1, '9/10の重複が1件検知される（黙って二重加算しない）');
+    assert(dupsOn0910[0].keptLabel === 'ファイルB(後に読込)', '後から読み込まれたファイルBの値が採用される');
+    assert(dupsOn0910[0].discardedLabel === 'ファイルA(先に読込)', '先に読み込まれたファイルAの値は破棄されたと分かる');
+    assert(dupsOn0910[0].valuesDiffer === true, '値が異なる重複であることも分かる（○ vs C1）');
+    // 実際の合計値は「二重加算されず、採用された方の値のみ」になっていることを確認
+    var dayRec0910 = RollingCore.buildDayRecord('2026-09-10', mergeDup.merged['2026-09-10']);
+    assertClose(dayRec0910.dailyTotalHours, 6.5, '9/10は採用されたファイルB側の値(C1=6.5h)のみが計上される（○の11hと二重加算されない）');
+    // 重複していない日付(9/11, 9/12)はそのまま両方とも保持される
+    assert(mergeDup.merged['2026-09-11'], '重複していない9/11(ファイルA由来)はそのまま残る');
+    assert(mergeDup.merged['2026-09-12'], '重複していない9/12(ファイルB由来)はそのまま残る');
+  }
 
   console.log('rolling60h-core.test.mjs: ALL TESTS PASSED (' + 'checks executed' + ')');
 }
