@@ -2310,6 +2310,15 @@
 
       <!-- WH60 労働時間管理 Tab -->
       <div id="panel-wh60" class="hidden">
+        <!-- サブタブ切替: 既存の日次WH60（本日アラート）と新規Rolling 60h（月間監視）を
+             同一タブ内で切り替える。既存の日次ロジック(wh60*関数群)・LINE通知・
+             自動チェックには一切手を入れず、表示の出し分けのみを行う。 -->
+        <div class="flex gap-2 mb-4 border-b border-gray-700 pb-2">
+          <button id="wh60-subtab-btn-daily" onclick="wh60SwitchSubTab('daily')" class="px-3 py-1.5 rounded-lg text-sm font-bold bg-blue-600 text-white">⏱ 本日アラート</button>
+          <button id="wh60-subtab-btn-rolling" onclick="wh60SwitchSubTab('rolling')" class="px-3 py-1.5 rounded-lg text-sm font-bold bg-gray-700 text-gray-300">📅 月間Rolling</button>
+        </div>
+
+        <div id="wh60-daily-subpanel">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">⏱ WH60 労働時間管理</h2>
@@ -2390,6 +2399,11 @@
           <div id="wh60-empty" class="text-center text-ink-lighter py-8">Amazon WHデータを読み込んでください</div>
         </div>
         <div id="wh60-line-result" class="mt-3 text-sm"></div>
+        </div><!-- /#wh60-daily-subpanel -->
+
+        <!-- Rolling 60h（月間監視）サブパネル。内容は rolling60h-ui.js が動的に描画する
+             （index.html への直書きを避けるため、コンテナのみここに置く）。 -->
+        <div id="wh60-rolling-subpanel" class="hidden"></div>
       </div>
 
       <!-- 時間指定抽出 Tab -->
@@ -14944,6 +14958,24 @@ var driverDB = {
       twCloseLineSendModal();
     }
 
+    // ===== Rolling 60h（月間監視・新規）サブタブ切替 =====
+    // 既存WH60（日次アラート）ロジックとは完全に独立。表示の出し分けのみ行う。
+    var wh60CurrentSubTab = 'daily';
+    function wh60SwitchSubTab(subtab) {
+      wh60CurrentSubTab = subtab;
+      var dailyPanel = document.getElementById('wh60-daily-subpanel');
+      var rollingPanel = document.getElementById('wh60-rolling-subpanel');
+      var dailyBtn = document.getElementById('wh60-subtab-btn-daily');
+      var rollingBtn = document.getElementById('wh60-subtab-btn-rolling');
+      if (dailyPanel) dailyPanel.classList.toggle('hidden', subtab !== 'daily');
+      if (rollingPanel) rollingPanel.classList.toggle('hidden', subtab !== 'rolling');
+      if (dailyBtn) dailyBtn.className = 'px-3 py-1.5 rounded-lg text-sm font-bold ' + (subtab === 'daily' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300');
+      if (rollingBtn) rollingBtn.className = 'px-3 py-1.5 rounded-lg text-sm font-bold ' + (subtab === 'rolling' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300');
+      if (subtab === 'rolling' && typeof RollingUI !== 'undefined' && RollingUI.onShown) {
+        RollingUI.onShown();
+      }
+    }
+
     // ===== WH60 労働時間管理 =====
     var wh60Data = {};       // { transporter_id: { name, dsp, days: {0..6: hours}, weekTotal } }
     var wh60AssignData = {};  // { transporter_id: { name, routeMin, departureTime } }
@@ -20438,5 +20470,7 @@ var driverDB = {
   <script src="/manual-assign-board.js?v=20260903-2"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
+  <script src="/rolling60h-core.js?v=20260904-1"></script>
+  <script src="/rolling60h-ui.js?v=20260904-1"></script>
 </body>
 </html>

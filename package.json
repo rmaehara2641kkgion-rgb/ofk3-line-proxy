@@ -10,7 +10,8 @@
     "test:transport-audit": "node tests/test-transport-audit.mjs",
     "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-low-only-pipeline.test.mjs",
     "test:manual-assign-board": "node tests/manual-assign-board-core.test.mjs",
-    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board"
+    "test:rolling60h": "node tests/rolling60h-core.test.mjs",
+    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h"
   },
   "engines": {
     "node": ">=18.0.0"
