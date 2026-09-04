@@ -3145,23 +3145,35 @@ var driverDB = {
     // （以前のバグ: 埋め込み済みドライバーはdriverIdしか保存せず、稼働実績の更新が消えていた）。
     // 呼び出し元は戻り値(true/false)を見て、保存に失敗した場合は「保存できた」という
     // 表示をしないこと（アップロード直後に成功表示 → 実は失われている、という事態を防ぐ）。
-    // 新しい保存を行う直前に、直前の保存内容を1世代だけバックアップとして退避する
-    // （restoreDriverDBOverlayBackup() で復元可能）。
+    //
+    // バックアップ（1世代前の退避、restoreDriverDBOverlayBackup()用）は、本体保存とは
+    // 独立したtry/catchで行う best-effort 処理。バックアップの保存がQuotaExceededError等で
+    // 失敗しても、必ず本体(driverDBOverlay)の保存を試行する（バックアップ失敗を理由に
+    // 最新データの保存自体を諦めない＝本番で確認されたQuotaExceededErrorへの対応）。
+    // 成功/失敗の判定・driverDBOverlaySavedAtの更新は、本体保存の結果のみで決める。
     function saveDriverDBOverlay() {
       var overlay = {};
       for (var k in driverDB) {
         overlay[k] = driverDB[k];
       }
+      var serialized = JSON.stringify(overlay);
+
+      // ① バックアップ（best-effort。失敗しても本体保存は継続する）
       try {
-        var serialized = JSON.stringify(overlay);
         var previous = localStorage.getItem('driverDBOverlay');
         if (previous !== null && previous !== serialized) {
           localStorage.setItem('driverDBOverlayBackup', previous);
         }
+      } catch (e) {
+        console.warn('driverDBOverlayBackup save failed（バックアップは諦めて本体保存を続行します）:', e.message);
+      }
+
+      // ② 本体保存（こちらの成否のみで戻り値を決める）
+      try {
         localStorage.setItem('driverDBOverlay', serialized);
         localStorage.setItem('driverDBOverlaySavedAt', new Date().toISOString());
         return true;
-      } catch(e) {
+      } catch (e) {
         console.warn('driverDBOverlay save failed (storage full?):', e.message);
         return false;
       }
@@ -19042,6 +19054,10 @@ var driverDB = {
       return out;
     }
     var teamQualitySnapshot = null;
+    // teamQualitySnapshotは再生成可能な二次キャッシュのためlocalStorageへ永続化しない方針に変更。
+    // 以前のバージョンが保存した古いエントリが残っていれば、容量を無駄に占有しないよう削除する
+    // （失敗してもアプリの動作には影響しないbest-effort）。
+    try { localStorage.removeItem('teamQualitySnapshot'); } catch (e) {}
     var ftdsImportPeriodLabel = '';
     var _tqSelectedDept = null;
     var _tqSelectedDriver = null;
@@ -19286,32 +19302,13 @@ var driverDB = {
       return teamQualitySnapshot;
     }
 
+    // teamQualitySnapshotはdriverDB/DNR/FTDS/CC等の一次データから再生成可能な
+    // 品質ダッシュボード用の二次キャッシュのため、localStorageへは永続化しない
+    // （容量超過の一因だったため）。ページ生存中のみメモリ変数(teamQualitySnapshot)で
+    // 保持し、reload後はrenderTeamQualityDashboard()がbuildTeamQualitySnapshot()で
+    // 再生成する。
     function persistTeamQualitySnapshot(snap) {
-      if (!snap) return;
-      try {
-        var slim = { updatedAt: snap.updatedAt, sources: snap.sources, drivers: {} };
-        for (var k in snap.drivers) {
-          var d = snap.drivers[k];
-          slim.drivers[k] = {
-            dept: d.dept,
-            packagesPerHour: d.packagesPerHour,
-            misdeliveryRate: d.misdeliveryRate,
-            deliveryRate: d.deliveryRate,
-            workDays: d.workDays,
-            totalPackages: d.totalPackages,
-            dnrCount: d.dnrCount,
-            dnrCost: d.dnrCost,
-            ftdsCount: d.ftdsCount,
-            ccRequired: d.ccRequired,
-            ccActual: d.ccActual,
-            qualityScore: d.qualityScore
-          };
-        }
-        localStorage.setItem('teamQualitySnapshot', JSON.stringify(slim));
-      } catch (e) {
-        console.warn('teamQualitySnapshot: localStorage保存スキップ（容量超過）', e);
-        try { localStorage.removeItem('teamQualitySnapshot'); } catch (e2) {}
-      }
+      // no-op（意図的にlocalStorageへは保存しない）
     }
 
     function getDriverFtdsReasons(driverKey) {
@@ -19380,11 +19377,8 @@ var driverDB = {
     }
 
     function renderTeamQualityDashboard() {
-      if (!teamQualitySnapshot) {
-        // Try localStorage
-        var saved = localStorage.getItem('teamQualitySnapshot');
-        if (saved) { try { teamQualitySnapshot = JSON.parse(saved); } catch(e) {} }
-      }
+      // teamQualitySnapshotはlocalStorageへ永続化しない方針（容量超過対策）のため、
+      // メモリ上に無ければ一次データ（driverDB/DNR/FTDS/CC等）から再生成する。
       if (!teamQualitySnapshot) {
         buildTeamQualitySnapshot();
       }
