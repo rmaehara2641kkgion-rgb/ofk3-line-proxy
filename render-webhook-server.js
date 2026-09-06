@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
+const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -2157,6 +2158,153 @@ app.post('/dnr-export', function(req, res) {
       res.send('﻿' + csv);
     }).catch(function(masterErr) {
       log('dnr-export driver master fetch error: ' + masterErr.message);
+      if (!res.headersSent) {
+        res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
+      }
+    });
+  });
+});
+
+// ===== TWC（時間指定違反分析）Excel解析API（n8n連携用） =====
+// index.htmlの既存TWC処理（processTwcData/groupTwcByDriver/classifyTwcJudgment/
+// buildTwcDaComment/exportTwcResult、index.html内 17969-18364行付近、現行main時点の
+// 行番号）と同じ判定・集計・出力仕様をNode側に移植したもの。index.html側のロジックは
+// 無変更。判定ロジック（時間指定超過の算出・同日判定・優先順位判定の3閾値）は一切変更
+// していない。列マッピング・違反判定・DA別集計・シート行生成は twc-core.js
+//（DOM非依存の純粋関数）に分離済み。ドライバーマスタ取得・multer/xlsx読込・
+// Content-Dispositionは /ftds-export・/cc-export・/dnr-export用に定義済みの共通関数を
+// そのまま再利用する（3APIとも無変更）。
+//
+// 既知の制約（実機検証済み。既存セルスタイルの再現に関する報告）:
+//   列幅(!cols)はxlsxライブラリで書き出し可能なため再現している。一方、原本の
+//   styleTwcSheet()が設定する太字フォント(.s = {font:{bold:true}})は、現在利用している
+//   xlsx(SheetJS Community Edition)では書き出し時にスタイル情報が保持されないことを
+//   実機検証済み（書き出し→再読込でstyleが失われる。フォントスタイル書き出しには
+//   SheetJS Pro等が必要）。そのためAPI出力では列幅のみ再現し、太字装飾は再現していない。
+
+const TWC_API_TOKEN = process.env.TWC_API_TOKEN || '';
+console.log('TWC_API_TOKEN configured:', !!TWC_API_TOKEN);
+
+// /twc-exportの認証チェック。他3APIと同じfail-closed方針（未設定時503、不一致時401）。
+// トークン値そのものはログに出力しない。
+function checkTwcApiAuth(req, res) {
+  if (!TWC_API_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'TWC_API_TOKEN not configured' });
+    return false;
+  }
+  var provided = req.headers['x-twc-api-token'] || '';
+  if (!provided || provided !== TWC_API_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// TwcCore.twcBuildXxxSheetRows() が返す2次元配列をxlsxワークシートへ変換し、
+// TWC_SHEET_STYLEの列幅(!cols)のみ適用する（太字等のフォントスタイルは上記の理由で非対応）。
+function twcRowsToWorksheet(xlsxLib, rows, styleInfo) {
+  var ws = xlsxLib.utils.aoa_to_sheet(rows);
+  if (styleInfo && styleInfo.widths) {
+    ws['!cols'] = styleInfo.widths.map(function(w) { return { wch: w }; });
+  }
+  return ws;
+}
+
+app.post('/twc-export', function(req, res) {
+  if (!checkTwcApiAuth(req, res)) return;
+
+  var xlsxLib = getXlsxLib();
+  var zipMulter = getZipMulter(); // 他3APIと同じ multer(memoryStorage, 10MB上限) を再利用
+  if (!xlsxLib || !zipMulter) {
+    return res.status(500).json({ status: 'error', message: 'server modules not ready' });
+  }
+
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) {
+      log('twc-export multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ status: 'error', message: err.message || 'upload error' });
+    }
+
+    var file = req.file;
+    if (!file) return res.status(400).json({ status: 'error', message: 'file required (field name: file)' });
+
+    var wb;
+    try {
+      // index.html: handleTwcFileのxlsx分岐（cellDates:true、header:1・defval:''・raw:true）と同じ設定
+      wb = xlsxLib.read(file.buffer, { type: 'buffer', cellDates: true });
+    } catch (parseErr) {
+      return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parseErr.message });
+    }
+
+    if (!wb.SheetNames || wb.SheetNames.length === 0) {
+      return res.status(422).json({ status: 'error', message: 'TWCデータ形式を認識できませんでした（必須列: transporter_id / time_window / planned_enter_time / actual_attempt_time）' });
+    }
+
+    // index.html: handleTwcFileと同じく先頭シートのみを使用（既存仕様のまま。シート探索は原本に無い）
+    var ws = wb.Sheets[wb.SheetNames[0]];
+    var rows = xlsxLib.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+
+    var processed = TwcCore.twcProcessRows(rows);
+    if (processed.error === 'header_not_found' || processed.error === 'no_valid_rows') {
+      return res.status(422).json({ status: 'error', message: 'TWCデータ形式を認識できませんでした（必須列: transporter_id / time_window / planned_enter_time / actual_attempt_time）' });
+    }
+    if (!processed.violations || processed.violations.length === 0) {
+      // index.html: exportTwcResult()の「TWC違反データがありません」ガード（違反0件は正常だが出力対象なし）と同じ
+      return res.status(422).json({ status: 'error', message: 'TWC違反データがありません' });
+    }
+
+    fetchFtdsDriverMaster().then(function(master) { // /tenko-master?action=getMaster を他3APIと共通取得
+      var tidToName = {};
+      for (var mi = 0; mi < master.length; mi++) {
+        var mtid = String(master[mi].transportId || '').trim();
+        if (!mtid) continue;
+        tidToName[mtid] = master[mi].englishName || '';
+      }
+
+      var violations = processed.violations;
+      for (var vi = 0; vi < violations.length; vi++) {
+        if (tidToName[violations[vi].transportId]) {
+          violations[vi].driverName = tidToName[violations[vi].transportId];
+        }
+      }
+
+      var driverStats = TwcCore.twcGroupByDriver(violations);
+      var periodLabel = ftdsExtractPeriodLabel('', file.originalname);
+      var period = periodLabel || getTodayJst();
+
+      var xwb = xlsxLib.utils.book_new();
+
+      var summaryRows = TwcCore.twcBuildSummarySheetRows(driverStats, {
+        period: period,
+        windowLabel: processed.windowLabel,
+        totalViolations: violations.length
+      });
+      var wsSummary = twcRowsToWorksheet(xlsxLib, summaryRows, TwcCore.TWC_SHEET_STYLE.summary);
+      xlsxLib.utils.book_append_sheet(xwb, wsSummary, TwcCore.TWC_SHEET_STYLE.summary.sheetName);
+
+      var driverDetailRows = TwcCore.twcBuildDriverDetailSheetRows(driverStats, violations.length);
+      var wsDriverDetail = twcRowsToWorksheet(xlsxLib, driverDetailRows, TwcCore.TWC_SHEET_STYLE.driverDetail);
+      xlsxLib.utils.book_append_sheet(xwb, wsDriverDetail, TwcCore.TWC_SHEET_STYLE.driverDetail.sheetName);
+
+      var topDriverSheet = TwcCore.twcBuildTopDriverSheetRows(driverStats, violations.length);
+      if (topDriverSheet) {
+        var wsTopDriver = twcRowsToWorksheet(xlsxLib, topDriverSheet.rows, TwcCore.TWC_SHEET_STYLE.topDriver);
+        xlsxLib.utils.book_append_sheet(xwb, wsTopDriver, topDriverSheet.sheetName);
+      }
+
+      var xlsxBuffer = xlsxLib.write(xwb, { type: 'buffer', bookType: 'xlsx' });
+      var outFileName = 'OFK3_時間指定違反分析_' + period + '_' + getTodayJst() + '.xlsx';
+
+      log('twc-export: ' + violations.length + ' violations, ' + driverStats.length + ' drivers, master=' + master.length + ' drivers, file=' + outFileName);
+
+      // Content-Dispositionの非ASCII制約は他3APIと同じ（RFC 5987 filename*=を使用）
+      var asciiFallbackName = 'TWC_export_' + period.replace(/[^A-Za-z0-9_-]/g, '') + '_' + getTodayJst() + '.xlsx';
+      var encodedOutFileName = encodeURIComponent(outFileName);
+      res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.set('Content-Disposition', 'attachment; filename="' + asciiFallbackName + '"; filename*=UTF-8\'\'' + encodedOutFileName);
+      res.send(xlsxBuffer);
+    }).catch(function(masterErr) {
+      log('twc-export driver master fetch error: ' + masterErr.message);
       if (!res.headersSent) {
         res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
       }
