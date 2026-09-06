@@ -138,6 +138,18 @@
   // index.html: exportDnrResult のCSV行列生成部分（18881-18897）を移植。
   // ヘッダー行＋データ行の2次元配列を返す。文字列化（クォート/エスケープ/BOM等）や
   // 出力フォーマット（CSV/xlsx等）は呼び出し側の責務とし、ここでは持たない。
+  // 新規（実データ比較で発見した既存アプリとの表記差の修正）: 「詳細分類」(sub_bucket)列だけに
+  // 適用する表示正規化。アンダースコアを半角スペースに変換するのみ（大文字小文字は変更しない）。
+  // 既存アプリのtranslateReason()は辞書未一致時のフォールバックとして`_`→半角スペース変換を
+  // 行っており（index.html:18326 `return reason.replace(/_/g, ' ');`）、DNRの実データ出力でも
+  // その変換結果が最終的な「詳細分類」表示として使われていた。dnrTranslateReason()はDNR用に
+  // 辞書完全一致のみを翻訳し他のフォールバックは持ち込まない設計にしたため、この1点（アンダー
+  // スコア→スペース）だけを独立した正規化として追加する。shipment_reason・bucket列や
+  // TransportID・TrackingID等の他列には適用しない。
+  function dnrNormalizeSubBucketDisplay(val) {
+    return String(val || '').replace(/_/g, ' ');
+  }
+
   function dnrBuildExportRows(recs, reasonDict) {
     var header = ['ドライバー'];
     for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
@@ -151,7 +163,13 @@
         var col = DNR_KEEP_COLS[k2];
         var val = r[col] || '';
         if (col === 'shipment_reason' || col === 'sub_bucket' || col === 'bucket') {
+          // 辞書ルックアップは元の値（アンダースコア含む）で行う。辞書キー自体に
+          // アンダースコアを含むもの（例: 'No Item_delivery box'）があるため、
+          // 正規化より先に翻訳を行う必要がある。
           val = dnrTranslateReason(val, reasonDict);
+        }
+        if (col === 'sub_bucket') {
+          val = dnrNormalizeSubBucketDisplay(val);
         }
         row.push(val);
       }
@@ -170,6 +188,7 @@
     dnrDetectSignal: dnrDetectSignal,
     dnrResolveDriverDisplayName: dnrResolveDriverDisplayName,
     dnrTranslateReason: dnrTranslateReason,
+    dnrNormalizeSubBucketDisplay: dnrNormalizeSubBucketDisplay,
     dnrExtractRow: dnrExtractRow,
     dnrExtractRows: dnrExtractRows,
     dnrBuildExportRows: dnrBuildExportRows
