@@ -1294,6 +1294,14 @@ function ftdsMapHeaderColumns(headerRow) {
     else if (h.indexOf('日付') >= 0) cols.date = i;
     else if ((h === 'event_date' || h === 'event date') && cols.date === undefined) cols.date = i; // 修正1件目: event_dateを日付列として認識（既存の「日付」列より優先度は下げる）
     else if (h.indexOf('失敗理由') >= 0 && h.indexOf('内訳') >= 0) cols.reasonBreakdown = i;
+    // CC専用列（べき架電/実架電/通話時間/架電率）。index.htmlのmapAnalysisHeaderColumnsと同一。
+    // /ftds-export初回実装時はFTDSのみのスコープとして省略していたが、/cc-exportとの共有関数化に
+    // 伴い原本どおり復元（FTDS側の処理はcols.ccRequired等を一切参照しないため挙動に影響なし）。
+    else if (h.indexOf('べき架電') >= 0 || h.indexOf('ベキ架電') >= 0) cols.ccRequired = i;
+    else if (h.indexOf('実架電') >= 0) cols.ccActual = i;
+    else if (h.indexOf('通話回数') >= 0) cols.ccActual = i;
+    else if (h.indexOf('通話時間') >= 0) cols.duration = i;
+    else if (h.indexOf('架電率') >= 0) cols.ccRate = i;
     else if (h.indexOf('理由内訳') >= 0) cols.reasonBreakdown = i;
     else if (h.indexOf('対象週') >= 0) cols.weekCount = i;
     else if (h === 'failure reason' || h === 'failure_reason') cols.reason = i;
@@ -1302,6 +1310,9 @@ function ftdsMapHeaderColumns(headerRow) {
     else if (h === 'tracking id' || h === 'tracking_id') cols.tracking = i;
     else if (h === 'scannable id' || h === 'scannable_id') cols.tracking = i;
     else if (h.indexOf('postal') >= 0 || h === 'zip') cols.zip = i;
+    else if (h === 'call event' || h === 'call_event') cols.callEvent = i; // CC専用列。同上の理由で復元
+    else if (h === 'text event' || h === 'text_event') cols.textEvent = i; // CC専用列。同上の理由で復元
+    else if (h.indexOf('call duration') >= 0) cols.duration = i; // CC専用列。同上の理由で復元
     else if (h === 'shipment reason' || h === 'shipment_reason') cols.reason = i;
     else if (h === 'ship method' || h === 'ship_method') cols.method = i;
   }
@@ -1662,6 +1673,263 @@ app.post('/ftds-export', function(req, res) {
       res.send('﻿' + csv);
     }).catch(function(masterErr) {
       log('ftds-export driver master fetch error: ' + masterErr.message);
+      if (!res.headersSent) {
+        res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
+      }
+    });
+  });
+});
+
+// ===== Contact Compliance(CC) Excel解析API（n8n連携用） =====
+// index.htmlの既存CC処理（processCcData/exportCcResult、index.html内 16633-16917行付近）と
+// 同じ判定・集計・出力仕様をNode側に移植したもの。index.html側のロジックは無変更。
+// 列マッピング・ヘッダー正規化・日付整形・理由翻訳・ドライバーマスタ取得・multer/xlsxは
+// FTDS用に定義済みの共通関数（ftdsMapHeaderColumns/ftdsFormatDateValue/ftdsTranslateReason/
+// fetchFtdsDriverMaster/getXlsxLib/getZipMulter等）をそのまま再利用する（/ftds-export側は無変更）。
+// CC固有ロジック（架電要否判定・架電率・CC列構成の集計/出力）のみ cc プレフィックスの新規関数として分離。
+
+const CC_API_TOKEN = process.env.CC_API_TOKEN || '';
+console.log('CC_API_TOKEN configured:', !!CC_API_TOKEN);
+
+// /cc-exportの認証チェック。checkFtdsApiAuthと同じfail-closed方針（未設定時503、不一致時401）
+function checkCcApiAuth(req, res) {
+  if (!CC_API_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'CC_API_TOKEN not configured' });
+    return false;
+  }
+  var provided = req.headers['x-cc-api-token'] || '';
+  if (!provided || provided !== CC_API_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// index.html: findReportSheet(wb, 'cc') のcc分岐（else節）を移植。
+// 「累計」始まりのシートは既存同様スキップ（累計レポート取込は本APIの対象外）。
+function ccFindReportSheet(wb, XLSX) {
+  var best = null;
+  var bestName = null;
+  var bestScore = 0;
+  for (var si = 0; si < wb.SheetNames.length; si++) {
+    if (wb.SheetNames[si].indexOf('累計') === 0) continue;
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], { header: 1, defval: '' });
+    if (!rows || rows.length < 2) continue;
+    var hdr = rows[0];
+    var score = 0;
+    var hasTransporter = false;
+    for (var hi = 0; hi < hdr.length; hi++) {
+      var h = ftdsNormalizeHeader(hdr[hi]);
+      if (ftdsIsTransporterHeader(hdr[hi])) { hasTransporter = true; score += 3; }
+      if (h.indexOf('scannable') >= 0) score += 4;
+      if (h.indexOf('call event') >= 0 || h.indexOf('text event') >= 0) score += 3;
+      if (h.indexOf('shipment reason') >= 0) score += 2;
+      if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) score += 2;
+    }
+    if (hasTransporter && score > bestScore) {
+      bestScore = score;
+      best = rows;
+      bestName = wb.SheetNames[si];
+    }
+  }
+  return { rows: best, sheetName: bestName };
+}
+
+// index.html: findAnalysisHeaderRow(rows, 'cc') のcc分岐を移植。
+// 既知の限界: Amazon生データにはccRequired/ccActual/reasonBreakdown列が無いため、
+// 実運用では-1（見つからず）になりやすい。processCcData同様、呼び出し側で0行目にフォールバックする。
+function ccFindHeaderRow(rows) {
+  for (var ri = 0; ri < Math.min(rows.length, 15); ri++) {
+    var cols = ftdsMapHeaderColumns(rows[ri]);
+    if (cols.tid === undefined) continue;
+    if (cols.ccRequired !== undefined || cols.ccActual !== undefined || cols.reasonBreakdown !== undefined) return ri;
+  }
+  return -1;
+}
+
+// index.html: isCcCallRequired を移植
+function ccIsCallRequired(rec) {
+  var ct = String(rec.contactType || '').trim();
+  if (!ct) return false;
+  if (ct.indexOf('電話') >= 0) return true;
+  if (ct.toLowerCase().indexOf('call') >= 0) return true;
+  return false;
+}
+
+// index.html: isCcCallMade を移植
+function ccIsCallMade(rec) {
+  return (parseInt(rec.duration, 10) || 0) > 0;
+}
+
+// index.html: calcCcCallRate を移植
+function ccCalcCallRate(required, actual) {
+  var r = required != null ? required : 0;
+  var a = actual != null ? actual : 0;
+  if (r <= 0) return null;
+  return Math.round(a / r * 1000) / 10;
+}
+
+// index.html: processCcData の本体ロジック（列マッピング〜行ごとの正規化）を移植。
+// ドライバー名解決（TID→氏名）はマスタ取得後に別途行う。既存同様rowNameへのフォールバックは無い
+// （processCcDataはTID完全一致のみでdriverNameを決定しており、FTDSのrowNameフォールバックは無い）。
+function ccProcessRows(rows) {
+  var headerIdx = ccFindHeaderRow(rows);
+  if (headerIdx < 0) headerIdx = 0;
+  var header = rows[headerIdx];
+  var colMap = ftdsMapHeaderColumns(header);
+  if (colMap.tid === undefined) {
+    return { error: 'TransportID列が見つかりません' };
+  }
+
+  var results = [];
+  for (var r = headerIdx + 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row) continue;
+    var tid = String(row[colMap.tid] || '').trim();
+    if (!tid) continue;
+    var dateVal = colMap.date !== undefined ? ftdsFormatDateValue(row[colMap.date]) : '';
+    var reason = colMap.reason !== undefined ? String(row[colMap.reason] || '') : '';
+    var method = colMap.method !== undefined ? String(row[colMap.method] || '') : '';
+    var callEvent = colMap.callEvent !== undefined ? String(row[colMap.callEvent] || '') : '';
+    var textEvent = colMap.textEvent !== undefined ? String(row[colMap.textEvent] || '') : '';
+    var duration = colMap.duration !== undefined ? (parseInt(row[colMap.duration], 10) || 0) : 0;
+    var tracking = colMap.tracking !== undefined ? String(row[colMap.tracking] || '') : '';
+
+    var contactType = '';
+    if (callEvent) contactType = callEvent;
+    if (textEvent) contactType = contactType ? (contactType + ' / ' + textEvent) : textEvent;
+
+    results.push({
+      date: dateVal,
+      driverName: '', // TID未一致時はマスタ照合後もそのまま空（既存同様rowNameフォールバック無し）
+      transporterId: tid,
+      tracking: tracking,
+      reason: reason,
+      method: method,
+      contactType: contactType,
+      duration: duration
+    });
+  }
+  return { results: results };
+}
+
+// index.html: exportCcResult のCSV生成ロジックを移植したもの（列構成・2ブロック構成は同一）。
+// 既存バグの修正1点のみ適用（ご依頼の必須条件「未特定TransportIDを他人へ誤集約しない」に対応）:
+//  未特定（driverName空）行は「(未特定)::TransportID」を内部集約キーとし、TID単位で別行にする
+//  （登録済みドライバーはdriverNameのみで集約する既存挙動を維持。/ftds-export の修正2件目と同じ方式）。
+// それ以外（件数は行数ベース＝重み付け無し、reasons集計は翻訳前の生文字列キー）は既存exportCcResult
+// と同じ挙動のまま変更していない（調査報告のとおり、ご依頼に無い変更は行わない）。
+function ccBuildExportCsv(results) {
+  var driverStats = {};
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var dName = r.driverName || '(未特定)';
+    var groupKey = r.driverName ? dName : (dName + '::' + r.transporterId);
+    if (!driverStats[groupKey]) driverStats[groupKey] = { displayName: dName, tid: r.transporterId, count: 0, required: 0, actual: 0, duration: 0, reasons: {}, dates: {} };
+    var ds = driverStats[groupKey];
+    ds.count++;
+    if (ccIsCallRequired(r)) ds.required++;
+    if (ccIsCallMade(r)) ds.actual++;
+    ds.duration += (r.duration || 0);
+    if (r.reason) {
+      ds.reasons[r.reason] = (ds.reasons[r.reason] || 0) + 1;
+    }
+    if (r.date) ds.dates[r.date] = true;
+  }
+
+  var csvRows = [['ドライバー名', 'TransportID', 'べき架電', '実架電', '架電率(%)', '通話時間(秒)', '日付', '配送理由内訳']];
+  var dKeys = Object.keys(driverStats).sort(function(a, b) { return driverStats[b].required - driverStats[a].required; });
+  for (var d = 0; d < dKeys.length; d++) {
+    var stat = driverStats[dKeys[d]];
+    var reasonParts = [];
+    var rKeys = Object.keys(stat.reasons);
+    for (var ri = 0; ri < rKeys.length; ri++) {
+      reasonParts.push(ftdsTranslateReason(rKeys[ri]) + ':' + stat.reasons[rKeys[ri]]);
+    }
+    var dateList = Object.keys(stat.dates).sort().join(' / ');
+    var rate = ccCalcCallRate(stat.required, stat.actual);
+    csvRows.push([stat.displayName, stat.tid, stat.required, stat.actual, rate != null ? rate : '', stat.duration, dateList, reasonParts.join(' | ')]);
+  }
+
+  csvRows.push([]);
+  csvRows.push(['=== 詳細データ ===']);
+  csvRows.push(['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']);
+  for (var j = 0; j < results.length; j++) {
+    var rec = results[j];
+    csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, ftdsTranslateReason(rec.reason), rec.method, ftdsTranslateReason(rec.contactType), rec.duration]);
+  }
+
+  return csvRows.map(function(row) {
+    return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
+  }).join('\n');
+}
+
+app.post('/cc-export', function(req, res) {
+  if (!checkCcApiAuth(req, res)) return;
+
+  var xlsxLib = getXlsxLib();
+  var zipMulter = getZipMulter(); // /ftds-exportと同じ multer(memoryStorage, 10MB上限) を再利用
+  if (!xlsxLib || !zipMulter) {
+    return res.status(500).json({ status: 'error', message: 'server modules not ready' });
+  }
+
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) {
+      log('cc-export multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ status: 'error', message: err.message || 'upload error' });
+    }
+
+    var file = req.file;
+    if (!file) return res.status(400).json({ status: 'error', message: 'file required (field name: file)' });
+
+    var wb;
+    try {
+      wb = xlsxLib.read(file.buffer, { type: 'buffer', cellDates: true });
+    } catch (parseErr) {
+      return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parseErr.message });
+    }
+
+    var sheetInfo = ccFindReportSheet(wb, xlsxLib);
+    if (!sheetInfo.rows || sheetInfo.rows.length < 2) {
+      return res.status(422).json({ status: 'error', message: 'Contact Compliance形式のシートが見つかりません（transporter_id列を含むシートが必要です）' });
+    }
+
+    var processed = ccProcessRows(sheetInfo.rows);
+    if (processed.error) {
+      return res.status(422).json({ status: 'error', message: processed.error });
+    }
+    if (processed.results.length === 0) {
+      return res.status(422).json({ status: 'error', message: 'TransportIDを持つ行が見つかりませんでした' });
+    }
+
+    fetchFtdsDriverMaster().then(function(master) { // /tenko-master?action=getMaster をFTDSと共通取得
+      var tidToName = {};
+      for (var mi = 0; mi < master.length; mi++) {
+        var mtid = String(master[mi].transportId || '').trim();
+        if (!mtid) continue;
+        tidToName[mtid] = master[mi].englishName || '';
+      }
+
+      var results = processed.results;
+      for (var ri2 = 0; ri2 < results.length; ri2++) {
+        var rec = results[ri2];
+        if (tidToName[rec.transporterId]) rec.driverName = tidToName[rec.transporterId];
+      }
+
+      var csv = ccBuildExportCsv(results);
+      var periodLabel = ftdsExtractPeriodLabel(sheetInfo.sheetName, file.originalname);
+      var outFileName = 'ContactCompliance分析_' + (periodLabel || getTodayJst()) + '.csv';
+
+      log('cc-export: ' + results.length + ' rows, master=' + master.length + ' drivers, file=' + outFileName);
+
+      // Content-Dispositionの非ASCII制約はftds-exportと同じ（RFC 5987 filename*=を使用）
+      var asciiFallbackName = 'CC_export_' + (periodLabel || getTodayJst()).replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
+      var encodedOutFileName = encodeURIComponent(outFileName);
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="' + asciiFallbackName + '"; filename*=UTF-8\'\'' + encodedOutFileName);
+      res.send('﻿' + csv);
+    }).catch(function(masterErr) {
+      log('cc-export driver master fetch error: ' + masterErr.message);
       if (!res.headersSent) {
         res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
       }
