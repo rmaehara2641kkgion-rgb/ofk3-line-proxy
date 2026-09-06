@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -2040,6 +2041,122 @@ app.post('/cc-export', function(req, res) {
       res.send('﻿' + csv);
     }).catch(function(masterErr) {
       log('cc-export driver master fetch error: ' + masterErr.message);
+      if (!res.headersSent) {
+        res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
+      }
+    });
+  });
+});
+
+// ===== DNR Excel解析API（n8n連携用） =====
+// index.htmlの既存DNR処理（handleDnrFile/exportDnrResult、index.html内 18458-18908行付近、
+// 現行main時点の行番号）と同じ判定・変換・出力仕様をNode側に移植したもの。index.html側の
+// ロジックは無変更。列マッピング・TID抽出・行変換・出力データ生成は dnr-core.js
+//（DOM非依存の純粋関数）に分離済み。ドライバーマスタ取得・multer/xlsx・CSV直列化は
+// /ftds-export・/cc-export用に定義済みの共通関数をそのまま再利用する（両APIとも無変更）。
+//
+// 既存仕様からの意図的な変更点（ユーザー指示に基づく。詳細はdnr-core.js冒頭コメント参照）:
+//   1. 「TID列が見つからなければ9列目を強制的にTID列とみなす」フォールバックを廃止し、
+//      TID列とDNR固有列(DnrCore.DNR_STRONG_SIGNAL_COLS)のいずれも検出できない場合は422。
+//   2. TransportID空欄行は削除しない（既存仕様のまま）。
+//   3. 理由翻訳はREASON_JA辞書に完全一致する値のみ翻訳し、それ以外は原文を保持する
+//      （DnrCore.dnrTranslateReasonは既存translateReason()と異なり英字除去フォールバックをしない）。
+
+const DNR_API_TOKEN = process.env.DNR_API_TOKEN || '';
+console.log('DNR_API_TOKEN configured:', !!DNR_API_TOKEN);
+
+// /dnr-exportの認証チェック。checkFtdsApiAuth/checkCcApiAuthと同じfail-closed方針
+function checkDnrApiAuth(req, res) {
+  if (!DNR_API_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'DNR_API_TOKEN not configured' });
+    return false;
+  }
+  var provided = req.headers['x-dnr-api-token'] || '';
+  if (!provided || provided !== DNR_API_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/dnr-export', function(req, res) {
+  if (!checkDnrApiAuth(req, res)) return;
+
+  var xlsxLib = getXlsxLib();
+  var zipMulter = getZipMulter(); // /ftds-export・/cc-exportと同じ multer(memoryStorage, 10MB上限) を再利用
+  if (!xlsxLib || !zipMulter) {
+    return res.status(500).json({ status: 'error', message: 'server modules not ready' });
+  }
+
+  zipMulter.single('file')(req, res, function(err) {
+    if (err) {
+      log('dnr-export multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ status: 'error', message: err.message || 'upload error' });
+    }
+
+    var file = req.file;
+    if (!file) return res.status(400).json({ status: 'error', message: 'file required (field name: file)' });
+
+    var wb;
+    try {
+      wb = xlsxLib.read(file.buffer, { type: 'buffer' });
+    } catch (parseErr) {
+      return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parseErr.message });
+    }
+
+    if (!wb.SheetNames || wb.SheetNames.length === 0) {
+      return res.status(422).json({ status: 'error', message: 'DNR形式のシートが見つかりません（transporter_id列とDNR固有列を含むシートが必要です）' });
+    }
+
+    // index.html: handleDnrFileと同じく先頭シート・先頭行=ヘッダーを前提とする（既存仕様のまま。
+    // シート探索・複数ヘッダー行探索は原本に無いため今回追加しない）
+    var ws = wb.Sheets[wb.SheetNames[0]];
+    var json = xlsxLib.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    if (json.length < 2) {
+      return res.status(422).json({ status: 'error', message: 'DNRファイルにデータがありません' });
+    }
+
+    var colMap = DnrCore.dnrMapHeaderColumns(json[0]);
+    if (!DnrCore.dnrDetectSignal(colMap)) {
+      return res.status(422).json({ status: 'error', message: 'DNR形式のシートが見つかりません（transporter_id列とDNR固有列[' + DnrCore.DNR_STRONG_SIGNAL_COLS.join('/') + ']のいずれかが必要です）' });
+    }
+
+    var recs = DnrCore.dnrExtractRows(json, 0, colMap);
+    if (recs.length === 0) {
+      return res.status(422).json({ status: 'error', message: '有効なデータ行が見つかりませんでした' });
+    }
+
+    fetchFtdsDriverMaster().then(function(master) { // /tenko-master?action=getMaster をFTDS/CCと共通取得
+      var tidToName = {};
+      var tidToJapaneseName = {};
+      for (var mi = 0; mi < master.length; mi++) {
+        var mtid = String(master[mi].transportId || '').trim();
+        if (!mtid) continue;
+        tidToName[mtid] = master[mi].englishName || '';
+        tidToJapaneseName[mtid] = master[mi].japaneseName || '';
+      }
+
+      for (var ri = 0; ri < recs.length; ri++) {
+        var rec = recs[ri];
+        if (rec.transportId && tidToName[rec.transportId]) {
+          rec.driverName = DnrCore.dnrResolveDriverDisplayName(tidToName[rec.transportId], tidToJapaneseName[rec.transportId]);
+        }
+      }
+
+      var csvRows = DnrCore.dnrBuildExportRows(recs, FTDS_REASON_JA); // 既存REASON_JA辞書を再利用（完全一致のみ翻訳）
+      var csv = csvRowsToString(csvRows);
+      var outFileName = 'DNR分析_' + getTodayJst() + '.csv'; // 原本のexportDnrResultと同じファイル名規則（週ラベルは使わない）
+
+      log('dnr-export: ' + recs.length + ' rows, master=' + master.length + ' drivers, file=' + outFileName);
+
+      // Content-Dispositionの非ASCII制約はftds-export・cc-exportと同じ（RFC 5987 filename*=を使用）
+      var asciiFallbackName = 'DNR_export_' + getTodayJst() + '.csv';
+      var encodedOutFileName = encodeURIComponent(outFileName);
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="' + asciiFallbackName + '"; filename*=UTF-8\'\'' + encodedOutFileName);
+      res.send('﻿' + csv);
+    }).catch(function(masterErr) {
+      log('dnr-export driver master fetch error: ' + masterErr.message);
       if (!res.headersSent) {
         res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
       }
