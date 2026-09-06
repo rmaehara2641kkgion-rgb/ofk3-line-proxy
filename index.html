@@ -2310,101 +2310,13 @@
       </div>
 
       <!-- WH60 労働時間管理 Tab -->
+      <!-- 「本日アラート」サブタブは実運用確認の結果不要と判断され削除。
+           Rolling 60h（旧: 月間Rolling）のみを常時表示する。
+           日次ロジック(wh60*関数群)・LINE通知・自動チェックのJS本体には一切手を入れていない。 -->
       <div id="panel-wh60" class="hidden">
-        <!-- サブタブ切替: 既存の日次WH60（本日アラート）と新規Rolling 60h（月間監視）を
-             同一タブ内で切り替える。既存の日次ロジック(wh60*関数群)・LINE通知・
-             自動チェックには一切手を入れず、表示の出し分けのみを行う。 -->
-        <div class="flex gap-2 mb-4 border-b border-gray-700 pb-2">
-          <button id="wh60-subtab-btn-daily" onclick="wh60SwitchSubTab('daily')" class="px-3 py-1.5 rounded-lg text-sm font-bold bg-blue-600 text-white">⏱ 本日アラート</button>
-          <button id="wh60-subtab-btn-rolling" onclick="wh60SwitchSubTab('rolling')" class="px-3 py-1.5 rounded-lg text-sm font-bold bg-gray-700 text-gray-300">📅 月間Rolling</button>
-        </div>
-
-        <div id="wh60-daily-subpanel">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-lg font-bold">⏱ WH60 労働時間管理</h2>
-            <p class="text-sm text-ink-lighter">週60時間超過防止 - アラート&LINE通知</p>
-          </div>
-          <div class="flex gap-2">
-            <button onclick="wh60SaveToServer()" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">💾 サーバー保存（自動アラートON）</button>
-            <button onclick="wh60SendAlerts()" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">🚨 危険DA LINE送信</button>
-            <button onclick="wh60Send30minReminders()" class="px-3 py-1.5 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700">⏰ 帰庫1時間前リマインド</button>
-          </div>
-        </div>
-
-        <!-- ファイル読込エリア -->
-        <div class="grid grid-cols-2 gap-4 mb-4">
-          <div class="card p-4">
-            <h3 class="text-sm font-bold mb-2">① Amazon WHデータ読込</h3>
-            <p class="text-xs text-ink-lighter mb-2">Daily_AMZL_JP_Working_Hour の Excel をアップ</p>
-            <input type="file" id="wh60-file-wh" accept=".xlsx,.xls,.csv" onchange="wh60LoadWHFile(this)" class="hidden">
-            <button onclick="document.getElementById('wh60-file-wh').click()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">📂 ファイル選択</button>
-            <div id="wh60-wh-status" class="text-xs mt-2 text-ink-lighter"></div>
-          </div>
-          <div class="card p-4">
-            <h3 class="text-sm font-bold mb-2">② アサインデータ読込</h3>
-            <p class="text-xs text-ink-lighter mb-2">ルート_OFK3 の Excel をアップ（今日の予測時間）</p>
-            <input type="file" id="wh60-file-assign" accept=".xlsx,.xls,.csv" onchange="wh60LoadAssignFile(this)" class="hidden">
-            <button onclick="document.getElementById('wh60-file-assign').click()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">📂 ファイル選択</button>
-            <div id="wh60-assign-status" class="text-xs mt-2 text-ink-lighter"></div>
-          </div>
-        </div>
-
-        <!-- サマリーカード -->
-        <div class="grid grid-cols-4 gap-3 mb-4" id="wh60-summary">
-          <div class="card p-3 text-center">
-            <div class="text-2xl font-bold" id="wh60-total-da">-</div>
-            <div class="text-xs text-ink-lighter">対象DA数</div>
-          </div>
-          <div class="card p-3 text-center border-l-4 border-red-500">
-            <div class="text-2xl font-bold text-red-500" id="wh60-danger-count">-</div>
-            <div class="text-xs text-ink-lighter">🔴 危険（残≤12:30）</div>
-          </div>
-          <div class="card p-3 text-center border-l-4 border-yellow-500">
-            <div class="text-2xl font-bold text-yellow-500" id="wh60-warn-count">-</div>
-            <div class="text-xs text-ink-lighter">🟡 注意（残≤24:00）</div>
-          </div>
-          <div class="card p-3 text-center border-l-4 border-green-500">
-            <div class="text-2xl font-bold text-green-500" id="wh60-safe-count">-</div>
-            <div class="text-xs text-ink-lighter">🟢 安全</div>
-          </div>
-        </div>
-
-        <!-- DA一覧テーブル -->
-        <div class="card p-4">
-          <h3 class="text-sm font-bold mb-3">DA別 週間稼働状況</h3>
-          <div class="overflow-x-auto">
-            <table class="w-full text-xs" id="wh60-table">
-              <thead>
-                <tr class="text-left text-ink-lighter border-b border-gray-700">
-                  <th class="p-2">状態</th>
-                  <th class="p-2">社名</th>
-                  <th class="p-2">名前</th>
-                  <th class="p-2">日</th>
-                  <th class="p-2">月</th>
-                  <th class="p-2">火</th>
-                  <th class="p-2">水</th>
-                  <th class="p-2">木</th>
-                  <th class="p-2">金</th>
-                  <th class="p-2">土</th>
-                  <th class="p-2 font-bold">合計</th>
-                  <th class="p-2 font-bold">残り</th>
-                  <th class="p-2">今日予測</th>
-                  <th class="p-2 font-bold">帰庫リミット</th>
-                  <th class="p-2">LINE</th>
-                </tr>
-              </thead>
-              <tbody id="wh60-tbody"></tbody>
-            </table>
-          </div>
-          <div id="wh60-empty" class="text-center text-ink-lighter py-8">Amazon WHデータを読み込んでください</div>
-        </div>
-        <div id="wh60-line-result" class="mt-3 text-sm"></div>
-        </div><!-- /#wh60-daily-subpanel -->
-
-        <!-- Rolling 60h（月間監視）サブパネル。内容は rolling60h-ui.js が動的に描画する
+        <!-- Rolling 60h サブパネル。内容は rolling60h-ui.js が動的に描画する
              （index.html への直書きを避けるため、コンテナのみここに置く）。 -->
-        <div id="wh60-rolling-subpanel" class="hidden"></div>
+        <div id="wh60-rolling-subpanel"></div>
       </div>
 
       <!-- 時間指定抽出 Tab -->
@@ -3702,6 +3614,7 @@ var driverDB = {
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
       if (tab === 'map-master') wh60LoadAddrStats();
+      if (tab === 'wh60') { if (typeof RollingUI !== 'undefined' && RollingUI.onShown) RollingUI.onShown(); }
       if (tab === 'team-quality') renderTeamQualityDashboard();
       if (tab === 'optimization' && typeof AssignSupport !== 'undefined') {
         if (AssignSupport.syncShiftFromGlobals) AssignSupport.syncShiftFromGlobals();
@@ -15157,24 +15070,6 @@ var driverDB = {
       }
 
       twCloseLineSendModal();
-    }
-
-    // ===== Rolling 60h（月間監視・新規）サブタブ切替 =====
-    // 既存WH60（日次アラート）ロジックとは完全に独立。表示の出し分けのみ行う。
-    var wh60CurrentSubTab = 'daily';
-    function wh60SwitchSubTab(subtab) {
-      wh60CurrentSubTab = subtab;
-      var dailyPanel = document.getElementById('wh60-daily-subpanel');
-      var rollingPanel = document.getElementById('wh60-rolling-subpanel');
-      var dailyBtn = document.getElementById('wh60-subtab-btn-daily');
-      var rollingBtn = document.getElementById('wh60-subtab-btn-rolling');
-      if (dailyPanel) dailyPanel.classList.toggle('hidden', subtab !== 'daily');
-      if (rollingPanel) rollingPanel.classList.toggle('hidden', subtab !== 'rolling');
-      if (dailyBtn) dailyBtn.className = 'px-3 py-1.5 rounded-lg text-sm font-bold ' + (subtab === 'daily' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300');
-      if (rollingBtn) rollingBtn.className = 'px-3 py-1.5 rounded-lg text-sm font-bold ' + (subtab === 'rolling' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300');
-      if (subtab === 'rolling' && typeof RollingUI !== 'undefined' && RollingUI.onShown) {
-        RollingUI.onShown();
-      }
     }
 
     // ===== WH60 労働時間管理 =====

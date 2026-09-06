@@ -67,7 +67,7 @@
     container.innerHTML =
       '<div class="flex items-center justify-between mb-4">' +
       '  <div>' +
-      '    <h2 class="text-lg font-bold">📅 Rolling 60h 月間監視</h2>' +
+      '    <h2 class="text-lg font-bold">📅 Rolling 60h</h2>' +
       '    <p class="text-sm text-ink-lighter">任意の連続7日間で60時間超過を判定（固定週ではありません）</p>' +
       '  </div>' +
       '</div>' +
