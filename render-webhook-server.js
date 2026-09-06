@@ -1539,6 +1539,24 @@ function ftdsProcessRows(rows) {
   return { results: results };
 }
 
+// /ftds-export・/cc-export共通のCSVセル値変換。null/undefined/空文字だけを空欄にし、
+// 数値0（実架電0件・通話時間0秒・件数0等）は"0"としてそのまま出力する。
+// 変更前は `String(c || '')` というtruthy判定だったため、有効な数値0まで空欄になっていた
+// （CC自動化2巡目の修正4件目）。この関数はFTDS/CC双方のCSV生成から共通で呼ばれるため、
+// 変更後は必ず /ftds-export の回帰テストも実施すること。
+function csvCellText(c) {
+  if (c === null || c === undefined || c === '') return '';
+  return String(c);
+}
+
+// /ftds-export・/cc-export共通のCSV行列→文字列変換（ダブルクォート囲み・""エスケープ）。
+// セル値の空欄判定はcsvCellText()に委譲（数値0を空欄化しない）。
+function csvRowsToString(csvRows) {
+  return csvRows.map(function(row) {
+    return row.map(function(c) { return '"' + csvCellText(c).replace(/"/g, '""') + '"'; }).join(',');
+  }).join('\n');
+}
+
 // index.html: exportFtdsResult のCSV生成ロジックを移植したもの（列構成・2ブロック構成は同一）。
 // 以下3点は既存のバグ修正として今回変更:
 //  修正2件目: 未特定（driverName空）行は「(未特定)::TransportID」を内部集約キーとし、TID単位で別行にする
@@ -1582,9 +1600,7 @@ function ftdsBuildExportCsv(results) {
     csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, ftdsTranslateReason(rec.reason)]);
   }
 
-  return csvRows.map(function(row) {
-    return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
-  }).join('\n');
+  return csvRowsToString(csvRows);
 }
 
 // ドライバーマスタ取得: 既存の GET /tenko-master?action=getMaster をサーバー内部からループバック呼出
@@ -1705,8 +1721,15 @@ function checkCcApiAuth(req, res) {
   return true;
 }
 
-// index.html: findReportSheet(wb, 'cc') のcc分岐（else節）を移植。
+// index.html: findReportSheet(wb, 'cc') のcc分岐（else節）を移植したもの。
 // 「累計」始まりのシートは既存同様スキップ（累計レポート取込は本APIの対象外）。
+//
+// 修正3件目（CC自動化2巡目）: 原本のfindReportSheet('cc')は「transporter_id列がある」
+// だけでもscore=3>bestScore(0)となり採用されてしまう（CC固有列が0でも通ってしまう既存の弱点。
+// 前回の調査報告で発見済み・報告のみで未修正だった）。今回、CC固有列（scannable_id/
+// call_event/text_event/shipment_reason/call duration）のスコアだけを別途集計し
+// （ccSignalScore）、これが0のシートは候補にしない。追加した列名・キーワードは無く、
+// 既存findReportSheetがCC判定に使っていたキーワードをそのまま閾値判定へ転用しただけ。
 function ccFindReportSheet(wb, XLSX) {
   var best = null;
   var bestName = null;
@@ -1717,16 +1740,17 @@ function ccFindReportSheet(wb, XLSX) {
     if (!rows || rows.length < 2) continue;
     var hdr = rows[0];
     var score = 0;
+    var ccSignalScore = 0; // transporter_id以外のCC固有列から得たスコアのみ
     var hasTransporter = false;
     for (var hi = 0; hi < hdr.length; hi++) {
       var h = ftdsNormalizeHeader(hdr[hi]);
       if (ftdsIsTransporterHeader(hdr[hi])) { hasTransporter = true; score += 3; }
-      if (h.indexOf('scannable') >= 0) score += 4;
-      if (h.indexOf('call event') >= 0 || h.indexOf('text event') >= 0) score += 3;
-      if (h.indexOf('shipment reason') >= 0) score += 2;
-      if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) score += 2;
+      if (h.indexOf('scannable') >= 0) { score += 4; ccSignalScore += 4; }
+      if (h.indexOf('call event') >= 0 || h.indexOf('text event') >= 0) { score += 3; ccSignalScore += 3; }
+      if (h.indexOf('shipment reason') >= 0) { score += 2; ccSignalScore += 2; }
+      if (h.indexOf('total call duration') >= 0 || h.indexOf('call duration') >= 0) { score += 2; ccSignalScore += 2; }
     }
-    if (hasTransporter && score > bestScore) {
+    if (hasTransporter && ccSignalScore > 0 && score > bestScore) {
       bestScore = score;
       best = rows;
       bestName = wb.SheetNames[si];
@@ -1814,11 +1838,13 @@ function ccProcessRows(rows) {
 }
 
 // index.html: exportCcResult のCSV生成ロジックを移植したもの（列構成・2ブロック構成は同一）。
-// 既存バグの修正1点のみ適用（ご依頼の必須条件「未特定TransportIDを他人へ誤集約しない」に対応）:
-//  未特定（driverName空）行は「(未特定)::TransportID」を内部集約キーとし、TID単位で別行にする
-//  （登録済みドライバーはdriverNameのみで集約する既存挙動を維持。/ftds-export の修正2件目と同じ方式）。
-// それ以外（件数は行数ベース＝重み付け無し、reasons集計は翻訳前の生文字列キー）は既存exportCcResult
-// と同じ挙動のまま変更していない（調査報告のとおり、ご依頼に無い変更は行わない）。
+// 既存バグ修正2点を適用（CC自動化2巡目のご指示に基づく）:
+//  修正: 未特定（driverName空）行は「(未特定)::TransportID」を内部集約キーとし、TID単位で別行にする
+//        （登録済みドライバーはdriverNameのみで集約する既存挙動を維持。/ftds-export と同じ方式）。
+//  修正: 配送理由の集計キーをftdsTranslateReason()後の日本語にし、表記ゆれ（Bad Weather/BAD_WEATHER等）
+//        を合算（/ftds-export の修正3件目と同じ方式。詳細データ側も同じftdsTranslateReason()を使うため表示が整合する）。
+// 件数は既存どおり行数ベース（重み付け無し）のまま変更していない（CC自動化1巡目の調査報告のとおり、
+// CCには元々件数列による重み付けが存在しないため、FTDSのカウント列仕様は持ち込まない）。
 function ccBuildExportCsv(results) {
   var driverStats = {};
   for (var i = 0; i < results.length; i++) {
@@ -1832,7 +1858,8 @@ function ccBuildExportCsv(results) {
     if (ccIsCallMade(r)) ds.actual++;
     ds.duration += (r.duration || 0);
     if (r.reason) {
-      ds.reasons[r.reason] = (ds.reasons[r.reason] || 0) + 1;
+      var reasonJa = ftdsTranslateReason(r.reason);
+      ds.reasons[reasonJa] = (ds.reasons[reasonJa] || 0) + 1;
     }
     if (r.date) ds.dates[r.date] = true;
   }
@@ -1842,9 +1869,9 @@ function ccBuildExportCsv(results) {
   for (var d = 0; d < dKeys.length; d++) {
     var stat = driverStats[dKeys[d]];
     var reasonParts = [];
-    var rKeys = Object.keys(stat.reasons);
+    var rKeys = Object.keys(stat.reasons); // 既に日本語翻訳済みキーのため再翻訳は不要
     for (var ri = 0; ri < rKeys.length; ri++) {
-      reasonParts.push(ftdsTranslateReason(rKeys[ri]) + ':' + stat.reasons[rKeys[ri]]);
+      reasonParts.push(rKeys[ri] + ':' + stat.reasons[rKeys[ri]]);
     }
     var dateList = Object.keys(stat.dates).sort().join(' / ');
     var rate = ccCalcCallRate(stat.required, stat.actual);
@@ -1859,9 +1886,7 @@ function ccBuildExportCsv(results) {
     csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, ftdsTranslateReason(rec.reason), rec.method, ftdsTranslateReason(rec.contactType), rec.duration]);
   }
 
-  return csvRows.map(function(row) {
-    return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
-  }).join('\n');
+  return csvRowsToString(csvRows);
 }
 
 app.post('/cc-export', function(req, res) {
@@ -1891,7 +1916,7 @@ app.post('/cc-export', function(req, res) {
 
     var sheetInfo = ccFindReportSheet(wb, xlsxLib);
     if (!sheetInfo.rows || sheetInfo.rows.length < 2) {
-      return res.status(422).json({ status: 'error', message: 'Contact Compliance形式のシートが見つかりません（transporter_id列を含むシートが必要です）' });
+      return res.status(422).json({ status: 'error', message: 'Contact Compliance形式のシートが見つかりません（transporter_id列に加え、scannable_id/call_event/text_event/shipment_reason/call durationのいずれかの列が必要です）' });
     }
 
     var processed = ccProcessRows(sheetInfo.rows);
