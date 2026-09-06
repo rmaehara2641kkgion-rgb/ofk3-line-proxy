@@ -139,6 +139,83 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// ===== LINE通知 一時停止スイッチ（緊急対応） =====
+// タブレット→PCの点呼同期が完全に安定するまで、LINEへの実送信のみを止めるための安全スイッチ。
+// 点呼処理・QR認証・点呼データ保存・tenko-sync・driverDB・シフト等の他機能には一切影響しない。
+//
+// 2層構成:
+//   1) Render環境変数 LINE_NOTIFICATIONS_ENABLED … 最終マスターキルスイッチ。
+//      'true' 以外（未設定含む）は常に「送信しない」。これはコードでは変更できない
+//      （Renderダッシュボードでの変更のみが有効）。
+//   2) アプリ側 非常停止スイッチ（管理画面から即時ON/OFF可能） … 下記 lineAppSwitchState。
+//      日常運用の非常停止用。ローカルディスクに永続化し、サーバープロセス再起動後も
+//      状態を保持する。
+//      フェイルセーフ設計: 保存状態が「存在しない／読み込みに失敗する／JSONが破損している／
+//      再デプロイ等で状態ファイル自体が消失している」場合は、既定値を enabled:false
+//      （＝送信禁止）とする。「状態が不明ならLINE送信禁止」を徹底し、状態不明のまま
+//      安全側に倒れない事故（既定でON復帰）を防ぐ。管理者が設定画面から明示的に
+//      「送信を再開する」を押した場合のみ enabled:true になる。
+// 実送信は「1)と2)の両方がONのときだけ」有効（どちらか一方でもOFFなら送信禁止）。
+const LINE_NOTIFICATIONS_ENABLED = process.env.LINE_NOTIFICATIONS_ENABLED === 'true';
+console.log('LINE_NOTIFICATIONS_ENABLED (Render env, マスターキルスイッチ):', LINE_NOTIFICATIONS_ENABLED);
+
+var LINE_APP_SWITCH_STORE_PATH = path.join(os.tmpdir(), 'line-app-switch-store.json');
+// 既定値は enabled:false（＝状態不明時は送信禁止のフェイルセーフ）。
+// 保存済みファイルが正しく読めた場合のみ、その内容（enabled:trueも含む）を採用する。
+var lineAppSwitchState = { enabled: false, updatedAt: null, updatedBy: null };
+(function loadLineAppSwitchState() {
+  try {
+    if (!fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
+      console.log('LINE app switch (非常停止): 状態ファイルなし → フェイルセーフでenabled=false');
+      return;
+    }
+    var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
+    if (loaded && typeof loaded.enabled === 'boolean') {
+      lineAppSwitchState = loaded;
+    } else {
+      console.warn('line-app-switch-store: 内容が不正な形式のため無視（フェイルセーフでenabled=falseのまま）:', JSON.stringify(loaded));
+    }
+  } catch (e) {
+    console.warn('line-app-switch-store load failed（破損/読込エラー。フェイルセーフでenabled=falseのまま）:', e.message);
+  }
+  console.log('LINE app switch (非常停止) loaded:', JSON.stringify(lineAppSwitchState));
+})();
+
+function persistLineAppSwitchState() {
+  try {
+    fs.writeFileSync(LINE_APP_SWITCH_STORE_PATH, JSON.stringify(lineAppSwitchState), 'utf8');
+    return true;
+  } catch (e) {
+    console.warn('line-app-switch-store persist failed:', e.message);
+    return false;
+  }
+}
+
+function isLineSendEffectivelyEnabled() {
+  return LINE_NOTIFICATIONS_ENABLED && lineAppSwitchState.enabled;
+}
+
+// LINE Messaging APIへの実送信は、必ずこの関数を経由させる（送信処理の唯一の入口）。
+// フラグOFFの間はLINE APIを一切呼び出さず、個人情報やトークンを含まない簡易ログだけを残す。
+// 点呼・WH60・メンター・ウェルカムメッセージ等、Render経由の全LINE push送信がこの関数を通る
+// （直下の sendLinePushMessage 呼び出し元一覧は本コミット時点で4箇所: /proxy, /mentor-alert,
+//  sendWelcomeMessage, wh60SendLine）。
+async function sendLinePushMessage(to, messages) {
+  if (!isLineSendEffectivelyEnabled()) {
+    console.log('[LINE通知停止中] 送信をスキップしました (renderEnv=' + LINE_NOTIFICATIONS_ENABLED + ', appSwitch=' + lineAppSwitchState.enabled + ')');
+    return { skipped: true };
+  }
+  return axios.post('https://api.line.me/v2/bot/message/push', {
+    to: to,
+    messages: messages
+  }, {
+    headers: {
+      'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
 // JST日付ヘルパー（UTC+9補正）
 function getTodayJst() {
   var now = new Date();
@@ -587,15 +664,7 @@ app.post('/mentor-alert', async (req, res) => {
     var sent = 0;
     for (var i = 0; i < MENTOR_ADMIN_IDS.length; i++) {
       try {
-        await axios.post('https://api.line.me/v2/bot/message/push', {
-          to: MENTOR_ADMIN_IDS[i],
-          messages: [{ type: 'text', text: alertText }]
-        }, {
-          headers: {
-            'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-            'Content-Type': 'application/json'
-          }
-        });
+        await sendLinePushMessage(MENTOR_ADMIN_IDS[i], [{ type: 'text', text: alertText }]);
         sent++;
       } catch (e) {
         console.log('[mentor-alert] LINE error for ' + MENTOR_ADMIN_IDS[i] + ':', e.response ? e.response.status : e.message);
@@ -635,6 +704,41 @@ app.post('/mentor-notified', (req, res) => {
 
 const PROXY_SECRET = process.env.PROXY_SECRET || '';
 
+// ===== LINE全送信 非常停止（管理画面から操作） =====
+// 現在状態の確認用。認証不要（送信を行わない読み取り専用のため、他の /wh60/status 等と同様の扱い）。
+app.get('/line-notifications/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    renderEnabled: LINE_NOTIFICATIONS_ENABLED,
+    appEnabled: lineAppSwitchState.enabled,
+    effectiveEnabled: isLineSendEffectivelyEnabled(),
+    updatedAt: lineAppSwitchState.updatedAt,
+    updatedBy: lineAppSwitchState.updatedBy || null
+  });
+});
+
+// アプリ側の非常停止スイッチを切り替える。/proxy と同じ簡易認証(PROXY_SECRET)を適用する。
+app.post('/line-notifications/toggle', (req, res) => {
+  if (PROXY_SECRET && req.headers['x-proxy-secret'] !== PROXY_SECRET) {
+    return res.status(403).json({ status: 'error', message: 'Forbidden' });
+  }
+  var enabled = !!(req.body && req.body.enabled);
+  lineAppSwitchState = {
+    enabled: enabled,
+    updatedAt: new Date().toISOString(),
+    updatedBy: (req.body && typeof req.body.updatedBy === 'string') ? req.body.updatedBy.slice(0, 100) : null
+  };
+  var saved = persistLineAppSwitchState();
+  log('LINE app switch (非常停止) changed: enabled=' + enabled + ' saved=' + saved);
+  res.json({
+    status: 'ok',
+    saved: saved,
+    renderEnabled: LINE_NOTIFICATIONS_ENABLED,
+    appEnabled: lineAppSwitchState.enabled,
+    effectiveEnabled: isLineSendEffectivelyEnabled()
+  });
+});
+
 app.post('/proxy', async (req, res) => {
   try {
     // 簡易認証: PROXY_SECRET設定時のみチェック
@@ -659,18 +763,13 @@ app.post('/proxy', async (req, res) => {
       console.log('messages[' + mi + ']:', JSON.stringify(messages[mi]).substring(0, 500));
     }
 
-    const response = await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: target,
-      messages: messages
-    }, {
-      headers: {
-        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-        'Content-Type': 'application/json'
-      }
-    });
+    const result = await sendLinePushMessage(target, messages);
+    if (result && result.skipped) {
+      return res.json({ status: 'ok', lineSkipped: true });
+    }
 
-    log('LINE push success:', target, response.status);
-    res.json({ status: 'ok', lineStatus: response.status });
+    log('LINE push success:', target, result.status);
+    res.json({ status: 'ok', lineStatus: result.status });
   } catch (err) {
     console.error('===== LINE PUSH ERROR =====');
     console.error('Error details:', JSON.stringify(err.response && err.response.data ? err.response.data : err.message, null, 2));
@@ -680,16 +779,10 @@ app.post('/proxy', async (req, res) => {
 
 async function sendWelcomeMessage(userId) {
   try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: userId,
-      messages: [{ type: 'text', text: '友だち追加ありがとうございます。\n配送通知の設定は管理者画面から行ってください。' }]
-    }, {
-      headers: {
-        'Authorization': `Bearer ${CHANNEL_ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    log('Welcome message sent to', userId);
+    const result = await sendLinePushMessage(userId, [{ type: 'text', text: '友だち追加ありがとうございます。\n配送通知の設定は管理者画面から行ってください。' }]);
+    if (!(result && result.skipped)) {
+      log('Welcome message sent to', userId);
+    }
   } catch (err) {
     log('Welcome message error:', err.response?.data || err.message);
   }
@@ -820,15 +913,7 @@ function wh60AutoCheck() {
 async function wh60SendLine(to, text) {
   if (!to || !CHANNEL_ACCESS_TOKEN) return;
   try {
-    await axios.post('https://api.line.me/v2/bot/message/push', {
-      to: to,
-      messages: [{ type: 'text', text: text }]
-    }, {
-      headers: {
-        'Authorization': 'Bearer ' + CHANNEL_ACCESS_TOKEN,
-        'Content-Type': 'application/json'
-      }
-    });
+    await sendLinePushMessage(to, [{ type: 'text', text: text }]);
   } catch (err) {
     log('WH60 LINE send error:', err.response ? err.response.data : err.message);
   }
