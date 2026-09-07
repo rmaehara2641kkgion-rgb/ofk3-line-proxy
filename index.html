@@ -1004,9 +1004,13 @@
           </div>
           <div class="flex items-center justify-between hidden" id="tenko-sync-token-saved-row">
             <span class="text-xs text-ink-lighter">同期キーは保存済みです</span>
-            <button class="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200" onclick="clearTenkoSyncToken()">変更・削除</button>
+            <span class="flex gap-2">
+              <button class="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200" onclick="showTenkoSyncTokenChangeForm()">🔑 同期キーを変更</button>
+              <button class="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200" onclick="clearTenkoSyncToken()">削除</button>
+            </span>
           </div>
           <div class="mt-2" id="tenko-sync-status-indicator"></div>
+          <div class="mt-2 text-xs text-ink-lighter" id="tenko-sync-diag-line"></div>
         </div>
 
         <!-- LINE自動通知コントロール -->
@@ -5731,20 +5735,149 @@ var driverDB = {
       return localStorage.getItem('tenkoSyncToken') || '';
     }
 
+    // サーバー側 tenko-sync-token-core.js の normalizeSyncToken() と同一仕様：
+    // 前後の空白（半角スペース・タブ・CR/LF・全角スペースU+3000等）だけを除去する。
+    // トークン内部の文字は一切変更しない（既存token互換性を壊さないため）。
+    function normalizeSyncTokenInput(raw) {
+      if (typeof raw !== 'string') return '';
+      return raw.trim();
+    }
+
+    // 正規化後のtokenのSHA-256先頭12桁(hex)を返す（診断専用。token本体は含まない）。
+    // Web Crypto API未対応/非httpsコンテキスト等では null を返す（診断が使えないだけで同期自体には影響しない）。
+    async function computeTokenFingerprint(token) {
+      var normalized = normalizeSyncTokenInput(token || '');
+      if (!normalized) return null;
+      try {
+        var enc = new TextEncoder().encode(normalized);
+        var digestBuf = await crypto.subtle.digest('SHA-256', enc);
+        var hex = Array.prototype.map.call(new Uint8Array(digestBuf), function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+        return hex.slice(0, 12);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // ---- 同期キー診断状態（業務データ(tenkoLog/tenkoSchedule)とは別のlocalStorageキーで管理） ----
+    // 「前回成功時のfingerprint」を覚えておくことで、次回401発生時に
+    // A: この端末側のtokenが変わった / B: サーバー側のtokenが変わった / C: 原因不明
+    // を切り分けられるようにする。
+    var tenkoSyncDiag = (function() {
+      try {
+        var raw = JSON.parse(localStorage.getItem('tenkoSyncDiag') || 'null');
+        if (raw && typeof raw === 'object') return raw;
+      } catch (e) { /* 壊れていれば無視して初期値扱い */ }
+      return { lastOkTs: null, lastOkFingerprint: null, lastFailTs: null, lastFailClassification: null };
+    })();
+    function persistTenkoSyncDiag() {
+      try { localStorage.setItem('tenkoSyncDiag', JSON.stringify(tenkoSyncDiag)); } catch (e) { /* 診断情報のみ。失敗しても同期自体には影響しない */ }
+    }
+
+    function renderTenkoSyncDiagLine(overrideMessage) {
+      var el = document.getElementById('tenko-sync-diag-line');
+      if (!el) return;
+      if (overrideMessage) { el.textContent = overrideMessage; return; }
+      el.textContent = tenkoSyncDiag.lastOkTs
+        ? ('最終同期成功: ' + new Date(tenkoSyncDiag.lastOkTs).toLocaleString('ja-JP'))
+        : '';
+    }
+
+    // 同期成功(200)のたびに、診断用に「その時点のtoken fingerprint」を記録する。
+    // tenkoLog等の業務データには一切触れない。
+    function recordTenkoSyncOk() {
+      var token = getTenkoSyncToken();
+      computeTokenFingerprint(token).then(function(fp) {
+        tenkoSyncDiag.lastOkTs = Date.now();
+        tenkoSyncDiag.lastOkFingerprint = fp;
+        persistTenkoSyncDiag();
+        renderTenkoSyncDiagLine();
+      });
+    }
+
+    // 401発生時の診断。/tenko-sync/status（token本体を含まないfingerprint専用エンドポイント）に
+    // 問い合わせ、直近成功時のfingerprintと比較してA/B/Cを判定する。30秒ごとのpollで
+    // 連打しないよう簡易クールダウンを設ける。
+    var _tenkoAuthDiagLastRunTs = 0;
+    function diagnoseTenkoSyncAuthFailure() {
+      var now = Date.now();
+      if (now - _tenkoAuthDiagLastRunTs < 25000) return; // 直前のpollで既に診断済み
+      _tenkoAuthDiagLastRunTs = now;
+
+      var token = getTenkoSyncToken();
+      Promise.all([
+        computeTokenFingerprint(token),
+        fetch('/tenko-sync/status').then(function(r) { return r.json(); }).catch(function() { return null; })
+      ]).then(function(results) {
+        var clientFp = results[0];
+        var serverStatus = results[1];
+        var serverFp = serverStatus && serverStatus.configured ? serverStatus.fingerprint : null;
+        var lastOkFp = tenkoSyncDiag.lastOkFingerprint;
+        var classification, message;
+
+        if (!serverStatus || !serverStatus.configured) {
+          classification = 'C';
+          message = '🔍 診断: サーバー側で同期キーが未設定です（管理者に確認してください）';
+        } else if (lastOkFp && clientFp && clientFp !== lastOkFp) {
+          classification = 'A';
+          message = '🔍 診断(A): この端末の同期キーが、前回成功時と変わっています';
+        } else if (lastOkFp && serverFp && serverFp !== lastOkFp) {
+          classification = 'B';
+          message = '🔍 診断(B): サーバー側の同期キーが、前回成功時と変わった可能性があります';
+        } else if (clientFp && serverFp && clientFp !== serverFp) {
+          classification = 'B';
+          message = '🔍 診断(B): この端末とサーバーで同期キーが一致していません';
+        } else {
+          classification = 'C';
+          message = '🔍 診断(C): 原因を自動判別できません（管理者に連絡してください）';
+        }
+
+        tenkoSyncDiag.lastFailTs = Date.now();
+        tenkoSyncDiag.lastFailClassification = classification;
+        persistTenkoSyncDiag();
+        renderTenkoSyncDiagLine(message);
+        console.warn('[tenko-sync-diag]', message,
+          'clientFingerprint=' + clientFp, 'serverFingerprint=' + serverFp, 'lastOkFingerprint=' + lastOkFp);
+      }).catch(function(e) {
+        console.warn('tenko-sync診断エラー（診断のみの失敗。同期自体には影響なし）:', e.message || e);
+      });
+    }
+
     function saveTenkoSyncToken() {
       var el = document.getElementById('tenko-sync-token-input');
       if (!el) return;
-      var val = (el.value || '').trim();
-      if (!val) { alert('同期キーを入力してください'); return; }
-      localStorage.setItem('tenkoSyncToken', val);
+      var normalized = normalizeSyncTokenInput(el.value || '');
+      if (!normalized) { alert('同期キーを入力してください'); return; }
+      try {
+        localStorage.setItem('tenkoSyncToken', normalized);
+      } catch (e) {
+        alert('同期キーの保存に失敗しました（端末のストレージ容量等をご確認ください）。もう一度お試しください。\n' + (e.message || e));
+        return;
+      }
+      // 保存直後に再読込し、実際に保存された値が入力値と一致するか確認してから成功扱いにする。
+      var verify = localStorage.getItem('tenkoSyncToken');
+      if (verify !== normalized) {
+        alert('同期キーの保存を確認できませんでした。もう一度保存し直してください（点呼データには影響ありません）。');
+        return;
+      }
       el.value = '';
       renderTenkoSyncTokenUI();
       updateTenkoSyncStatusIndicator('unknown');
       addNotifyLog('system', '🔑', '点呼同期キーを設定しました');
     }
 
+    // 「変更」: 既存tokenを消さずに入力欄を表示するだけ（削除→再登録を要求しない）。
+    // 入力せずに離れた場合、保存済みの既存tokenはそのまま有効。
+    function showTenkoSyncTokenChangeForm() {
+      var inputRow = document.getElementById('tenko-sync-token-input-row');
+      var savedRow = document.getElementById('tenko-sync-token-saved-row');
+      if (inputRow) inputRow.classList.remove('hidden');
+      if (savedRow) savedRow.classList.add('hidden');
+      var input = document.getElementById('tenko-sync-token-input');
+      if (input) input.focus();
+    }
+
     function clearTenkoSyncToken() {
-      if (!confirm('保存済みの同期キーを削除しますか？\n削除するとこの端末は他端末との点呼データ同期ができなくなります。')) return;
+      if (!confirm('保存済みの同期キーを削除しますか？\n削除するとこの端末は他端末との点呼データ同期ができなくなります。\n（点呼データ自体は削除されません）')) return;
       localStorage.removeItem('tenkoSyncToken');
       renderTenkoSyncTokenUI();
       updateTenkoSyncStatusIndicator('no-token');
@@ -5768,14 +5901,26 @@ var driverDB = {
         inputRow.classList.remove('hidden');
         savedRow.classList.add('hidden');
       }
+      renderTenkoSyncDiagLine();
     }
 
     function updateTenkoSyncStatusIndicator(state) {
+      if (state === 'ok') { recordTenkoSyncOk(); }
+      else if (state === 'auth-failed') { diagnoseTenkoSyncAuthFailure(); }
+
       var el = document.getElementById('tenko-sync-status-indicator');
       if (!el) return;
+
+      if (state === 'auth-failed') {
+        el.innerHTML = '<div class="flex flex-wrap items-center gap-2">' +
+          '<span class="text-xs text-red-500">🔴 同期キーが正しくありません（同期停止中・点呼データは削除されず保持されています）</span>' +
+          '<button type="button" class="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200" onclick="showTenkoSyncTokenChangeForm()">🔑 同期キーを変更</button>' +
+          '</div>';
+        return;
+      }
+
       var map = {
         'no-token': ['⚪ 点呼同期キーが未設定です', 'text-xs text-gray-400'],
-        'auth-failed': ['🔴 同期キーが正しくありません（同期停止中・データは保持されています）', 'text-xs text-red-500'],
         'server-not-configured': ['🔴 サーバー側の同期設定が未完了です', 'text-xs text-red-500'],
         'network-error': ['🟡 通信エラー（同期一時停止・データは保持されています）', 'text-xs text-amber-500'],
         'error': ['🟡 同期エラー', 'text-xs text-amber-500'],

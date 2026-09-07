@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
+const TenkoSyncTokenCore = require('./tenko-sync-token-core.js'); // 点呼同期キーの正規化・fingerprint計算（/tenko-sync認証用）
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -61,11 +62,20 @@ const GAS_URL = process.env.GAS_URL || '';
 console.log('GOOGLE_MAPS_API_KEY configured:', !!GOOGLE_MAPS_API_KEY);
 
 // /tenko-sync認証トークン（Render環境変数）。未設定時はfail-closed（503）。
-// 値そのものはログにも出さない。設定有無のみ起動時に表示する。
-const TENKO_SYNC_TOKEN = process.env.TENKO_SYNC_TOKEN || '';
-console.log('TENKO_SYNC_TOKEN configured:', !!TENKO_SYNC_TOKEN);
+// 値そのものはログにも出さない。設定有無・長さ・fingerprintのみ起動時に表示する。
+// normalizeSyncToken()で前後の空白/全角空白/CR・LFのみを除去する（Render環境変数への
+// 貼り付け事故対策。トークン内部の文字は一切変更しない。仕様はtenko-sync-token-core.js参照、
+// クライアント側index.htmlのsaveTenkoSyncToken()と同じ仕様で正規化している）。
+const TENKO_SYNC_TOKEN = TenkoSyncTokenCore.normalizeSyncToken(process.env.TENKO_SYNC_TOKEN || '');
+const TENKO_SYNC_TOKEN_FINGERPRINT = TenkoSyncTokenCore.tokenFingerprint(TENKO_SYNC_TOKEN);
+console.log('TENKO_SYNC_TOKEN configured:', !!TENKO_SYNC_TOKEN,
+  '/ length:', TENKO_SYNC_TOKEN.length,
+  '/ fingerprint:', TENKO_SYNC_TOKEN_FINGERPRINT);
 
-// /tenko-syncの認証チェック。true=認証OK、false=既にレスポンス済み（呼び出し側はreturnするだけでよい）
+// /tenko-syncの認証チェック。true=認証OK、false=既にレスポンス済み（呼び出し側はreturnするだけでよい）。
+// 失敗時は診断用に「timestamp・エンドポイント・提示/期待されたfingerprintと長さ」だけをログする
+// （token本体は絶対にログに出さない）。次回発生時に「タブレット側tokenが変わったのか」
+// 「サーバー側tokenが変わったのか」を切り分けられるようにするための診断情報。
 function checkTenkoSyncAuth(req, res) {
   if (!TENKO_SYNC_TOKEN) {
     res.status(503).json({ status: 'error', message: 'sync not configured' });
@@ -73,13 +83,34 @@ function checkTenkoSyncAuth(req, res) {
   }
   var authHeader = req.headers['authorization'] || '';
   var bearerMatch = /^Bearer\s+(.+)$/i.exec(authHeader);
-  var providedToken = (bearerMatch ? bearerMatch[1] : '') || req.headers['x-tenko-sync-token'] || '';
+  var rawProvided = (bearerMatch ? bearerMatch[1] : '') || req.headers['x-tenko-sync-token'] || '';
+  var providedToken = TenkoSyncTokenCore.normalizeSyncToken(rawProvided);
   if (!providedToken || providedToken !== TENKO_SYNC_TOKEN) {
+    var providedFingerprint = providedToken ? TenkoSyncTokenCore.tokenFingerprint(providedToken) : null;
+    console.warn('[tenko-sync-auth] unauthorized:',
+      'timestamp=' + new Date().toISOString(),
+      'endpoint=' + req.method + ' ' + req.path,
+      'providedFingerprint=' + providedFingerprint,
+      'expectedFingerprint=' + TENKO_SYNC_TOKEN_FINGERPRINT,
+      'providedLength=' + providedToken.length,
+      'expectedLength=' + TENKO_SYNC_TOKEN.length);
     res.status(401).json({ status: 'error', message: 'unauthorized' });
     return false;
   }
   return true;
 }
+
+// 診断用: token本体を一切含まない「設定有無・fingerprint・長さ」だけを返すエンドポイント。
+// 認証不要（この情報だけではtoken本体は推測できない）。タブレット/PC側の診断UIが、
+// 自分の手元のtokenのfingerprintとここで返るfingerprintを見比べて一致/不一致を確認するために使う。
+app.get('/tenko-sync/status', function(req, res) {
+  res.json({
+    status: 'ok',
+    configured: !!TENKO_SYNC_TOKEN,
+    fingerprint: TENKO_SYNC_TOKEN_FINGERPRINT,
+    length: TENKO_SYNC_TOKEN.length
+  });
+});
 
 // 住所→座標キャッシュ（プロセス内、Renderでは再起動で消える）
 const geocodeCache = {};
