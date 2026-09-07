@@ -148,7 +148,14 @@
       // 同日判定（既存仕様のまま変更しない）: actual_attempt_timeの日付にwindow終了時刻(分)を
       // 合成してwindowEndDtを作る。日またぎは考慮しない。
       var windowEndDt = new Date(actualAttempt.getFullYear(), actualAttempt.getMonth(), actualAttempt.getDate(), Math.floor(windowEndMin / 60), windowEndMin % 60, 0);
-      var overageMin = Math.round((actualAttempt.getTime() - windowEndDt.getTime()) / 60000);
+      // 超過時間(分)は「経過した完了分」を採用する（Math.floor）。四捨五入(Math.round)だと
+      // 例えば実超過が70分30秒のとき71分に繰り上がってしまい、既存正常出力（W35_時間指定違反_分析）
+      // の表示（完了分のみ・端数切り捨て）と1分ずれる（実データ比較で確認: 対象DAの最大超過時間が
+      // 1時間10分→1時間11分にずれていた）。切り捨てにしても超過0分以下の除外判定（次行）や
+      // DA別違反件数には影響しない（超過が正の場合のfloorは常に0以上であり、超過なし/マイナス超過は
+      // 従来通り除外される）。全件一律に-1分するような補正ではなく、端数(30秒以上)を持つケースのみ
+      // 挙動が変わる。
+      var overageMin = Math.floor((actualAttempt.getTime() - windowEndDt.getTime()) / 60000);
       if (overageMin <= 0) continue; // 時間指定内に完了＝違反ではない
 
       var plannedEnter = cols.planned_enter_time !== undefined ? twcParseDateTimeCell(row[cols.planned_enter_time]) : null;
@@ -174,6 +181,34 @@
     var windowLabel = twcWindowDisplayLabel(topWindow);
 
     return { violations: violations, totalRows: totalRows, windowLabel: windowLabel };
+  }
+
+  // 新規: ドライバー表示名の自己重複除去（表示バグ対策）。
+  // index.htmlのTWC UI（resolveDriverNameFromTid）はTID完全一致でtransportIDsのキー
+  // （ドライバーマスタのenglishNameフィールドの値そのもの）をそのまま表示名として使う
+  // だけで、名前の組み立て・結合処理は一切行っていない。render-webhook-server.js側
+  // （/twc-export）も同様にmaster[].englishNameをそのまま採用しているが、実データ比較で
+  // マスタ側のenglishNameの値自体が区切りなく2回連結された状態（例:
+  // "晴樹 藤永晴樹 藤永"、"健士朗 脇山 脇山"）になっているケースが見つかっている。
+  // TransportIDの完全一致ルールやfuzzy match排除の方針は変更せず、氏名の新規合成も行わず、
+  // 明確な自己重複（文字列全体が同一部分文字列の単純な2回繰り返し、または空白区切りの
+  // 末尾語が直前の語と同一）だけを取り除く防御的な表示整形のみを行う。
+  function twcDedupeDisplayName(name) {
+    var s = String(name || '').trim();
+    if (!s) return s;
+    // a) 全体が同一文字列の2回連続（区切りなし）: "晴樹 藤永晴樹 藤永" → "晴樹 藤永"
+    var len = s.length;
+    if (len > 0 && len % 2 === 0) {
+      var half = s.slice(0, len / 2);
+      if (half && half === s.slice(len / 2)) return half;
+    }
+    // b) 空白区切りの単語が直前と同一のまま連続: "健士朗 脇山 脇山" → "健士朗 脇山"
+    var words = s.split(/\s+/);
+    var out = [];
+    for (var i = 0; i < words.length; i++) {
+      if (i === 0 || words[i] !== words[i - 1]) out.push(words[i]);
+    }
+    return out.join(' ');
   }
 
   // index.html: groupTwcByDriver (18156-18178) を移植（無変更、元から純粋関数）
@@ -319,6 +354,7 @@
     twcFormatTime: twcFormatTime,
     twcFormatOverage: twcFormatOverage,
     twcProcessRows: twcProcessRows,
+    twcDedupeDisplayName: twcDedupeDisplayName,
     twcGroupByDriver: twcGroupByDriver,
     twcClassifyJudgment: twcClassifyJudgment,
     twcMultiDayCount: twcMultiDayCount,

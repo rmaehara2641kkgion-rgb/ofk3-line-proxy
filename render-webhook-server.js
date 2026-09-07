@@ -2200,6 +2200,14 @@ function checkTwcApiAuth(req, res) {
   return true;
 }
 
+// "Wk35"表記をftdsExtractPeriodLabel（FTDS/CC/DNRと共通の関数。無変更）が拾える"W35"へ
+// 正規化するTWC専用のフォールバック。共有関数自体は変更せず、TWC側の呼び出し前処理としてのみ
+// 適用する（FTDS/CC/DNRの挙動には一切影響しない）。既存パターン（"W35"等）で抽出できる
+// ファイル名はそのまま（このフォールバックを通しても結果は変わらない）。
+function twcNormalizeWkPeriodLabel(text) {
+  return String(text || '').replace(/\bWk(\d+)/gi, 'W$1');
+}
+
 // TwcCore.twcBuildXxxSheetRows() が返す2次元配列をxlsxワークシートへ変換し、
 // TWC_SHEET_STYLEの列幅(!cols)のみ適用する（太字等のフォントスタイルは上記の理由で非対応）。
 function twcRowsToWorksheet(xlsxLib, rows, styleInfo) {
@@ -2258,7 +2266,10 @@ app.post('/twc-export', function(req, res) {
       for (var mi = 0; mi < master.length; mi++) {
         var mtid = String(master[mi].transportId || '').trim();
         if (!mtid) continue;
-        tidToName[mtid] = master[mi].englishName || '';
+        // マスタのenglishNameが区切りなく自己重複している既知のケース（例:
+        // "晴樹 藤永晴樹 藤永"）を表示前に除去する（TWC専用。FTDS/CC/DNRは無変更）。
+        // TID完全一致で解決した後の表示整形のみで、名前の新規合成やfuzzy matchは行わない。
+        tidToName[mtid] = TwcCore.twcDedupeDisplayName(master[mi].englishName || '');
       }
 
       var violations = processed.violations;
@@ -2270,6 +2281,10 @@ app.post('/twc-export', function(req, res) {
 
       var driverStats = TwcCore.twcGroupByDriver(violations);
       var periodLabel = ftdsExtractPeriodLabel('', file.originalname);
+      if (!periodLabel) {
+        // 通常のW\d+パターンで拾えなかった場合のみ、"Wk35"→"W35"正規化後に再試行する
+        periodLabel = ftdsExtractPeriodLabel('', twcNormalizeWkPeriodLabel(file.originalname));
+      }
       var period = periodLabel || getTodayJst();
 
       var xwb = xlsxLib.utils.book_new();
