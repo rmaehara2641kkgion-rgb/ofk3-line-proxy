@@ -12,7 +12,9 @@
     "test:manual-assign-board": "node tests/manual-assign-board-core.test.mjs",
     "test:rolling60h": "node tests/rolling60h-core.test.mjs",
     "test:twc": "node tests/twc-core.test.mjs",
-    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:twc"
+    "test:lat-core": "node tests/lat-core.test.mjs",
+    "test:lat-export-api": "node tests/lat-export-api.test.mjs",
+    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api"
   },
   "engines": {
     "node": ">=18.0.0"

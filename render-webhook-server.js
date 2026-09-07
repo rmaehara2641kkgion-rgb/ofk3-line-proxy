@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
+const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -2320,6 +2321,201 @@ app.post('/twc-export', function(req, res) {
       res.send(xlsxBuffer);
     }).catch(function(masterErr) {
       log('twc-export driver master fetch error: ' + masterErr.message);
+      if (!res.headersSent) {
+        res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
+      }
+    });
+  });
+});
+
+// ===== LAT（Loading Area Turnover / 出発判定）Excel解析API（n8n連携用） =====
+// index.htmlの既存LAT処理（latDetectInputFormat/latParseRawTurnoverRows/latParseRawRoutesRows/
+// LOW分岐/latTryCombineRaw/latExtractTime/mergeAndRender/exportLatResult、index.html内
+// 17047-17961行付近、現行main時点の行番号）と、lat-departure-core.js（判定ロジック）を
+// Node側に移植したもの。index.html側のロジックは無変更。判定ロジック（早着出発<-10分・
+// 定刻<=5分・遅延>5分の3閾値、超過時間の算出方法、route_id完全一致JOIN）は一切変更して
+// いない。列マッピング・入力形式判定・RAW2ファイルJOIN・集計・CSV行生成は lat-core.js
+// （DOM非依存の純粋関数）に分離済み。ドライバーマスタ取得はFTDS/CC/DNR/TWC用に定義済みの
+// 共通関数 fetchFtdsDriverMaster() をそのまま再利用する。
+//
+// 対応する3入力形式（ファイル名・週番号・列位置・投入順には一切依存しない。列名のみで判定）:
+//   LOW         : 1ファイルで完結（loading_area_turnover + employee_id）
+//   RAW（2ファイル）: Loading Area Turnover形式（loading_area_turnoverあり・employee_idなし）+
+//                    Total Number of DSP Routes形式（employee_id・planned_departure/arrivalあり・
+//                    loading_area_turnoverなし）を投入順を問わず自動判定してJOIN
+//
+// 【Excel時刻の重要仕様】Total Number of DSP Routes形式のroute_actual_departure/beacon_entrance
+// 列は、実データでExcelの書式設定が壊れておりraw:false（表示テキスト）で読むと時刻が
+// 意味不明な文字列に化けることを確認済み（例: 本来18:26のはずが"2629.3"になる）。
+// このAPIは他3API同様cellDatesオプションを使わずxlsxLib.read(buffer,{type:'buffer'})の
+// デフォルト（raw値）で読み、sheet_to_jsonもraw:trueで数値シリアルのまま取得し、
+// lat-core.jsのlatExtractTime()でシリアル値から時刻を復元する（フォーマット済み
+// テキストには依存しない）。ただしdate列のみは既存仕様どおりraw:falseのテキストへ
+// 差し替える（latOverlayDateColumnWithText。日付のみのセルはテキスト表示の方が安全なため）。
+// なお現行仕様上、route_actual_departure/beacon_entrance自体はそもそも参照しない
+// （実績時刻は常にLoading Area Turnover側のbeacon_*列を正として使うため、この壊れた
+// 列を直接読む経路がそもそも存在しない）。
+
+const LAT_API_TOKEN = process.env.LAT_API_TOKEN || '';
+console.log('LAT_API_TOKEN configured:', !!LAT_API_TOKEN);
+
+// /lat-exportの認証チェック。他4APIと同じfail-closed方針（未設定時503、不一致時401）。
+// トークン値そのものはログに出力しない。
+function checkLatApiAuth(req, res) {
+  if (!LAT_API_TOKEN) {
+    res.status(503).json({ status: 'error', message: 'LAT_API_TOKEN not configured' });
+    return false;
+  }
+  var provided = req.headers['x-lat-api-token'] || '';
+  if (!provided || provided !== LAT_API_TOKEN) {
+    res.status(401).json({ status: 'error', message: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// アップロードされた1ファイルをrows(raw:true、date列のみraw:falseで上書き)へ変換し、
+// 列名から入力形式を判定する。ファイル名は一切参照しない（多形式)。
+function latReadAndDetectFile(xlsxLib, file) {
+  var wb;
+  try {
+    wb = xlsxLib.read(file.buffer, { type: 'buffer' });
+  } catch (parseErr) {
+    return { error: 'parse_error', message: parseErr.message };
+  }
+  if (!wb.SheetNames || wb.SheetNames.length === 0) {
+    return { error: 'no_sheet' };
+  }
+  var ws = wb.Sheets[wb.SheetNames[0]];
+  var rowsRaw = xlsxLib.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
+  var rowsText = xlsxLib.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+  var rows = LatCore.latOverlayDateColumnWithText(rowsRaw, rowsText);
+  if (!rows || rows.length < 2) {
+    return { error: 'no_data' };
+  }
+  var colMap = LatCore.latBuildColMap(rows[0]);
+  var format = LatCore.latDetectInputFormat(colMap);
+  return { rows: rows, colMap: colMap, format: format, originalname: file.originalname };
+}
+
+var LAT_FORMAT_ERROR_MESSAGE = 'LATデータ形式を認識できませんでした（LOW形式: loading_area_turnover列とemployee_id列を持つ単一ファイル / RAW形式: Loading Area Turnover形式とTotal Number of DSP Routes形式の2ファイル）';
+
+app.post('/lat-export', function(req, res) {
+  if (!checkLatApiAuth(req, res)) return;
+
+  var xlsxLib = getXlsxLib();
+  var zipMulter = getZipMulter(); // 他4APIと同じ multer(memoryStorage, 10MB上限) を再利用
+  if (!xlsxLib || !zipMulter) {
+    return res.status(500).json({ status: 'error', message: 'server modules not ready' });
+  }
+
+  // LOWは1ファイル、RAWはTurnover+Routesの2ファイル。フィールド名は投入順・役割を
+  // 意味しない単一の'files'（多形式対応。役割は列名から自動判定するため、
+  // フィールド名やファイル名で判定しない）。
+  zipMulter.array('files', 2)(req, res, function(err) {
+    if (err) {
+      log('lat-export multer error: ' + (err.message || JSON.stringify(err)));
+      return res.status(400).json({ status: 'error', message: err.message || 'upload error' });
+    }
+
+    var files = req.files || [];
+    if (!files.length) {
+      return res.status(400).json({ status: 'error', message: 'file required (field name: files。LOWは1ファイル、RAWは2ファイル)' });
+    }
+    if (files.length > 2) {
+      return res.status(400).json({ status: 'error', message: 'files must be 1 (LOW) or 2 (RAW: Loading Area Turnover + Total Number of DSP Routes)' });
+    }
+
+    var parsedFiles = [];
+    for (var fi = 0; fi < files.length; fi++) {
+      var parsed = latReadAndDetectFile(xlsxLib, files[fi]);
+      if (parsed.error === 'parse_error') {
+        return res.status(400).json({ status: 'error', message: 'Excelファイルの解析に失敗しました: ' + parsed.message });
+      }
+      if (parsed.error === 'no_sheet' || parsed.error === 'no_data') {
+        return res.status(422).json({ status: 'error', message: LAT_FORMAT_ERROR_MESSAGE });
+      }
+      parsedFiles.push(parsed);
+    }
+
+    var beaconMap = null;
+    var joinDiagnosis = null;
+    var period = '';
+
+    if (parsedFiles.length === 1) {
+      var pf = parsedFiles[0];
+      if (pf.format !== 'low') {
+        return res.status(422).json({ status: 'error', message: 'RAW形式（Loading Area Turnover / Total Number of DSP Routes）は2ファイル同時投入が必要です。1ファイルのみの場合はLOW形式（loading_area_turnover列とemployee_id列を両方持つファイル）を投入してください。' });
+      }
+      var lowParsed = LatCore.latParseLowRows(pf.rows, pf.colMap);
+      if (lowParsed.error === 'no_data' || lowParsed.error === 'no_route_id') {
+        return res.status(422).json({ status: 'error', message: LAT_FORMAT_ERROR_MESSAGE });
+      }
+      if (!lowParsed.count) {
+        return res.status(422).json({ status: 'error', message: 'LATデータを1件も読み込めませんでした' });
+      }
+      beaconMap = lowParsed.map;
+      period = ftdsExtractPeriodLabel('', pf.originalname);
+    } else {
+      // 2ファイル: 投入順は問わない。列名判定の結果がTurnover1件+Routes1件の組み合わせの
+      // 場合のみJOINする（それ以外の組み合わせ＝誤った2ファイル投入はエラーとする）。
+      var turnoverPf = parsedFiles.filter(function(p) { return p.format === 'raw_turnover'; });
+      var routesPf = parsedFiles.filter(function(p) { return p.format === 'raw_routes'; });
+      if (turnoverPf.length !== 1 || routesPf.length !== 1) {
+        return res.status(422).json({ status: 'error', message: '2ファイル投入時はLoading Area Turnover形式（loading_area_turnover列あり・employee_idなし）とTotal Number of DSP Routes形式（employee_id・planned_departure/planned_arrival列あり・loading_area_turnoverなし）を1つずつ投入してください（投入順は問いません）' });
+      }
+      var turnoverParsed = LatCore.latParseRawTurnoverRows(turnoverPf[0].rows, turnoverPf[0].colMap);
+      var routesParsed = LatCore.latParseRawRoutesRows(routesPf[0].rows, routesPf[0].colMap);
+      if (!turnoverParsed.count) {
+        return res.status(422).json({ status: 'error', message: 'Loading Area Turnoverデータを1件も読み込めませんでした' });
+      }
+      var combined = LatCore.latCombineRaw(turnoverParsed.rows, turnoverParsed, routesParsed.rows, routesParsed);
+      beaconMap = combined.beaconMap;
+      joinDiagnosis = combined.diagnosis;
+      period = ftdsExtractPeriodLabel('', turnoverPf[0].originalname) || ftdsExtractPeriodLabel('', routesPf[0].originalname);
+    }
+
+    if (!beaconMap || !Object.keys(beaconMap).length) {
+      return res.status(422).json({ status: 'error', message: 'LATデータがありません' });
+    }
+
+    var resultRows = LatCore.latBuildResultRows(beaconMap);
+
+    fetchFtdsDriverMaster().then(function(master) { // /tenko-master?action=getMaster を他4APIと共通取得
+      var tidToName = {};
+      var tidToJapaneseName = {};
+      for (var mi = 0; mi < master.length; mi++) {
+        var mtid = String(master[mi].transportId || '').trim();
+        if (!mtid) continue;
+        tidToName[mtid] = master[mi].englishName || '';
+        tidToJapaneseName[mtid] = master[mi].japaneseName || '';
+      }
+      // 表示形式はDNRと同じ「japaneseName (englishName)」（dnr-core.jsのdnrResolveDriverDisplayNameを
+      // 再利用。dnr-core.js自体は変更しない）。TID不一致時はdriverName=''のままとなり、
+      // 出力側でexportLatResultと同じ「(未特定)」フォールバックが適用される。
+      for (var ri = 0; ri < resultRows.length; ri++) {
+        var rec = resultRows[ri];
+        if (rec.employeeId && tidToName[rec.employeeId]) {
+          rec.driverName = DnrCore.dnrResolveDriverDisplayName(tidToName[rec.employeeId], tidToJapaneseName[rec.employeeId]);
+        }
+      }
+
+      var csvBuild = LatCore.latBuildExportCsvRows(resultRows);
+      var csv = LatCore.latRowsToCsvString(csvBuild.rows);
+      var outPeriod = period || getTodayJst();
+      var outFileName = 'LAT分析_' + outPeriod + '.csv';
+
+      log('lat-export: ' + resultRows.length + ' routes, master=' + master.length + ' drivers' +
+        (joinDiagnosis ? ', join=' + JSON.stringify(joinDiagnosis) : ', low(single-file)') + ', file=' + outFileName);
+
+      // Content-Dispositionの非ASCII制約は他4APIと同じ（RFC 5987 filename*=を使用）
+      var asciiFallbackName = 'LAT_export_' + outPeriod.replace(/[^A-Za-z0-9_-]/g, '') + '.csv';
+      var encodedOutFileName = encodeURIComponent(outFileName);
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="' + asciiFallbackName + '"; filename*=UTF-8\'\'' + encodedOutFileName);
+      res.send(csv);
+    }).catch(function(masterErr) {
+      log('lat-export driver master fetch error: ' + masterErr.message);
       if (!res.headersSent) {
         res.status(502).json({ status: 'error', message: 'ドライバーマスタの取得に失敗しました: ' + masterErr.message });
       }
