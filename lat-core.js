@@ -491,6 +491,61 @@
     return { tidToName: tidToName, tidToJapaneseName: tidToJapaneseName };
   }
 
+  // 新規: 現行マスタのenglishName表記揺れ（例: "玲緒 山田 山" のように、姓の断片トークンが
+  // 余計に付与されている）を、信頼できる情報源であるjapaneseNameの構成語（トークン）と
+  // 照合することで安全に吸収する。マスタデータそのものは書き換えない（表示用の値だけを
+  // 補正する）。
+  //
+  // ルール（一般化のみ。個別のTID・氏名の分岐は一切行わない）:
+  //   1. englishName・japaneseNameを空白（半角/全角）でトークン分割する
+  //   2. englishNameの各トークンについて、japaneseNameのトークン集合に完全一致するものだけを
+  //      残す（重複トークンは最初の1回のみ採用）。部分一致・類似度判定は行わない
+  //      （fuzzy matchではなく、トークンの完全一致比較のみ）
+  //   3. 1つも一致しない場合（ローマ字表記等、той文字体系が異なりそもそも比較できない場合）や、
+  //      全トークンが一致する場合（元から正常）は、englishNameを一切変更せず返す
+  //      （安全側に倒す＝判定に自信が持てない時は手を加えない）
+  //
+  // 例: englishName="玲緒 山田 山"(3トークン), japaneseName="山田 玲緒"(2トークン)
+  //     → "山" はjapaneseNameのどのトークンにも一致しないため除去 → "玲緒 山田"
+  // 例: englishName="優人 小野", japaneseName="小野 優人" → 全トークン一致のため無変更
+  // 例: englishName="yuusuke oki", japaneseName="沖 裕介" → 1つも一致しないため無変更
+  function latNormalizeEnglishNameTokens(englishName, japaneseName) {
+    var en = String(englishName || '').trim();
+    var ja = String(japaneseName || '').trim();
+    if (!en || !ja) return en;
+    var enTokens = en.split(/[\s　]+/).filter(Boolean);
+    if (enTokens.length <= 1) return en;
+    var jaTokenSet = {};
+    ja.split(/[\s　]+/).filter(Boolean).forEach(function (t) { jaTokenSet[t] = true; });
+    var seen = {};
+    var filtered = [];
+    for (var i = 0; i < enTokens.length; i++) {
+      var t = enTokens[i];
+      if (jaTokenSet[t] && !seen[t]) { filtered.push(t); seen[t] = true; }
+    }
+    if (filtered.length === 0 || filtered.length === enTokens.length) return en;
+    return filtered.join(' ');
+  }
+
+  // 新規: TID解決済みのenglishName/japaneseNameから、既存表示仕様（DNRと同じ
+  // 「japaneseName (englishName)」形式）に沿った表示名を1件分組み立てる。
+  //   - englishNameの表記揺れ吸収（TwcCore.twcDedupeDisplayNameによる自己重複除去は
+  //     呼び出し側で適用済みの値を受け取る想定。ここではjapaneseNameとのトークン照合のみ行う）
+  //   - japaneseNameが取得できていればenglishName側の異常だけを理由に空文字（＝(未特定)）へ
+  //     落とさない（englishNameが空でもjapaneseNameだけで表示する）
+  //   - 表示形式の組み立て自体はdnr-core.jsのdnrResolveDriverDisplayNameをそのまま利用する
+  //     （呼び出し側から渡してもらう。lat-core.jsはdnr-core.jsに依存しない設計を維持するため）
+  function latResolveDriverDisplayName(englishName, japaneseName, dnrResolveDriverDisplayNameFn) {
+    var en = String(englishName || '').trim();
+    var ja = String(japaneseName || '').trim();
+    if (!en && !ja) return '';
+    if (en && ja) {
+      var cleanedEn = latNormalizeEnglishNameTokens(en, ja);
+      return dnrResolveDriverDisplayNameFn(cleanedEn, ja);
+    }
+    return ja || en;
+  }
+
   // index.html: latResultHasPlannedDepartureSource (17670-17675) を移植（無変更）
   function latResultHasPlannedDepartureSource(latResultData) {
     for (var i = 0; i < latResultData.length; i++) {
@@ -552,6 +607,8 @@
     latCombineRaw: latCombineRaw,
     latBuildResultRows: latBuildResultRows,
     latBuildTidNameMaps: latBuildTidNameMaps,
+    latNormalizeEnglishNameTokens: latNormalizeEnglishNameTokens,
+    latResolveDriverDisplayName: latResolveDriverDisplayName,
     latResultHasPlannedDepartureSource: latResultHasPlannedDepartureSource,
     latBuildExportCsvRows: latBuildExportCsvRows,
     latRowsToCsvString: latRowsToCsvString

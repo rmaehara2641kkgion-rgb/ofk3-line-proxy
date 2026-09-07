@@ -22,6 +22,8 @@ import { dirname, join } from 'path';
 
 const require = createRequire(import.meta.url);
 const LatCore = require('../lat-core.js');
+const DnrCore = require('../dnr-core.js'); // 表示形式の再利用先。dnr-core.js自体は変更していない
+const TwcCore = require('../twc-core.js'); // 自己重複除去(twcDedupeDisplayName)の再利用先。twc-core.js自体は変更していない
 const XLSX = require('xlsx');
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIX = join(__dirname, 'fixtures/lat-verify/synthetic');
@@ -302,6 +304,144 @@ function testBuildTidNameMapsHandlesDuplicateMasterRecords() {
   assert(LatCore.latBuildTidNameMaps(undefined).tidToName, 'master自体がundefinedでもクラッシュしない');
 }
 
+// ---- ドライバー表示名解決: 現行マスタのenglishName表記揺れ吸収 ----
+// 実運用で報告された2件の表記揺れ（マスタの値自体は架空の例に置き換えて再現。
+// 実在氏名・TIDは使わない）。「一般化できるトークン照合ルールのみ」で解決できることの
+// 回帰テスト。個別のTID・氏名のハードコードによる分岐は一切追加していない。
+function testNormalizeEnglishNameTokensGeneralRules() {
+  // Case A（実運用相当・簡略化）: englishName・japaneseNameのトークンが完全に一致 → 無変更
+  assert(LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily', 'SynFamily SynGiven') === 'SynGiven SynFamily', 'トークンが完全一致する場合は変更しない');
+
+  // Case B（実運用相当・簡略化）: englishNameに、japaneseNameのどのトークンにも一致しない
+  // 余分な断片トークンが付いている → その断片だけを除去
+  assert(LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily Syn', 'SynFamily SynGiven') === 'SynGiven SynFamily', '余分な断片トークンだけを除去する, got ' + LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily Syn', 'SynFamily SynGiven'));
+
+  // 1つも一致しない場合（ローマ字表記等、文字体系が異なり比較不能）→ 無変更（安全側）
+  assert(LatCore.latNormalizeEnglishNameTokens('romaji name here', 'SynFamily SynGiven') === 'romaji name here', '1つも一致しない場合は変更しない（fuzzy matchしない）');
+
+  // 単一トークンのenglishName（比較の意味が薄い）→ 無変更
+  assert(LatCore.latNormalizeEnglishNameTokens('SYNCODE', 'SynFamily SynGiven') === 'SYNCODE', '単一トークンのenglishNameは変更しない');
+
+  // 同一トークンの重複（TwcCore.twcDedupeDisplayNameでは捕捉できない非隣接重複）も
+  // 一致トークンの範囲内で重複除去される
+  assert(LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily SynGiven', 'SynFamily SynGiven') === 'SynGiven SynFamily', '一致トークンの重複も除去される, got ' + LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily SynGiven', 'SynFamily SynGiven'));
+
+  // englishName・japaneseNameいずれかが空 → 無変更
+  assert(LatCore.latNormalizeEnglishNameTokens('', 'SynFamily SynGiven') === '', 'englishName空は空のまま');
+  assert(LatCore.latNormalizeEnglishNameTokens('SynGiven SynFamily', '') === 'SynGiven SynFamily', 'japaneseName空ならenglishNameは無変更');
+}
+
+function testResolveDriverDisplayNameEndToEnd() {
+  function resolve(en, ja) {
+    if (en) en = TwcCore.twcDedupeDisplayName(en);
+    return LatCore.latResolveDriverDisplayName(en, ja, DnrCore.dnrResolveDriverDisplayName);
+  }
+
+  // Case A: englishName="優人 小野"相当のトークン一致ケース → 「japaneseName (englishName)」形式
+  assert(resolve('SynGiven SynFamily', 'SynFamily SynGiven') === 'SynFamily SynGiven (SynGiven SynFamily)', 'Case A: 完全一致トークンはdnrResolveDriverDisplayName形式のまま');
+
+  // Case B: englishNameに余分な断片トークンがある場合 → 断片だけ除去したうえで
+  // 「japaneseName (正規化されたenglishName)」形式。日本語名は正しく表示され、
+  // 異常なenglishNameのために(未特定)へは絶対に落ちない
+  var caseB = resolve('SynGiven SynFamily Syn', 'SynFamily SynGiven');
+  assert(caseB === 'SynFamily SynGiven (SynGiven SynFamily)', 'Case B: 断片除去後にDNR形式で表示され、未特定へ落ちない, got ' + caseB);
+  assert(caseB.indexOf('未特定') < 0, 'Case B: 未特定にならない');
+
+  // englishNameが完全に一致しない（ローマ字等）場合でも、japaneseNameがあれば
+  // englishName異常を理由に未特定へは落とさず、無変更のenglishNameでDNR形式表示する
+  var romaji = resolve('romaji name here', 'SynFamily SynGiven');
+  assert(romaji === 'SynFamily SynGiven (romaji name here)', 'ローマ字等で比較不能でも無変更のままDNR形式で表示される, got ' + romaji);
+
+  // TwcCore.twcDedupeDisplayNameで捕捉される既存の自己重複パターン（TWCの氏名重複調査で
+  // 確認済み）も、事前のdedupeステップで正しく処理される
+  assert(resolve('SynName SynName', 'SynName') === 'SynName (SynName)', '区切りなし全体重複はTwcCore.twcDedupeDisplayNameで除去される');
+
+  // japaneseNameのみでenglishNameが空 → japaneseNameだけで表示（"名前 ()"のような
+  // 不完全な形式にならない。未特定にも落とさない）
+  var jaOnly = resolve('', 'SynFamily SynGiven');
+  assert(jaOnly === 'SynFamily SynGiven', 'englishName空でもjapaneseNameだけで表示される（未特定へ落とさない）');
+  assert(jaOnly.indexOf('(') < 0, 'englishName空の場合は空の括弧を付けない');
+
+  // englishNameのみでjapaneseNameが空 → 既存仕様どおりenglishNameのみ（2832614-49/2834055-14相当の
+  // 「最新マスタで新規解決できたケース」は退行させない）
+  assert(resolve('SynEnglishOnly Name', '') === 'SynEnglishOnly Name', 'japaneseName空の場合はenglishNameのみ表示（既存の新規解決ケースを退行させない）');
+
+  // 両方空 → 呼び出し側で(未特定)フォールバックが適用される空文字
+  assert(resolve('', '') === '', '両方空の場合は空文字（呼び出し側で(未特定)フォールバック）');
+}
+
+// ---- 本番経路の全体パイプライン再現テスト ----
+// 個別関数を単体で呼ぶのではなく、
+//   master配列（fetchFtdsDriverMaster()の戻り値と同じ形）
+//     → LatCore.latBuildTidNameMaps()
+//     → render-webhook-server.js の /lat-export と全く同じグルー手順
+//       （TwcCore.twcDedupeDisplayNameでの自己重複除去 → LatCore.latResolveDriverDisplayName）
+//     → 最終表示名
+// を実際に通し、transportId起点でenglishName/japaneseNameが失われずに最終表示まで
+// 到達することを確認する。fetchFtdsDriverMaster()自体（/tenko-masterへのHTTP取得）と
+// /tenko-master GETルート（外部GASへのプロキシ、render-webhook-server.js 971-988行）は
+// いずれもレスポンスをそのまま(res.json(response.data))中継するだけで、フィールド名の
+// 変換や書き換えは一切行っていない（コード上確認済み）。そのため、ここでのmaster配列は
+// 「fetchFtdsDriverMaster()が実際に返す値の形」をそのまま模したもので問題ない。
+//
+// 値はすべて架空（SYN-プレフィックス）。実在TID・氏名は使わない。
+function latExportGlueResolveDriverName(master, transportId) {
+  // render-webhook-server.js の /lat-export ドライバー名解決部分（2484-2506行付近）と
+  // 完全に同じ手順。この関数自体は本番コードの複製ではなく、本番コードが依存する
+  // LatCore/TwcCore/DnrCoreの公開関数だけを同じ順序で呼び出すテスト専用ヘルパー。
+  var maps = LatCore.latBuildTidNameMaps(master);
+  var en = maps.tidToName[transportId] || '';
+  var ja = maps.tidToJapaneseName[transportId] || '';
+  if (!en && !ja) return { resolved: '', en: en, ja: ja };
+  if (en) en = TwcCore.twcDedupeDisplayName(en);
+  return { resolved: LatCore.latResolveDriverDisplayName(en, ja, DnrCore.dnrResolveDriverDisplayName), en: en, ja: ja };
+}
+
+function testFullPipelineFromMasterArrayToDisplayName() {
+  // ケース1（AJ1R2YVU3NWZ2相当）: englishName自体は正常（トークン正規化は不要なケース）。
+  // ここで確認したいのは「transportId→japaneseNameが latBuildTidNameMaps の時点で
+  // 失われていないか」であり、正規化ロジックの動作確認ではない。
+  var masterOno = [
+    { transportId: 'SYN-TID-CASE1', englishName: 'SynGiven SynFamily', japaneseName: 'SynFamily SynGiven' }
+  ];
+  var r1 = latExportGlueResolveDriverName(masterOno, 'SYN-TID-CASE1');
+  assert(r1.ja === 'SynFamily SynGiven', 'ケース1: latBuildTidNameMapsの時点でjapaneseNameが保持されている, got ' + JSON.stringify(r1.ja));
+  assert(r1.en === 'SynGiven SynFamily', 'ケース1: englishNameも保持されている（正規化で消えていない）, got ' + JSON.stringify(r1.en));
+  assert(r1.resolved === 'SynFamily SynGiven (SynGiven SynFamily)', 'ケース1: パイプライン全体で正しい表示名まで到達する, got ' + JSON.stringify(r1.resolved));
+  assert(r1.resolved.indexOf('未特定') < 0, 'ケース1: 未特定にならない');
+
+  // ケース2（A2YHPFN5QSP7X0相当）: englishNameに余分な断片トークンがあるケース。
+  // パイプライン全体を通しても断片が正しく除去され、未特定にならないことを確認。
+  var masterYamada = [
+    { transportId: 'SYN-TID-CASE2', englishName: 'SynGiven SynFamily Syn', japaneseName: 'SynFamily SynGiven' }
+  ];
+  var r2 = latExportGlueResolveDriverName(masterYamada, 'SYN-TID-CASE2');
+  assert(r2.ja === 'SynFamily SynGiven', 'ケース2: japaneseNameが保持されている');
+  assert(r2.resolved === 'SynFamily SynGiven (SynGiven SynFamily)', 'ケース2: 断片トークン除去後の表示名まで到達する, got ' + JSON.stringify(r2.resolved));
+  assert(r2.resolved.indexOf('未特定') < 0, 'ケース2: 未特定にならない');
+  assert(r2.resolved.indexOf('Syn)') < 0, 'ケース2: 余分な断片トークンが最終表示に残っていない');
+
+  // 対照実験: マスタ側にjapaneseNameが本当に存在しない（空文字）場合は、
+  // パイプラインの途中で失われたのではなく、入力時点で無いことを明示する
+  // （fetchFtdsDriverMaster()やlatBuildTidNameMapsの不具合と、マスタ側のデータ欠落を
+  // 区別するための対照ケース）。この場合はenglishNameのみの表示になる（未特定にはしない）。
+  var masterNoJa = [
+    { transportId: 'SYN-TID-CASE3', englishName: 'SynEnglishOnly Name', japaneseName: '' }
+  ];
+  var r3 = latExportGlueResolveDriverName(masterNoJa, 'SYN-TID-CASE3');
+  assert(r3.ja === '', '対照ケース: マスタ入力時点でjapaneseNameが空であることを明示');
+  assert(r3.resolved === 'SynEnglishOnly Name', '対照ケース: japaneseNameが本当に無い場合はenglishNameのみの表示になる（2832614-49/2834055-14相当、退行なし）');
+
+  // 同一TIDが複数レコードある場合でも、ケース1/2の情報が失われないことを確認
+  // （latBuildTidNameMapsの重複対策との組み合わせ）
+  var masterWithDup = [
+    { transportId: 'SYN-TID-CASE1', englishName: '', japaneseName: '' }, // 空の重複レコードが後にあっても
+    { transportId: 'SYN-TID-CASE1', englishName: 'SynGiven SynFamily', japaneseName: 'SynFamily SynGiven' }
+  ];
+  var r4 = latExportGlueResolveDriverName(masterWithDup, 'SYN-TID-CASE1');
+  assert(r4.resolved === 'SynFamily SynGiven (SynGiven SynFamily)', '重複レコードがあっても正しい表示名まで到達する');
+}
+
 testFormatDetectionSyntheticFiles();
 testFilenameIndependence();
 testOrderIndependence();
@@ -314,5 +454,8 @@ testBomCsv();
 testLowStandalone();
 testRawJoinSeventeenColumnOutput();
 testBuildTidNameMapsHandlesDuplicateMasterRecords();
+testNormalizeEnglishNameTokensGeneralRules();
+testResolveDriverDisplayNameEndToEnd();
+testFullPipelineFromMasterArrayToDisplayName();
 
 console.log('lat-core.test.mjs: all tests passed (synthetic fixtures only; W35 real-data regression recorded in comments, not committed as fixture)');

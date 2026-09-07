@@ -2490,11 +2490,23 @@ app.post('/lat-export', function(req, res) {
       // 表示形式はDNRと同じ「japaneseName (englishName)」（dnr-core.jsのdnrResolveDriverDisplayNameを
       // 再利用。dnr-core.js自体は変更しない）。TID不一致時はdriverName=''のままとなり、
       // 出力側でexportLatResultと同じ「(未特定)」フォールバックが適用される。
+      //
+      // 現行マスタのenglishName表記揺れ対策（運用上マスタ自体は直接修正できないため、
+      // LAT側の表示解決だけで安全に吸収する）:
+      //   1. TwcCore.twcDedupeDisplayName（既存関数の再利用。TWCの氏名重複調査で確認済みの
+      //      「自己重複」パターン－ 例:"晴樹 藤永晴樹 藤永"、"健士朗 脇山 脇山" －を除去）
+      //   2. LatCore.latNormalizeEnglishNameTokens（新規。japaneseNameの構成語と一致しない
+      //      余分なトークンだけを除去。例:"玲緒 山田 山"→"玲緒 山田"）
+      // のどちらもTID完全一致で解決済みのenglishName文字列だけを対象とした表記正規化であり、
+      // 別TIDへの誤集約やfuzzy matchは一切行わない。個別TID・氏名のハードコードも無し。
       for (var ri = 0; ri < resultRows.length; ri++) {
         var rec = resultRows[ri];
-        if (rec.employeeId && tidToName[rec.employeeId]) {
-          rec.driverName = DnrCore.dnrResolveDriverDisplayName(tidToName[rec.employeeId], tidToJapaneseName[rec.employeeId]);
-        }
+        if (!rec.employeeId) continue;
+        var latEn = tidToName[rec.employeeId] || '';
+        var latJa = tidToJapaneseName[rec.employeeId] || '';
+        if (!latEn && !latJa) continue; // 未解決のまま。出力側で「(未特定)」フォールバック
+        if (latEn) latEn = TwcCore.twcDedupeDisplayName(latEn);
+        rec.driverName = LatCore.latResolveDriverDisplayName(latEn, latJa, DnrCore.dnrResolveDriverDisplayName);
       }
 
       var csvBuild = LatCore.latBuildExportCsvRows(resultRows);
