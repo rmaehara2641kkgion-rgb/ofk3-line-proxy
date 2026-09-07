@@ -2482,14 +2482,11 @@ app.post('/lat-export', function(req, res) {
     var resultRows = LatCore.latBuildResultRows(beaconMap);
 
     fetchFtdsDriverMaster().then(function(master) { // /tenko-master?action=getMaster を他4APIと共通取得
-      var tidToName = {};
-      var tidToJapaneseName = {};
-      for (var mi = 0; mi < master.length; mi++) {
-        var mtid = String(master[mi].transportId || '').trim();
-        if (!mtid) continue;
-        tidToName[mtid] = master[mi].englishName || '';
-        tidToJapaneseName[mtid] = master[mi].japaneseName || '';
-      }
+      // TID→englishName/japaneseNameのマップ構築はlat-core.jsのlatBuildTidNameMaps()へ委譲
+      // （同一TIDの重複マスタレコード対策込み。詳細はlat-core.js側のコメント参照）。
+      var nameMaps = LatCore.latBuildTidNameMaps(master);
+      var tidToName = nameMaps.tidToName;
+      var tidToJapaneseName = nameMaps.tidToJapaneseName;
       // 表示形式はDNRと同じ「japaneseName (englishName)」（dnr-core.jsのdnrResolveDriverDisplayNameを
       // 再利用。dnr-core.js自体は変更しない）。TID不一致時はdriverName=''のままとなり、
       // 出力側でexportLatResultと同じ「(未特定)」フォールバックが適用される。

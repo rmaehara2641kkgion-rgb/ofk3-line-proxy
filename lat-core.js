@@ -465,6 +465,32 @@
     return out;
   }
 
+  // 新規: ドライバーマスタ配列（fetchFtdsDriverMaster()の戻り値と同じ
+  // [{transportId, englishName, japaneseName, ...}, ...] 形状。FTDS/CC/DNR/TWCの各APIが
+  // 共通で使っているものと同一）から、TID(TransportID)→englishName/japaneseNameのマップを
+  // 構築する。表示名の組み立て（「japaneseName (englishName)」形式へのラップ）自体はここでは
+  // 行わない（呼び出し側でdnr-core.jsのdnrResolveDriverDisplayName()を再利用する）。
+  //
+  // 実データ調査で、同一TransportIDがマスタ配列に複数回出現するケース（入れ替え・再登録等で
+  // 一部フィールドが空の重複レコードが残っている）があることを確認済み（TWCの氏名重複調査でも
+  // 同種のマスタ品質問題を確認済み）。単純に配列を先頭から辿って毎回上書きすると、後から
+  // 出現した空文字が先に見つかった正しい氏名を消してしまうことがあるため、englishName・
+  // japaneseNameそれぞれ独立に「最初に見つかった空でない値」を採用する（後勝ちにしない）。
+  // TID完全一致ルールは維持し、fuzzy matchや氏名の新規合成は一切行わない。
+  function latBuildTidNameMaps(master) {
+    var tidToName = {};
+    var tidToJapaneseName = {};
+    for (var mi = 0; mi < (master || []).length; mi++) {
+      var mtid = String((master[mi] && master[mi].transportId) || '').trim();
+      if (!mtid) continue;
+      var en = (master[mi].englishName || '');
+      var ja = (master[mi].japaneseName || '');
+      if (en && !tidToName[mtid]) tidToName[mtid] = en;
+      if (ja && !tidToJapaneseName[mtid]) tidToJapaneseName[mtid] = ja;
+    }
+    return { tidToName: tidToName, tidToJapaneseName: tidToJapaneseName };
+  }
+
   // index.html: latResultHasPlannedDepartureSource (17670-17675) を移植（無変更）
   function latResultHasPlannedDepartureSource(latResultData) {
     for (var i = 0; i < latResultData.length; i++) {
@@ -525,6 +551,7 @@
     latParseLowRows: latParseLowRows,
     latCombineRaw: latCombineRaw,
     latBuildResultRows: latBuildResultRows,
+    latBuildTidNameMaps: latBuildTidNameMaps,
     latResultHasPlannedDepartureSource: latResultHasPlannedDepartureSource,
     latBuildExportCsvRows: latBuildExportCsvRows,
     latRowsToCsvString: latRowsToCsvString

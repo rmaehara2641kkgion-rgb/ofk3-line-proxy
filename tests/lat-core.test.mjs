@@ -256,6 +256,52 @@ function testRawJoinSeventeenColumnOutput() {
   assert(csvBuild.rows[0].indexOf('出発予定') === 10 && csvBuild.rows[0].indexOf('判定') === 16, '列順は既存仕様どおり（出発予定=11列目、判定=最終列）');
 }
 
+// ---- ドライバー表示名解決: 同一TIDの重複マスタレコード対策（latBuildTidNameMaps） ----
+// 実運用で報告された「元祖(index.html)では氏名解決できていたのに/lat-exportでは
+// (未特定)になった」ケースの根本原因（同一TransportIDがマスタ配列に複数回出現し、
+// 後から出現した空文字が先に見つかった正しい値を上書きしていた）に対する回帰テスト。
+// マスタの内容自体は架空（実在TID・氏名は使わない）。
+function testBuildTidNameMapsHandlesDuplicateMasterRecords() {
+  // ケース1: 正しい値が先、後続の重複レコードが両フィールドとも空 → 空で上書きされない
+  const masterA = [
+    { transportId: 'SYN-TID-1', englishName: 'SYN Name A', japaneseName: 'テスト名A' },
+    { transportId: 'SYN-TID-1', englishName: '', japaneseName: '' }
+  ];
+  const mapsA = LatCore.latBuildTidNameMaps(masterA);
+  assert(mapsA.tidToName['SYN-TID-1'] === 'SYN Name A', '先に見つかった正しいenglishNameが後続の空文字で上書きされない, got ' + mapsA.tidToName['SYN-TID-1']);
+  assert(mapsA.tidToJapaneseName['SYN-TID-1'] === 'テスト名A', '先に見つかった正しいjapaneseNameが後続の空文字で上書きされない, got ' + mapsA.tidToJapaneseName['SYN-TID-1']);
+
+  // ケース2: 空レコードが先、正しい値が後続 → 後続の正しい値が採用される（永久にブロックされない）
+  const masterB = [
+    { transportId: 'SYN-TID-2', englishName: '', japaneseName: '' },
+    { transportId: 'SYN-TID-2', englishName: 'SYN Name B', japaneseName: 'テスト名B' }
+  ];
+  const mapsB = LatCore.latBuildTidNameMaps(masterB);
+  assert(mapsB.tidToName['SYN-TID-2'] === 'SYN Name B', '先行レコードが空でも後続の正しい値が採用される, got ' + mapsB.tidToName['SYN-TID-2']);
+  assert(mapsB.tidToJapaneseName['SYN-TID-2'] === 'テスト名B', '先行レコードが空でも後続の正しい値が採用される, got ' + mapsB.tidToJapaneseName['SYN-TID-2']);
+
+  // ケース3: englishNameのみ重複で空、japaneseNameは両方に値あり → フィールドごとに独立して先勝ち
+  const masterC = [
+    { transportId: 'SYN-TID-3', englishName: 'SYN Name C', japaneseName: 'テスト名C1' },
+    { transportId: 'SYN-TID-3', englishName: '', japaneseName: 'テスト名C2' }
+  ];
+  const mapsC = LatCore.latBuildTidNameMaps(masterC);
+  assert(mapsC.tidToName['SYN-TID-3'] === 'SYN Name C', 'englishNameは最初の値を維持');
+  assert(mapsC.tidToJapaneseName['SYN-TID-3'] === 'テスト名C1', 'japaneseNameも最初の値を維持（2件目に値があっても上書きしない＝先勝ち）');
+
+  // TID完全一致であることの確認（fuzzy matchなし・前後空白のみ許容）
+  const masterD = [{ transportId: '  SYN-TID-4  ', englishName: 'SYN Name D', japaneseName: '' }];
+  const mapsD = LatCore.latBuildTidNameMaps(masterD);
+  assert(mapsD.tidToName['SYN-TID-4'] === 'SYN Name D', 'transportIdの前後空白のみtrimされる（既存仕様どおり）');
+  assert(mapsD.tidToName['SYN-TID-4X'] === undefined, '部分一致・類似TIDへは解決しない（fuzzy matchなし）');
+
+  // transportId欠落レコードは無視される（クラッシュしない）
+  const masterE = [{ transportId: '', englishName: 'SYN Ghost', japaneseName: '' }, null];
+  const mapsE = LatCore.latBuildTidNameMaps(masterE.filter(Boolean)); // nullは呼び出し側で除外される想定だが、防御的にfilter
+  assert(Object.keys(mapsE.tidToName).length === 0, 'transportId空のレコードはマップに含まれない');
+  assert(LatCore.latBuildTidNameMaps(undefined).tidToName, 'master自体がundefinedでもクラッシュしない');
+}
+
 testFormatDetectionSyntheticFiles();
 testFilenameIndependence();
 testOrderIndependence();
@@ -267,5 +313,6 @@ testJudgmentBoundaries();
 testBomCsv();
 testLowStandalone();
 testRawJoinSeventeenColumnOutput();
+testBuildTidNameMapsHandlesDuplicateMasterRecords();
 
 console.log('lat-core.test.mjs: all tests passed (synthetic fixtures only; W35 real-data regression recorded in comments, not committed as fixture)');
