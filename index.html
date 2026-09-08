@@ -3245,6 +3245,35 @@ var driverDB = {
       return name;
     }
 
+    // ===== TransportID / driverId 用の識別子正規化 =====
+    // QRコードの読取値やドライバーマスタの手入力値には、IME入力ミスによる全角英数字混入、
+    // コピペ時の不可視文字（BOM/ゼロ幅スペース）、改行・前後空白などが混入することがある。
+    // これらはJSの \s では正規化しきれない全角英数字を除き、比較前に必ずこの関数を通す。
+    // 既存の normalizeExecCourseType (index.html) / toHalfWidthAlnum (rolling60h-core.js) と
+    // 同種の全角→半角変換を、TransportID・driverIdの照合専用に切り出したもの。
+    function normalizeIdToken(v) {
+      if (v === null || v === undefined) return '';
+      var s = String(v);
+      // 全角英数字 → 半角
+      s = s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); });
+      // 空白類（半角/全角スペース・タブ・改行・BOM等。JSの\sで包含）と各種ハイフン/マイナス記号（半角/全角/ダッシュ/マイナス）を除去
+      s = s.replace(/[\s\-‐‑‒–—―−－]/g, '');
+      return s;
+    }
+
+    // QR読取デバッグ用オプトインログ（本番では既定OFF）。
+    // 点呼のQR認証で「無効なQR」等の問題が再発した場合、ブラウザのコンソールで
+    //   localStorage.setItem('ofk3QrDebug', '1')
+    // を実行してリロードすると、raw/parsed/lookupKey/判定結果がコンソールに出力される。
+    // 調査後は localStorage.removeItem('ofk3QrDebug') でOFFに戻せる。
+    var OFK3_QR_DEBUG = (function() {
+      try { return localStorage.getItem('ofk3QrDebug') === '1'; } catch (e) { return false; }
+    })();
+    function qrDebugLog() {
+      if (!OFK3_QR_DEBUG) return;
+      try { console.log.apply(console, ['[QR-DEBUG]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {}
+    }
+
     // 別名キーの物理マージ: aliasKey側のデータをcanonicalKey側に統合して削除
     function mergeDriverKeys(aliasKey, canonicalKey) {
       if (!aliasKey || !canonicalKey || aliasKey === canonicalKey) return { merged: false };
@@ -6277,15 +6306,17 @@ var driverDB = {
       var transportId = scanResult ? scanResult.transportId : null;
 
       if (!driverName) {
+        qrDebugLog('onQrCodeScanned: rejectReason=driver-not-found raw=', JSON.stringify(decodedText));
         addScanLog('不明なQRコード: ' + decodedText.slice(0, 30), 'warn');
         return;
       }
+      qrDebugLog('onQrCodeScanned: driverName=', driverName, 'transportId=', transportId);
 
       // Transport ID で点呼スケジュールを照合。該当がなければ名前で照合
       var matchedIndex = -1;
       if (transportId) {
         for (var i = 0; i < tenkoSchedule.length; i++) {
-          if (tenkoSchedule[i].transportId && tenkoSchedule[i].transportId.replace(/[\s\-]/g, '') === transportId.replace(/[\s\-]/g, '')) {
+          if (tenkoSchedule[i].transportId && normalizeIdToken(tenkoSchedule[i].transportId) === normalizeIdToken(transportId)) {
             matchedIndex = i;
             break;
           }
@@ -6336,41 +6367,53 @@ var driverDB = {
 
     // QRコード → ドライバー情報
     function findDriverByQr(decodedText) {
-      var clean = decodedText.replace(/[\s\-]/g, '');
+      // 読取値の前後に空白・改行・BOM等が混入していても形式判定に失敗しないよう、
+      // まず素直にtrimした版をプレフィックス判定に使う（内部の全角英数字等はnormalizeIdTokenで別途吸収）。
+      var raw = decodedText;
+      var trimmed = String(decodedText == null ? '' : decodedText).trim();
+      var clean = normalizeIdToken(trimmed);
+      qrDebugLog('raw=', JSON.stringify(raw), 'trimmed=', JSON.stringify(trimmed), 'normalized=', clean);
 
       // OFK3_LICENSE: 形式
-      if (decodedText.indexOf('OFK3_LICENSE:') === 0) {
-        var lname = resolveDriverKey(decodedText.replace('OFK3_LICENSE:', '').trim());
+      if (trimmed.indexOf('OFK3_LICENSE:') === 0) {
+        var lname = resolveDriverKey(trimmed.replace('OFK3_LICENSE:', '').trim());
+        qrDebugLog('type=OFK3_LICENSE lookupKey=', lname, 'found=', !!(driverDB[lname] || transportIDs[lname] || lineMapping[lname]));
         return { name: lname, transportId: transportIDs[lname] || null };
       }
 
       // OFK3_DRIVER: 形式
-      if (decodedText.indexOf('OFK3_DRIVER:') === 0) {
-        var dname2 = resolveDriverKey(decodedText.replace('OFK3_DRIVER:', '').trim());
+      if (trimmed.indexOf('OFK3_DRIVER:') === 0) {
+        var dname2 = resolveDriverKey(trimmed.replace('OFK3_DRIVER:', '').trim());
+        qrDebugLog('type=OFK3_DRIVER lookupKey=', dname2, 'found=', !!(driverDB[dname2] || transportIDs[dname2] || lineMapping[dname2]));
         return { name: dname2, transportId: transportIDs[dname2] || null };
       }
 
-      // OFK3_D形式（driverIdベース）
-      if (decodedText.indexOf('OFK3_D') === 0) {
-        var driverIdStr = decodedText.replace('OFK3_D', '');
+      // OFK3_D形式（driverIdベース）。旧QRに全角数字・前後空白が焼き込まれていても照合できるよう正規化して比較する
+      if (trimmed.indexOf('OFK3_D') === 0) {
+        var driverIdStr = normalizeIdToken(trimmed.replace('OFK3_D', ''));
         for (var dname in driverDB) {
-          if (String(driverDB[dname].driverId) === driverIdStr) {
+          if (normalizeIdToken(driverDB[dname].driverId) === driverIdStr) {
             var rname = resolveDriverKey(dname);
+            qrDebugLog('type=OFK3_D(driverId) driverIdStr=', driverIdStr, 'lookupKey=', rname);
             return { name: rname, transportId: transportIDs[rname] || null };
           }
         }
+        qrDebugLog('type=OFK3_D(driverId) driverIdStr=', driverIdStr, 'result=NOT_FOUND_IN_MASTER');
       }
 
-      // Transport ID で照合（Transport IDをQRデータとするケースを含む）
+      // Transport ID で照合（Transport IDをQRデータとするケースを含む）。
+      // マスタ側のTIDも同じ正規化を通し、手入力時の全角混入・全角/特殊ハイフン等の表記ゆれを吸収する。
       for (var tname in transportIDs) {
         if (!transportIDs[tname]) continue;
-        var tidClean = transportIDs[tname].toString().replace(/[\s\-]/g, '');
-        if (clean === tidClean) {
+        var tidClean = normalizeIdToken(transportIDs[tname]);
+        if (clean && clean === tidClean) {
           var rname2 = resolveDriverKey(tname);
+          qrDebugLog('type=TransportID lookupKey=', rname2, 'matchedMasterName=', tname);
           return { name: rname2, transportId: transportIDs[rname2] || transportIDs[tname] };
         }
       }
 
+      qrDebugLog('result=REJECTED reason=no-format-or-master-match');
       return null;
     }
 
@@ -7221,7 +7264,9 @@ var driverDB = {
     }
 
     function updateLicenseNumber(name, value) {
-      value = value.trim();
+      // 手入力時のIME全角英数字混入・前後空白等をここで正規化し、以後の保存値を常に半角に統一する
+      // （QR生成/照合、FTDS等のTID照合の両方がこの値をそのまま使うため）。
+      value = normalizeIdToken(value);
       if (value) {
         transportIDs[name] = value;
       } else {
@@ -7391,18 +7436,20 @@ var driverDB = {
     function getQRData(name) {
       var tid = transportIDs[name];
 
-      // Transport IDがあればIDのみ（日本語なし＝読み取り安定）
-      if (typeof tid === "string") {
-        tid = tid.trim();
-        if (tid.length > 0 && tid.length <= 100) {
-          return tid;
+      // Transport IDがあればIDのみ（日本語なし＝読み取り安定）。
+      // マスタへの手入力時に全角英数字・前後の空白/改行等が混入していても、
+      // 生成されるQR自体は常に正規化済みの値になるようにする（findDriverByQr側も同じ正規化で照合する）。
+      if (tid !== null && tid !== undefined && tid !== '') {
+        var tidNormalized = normalizeIdToken(tid);
+        if (tidNormalized.length > 0 && tidNormalized.length <= 100) {
+          return tidNormalized;
         }
       }
 
       // driverIdベースの固定QRコード（ドライバー追加削除しても不変）
       var db = driverDB[name];
       if (db && db.driverId) {
-        return "OFK3_D" + db.driverId;
+        return "OFK3_D" + normalizeIdToken(db.driverId);
       }
 
       // どこにもなければ名前ベース（最終手段）
@@ -16646,13 +16693,138 @@ var driverDB = {
       renderFtdsResultsUI();
     }
 
-    function exportFtdsResult() {
-      if (!ftdsResultData.length) return;
+    // ===== 品質Excel（FTDS/CC/DNR/LAT等）共通: 全体データ＋所属会社別シート出力 =====
+    // 六道および人が閲覧する品質Excelは、既存の「全体データ」相当（1シートの集計/明細）は
+    // そのまま維持しつつ、その後ろに所属会社ごとのシートを自動生成する。
+    // 列構成は全体データ・所属別シートで完全に一致させる（buildAoaFnに渡すレコード集合だけを絞り込む）。
 
-      // ドライバー別集計を作成
+    // レコード1件（driverName・TransportID相当の値）から所属会社名を判定する。
+    // 優先順位: 1) TransportID（ドライバーマスタのtransportIDsと突合。最も安全）
+    //           2) 氏名（resolveDriverKeyで別名・表記ゆれを吸収。"日本語名 (英語名)" 形式は
+    //              括弧内の英語名をマスタキーとして優先的に試す＝DNR等の一部インポートが生成する形式）
+    // 所属が判定できない場合は空文字を返す（呼び出し側で「所属不明」に分類する）。
+    function resolveQualityAffiliationByKeys(driverName, tid) {
+      var tidTrim = tid !== null && tid !== undefined ? String(tid).trim() : '';
+      if (tidTrim) {
+        for (var k in transportIDs) {
+          if (transportIDs[k] && String(transportIDs[k]).trim() === tidTrim) {
+            var deptByTid = driverDepartments[resolveDriverKey(k)] || driverDepartments[k];
+            if (deptByTid) return deptByTid;
+            break;
+          }
+        }
+      }
+      if (driverName) {
+        var nameStr = String(driverName);
+        var m = nameStr.match(/\(([^)]+)\)\s*$/);
+        if (m && m[1]) {
+          var keyFromParen = resolveDriverKey(m[1].trim());
+          if (driverDepartments[keyFromParen]) return driverDepartments[keyFromParen];
+        }
+        var key = resolveDriverKey(nameStr);
+        if (driverDepartments[key]) return driverDepartments[key];
+      }
+      return '';
+    }
+
+    // レコード配列を所属会社別に分類する。順序は DEPARTMENTS（既知の所属会社マスタ順）を基本とし、
+    // それ以外の所属名は登場順で末尾に追加する。所属が判定できないレコードは unknown にまとめる（削除しない）。
+    function groupQualityRecordsByAffiliation(records, getAffiliationFn) {
+      var order = DEPARTMENTS.slice();
+      var extraOrder = [];
+      var map = {};
+      var unknown = [];
+      for (var i = 0; i < records.length; i++) {
+        var rec = records[i];
+        var dept = String(getAffiliationFn(rec) || '').trim();
+        if (!dept) { unknown.push(rec); continue; }
+        if (!map[dept]) {
+          map[dept] = [];
+          if (order.indexOf(dept) < 0) extraOrder.push(dept);
+        }
+        map[dept].push(rec);
+      }
+      return { order: order.concat(extraOrder), map: map, unknown: unknown };
+    }
+
+    // Excelのシート名として安全な文字列に変換する（\ / ? * [ ] : を置換、31文字制限、重複回避）
+    function toSafeExcelSheetName(name, usedNames) {
+      var s = String(name || '').trim();
+      s = s.replace(/[\\\/\?\*\[\]:]/g, '_');
+      s = s.replace(/^'+|'+$/g, '');
+      if (!s) s = 'Sheet';
+      if (s.length > 31) s = s.substring(0, 31);
+      if (!usedNames[s]) { usedNames[s] = true; return s; }
+      var n = 2;
+      var unique = s;
+      while (usedNames[unique]) {
+        var suffix = '_' + n;
+        unique = s.substring(0, Math.max(0, 31 - suffix.length)) + suffix;
+        n++;
+      }
+      usedNames[unique] = true;
+      return unique;
+    }
+
+    // 品質Excelの見た目を軽く整える（ヘッダー太字＋列幅）。既存のCSV出力にはExcel書式が
+    // 存在しなかったため、TWC/所属別レポートで使っている書式（styleTwcSheet/styleDeptSheet）に
+    // 準じた最低限のスタイルを新規に定義する。headerRows: 太字にする行インデックスの配列。
+    function styleQualityExportSheet(ws, aoa, headerRows, colWidths) {
+      if (colWidths && colWidths.length) {
+        if (!ws['!cols']) ws['!cols'] = [];
+        for (var ci = 0; ci < colWidths.length; ci++) ws['!cols'][ci] = { wch: colWidths[ci] };
+      }
+      var maxCols = 0;
+      for (var r = 0; r < aoa.length; r++) { if (aoa[r] && aoa[r].length > maxCols) maxCols = aoa[r].length; }
+      for (var hi = 0; hi < headerRows.length; hi++) {
+        var rowIdx = headerRows[hi];
+        for (var c = 0; c < maxCols; c++) {
+          var addr = XLSX.utils.encode_cell({ r: rowIdx, c: c });
+          if (ws[addr]) { if (!ws[addr].s) ws[addr].s = {}; ws[addr].s.font = { bold: true }; }
+        }
+      }
+      return ws;
+    }
+
+    // records（全体データ）を「全体データ」シート＋所属会社別シート＋所属不明シートで構成された
+    // ワークブックに組み立てる。buildAoaFn(subsetRecords) は既存のCSV生成と同じ行データ（配列の配列）を返す関数。
+    // getAffiliationFn(record) はレコード1件の所属会社名（不明ならfalsy）を返す関数。
+    // styleFn(ws, aoa) は任意のスタイル適用関数（省略可）。
+    function buildQualityAffiliationWorkbook(records, buildAoaFn, getAffiliationFn, styleFn) {
+      var wb = XLSX.utils.book_new();
+      var usedNames = {};
+
+      var allAoa = buildAoaFn(records);
+      var wsAll = XLSX.utils.aoa_to_sheet(allAoa);
+      if (styleFn) styleFn(wsAll, allAoa);
+      XLSX.utils.book_append_sheet(wb, wsAll, toSafeExcelSheetName('全体データ', usedNames));
+
+      var groups = groupQualityRecordsByAffiliation(records, getAffiliationFn);
+      for (var i = 0; i < groups.order.length; i++) {
+        var dept = groups.order[i];
+        var recs = groups.map[dept];
+        if (!recs || recs.length === 0) continue;
+        var aoa = buildAoaFn(recs);
+        var ws = XLSX.utils.aoa_to_sheet(aoa);
+        if (styleFn) styleFn(ws, aoa);
+        XLSX.utils.book_append_sheet(wb, ws, toSafeExcelSheetName(dept, usedNames));
+      }
+
+      if (groups.unknown.length > 0) {
+        var uAoa = buildAoaFn(groups.unknown);
+        var uWs = XLSX.utils.aoa_to_sheet(uAoa);
+        if (styleFn) styleFn(uWs, uAoa);
+        XLSX.utils.book_append_sheet(wb, uWs, toSafeExcelSheetName('所属不明', usedNames));
+      }
+
+      return wb;
+    }
+
+    // FTDS: 「ドライバー別集計」＋空行＋「詳細データ」の2ブロックaoaを生成する（既存CSV仕様と同一の列構成・値）
+    function buildFtdsAoa(records) {
       var driverStats = {};
-      for (var i = 0; i < ftdsResultData.length; i++) {
-        var r = ftdsResultData[i];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
         var dName = r.driverName || '(未特定)';
         if (!driverStats[dName]) driverStats[dName] = {tid: r.transporterId, count: 0, reasons: {}, dates: {}};
         driverStats[dName].count++;
@@ -16662,8 +16834,7 @@ var driverDB = {
         if (r.date) driverStats[dName].dates[r.date] = true;
       }
 
-      // ドライバー別集計CSV
-      var csvRows = [['ドライバー名', 'TransportID', '件数', '日付', '失敗理由内訳']];
+      var aoa = [['ドライバー名', 'TransportID', '件数', '日付', '失敗理由内訳']];
       var dKeys = Object.keys(driverStats).sort(function(a, b) {
         return driverStats[b].count - driverStats[a].count;
       });
@@ -16676,29 +16847,31 @@ var driverDB = {
           reasonParts.push(translateReason(rKeys[ri]) + ':' + ds.reasons[rKeys[ri]]);
         }
         var dateList = Object.keys(ds.dates).sort().join(' / ');
-        csvRows.push([dk, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
+        aoa.push([dk, ds.tid, ds.count, dateList, reasonParts.join(' | ')]);
       }
 
-      // 空行で区切り、詳細データも追加
-      csvRows.push([]);
-      csvRows.push(['=== 詳細データ ===']);
-      csvRows.push(['日付', 'ドライバー名', 'TransportID', 'サイクル', 'ルートコード', 'TrackingID', '郵便番号', '失敗理由']);
-      for (var j = 0; j < ftdsResultData.length; j++) {
-        var rec = ftdsResultData[j];
-        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, translateReason(rec.reason)]);
+      var detailHeaderRow = aoa.length + 1;
+      aoa.push([]);
+      aoa.push(['=== 詳細データ ===']);
+      aoa.push(['日付', 'ドライバー名', 'TransportID', 'サイクル', 'ルートコード', 'TrackingID', '郵便番号', '失敗理由']);
+      for (var j = 0; j < records.length; j++) {
+        var rec = records[j];
+        aoa.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.cycle, rec.route, rec.tracking, rec.zip, translateReason(rec.reason)]);
       }
+      aoa._detailHeaderRow = detailHeaderRow;
+      return aoa;
+    }
 
-      var csv = csvRows.map(function(row) {
-        return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
-      }).join('\n');
-      var bom = '\uFEFF';
-      var blob = new Blob([bom + csv], {type: 'text/csv;charset=utf-8;'});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'FTDS分析_' + getTodayJst() + '.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+    function styleFtdsSheet(ws, aoa) {
+      return styleQualityExportSheet(ws, aoa, [0, aoa._detailHeaderRow], [22, 16, 8, 20, 30]);
+    }
+
+    function exportFtdsResult() {
+      if (!ftdsResultData.length) return;
+      var wb = buildQualityAffiliationWorkbook(ftdsResultData, buildFtdsAoa, function(rec) {
+        return resolveQualityAffiliationByKeys(rec.driverName, rec.transporterId);
+      }, styleFtdsSheet);
+      XLSX.writeFile(wb, 'FTDS分析_' + getTodayJst() + '.xlsx');
     }
 
     // ===== Contact Compliance分析 =====
@@ -16985,13 +17158,11 @@ var driverDB = {
       if (typeof buildTeamQualitySnapshot === 'function') buildTeamQualitySnapshot();
     }
 
-    function exportCcResult() {
-      if (!ccResultData.length) return;
-
-      // ドライバー別集計を作成
+    // CC: 「ドライバー別集計」＋空行＋「詳細データ」の2ブロックaoaを生成する（既存CSV仕様と同一の列構成・値）
+    function buildCcAoa(records) {
       var driverStats = {};
-      for (var i = 0; i < ccResultData.length; i++) {
-        var r = ccResultData[i];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
         var dName = r.driverName || '(未特定)';
         if (!driverStats[dName]) driverStats[dName] = {tid: r.transporterId, count: 0, required: 0, actual: 0, duration: 0, reasons: {}, dates: {}};
         driverStats[dName].count++;
@@ -17004,8 +17175,7 @@ var driverDB = {
         if (r.date) driverStats[dName].dates[r.date] = true;
       }
 
-      // ドライバー別集計CSV
-      var csvRows = [['ドライバー名', 'TransportID', 'べき架電', '実架電', '架電率(%)', '通話時間(秒)', '日付', '配送理由内訳']];
+      var aoa = [['ドライバー名', 'TransportID', 'べき架電', '実架電', '架電率(%)', '通話時間(秒)', '日付', '配送理由内訳']];
       var dKeys = Object.keys(driverStats).sort(function(a, b) {
         return driverStats[b].required - driverStats[a].required;
       });
@@ -17019,29 +17189,31 @@ var driverDB = {
         }
         var dateList = Object.keys(ds.dates).sort().join(' / ');
         var rate = calcCcCallRate(ds.required, ds.actual);
-        csvRows.push([dk, ds.tid, ds.required, ds.actual, rate != null ? rate : '', ds.duration, dateList, reasonParts.join(' | ')]);
+        aoa.push([dk, ds.tid, ds.required, ds.actual, rate != null ? rate : '', ds.duration, dateList, reasonParts.join(' | ')]);
       }
 
-      // 空行で区切り、詳細データも追加
-      csvRows.push([]);
-      csvRows.push(['=== 詳細データ ===']);
-      csvRows.push(['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']);
-      for (var j = 0; j < ccResultData.length; j++) {
-        var rec = ccResultData[j];
-        csvRows.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, translateReason(rec.reason), rec.method, translateReason(rec.contactType), rec.duration]);
+      var detailHeaderRow = aoa.length + 1;
+      aoa.push([]);
+      aoa.push(['=== 詳細データ ===']);
+      aoa.push(['日付', 'ドライバー名', 'TransportID', 'TrackingID', '配送理由', '配送方法', 'コンタクト種別', '通話時間(秒)']);
+      for (var j = 0; j < records.length; j++) {
+        var rec = records[j];
+        aoa.push([rec.date, rec.driverName || '(未特定)', rec.transporterId, rec.tracking, translateReason(rec.reason), rec.method, translateReason(rec.contactType), rec.duration]);
       }
+      aoa._detailHeaderRow = detailHeaderRow;
+      return aoa;
+    }
 
-      var csv = csvRows.map(function(row) {
-        return row.map(function(c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(',');
-      }).join('\n');
-      var bom = '\uFEFF';
-      var blob = new Blob([bom + csv], {type: 'text/csv;charset=utf-8;'});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'ContactCompliance分析_' + getTodayJst() + '.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+    function styleCcSheet(ws, aoa) {
+      return styleQualityExportSheet(ws, aoa, [0, aoa._detailHeaderRow], [22, 16, 10, 10, 12, 14, 20, 30]);
+    }
+
+    function exportCcResult() {
+      if (!ccResultData.length) return;
+      var wb = buildQualityAffiliationWorkbook(ccResultData, buildCcAoa, function(rec) {
+        return resolveQualityAffiliationByKeys(rec.driverName, rec.transporterId);
+      }, styleCcSheet);
+      XLSX.writeFile(wb, 'ContactCompliance分析_' + getTodayJst() + '.xlsx');
     }
 
     // ===== LAT分析 =====
@@ -17930,34 +18102,39 @@ var driverDB = {
       container.innerHTML = html;
     }
 
-    function exportLatResult() {
-      if (!latResultData.length) return;
+    // LAT: フラットな1テーブルaoaを生成する（既存CSV仕様と同一の列構成・値）。
+    // showPlannedColsはグローバルのlatResultData全体から判定するため、全体/所属別いずれの
+    // シートでも同一の列構成になる（部分集合recordsによって変わることはない）。
+    function buildLatAoa(records) {
       var showPlannedCols = latResultHasPlannedDepartureSource();
       var header = ['日付', 'Wave', 'ドライバー名', 'TransportID', 'Route ID', 'Route Code', 'DS到着', 'DS入場', 'FirstScan', 'LastScan', '実出発', 'DS退出', '積込時間(分)', '滞在時間(分)'];
       if (showPlannedCols) {
         header.splice(10, 0, '出発予定');
         header.push('差分(分)', '判定');
       }
-      var csvRows = [header];
-      for (var i = 0; i < latResultData.length; i++) {
-        var r = latResultData[i];
+      var aoa = [header];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
         var row = [r.date, r.wave || '', r.driverName || '(未特定)', r.employeeId, r.routeId, r.routeCode || '', r.dsArrival || '', r.dsEntrance || '', r.firstScan || '', r.lastScan || '', r.actualDeparture || '', r.dsExit || '', r.loadingMin, r.stayMin];
         if (showPlannedCols) {
           row.splice(10, 0, (r.plannedDeparture || r.plannedDepartureDisplay || '未設定'));
           row.push((r.diffMin !== '' && r.diffMin !== null ? r.diffMin : '-'), (r.judgment || r.judgmentDisplay || '判定不可'));
         }
-        csvRows.push(row);
+        aoa.push(row);
       }
-      var csv = csvRows.map(function(row) {
-        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
-      }).join('\n');
-      var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'LAT分析_' + getTodayJst() + '.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+      return aoa;
+    }
+
+    function styleLatSheet(ws, aoa) {
+      return styleQualityExportSheet(ws, aoa, [0], null);
+    }
+
+    function exportLatResult() {
+      if (!latResultData.length) return;
+      var wb = buildQualityAffiliationWorkbook(latResultData, buildLatAoa, function(rec) {
+        return resolveQualityAffiliationByKeys(rec.driverName, rec.employeeId);
+      }, styleLatSheet);
+      XLSX.writeFile(wb, 'LAT分析_' + getTodayJst() + '.xlsx');
     }
 
     if (document.readyState === 'loading') {
@@ -18301,12 +18478,39 @@ var driverDB = {
       return ws;
     }
 
+    // 「全体データ」シート（既存3シートの前に追加する、全違反の生データ・実際の配達試行昇順）。
+    // 既存3シート（時間指定_サマリー/DA別_詳細/重点確認）の内容・列構成は変更しない。
+    function buildTwcAllDataAoa() {
+      var aoa = [['日付', 'DA', 'TransportID', '時間指定', '計画上の入場', '実際の配達試行', '超過', '判定', '備考']];
+      var sorted = twcViolations.slice().sort(function(a, b) { return a.actualAttempt.getTime() - b.actualAttempt.getTime(); });
+      for (var i = 0; i < sorted.length; i++) {
+        var v = sorted[i];
+        aoa.push([
+          twcFormatDate(v.date),
+          v.driverName || '(未特定)',
+          v.transportId,
+          twcWindowDisplayLabel(v.timeWindow),
+          v.plannedEnter ? twcFormatTime(v.plannedEnter) : '-',
+          twcFormatTime(v.actualAttempt),
+          '+' + twcFormatOverage(v.overageMin),
+          '違反',
+          '時間指定超過' + (v.failureBridge ? '（' + translateReason(v.failureBridge) + '）' : '')
+        ]);
+      }
+      return aoa;
+    }
+
     function exportTwcResult() {
       if (!twcViolations.length) { alert('TWC違反データがありません'); return; }
       var driverStats = groupTwcByDriver(twcViolations);
       var period = (twcSourceMeta && twcSourceMeta.period) || getTodayJst();
 
       var wb = XLSX.utils.book_new();
+
+      // --- シート0: 全体データ ---
+      var wsAllData = XLSX.utils.aoa_to_sheet(buildTwcAllDataAoa());
+      styleTwcSheet(wsAllData, 0, 9, [8, 22, 16, 20, 14, 16, 10, 8, 30]);
+      XLSX.utils.book_append_sheet(wb, wsAllData, '全体データ');
 
       // --- シート1: 時間指定_サマリー ---
       var s1 = [];
@@ -18878,33 +19082,36 @@ var driverDB = {
       }).catch(function(err) { alert('LINE送信エラー: ' + err.message); });
     }
 
-    function exportDnrResult() {
-      if (!dnrResultData.length) return;
-      var csvHeaders = ['ドライバー'];
+    // DNR: フラットな1テーブルaoaを生成する（既存CSV仕様と同一の列構成・値）
+    function buildDnrAoa(records) {
+      var headers = ['ドライバー'];
       for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
-        csvHeaders.push(DNR_COL_LABELS[DNR_KEEP_COLS[k]] || DNR_KEEP_COLS[k]);
+        headers.push(DNR_COL_LABELS[DNR_KEEP_COLS[k]] || DNR_KEEP_COLS[k]);
       }
-      var csvRows = [csvHeaders];
-      for (var i = 0; i < dnrResultData.length; i++) {
-        var r = dnrResultData[i];
+      var aoa = [headers];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
         var row = [r.driverName || '未特定'];
         for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
           var val = r[DNR_KEEP_COLS[k]] || '';
           if (DNR_KEEP_COLS[k] === 'shipment_reason' || DNR_KEEP_COLS[k] === 'sub_bucket' || DNR_KEEP_COLS[k] === 'bucket') val = translateReason(val);
           row.push(val);
         }
-        csvRows.push(row);
+        aoa.push(row);
       }
-      var csv = csvRows.map(function(row) {
-        return row.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
-      }).join('\n');
-      var blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'DNR分析_' + getTodayJst() + '.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+      return aoa;
+    }
+
+    function styleDnrSheet(ws, aoa) {
+      return styleQualityExportSheet(ws, aoa, [0], null);
+    }
+
+    function exportDnrResult() {
+      if (!dnrResultData.length) return;
+      var wb = buildQualityAffiliationWorkbook(dnrResultData, buildDnrAoa, function(rec) {
+        return resolveQualityAffiliationByKeys(rec.driverName, rec.transporter_id);
+      }, styleDnrSheet);
+      XLSX.writeFile(wb, 'DNR分析_' + getTodayJst() + '.xlsx');
     }
 
     // ===== 品質統合サマリー =====
@@ -20006,6 +20213,49 @@ var driverDB = {
       return ws;
     }
 
+    // 「全体データ」シート用: 所属別シートに実際に分配される全ドライバー（getTqFilteredDrivers＝
+    // TQ_EXCLUDED_DEPTS除外後）を対象にした一覧。件数を各所属別シートの合計と一致させるため、
+    // buildDeptReportSheet(dept)の対象と同じ母集団（除外済み）を使う。
+    function buildAllDriversReportSheet() {
+      if (!teamQualitySnapshot) return null;
+      var filtered = getTqFilteredDrivers(teamQualitySnapshot);
+      var members = [];
+      for (var name in filtered) members.push({ name: name, data: filtered[name] });
+      if (members.length === 0) return null;
+      members.sort(function(a, b) { return (a.data.qualityScore || 0) - (b.data.qualityScore || 0); });
+      var now = new Date().toLocaleString('ja-JP');
+      var aoa = [
+        ['全体データ 個人品質レポート'],
+        ['対象人数: ' + members.length + '名', '', '出力日時: ' + now],
+        [],
+        ['氏名', '所属', '能力(個/h)', '誤配率(%)', '配完率(%)', '持ち戻り', 'チーム平均持ち戻り', 'DNR件数', 'DNR金額', '架電 実際', '架電 ベキ', '架電率(%)', '品質スコア']
+      ];
+      var totalFtds = 0;
+      for (var ti = 0; ti < members.length; ti++) totalFtds += members[ti].data.ftdsCount || 0;
+      var avgFtds = members.length > 0 ? Math.round(totalFtds / members.length * 10) / 10 : 0;
+      for (var i = 0; i < members.length; i++) {
+        var m = members[i];
+        var d = m.data;
+        var ccRate = calcCcCallRate(d.ccRequired, d.ccActual);
+        aoa.push([
+          m.name,
+          d.dept || '',
+          d.packagesPerHour ? Math.round(d.packagesPerHour * 10) / 10 : '',
+          d.misdeliveryRate ? Math.round(d.misdeliveryRate * 100) / 100 : '',
+          d.deliveryRate ? Math.round(d.deliveryRate * 10) / 10 : '',
+          d.ftdsCount || 0,
+          avgFtds,
+          d.dnrCount || 0,
+          d.dnrCost || 0,
+          d.ccActual || 0,
+          d.ccRequired || 0,
+          ccRate != null ? ccRate : '',
+          d.qualityScore || 0
+        ]);
+      }
+      return aoa;
+    }
+
     function exportDeptReport(dept) {
       var aoa = buildDeptReportSheet(dept);
       if (!aoa) { alert(dept + 'のデータがありません'); return; }
@@ -20022,6 +20272,15 @@ var driverDB = {
     function exportAllDeptsReport() {
       if (!teamQualitySnapshot) { alert('データがありません'); return; }
       var wb = XLSX.utils.book_new();
+
+      // 先頭シート: 全体データ（既存の所属別シートは削除・変更せず、その前に追加する）
+      var allAoa = buildAllDriversReportSheet();
+      if (allAoa) {
+        var wsAll = XLSX.utils.aoa_to_sheet(allAoa);
+        styleDeptSheet(wsAll, allAoa.length - 4);
+        XLSX.utils.book_append_sheet(wb, wsAll, '全体データ');
+      }
+
       var depts = getTqDeptOrder();
       var sheetCount = 0;
       for (var i = 0; i < depts.length; i++) {
@@ -20034,7 +20293,7 @@ var driverDB = {
         XLSX.utils.book_append_sheet(wb, ws, safeName);
         sheetCount++;
       }
-      if (sheetCount === 0) { alert('出力対象がありません'); return; }
+      if (sheetCount === 0 && !allAoa) { alert('出力対象がありません'); return; }
       var dateStr = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(wb, 'OFK3_個人品質レポート_全所属_' + dateStr + '.xlsx');
     }

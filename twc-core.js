@@ -32,6 +32,7 @@
   // 現在利用しているxlsx(SheetJS Community Edition)では書き出し時に保持されないことを
   // 実機検証済み（Pro版が必要）。render-webhook-server.js側では列幅のみ再現する。
   var TWC_SHEET_STYLE = {
+    allData: { headerRow: 0, colCount: 9, widths: [8, 22, 16, 20, 14, 16, 10, 8, 30], sheetName: '全体データ' },
     summary: { headerRow: 3, colCount: 6, widths: [10, 22, 8, 20, 16, 10], sheetName: '時間指定_サマリー' },
     driverDetail: { headerRow: 0, colCount: 6, widths: [22, 8, 20, 16, 16, 30], sheetName: 'DA別_詳細' },
     topDriver: { headerRow: 1, colCount: 4, widths: [10, 16, 16, 12] }
@@ -285,6 +286,31 @@
     return (name.split(/\s+/)[0] || name).replace(/[\[\]\\\/\?\*]/g, '_').substring(0, 20) + '_重点確認';
   }
 
+  // 新規: 「全体データ」シート（既存の時間指定_サマリー/DA別_詳細/重点確認シートの前に
+  // 追加する、全違反の生データ・実際の配達試行の昇順）の行生成。既存3シートの内容・列構成は
+  // 一切変更しない（追加シートのみ）。translateFn(text)は失敗理由(failureBridge)の日本語化に
+  // 使うコールバック（呼び出し側のtranslateReason/ftdsTranslateReasonを渡す。省略時は無変換）。
+  function twcBuildAllDataSheetRows(violations, translateFn) {
+    var t = typeof translateFn === 'function' ? translateFn : function (s) { return s; };
+    var rows = [['日付', 'DA', 'TransportID', '時間指定', '計画上の入場', '実際の配達試行', '超過', '判定', '備考']];
+    var sorted = violations.slice().sort(function (a, b) { return a.actualAttempt.getTime() - b.actualAttempt.getTime(); });
+    for (var i = 0; i < sorted.length; i++) {
+      var v = sorted[i];
+      rows.push([
+        twcFormatDate(v.date),
+        v.driverName || '(未特定)',
+        v.transportId,
+        twcWindowDisplayLabel(v.timeWindow),
+        v.plannedEnter ? twcFormatTime(v.plannedEnter) : '-',
+        twcFormatTime(v.actualAttempt),
+        '+' + twcFormatOverage(v.overageMin),
+        '違反',
+        '時間指定超過' + (v.failureBridge ? '（' + t(v.failureBridge) + '）' : '')
+      ]);
+    }
+    return rows;
+  }
+
   // index.html: exportTwcResult内のシート1（時間指定_サマリー）行生成（18311-18320）を移植。
   // XLSXシートへの変換（aoa_to_sheet等）や罫線・太字等のスタイル適用は呼び出し側の責務。
   function twcBuildSummarySheetRows(driverStats, opts) {
@@ -362,6 +388,7 @@
     twcAttemptRangeLabel: twcAttemptRangeLabel,
     twcDatesLabel: twcDatesLabel,
     twcResolveSheet3Name: twcResolveSheet3Name,
+    twcBuildAllDataSheetRows: twcBuildAllDataSheetRows,
     twcBuildSummarySheetRows: twcBuildSummarySheetRows,
     twcBuildDriverDetailSheetRows: twcBuildDriverDetailSheetRows,
     twcBuildTopDriverSheetRows: twcBuildTopDriverSheetRows
