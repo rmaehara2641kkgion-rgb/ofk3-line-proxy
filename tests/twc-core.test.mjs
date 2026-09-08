@@ -181,6 +181,31 @@ function testTopDriverSheetKeepsAllRecords() {
   assert(TwcCore.twcBuildTopDriverSheetRows([], 0) === null, 'ドライバーが居なければnull');
 }
 
+// ---- 新規: 「全体データ」シート（既存3シートの前に追加）の行生成 ----
+// 既存3シート（時間指定_サマリー/DA別_詳細/重点確認）の内容・列構成には一切触れない、
+// 追加専用の関数であることを確認する。
+function testBuildAllDataSheetRows() {
+  var violations = [
+    { driverName: 'B太郎', transportId: 'T2', date: new Date(2026, 7, 28), timeWindow: 'DW 05:00:00-13:00:00', plannedEnter: new Date(2026, 7, 28, 12, 50), actualAttempt: new Date(2026, 7, 28, 14, 0), overageMin: 60, failureBridge: 'CUSTOMER_UNAVAILABLE' },
+    { driverName: 'A次郎', transportId: 'T1', date: new Date(2026, 7, 28), timeWindow: 'DW 05:00:00-13:00:00', plannedEnter: null, actualAttempt: new Date(2026, 7, 28, 13, 10), overageMin: 10, failureBridge: '' }
+  ];
+  var rows = TwcCore.twcBuildAllDataSheetRows(violations, function (r) { return 'JA:' + r; });
+  assert(rows[0].length === 9, 'ヘッダーは9列, got ' + rows[0].length);
+  assert(rows.length === 3, 'ヘッダー1行+違反2行=3行, got ' + rows.length);
+  // 実際の配達試行の昇順（A次郎13:10 → B太郎14:00）
+  assert(rows[1][1] === 'A次郎', '1件目は実際の配達試行が早いA次郎, got ' + rows[1][1]);
+  assert(rows[1][4] === '-', '計画上の入場が無ければ"-", got ' + rows[1][4]);
+  assert(rows[2][1] === 'B太郎', '2件目はB太郎, got ' + rows[2][1]);
+  assert(rows[2][4] === '12:50', '計画上の入場はtwcFormatTimeで整形される, got ' + rows[2][4]);
+  assert(rows[2][8].indexOf('JA:CUSTOMER_UNAVAILABLE') >= 0, 'translateFnコールバックで備考のfailure_bridgeが翻訳される, got ' + rows[2][8]);
+  assert(rows[1][8] === '時間指定超過', 'failure_bridgeが無ければ括弧書きは付かない, got ' + rows[1][8]);
+
+  var emptyRows = TwcCore.twcBuildAllDataSheetRows([]);
+  assert(emptyRows.length === 1, 'データ0件でもヘッダー行だけは返す, got ' + emptyRows.length);
+
+  assert(TwcCore.TWC_SHEET_STYLE.allData.sheetName === '全体データ', 'シート名は全体データ');
+}
+
 testHeaderAndBasicExtraction();
 testOverageMinuteBoundary();
 testDedupeDisplayName();
@@ -189,5 +214,6 @@ testGroupByDriverRankingRegression();
 testClassifyJudgmentBoundaries();
 testResolveSheet3Name();
 testTopDriverSheetKeepsAllRecords();
+testBuildAllDataSheetRows();
 
 console.log('twc-core.test.mjs: all tests passed');

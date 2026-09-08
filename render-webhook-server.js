@@ -2290,6 +2290,11 @@ app.post('/twc-export', function(req, res) {
 
       var xwb = xlsxLib.utils.book_new();
 
+      // 「全体データ」シート（既存3シートの前に追加。既存3シートの内容・列構成は変更しない）
+      var allDataRows = TwcCore.twcBuildAllDataSheetRows(violations, ftdsTranslateReason);
+      var wsAllData = twcRowsToWorksheet(xlsxLib, allDataRows, TwcCore.TWC_SHEET_STYLE.allData);
+      xlsxLib.utils.book_append_sheet(xwb, wsAllData, TwcCore.TWC_SHEET_STYLE.allData.sheetName);
+
       var summaryRows = TwcCore.twcBuildSummarySheetRows(driverStats, {
         period: period,
         windowLabel: processed.windowLabel,
