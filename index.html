@@ -5937,17 +5937,36 @@ var driverDB = {
             if (deltaSeq < lastSeq) continue; // 古いdeltaは無視（同一seqの再受信は許容＝冪等）
             driverDeltaAppliedState.appliedSeqByDriver[mergeKey] = deltaSeq;
 
-            if (!driverDB[delta.name]) {
-              driverDB[delta.name] = { packagesPerHour: null, deliveryRate: null, workDays: 0, totalPackages: 0, incidents: 0, lastUpdated: getTodayJst(), history: [] };
+            // 改名の墓標(tombstone) delta: renameDriver()がリネーム/統合時に旧名称宛てに配信する。
+            // 通常の「無ければ作る」経路を通さず、別名登録＋既存データの統合のみ行うことで、
+            // このバッファに残っている旧名称向けの古い作成deltaが後から（別端末や再同期で）
+            // 再適用されても、旧名称のドライバーが復活しないようにする。
+            if (delta.renamedTo) {
+              registerDriverAlias(delta.name, delta.renamedTo);
+              if (driverDB[delta.name] || lineMapping[delta.name] || phoneMapping[delta.name] ||
+                  transportIDs[delta.name] || driverDepartments[delta.name] || driverJapaneseNames[delta.name] ||
+                  masterNotes[delta.name]) {
+                mergeDriverKeys(delta.name, delta.renamedTo);
+              }
+              deltaApplied = true;
+              continue;
+            }
+
+            // 既知の別名なら解決してから適用する（旧名称宛ての古いdeltaが後から届いても
+            // 別名登録済みの正キー側に書き込まれ、旧名称では復活しない）
+            var targetName = driverNameAliases[delta.name] || delta.name;
+
+            if (!driverDB[targetName]) {
+              driverDB[targetName] = { packagesPerHour: null, deliveryRate: null, workDays: 0, totalPackages: 0, incidents: 0, lastUpdated: getTodayJst(), history: [] };
               deltaApplied = true;
             }
             if (delta.driverId) {
-              driverDB[delta.name].driverId = String(delta.driverId); // 文字列に正規化（数値/文字列不一致を防ぐ）
+              driverDB[targetName].driverId = String(delta.driverId); // 文字列に正規化（数値/文字列不一致を防ぐ）
               deltaApplied = true;
             }
-            if (delta.transportId) { transportIDs[delta.name] = delta.transportId; deltaApplied = true; }
-            if (delta.japaneseName) { driverJapaneseNames[delta.name] = delta.japaneseName; deltaApplied = true; }
-            if (delta.company) { driverDepartments[delta.name] = delta.company; deltaApplied = true; }
+            if (delta.transportId) { transportIDs[targetName] = delta.transportId; deltaApplied = true; }
+            if (delta.japaneseName) { driverJapaneseNames[targetName] = delta.japaneseName; deltaApplied = true; }
+            if (delta.company) { driverDepartments[targetName] = delta.company; deltaApplied = true; }
           }
           if (deltaApplied) {
             saveDriverDBOverlay();
@@ -6090,6 +6109,26 @@ var driverDB = {
       }
       if (!deltas.length) return;
       pushTenkoSyncState({ driverDeltas: deltas });
+    }
+
+    // リネーム/統合で不要になった旧名称を「墓標(tombstone)」deltaとして配信する。
+    // 受信側(tenko-sync反映処理)はrenamedTo付きdeltaを見ると、通常の「無ければ作る」経路を通さず
+    // 別名登録＋既存データ統合のみ行うため、送信済みバッファに残っている旧名称の古い作成delta
+    // （このtombstoneより前にpushされたもの）が別端末や再同期時に後から適用されても、
+    // 旧名称のドライバーが復活しない。
+    function pushDriverRenameTombstone(oldName, newName, oldDriverIdHint) {
+      if (!oldName || !newName || oldName === newName) return;
+      pushTenkoSyncState({
+        driverDeltas: [{
+          name: oldName,
+          driverId: oldDriverIdHint ? String(oldDriverIdHint) : '',
+          renamedTo: newName,
+          deleted: true,
+          updatedAt: Date.now()
+        }]
+      });
+      // 新名称側も通常deltaとして配信（このdeltaを初めて見る端末が新名称を認識できるように）
+      if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(newName);
     }
 
     // 通知音（Web Audio API）
@@ -8267,17 +8306,34 @@ var driverDB = {
       renderMasterTable();
     }
 
+    // 全角スペース混入・連続空白等のリネーム入力を正規化（resolveDriverKey側の正規化と揃える）
+    function normalizeDriverNameInput(s) {
+      return String(s || '').replace(/　/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
     function renameDriver(oldName, newName) {
-      newName = newName.trim();
+      newName = normalizeDriverNameInput(newName);
       if (!newName || newName === oldName) {
         renderMasterTable();
         return;
       }
+      var oldDriverId = driverDB[oldName] && driverDB[oldName].driverId;
+
       if (driverDB[newName] || lineMapping[newName] || phoneMapping[newName]) {
-        alert('「' + newName + '」は既に存在します');
+        // 衝突: 単純拒否ではなく、既存レコードへの統合として扱う（データは失わない・空項目のみ補完）
+        if (!confirm('「' + newName + '」は既に別レコードとして登録されています。\n\n' +
+          '「' + oldName + '」のデータ（TID・LINE・電話番号・所属・メモ・実績等）を\n' +
+          '「' + newName + '」に統合しますか？\n' +
+          '（統合先に既に値がある項目は上書きされません。点呼履歴等は旧名称からも引き続き参照できるよう、旧名称は別名として保持されます）')) {
+          renderMasterTable();
+          return;
+        }
+        mergeDriverKeys(oldName, newName); // 既存の安全な統合処理（片方が空の項目のみ補完、alias登録込み）
+        if (typeof pushDriverRenameTombstone === 'function') pushDriverRenameTombstone(oldName, newName, oldDriverId);
         renderMasterTable();
         return;
       }
+
       // 全データを新名前にコピー
       if (driverDB[oldName]) { driverDB[newName] = driverDB[oldName]; delete driverDB[oldName]; }
       if (lineMapping[oldName]) { lineMapping[newName] = lineMapping[oldName]; delete lineMapping[oldName]; }
@@ -8286,6 +8342,12 @@ var driverDB = {
       if (driverDepartments[oldName]) { driverDepartments[newName] = driverDepartments[oldName]; delete driverDepartments[oldName]; }
       if (driverJapaneseNames[oldName]) { driverJapaneseNames[newName] = driverJapaneseNames[oldName]; delete driverJapaneseNames[oldName]; }
       if (masterNotes[oldName]) { masterNotes[newName] = masterNotes[oldName]; delete masterNotes[oldName]; }
+
+      // 旧名称を別名として登録（QR・点呼履歴・他端末の未同期データ等が旧名称のままでも
+      // 新名称に解決できるようにする。今までここが欠けていたため、旧名称に依存した
+      // 参照が改名後に迷子になっていた）
+      registerDriverAlias(oldName, newName);
+
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
       localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
@@ -8294,6 +8356,23 @@ var driverDB = {
       localStorage.setItem('driverDepartments', JSON.stringify(driverDepartments));
       localStorage.setItem('driverJapaneseNames', JSON.stringify(driverJapaneseNames));
       localStorage.setItem('masterNotes', JSON.stringify(masterNotes));
+
+      // サーバー・他端末への反映（旧名称の墓標deltaを配信し、他端末側の古いdeltaによる
+      // 旧名称の復活を防止する。あわせて新名称の通常deltaも配信）
+      if (typeof pushDriverRenameTombstone === 'function') {
+        pushDriverRenameTombstone(oldName, newName, oldDriverId);
+      } else if (typeof pushDriverDeltaToTablet === 'function') {
+        pushDriverDeltaToTablet(newName);
+      }
+      // 既知フィールドを外部マスタ（/tenko-master）にも新名称でベストエフォート反映。
+      // 外部GAS側は現状「名前をキーにしたフィールド更新」のみ対応のため、旧名称の行の
+      // リネーム/削除まではここから行えない（別途マスタ側の重複整理が必要な場合がある）。
+      if (typeof syncMasterFieldToServer === 'function') {
+        if (transportIDs[newName]) syncMasterFieldToServer(newName, 'transportId', transportIDs[newName]);
+        if (driverJapaneseNames[newName]) syncMasterFieldToServer(newName, 'japaneseName', driverJapaneseNames[newName]);
+        if (driverDepartments[newName]) syncMasterFieldToServer(newName, 'company', driverDepartments[newName]);
+      }
+
       renderMasterTable();
     }
 

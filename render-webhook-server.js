@@ -1086,6 +1086,10 @@ app.post('/tenko-sync', function(req, res) {
           transportId: incomingDelta.transportId || '',
           japaneseName: incomingDelta.japaneseName || '',
           company: incomingDelta.company || '',
+          // リネーム/統合の墓標(tombstone)用。renamedTo付きdeltaはクライアント側で
+          // 「無ければ作る」経路を通さず別名登録＋統合のみ行うことで、旧名称の再生成を防ぐ。
+          renamedTo: incomingDelta.renamedTo || '',
+          deleted: !!incomingDelta.deleted,
           updatedAt: typeof incomingDelta.updatedAt === 'number' ? incomingDelta.updatedAt : null,
           serverSeq: tenkoDeltaSeqCounter,
           serverInstanceId: tenkoServerInstanceId
