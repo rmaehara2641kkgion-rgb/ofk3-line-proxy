@@ -18159,12 +18159,37 @@ var driverDB = {
       if (files.length > 0) handleTwcFile(files[0]);
     }
 
+    // TWCヘッダー文字列の正規化: BOM除去・trim・小文字化に加え、空白/ハイフン/アンダースコアの
+    // 差異を吸収する（"Transporter ID" / "transporter-id" / "transporter_id" / "transporter id" は
+    // すべて "transporter_id" に正規化され同一列として認識される）。TWC_REQUIRED_COLSの値自体は
+    // 既にこの正規化後の形なので、既存の完全一致ケースは無変更のまま通る（後方互換）。
+    function normalizeTwcHeaderKey(v) {
+      var s = String(v || '');
+      s = s.replace(/^\uFEFF/, ''); // 文字列先頭に紛れ込んだBOMを除去（TextDecoderで除去済みの場合も無害）
+      s = s.trim().toLowerCase();
+      s = s.replace(/[\s\-_]+/g, '_'); // 空白・ハイフン・アンダースコアの連続を単一の"_"に統一
+      s = s.replace(/^_+|_+$/g, '');
+      return s;
+    }
+
     function findTwcHeaderRow(rows) {
       for (var r = 0; r < Math.min(rows.length, 10); r++) {
         var row = rows[r] || [];
-        var norm = row.map(function(c) { return String(c || '').trim().toLowerCase(); });
+        var norm = row.map(normalizeTwcHeaderKey);
         var hasAll = TWC_REQUIRED_COLS.every(function(col) { return norm.indexOf(col) >= 0; });
         if (hasAll) return r;
+      }
+      // デバッグ: 検出に失敗した場合、1行目を最有力候補として実際に認識したヘッダーと
+      // 必須列の判定結果をコンソールに出す（フォーマット変更時に原因を追えるように）
+      if (rows.length > 0) {
+        var candidateRaw = rows[0] || [];
+        var candidateNorm = candidateRaw.map(normalizeTwcHeaderKey);
+        console.log('[TWC] detected headers:', candidateRaw.map(function(c) { return String(c || ''); }));
+        console.log('[TWC] required columns:');
+        for (var ci = 0; ci < TWC_REQUIRED_COLS.length; ci++) {
+          var col = TWC_REQUIRED_COLS[ci];
+          console.log('  ' + col + ':', candidateNorm.indexOf(col) >= 0);
+        }
       }
       return -1;
     }
@@ -18172,7 +18197,7 @@ var driverDB = {
     function mapTwcColumns(header) {
       var map = {};
       for (var c = 0; c < header.length; c++) {
-        var key = String(header[c] || '').trim().toLowerCase();
+        var key = normalizeTwcHeaderKey(header[c]);
         if (key) map[key] = c;
       }
       return map;
@@ -18208,6 +18233,99 @@ var driverDB = {
       var m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
       if (!m) return null;
       return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10), parseInt(m[4], 10), parseInt(m[5], 10), m[6] ? parseInt(m[6], 10) : 0);
+    }
+
+    // ===== TWC日時セルの多形式判定・正規化（フォーマットアダプター） =====
+    // Amazon側の加工の仕方により、TWCの日時列（actual_attempt_time等）は複数の形式で
+    // 渡される可能性がある。「判定 → 該当アダプターで正規化 → 失敗時はunknownとして安全停止」
+    // という構造にし、根拠のない推測変換は行わない（特にamazon-short-timeは意図的に未対応）。
+
+    // 値の形式を判定する。値そのものだけで判定し、他列の値は使わない（判定はここでは副作用なし）。
+    function detectTwcDateTimeFormat(value) {
+      if (value instanceof Date) return isNaN(value.getTime()) ? 'unknown' : 'full-datetime';
+      var s = String(value === null || value === undefined ? '' : value).trim();
+      if (!s) return 'empty';
+      // A. 完全日時: "2026/9/4 11:52" "2026-09-04 11:52:30" 等
+      if (/^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}[ T]\d{1,2}:\d{2}(:\d{2})?/.test(s)) return 'full-datetime';
+      // D. amazon-short-time: "09:57.9" のような "M:SS.小数"（コロン1個＋秒に小数点）。
+      //    今回のW36ファイルで確認された形式。時（hour）が欠落しているため要注意。
+      if (/^\d{1,2}:\d{2}\.\d+$/.test(s)) return 'amazon-short-time';
+      // C. 時刻のみ（秒あり）: "11:52:30"（コロン2個・小数点なし）
+      if (/^\d{1,2}:\d{2}:\d{2}$/.test(s)) return 'time-only-with-seconds';
+      // C. 時刻のみ: "11:52"（コロン1個・小数点なし）
+      if (/^\d{1,2}:\d{2}$/.test(s)) return 'time-only';
+      // B. Excelシリアル日時: 数値のみ。2009〜2050年頃に相当する範囲だけを対象とし、
+      //    無関係な数値（件数・ID等）を誤って日時と判定しないよう安全側の範囲に限定する。
+      if (/^\d+(\.\d+)?$/.test(s)) {
+        var num = parseFloat(s);
+        if (num >= 40000 && num <= 55000) return 'excel-serial';
+      }
+      return 'unknown';
+    }
+
+    // A. 完全日時 → 既存のparseTwcDateTimeCellをそのまま利用（後方互換・ロジック重複なし）
+    function normalizeFullDateTime(value) {
+      return parseTwcDateTimeCell(value);
+    }
+
+    // B. Excelシリアル日時 → Date変換（1899-12-30起点の標準変換式）。
+    //    detectTwcDateTimeFormatで範囲を絞っているため、ここでは変換のみ行う。
+    function normalizeExcelSerial(value) {
+      var s = String(value === null || value === undefined ? '' : value).trim();
+      var num = parseFloat(s);
+      if (!isFinite(num)) return null;
+      var utcMs = Math.round((num - 25569) * 86400 * 1000);
+      var d = new Date(utcMs);
+      if (isNaN(d.getTime())) return null;
+      // シリアル値はローカル日時（JST等）として意味を持つため、UTC計算結果の年月日時分秒から
+      // ローカルタイムゾーンのDateとして組み直す（他のTWC日時と同じ扱いに揃える）。
+      return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds());
+    }
+
+    // C. 時刻のみ（"11:52" "11:52:30"）→ 同一行の別の日時列（例: planned_enter_time）から
+    //    日付部分だけを安全に合成する。dateSourceValueが完全日時として解釈できない場合は
+    //    合成せずnullを返す（日付の推測は行わない）。
+    function normalizeTimeOnly(value, dateSourceValue) {
+      var s = String(value === null || value === undefined ? '' : value).trim();
+      var m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+      if (!m) return null;
+      var dateBase = dateSourceValue ? normalizeFullDateTime(dateSourceValue) : null;
+      if (!dateBase) return null;
+      return new Date(dateBase.getFullYear(), dateBase.getMonth(), dateBase.getDate(),
+        parseInt(m[1], 10), parseInt(m[2], 10), m[3] ? parseInt(m[3], 10) : 0);
+    }
+
+    // D. amazon-short-time（"09:57.9"等）→ 意図的に変換しない。
+    //    W36実データを解析した結果、この形式は時（hour）の情報がCSV上のどの列にも
+    //    残っておらず、一意に復元できる根拠がない（詳細は完了報告を参照）。
+    //    推測で日時を作らないという安全ルールにより、常に未解決として返す。
+    function normalizeAmazonShortTime(value) {
+      return { date: null, format: 'amazon-short-time', ok: false };
+    }
+
+    // 日時セル正規化の共通入口。detectTwcDateTimeFormatで形式を判定し、対応するアダプターへ
+    // 振り分ける。戻り値は { date: Date|null, format: string, ok: boolean } に統一する。
+    // dateSourceValue: time-only系の日付合成に使う同一行の別列の値（省略可）。
+    function normalizeTwcDateTime(value, dateSourceValue) {
+      var format = detectTwcDateTimeFormat(value);
+      switch (format) {
+        case 'full-datetime':
+          var d1 = normalizeFullDateTime(value);
+          return { date: d1, format: format, ok: !!d1 };
+        case 'excel-serial':
+          var d2 = normalizeExcelSerial(value);
+          return { date: d2, format: format, ok: !!d2 };
+        case 'time-only':
+        case 'time-only-with-seconds':
+          var d3 = normalizeTimeOnly(value, dateSourceValue);
+          return { date: d3, format: format, ok: !!d3 };
+        case 'amazon-short-time':
+          return normalizeAmazonShortTime(value);
+        case 'empty':
+          return { date: null, format: 'empty', ok: false };
+        default:
+          return { date: null, format: 'unknown', ok: false };
+      }
     }
 
     function twcFormatDate(d) {
@@ -18256,8 +18374,26 @@ var driverDB = {
           rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: true });
         }
         var info = processTwcData(rows, { fileName: fname });
-        if (!info) {
-          alert('TWCデータ形式を認識できませんでした。\n必須列（transporter_id / time_window / planned_enter_time / actual_attempt_time）を確認してください');
+        if (!info || !info.ok) {
+          var reason = info && info.reason;
+          if (reason === 'header-not-found') {
+            var missing = (info.missingCols || []).join(' / ');
+            alert('TWCデータの必須列を認識できませんでした。\n\n不足列：\n' + (missing || '(検出できませんでした)'));
+          } else if (reason === 'datetime-format-unrecognized') {
+            var samples = (info.samples || []).slice(0, 3).join('\n');
+            alert('TWCデータは認識できましたが、\nactual_attempt_time の日時形式を解析できませんでした。\n\n検出形式：\n' + info.format + '\n\nサンプル：\n' + (samples || '(なし)'));
+          } else if (reason === 'no-valid-rows') {
+            var sk = (info.skipStats) || {};
+            var lines = [];
+            if (sk.noActualAttempt) lines.push('日時パース失敗 ' + sk.noActualAttempt + '件');
+            if (sk.noTid) lines.push('TransportID欠落 ' + sk.noTid + '件');
+            if (sk.noTimeWindow) lines.push('time_window欠落 ' + sk.noTimeWindow + '件');
+            if (sk.noWindowEnd) lines.push('time_window解析失敗 ' + sk.noWindowEnd + '件');
+            alert('TWCデータは読み込みましたが、\n判定対象となる有効データが0件でした。\n\nスキップ理由：\n' + (lines.join('\n') || '(不明)'));
+          } else {
+            // 想定外の失敗理由に対するフォールバック（従来の汎用メッセージを維持）
+            alert('TWCデータ形式を認識できませんでした。\n必須列（transporter_id / time_window / planned_enter_time / actual_attempt_time）を確認してください');
+          }
           return;
         }
         var msg = document.getElementById('twc-loaded-msg');
@@ -18267,26 +18403,61 @@ var driverDB = {
       else reader.readAsArrayBuffer(file);
     }
 
+    // processTwcDataの戻り値は常に { ok: boolean, ... } の形に統一する。
+    // ok:false の場合は reason で失敗理由を区別する（呼び出し側でUIメッセージを出し分けるため）。
+    //   'header-not-found'          : 必須列そのものが見つからない
+    //   'datetime-format-unrecognized' : ヘッダーは見つかったが、actual_attempt_timeの形式が
+    //                                    どの行も解釈できない（amazon-short-time/unknown等）
+    //   'no-valid-rows'             : 日時は解釈できた行があるが、他の条件（TID等）で0件になった
     function processTwcData(rows, meta) {
       var headerIdx = findTwcHeaderRow(rows);
-      if (headerIdx < 0) return null;
+      if (headerIdx < 0) {
+        // findTwcHeaderRow内でも詳細ログは出力済み。ここでは呼び出し側のUIメッセージ用に
+        // 不足列一覧だけを構造化して返す（1行目を代表候補として判定）。
+        var candidateNorm = (rows[0] || []).map(normalizeTwcHeaderKey);
+        var missingCols = TWC_REQUIRED_COLS.filter(function(c) { return candidateNorm.indexOf(c) < 0; });
+        return { ok: false, reason: 'header-not-found', missingCols: missingCols };
+      }
       var cols = mapTwcColumns(rows[headerIdx]);
 
       var violations = [];
       var totalRows = 0;
       var windowCounts = {};
       var tidToName = buildTidToNameLookup();
+      // デバッグ用: スキップ理由カウンタ・日時形式の分布・サンプル値
+      var twcSkipStats = { noTid: 0, noTimeWindow: 0, noActualAttempt: 0, noWindowEnd: 0 };
+      var formatStats = { 'full-datetime': 0, 'excel-serial': 0, 'time-only': 0, 'time-only-with-seconds': 0, 'amazon-short-time': 0, empty: 0, unknown: 0 };
+      var sampleActualAttemptRaw = [];
+      var dataRowCount = 0;
+      var dateParseSuccessCount = 0;
 
       for (var r = headerIdx + 1; r < rows.length; r++) {
         var row = rows[r];
         if (!row || !row.length) continue;
+        dataRowCount++;
         var tid = String(row[cols.transporter_id] || '').trim();
         var timeWindow = String(row[cols.time_window] || '').trim();
-        var actualAttempt = parseTwcDateTimeCell(row[cols.actual_attempt_time]);
-        if (!tid || !timeWindow || !actualAttempt) continue;
+        var actualRaw = cols.actual_attempt_time !== undefined ? row[cols.actual_attempt_time] : '';
+        var plannedRawForDate = cols.planned_enter_time !== undefined ? row[cols.planned_enter_time] : null;
+        // time-only系（"11:52"等）の日付合成にはplanned_enter_timeを使う（他の日時は使わない）。
+        // amazon-short-time（"09:57.9"等）はnormalizeAmazonShortTime内で常にok:falseになる。
+        var actualResult = normalizeTwcDateTime(actualRaw, plannedRawForDate);
+        formatStats[actualResult.format] = (formatStats[actualResult.format] || 0) + 1;
+        if (actualResult.ok) dateParseSuccessCount++;
+        if (sampleActualAttemptRaw.length < 5 && String(actualRaw === undefined || actualRaw === null ? '' : actualRaw).trim()) {
+          sampleActualAttemptRaw.push(actualRaw);
+        }
+        var actualAttempt = actualResult.date;
+
+        if (!tid || !timeWindow || !actualAttempt) {
+          if (!tid) twcSkipStats.noTid++;
+          else if (!timeWindow) twcSkipStats.noTimeWindow++;
+          else if (!actualAttempt) twcSkipStats.noActualAttempt++;
+          continue;
+        }
 
         var windowEndMin = parseTwcWindowEndMinutes(timeWindow);
-        if (windowEndMin == null) continue;
+        if (windowEndMin == null) { twcSkipStats.noWindowEnd++; continue; }
 
         totalRows++;
         windowCounts[timeWindow] = (windowCounts[timeWindow] || 0) + 1;
@@ -18311,7 +18482,42 @@ var driverDB = {
         });
       }
 
-      if (!totalRows) return null;
+      // [TWC] 判定ログ（成功・失敗いずれの場合も出力し、フォーマット変更時の原因追跡を容易にする）
+      console.log('[TWC] detected headers');
+      TWC_REQUIRED_COLS.forEach(function(c) { console.log('  ' + c + ': column ' + cols[c]); });
+      console.log('[TWC] datetime format analysis');
+      console.log('  totalRows:', dataRowCount);
+      Object.keys(formatStats).forEach(function(k) {
+        if (formatStats[k] > 0) console.log('  ' + k + ':', formatStats[k]);
+      });
+      if (sampleActualAttemptRaw.length) {
+        console.log('[TWC] sample actual_attempt_time', sampleActualAttemptRaw);
+      }
+
+      // 認識可能な形式（full-datetime/excel-serial/time-only系）で1件も解釈できなかった場合、
+      // 「ヘッダーは正しいが日時形式が未対応」として区別する（amazon-short-timeはここに該当する）。
+      if (dataRowCount > 0 && dateParseSuccessCount === 0) {
+        var dominantFormat = 'unknown';
+        var dominantCount = -1;
+        Object.keys(formatStats).forEach(function(k) {
+          if (k === 'empty') return;
+          if (formatStats[k] > dominantCount) { dominantCount = formatStats[k]; dominantFormat = k; }
+        });
+        console.log('[TWC] normalized');
+        console.log('  success: 0');
+        console.log('  failed:', dataRowCount);
+        console.log('  format:', dominantFormat);
+        return { ok: false, reason: 'datetime-format-unrecognized', format: dominantFormat, samples: sampleActualAttemptRaw };
+      }
+
+      console.log('[TWC] normalized');
+      console.log('  success:', dateParseSuccessCount);
+      console.log('  failed:', dataRowCount - dateParseSuccessCount);
+
+      if (!totalRows) {
+        console.log('[TWC] header recognized, datetime parsed, but 0 usable rows. skip reasons:', twcSkipStats);
+        return { ok: false, reason: 'no-valid-rows', skipStats: twcSkipStats };
+      }
 
       twcViolations = violations;
       twcTotalRows = totalRows;
@@ -18326,7 +18532,7 @@ var driverDB = {
       var btn = document.getElementById('twc-export-btn');
       if (btn) btn.disabled = violations.length === 0;
 
-      return { period: period, violations: violations.length, totalRows: totalRows };
+      return { ok: true, period: period, violations: violations.length, totalRows: totalRows };
     }
 
     // ドライバー単位に集計（優先順位付け・判定はW35_時間指定違反_分析と同じ規則で算出）
