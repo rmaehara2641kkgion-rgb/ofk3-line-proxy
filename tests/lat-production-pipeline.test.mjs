@@ -57,6 +57,7 @@ for (const fn of ['handleDspFile', 'handleDspDrop', 'handleLatFile', 'mergeAndRe
 }
 
 const coreSource = readFileSync(join(repoRoot, 'lat-departure-core.js'), 'utf8');
+const timelineSource = readFileSync(join(repoRoot, 'lat-timeline-core.js'), 'utf8');
 
 // ---- Minimal browser stubs ----
 function makeFakeElement() {
@@ -164,6 +165,7 @@ function loadScripts() {
   //    script runs — document.readyState is 'loading', so it must NOT
   //    install the loader yet, only arm the DOMContentLoaded listener.
   vm.runInContext(coreSource, context, { filename: 'lat-departure-core.js' });
+  vm.runInContext(timelineSource, context, { filename: 'lat-timeline-core.js' });
   assert(sandbox.__latProductionDspLoaderInstalled !== true, 'loader must not install before DOMContentLoaded');
   assert(domContentLoadedListeners.length === 1, 'core.js registered exactly one DOMContentLoaded listener');
   assert(loadListeners.length === 0, 'core.js must not depend on window load to install the loader');
