@@ -126,7 +126,7 @@ function runTests() {
   var sandbox = ctx.sandbox;
   vm.runInContext(coreSource, vm.createContext(sandbox), { filename: 'lat-departure-core.js' });
 
-  var dnrStub = 'var dnrResultData = []; function getTodayJst(){ return "2026-08-23"; } var driverJapaneseNames = {}; function updateQualitySummary(){} function buildTeamQualitySnapshot(){} function latFormatDate(d){ return d||""; }\n';
+  var dnrStub = 'var dnrResultData = []; function getTodayJst(){ return "2026-08-23"; } var driverJapaneseNames = {}; function updateQualitySummary(){} function buildTeamQualitySnapshot(){} function latFormatDate(d){ return d||""; } function resolveDriverKeyByTid(tid){ return ""; }\n';
   vm.runInContext(dnrStub + latSource, vm.createContext(sandbox), { filename: 'index.html#LAT block' });
 
   // ---- STEP: format detection (unit-level, no file I/O) ----

@@ -171,7 +171,7 @@ function loadScripts() {
   // 2) The big inline <script> runs next, declaring the original
   //    handleDspFile/dspRouteMap/mergeAndRender/etc. (still synchronous,
   //    still runs to completion before parsing/DOMContentLoaded can finish).
-  const dnrStub = 'var dnrResultData = []; function getTodayJst(){ return "2026-08-21"; } var driverJapaneseNames = {};\n';
+  const dnrStub = 'var dnrResultData = []; function getTodayJst(){ return "2026-08-21"; } var driverJapaneseNames = {}; function resolveDriverKeyByTid(tid){ return ""; }\n';
   vm.runInContext(dnrStub + latSource, context, { filename: 'index.html#LAT block' });
   assert(typeof sandbox.handleDspFile === 'function', 'inline script defines handleDspFile');
   assert(typeof sandbox.mergeAndRender === 'function', 'inline script defines mergeAndRender');
