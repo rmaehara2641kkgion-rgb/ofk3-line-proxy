@@ -20,6 +20,7 @@
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script src="/lat-departure-core.js?v=20260823-1"></script>
+  <script src="/lat-timeline-core.js?v=20260916-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -17763,180 +17764,27 @@ var driverDB = {
     // 日付のみを解析し、日数（latFormatDateと同じExcelシリアル基準=1970-01-01からのUTC日数）を返す。
     // 解析できなければnull。
     function latParseDateToDayNumber(raw) {
-      if (raw === null || raw === undefined || raw === '') return null;
-      var str = String(raw).trim();
-      if (!str) return null;
-      var m = str.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
-      if (m) return Math.floor(Date.UTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)) / 86400000);
-      var num = parseFloat(str);
-      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/) && num > 40000) {
-        return Math.floor(num) - 25569; // latFormatDateと同じExcelシリアル→JS日数変換
-      }
-      var m8 = str.match(/^(\d{4})(\d{2})(\d{2})$/);
-      if (m8) return Math.floor(Date.UTC(parseInt(m8[1], 10), parseInt(m8[2], 10) - 1, parseInt(m8[3], 10)) / 86400000);
-      return null;
+      return LatTimelineCore.latParseDateToDayNumber(raw);
     }
 
-    // セル(raw)が「自分自身の日付」を持つ場合だけ、自己完結した絶対分（dayNumber*1440+時刻分。
-    // 基準は latParseDateToDayNumber と同じUTC日数）を返す。日付を持たないセル（裸のHH:mm。
-    // 24時間超の経過時間風表記を含む）はnullを返す＝一切推測しない（W37実データ調査の結果、
-    // 出発予定・実出発・FirstScan/LastScanは日付情報を持たない裸のHH:mmで来ることが判明したため、
-    // このケースの日跨ぎ推測はnormalizeLatTimeline()側の業務順序チェーンに委ねる）。
     function latResolveOwnDateAbsoluteMinutes(raw) {
-      if (raw === null || raw === undefined || raw === '') return null;
-      var str = String(raw).trim();
-      if (!str) return null;
-      var num = parseFloat(str);
-      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/) && num > 40000) {
-        var ownDay = Math.floor(num) - 25569;
-        var timeMin = Math.round((num - Math.floor(num)) * 1440);
-        return ownDay * 1440 + timeMin;
-      }
-      var ownDay2 = latParseDateToDayNumber(str);
-      if (ownDay2 === null) return null; // "2026/8/4"のような日付パターンが無い＝自分の日付を持たない
-      var tm = str.match(/(\d{1,3}):(\d{2})/);
-      if (!tm) return null;
-      var timeMin2 = parseInt(tm[1], 10) * 60 + parseInt(tm[2], 10);
-      return ownDay2 * 1440 + timeMin2;
+      return LatTimelineCore.latResolveOwnDateAbsoluteMinutes(raw);
     }
 
-    // セル(raw)から「時刻のみ」を、24時間(1440分)でmodした時刻分(0〜1439)として取り出す。
-    // 24時間超のHH:mm（例:"35:42"）もこの時点では素直に%1440する＝そのセル単体の見かけの
-    // 経過時間表記を信用しない（W37実データで、実出発とFirstScan/LastScanのように列ごとに
-    // 24時間超のtext表現が混在し、単純に「そのまま経過分として保持」すると出発予定との差分が
-    // 無関係な1000分超になる/FirstScan・LastScan間が負や異常に長くなることを確認したため）。
-    // 実際の日またぎ判定はnormalizeLatTimeline()の業務順序チェーン側で行う。
     function latRawClockMinuteOfDay(raw) {
-      if (raw === null || raw === undefined || raw === '') return null;
-      var str = String(raw).trim();
-      if (!str) return null;
-      var num = parseFloat(str);
-      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/)) {
-        if (num > 40000) {
-          var timeMin = Math.round((num - Math.floor(num)) * 1440);
-          return ((timeMin % 1440) + 1440) % 1440;
-        }
-        if (num >= 0 && num < 1) return Math.round(num * 1440) % 1440;
-        if (num >= 1 && num < 86400) return Math.round(num / 60) % 1440;
-      }
-      var tm = str.match(/(\d{1,3}):(\d{2})/);
-      if (!tm) return null;
-      var timeMin2 = parseInt(tm[1], 10) * 60 + parseInt(tm[2], 10);
-      return ((timeMin2 % 1440) + 1440) % 1440;
+      return LatTimelineCore.latRawClockMinuteOfDay(raw);
     }
 
-    // ===== LAT内部計算: 同一route内イベントの chronological timeline 正規化 =====
-    // 日付情報を持たない裸のHH:mm（24時間超の経過時間風表記を含む）は、単体ではどの日を
-    // 指しているか判定できない。同一route内の他イベント・予定出発（scheduledDeparture。
-    // 既存データをそのまま使う。新規ハードコードしない）との関係からしか推測できないため、
-    // DS到着→DS入場→FirstScan→LastScan→実出発→DS退出という既知の業務順序でチェーンし、
-    // 各イベントを「直前の解決済みイベント以降で最小のロールオーバー」に解決する。
-    // チェーン先頭（最初に値があるイベント）だけは、予定出発に最も近い候補を選ぶ。
-    // セル自身が日付を持つ場合（latResolveOwnDateAbsoluteMinutes）は常に最優先＝一切推測しない。
-    // 単純な "if (end < start) end += 1440" では、日付を跨がない異常値（例: 34:40→48:30のような
-    // 業務上あり得ない長時間）まで正常値として採用してしまうため、正規化後も明らかに不自然な
-    // 値が残る場合はisTimelineSuspicious/timelineWarningReasonで警告するに留め、数値そのものは
-    // 削除・改変しない（LAT判定側で早着/定刻/遅延に採用しない、という判断にのみ使う）。
-    var LAT_TIMELINE_GAP_SUSPICIOUS_MIN = 120;      // 隣接イベント間隔がこれを超えたら警告(分)
-    var LAT_TIMELINE_DIFF_SUSPICIOUS_MIN = 180;     // 出発差分の絶対値がこれを超えたら警告(分)
-    var LAT_TIMELINE_ROLLOVER_SUSPICIOUS_DAYS = 2;  // ロールオーバーがこの日数以上必要なら警告
-
-    // 1イベントをchronological timeline上へ解決する。prevAbsがnull（チェーン先頭）なら
-    // anchorAbsに最も近い候補（前後2日の範囲）を選ぶ。prevAbsがあれば、それ以降で最小の
-    // ロールオーバー（0〜3日先）を選ぶ＝業務順序（後続イベントは先行イベントより後）を保証する。
     function latResolveTimelineField(raw, prevAbs, anchorAbs) {
-      if (raw === null || raw === undefined || raw === '') return { abs: null, hasOwnDate: false, rolloverDays: 0 };
-      var ownDateAbs = latResolveOwnDateAbsoluteMinutes(raw);
-      if (ownDateAbs !== null) return { abs: ownDateAbs, hasOwnDate: true, rolloverDays: 0 };
-      var clockMin = latRawClockMinuteOfDay(raw);
-      if (clockMin === null) return { abs: null, hasOwnDate: false, rolloverDays: 0 };
-
-      if (prevAbs === null) {
-        var anchorDay = Math.floor(anchorAbs / 1440);
-        var bestAbs = null, bestDiff = Infinity, bestK = 0;
-        for (var k = -2; k <= 2; k++) {
-          var cand = (anchorDay + k) * 1440 + clockMin;
-          var diff = Math.abs(cand - anchorAbs);
-          if (diff < bestDiff) { bestDiff = diff; bestAbs = cand; bestK = k; }
-        }
-        return { abs: bestAbs, hasOwnDate: false, rolloverDays: Math.abs(bestK) };
-      }
-
-      var baseDay = Math.floor(prevAbs / 1440);
-      var slack = 5; // ほぼ同時刻の計測誤差を許容する猶予(分)
-      for (var f = 0; f <= 3; f++) {
-        var cand2 = (baseDay + f) * 1440 + clockMin;
-        if (cand2 >= prevAbs - slack) return { abs: cand2, hasOwnDate: false, rolloverDays: f };
-      }
-      return { abs: (baseDay + 3) * 1440 + clockMin, hasOwnDate: false, rolloverDays: 3 };
+      return LatTimelineCore.latResolveTimelineField(raw, prevAbs, anchorAbs);
     }
 
-    // input: { routeDayNumber, plannedDeparture, arrival, entrance, firstScan, lastScan, departure, exit }
-    // （いずれも生のセル値/latExtractTime前のraw文字列。欠損は''またはnull/undefinedでよい）
-    // 欠損イベントは無理に補完せずスキップする（チェーンは直近の解決済みイベントから継続）。
+    // W37 LOW/DSP beacon "57:46.8" is mm:ss.tenths, not HH:mm. Date-bearing cells stay exact.
+    // Gaps across missing events are not treated as adjacent_gap_over_120. Thresholds unchanged.
     function normalizeLatTimeline(input) {
-      input = input || {};
-      var routeDayNumber = input.routeDayNumber;
-
-      var scheduledAbs = null;
-      if (input.plannedDeparture) {
-        scheduledAbs = latResolveOwnDateAbsoluteMinutes(input.plannedDeparture);
-        if (scheduledAbs === null) {
-          var schedClock = latRawClockMinuteOfDay(input.plannedDeparture);
-          if (schedClock !== null && routeDayNumber !== null && routeDayNumber !== undefined) {
-            scheduledAbs = routeDayNumber * 1440 + schedClock;
-          }
-        }
-      }
-      var anchorAbs = scheduledAbs !== null ? scheduledAbs
-        : ((routeDayNumber !== null && routeDayNumber !== undefined) ? routeDayNumber * 1440 : 0);
-
-      var order = [
-        { key: 'arrival', outKey: 'arrivalAbs' },
-        { key: 'entrance', outKey: 'entranceAbs' },
-        { key: 'firstScan', outKey: 'firstScanAbs' },
-        { key: 'lastScan', outKey: 'lastScanAbs' },
-        { key: 'departure', outKey: 'departureAbs' },
-        { key: 'exit', outKey: 'exitAbs' }
-      ];
-      var result = { plannedDepartureAbs: scheduledAbs };
-      var reasons = [];
-      var prevAbs = null;
-      var prevLabel = null;
-      for (var i = 0; i < order.length; i++) {
-        var key = order[i].key;
-        var resolved = latResolveTimelineField(input[key], prevAbs, anchorAbs);
-        result[order[i].outKey] = resolved.abs;
-        if (resolved.abs !== null) {
-          if (resolved.rolloverDays >= LAT_TIMELINE_ROLLOVER_SUSPICIOUS_DAYS) {
-            reasons.push(key + 'が' + resolved.rolloverDays + '日分ロールオーバーして解決された');
-          }
-          if (prevAbs !== null) {
-            var gap = resolved.abs - prevAbs;
-            if (gap > LAT_TIMELINE_GAP_SUSPICIOUS_MIN) {
-              reasons.push(prevLabel + '→' + key + 'の間隔が' + gap + '分と異常に長い');
-            } else if (gap < -5) {
-              reasons.push(prevLabel + '→' + key + 'の順序が成立しない(' + gap + '分)');
-            }
-          }
-          prevAbs = resolved.abs;
-          prevLabel = key;
-        }
-      }
-
-      if (scheduledAbs !== null && result.departureAbs !== null) {
-        var diff = result.departureAbs - scheduledAbs;
-        if (Math.abs(diff) > LAT_TIMELINE_DIFF_SUSPICIOUS_MIN) {
-          reasons.push('出発差分が' + diff + '分と異常に大きい');
-        }
-      }
-
-      result.isTimelineSuspicious = reasons.length > 0;
-      result.timelineWarningReason = reasons.join('; ');
-      return result;
+      return LatTimelineCore.normalizeLatTimeline(input);
     }
 
-    // Excelシリアル日付 or 文字列日付を表示用に整形
     function latFormatDate(str) {
       if (!str) return '';
       str = String(str).trim();
@@ -18032,7 +17880,7 @@ var driverDB = {
         // 記録するのみで、数値そのものは変更しない（早着/定刻/遅延のLAT判定には採用しない）。
         var timeline = normalizeLatTimeline({
           routeDayNumber: lat.dayNumber,
-          plannedDeparture: lat.plannedDepartureRaw,
+          plannedDeparture: lat.plannedDepartureRaw || lat.plannedDeparture || plannedDep,
           arrival: lat.arrivalRaw,
           entrance: lat.entranceRaw,
           firstScan: lat.firstScanRaw,
@@ -18040,8 +17888,23 @@ var driverDB = {
           departure: lat.departureRaw,
           exit: lat.exitRaw
         });
+        var meta = timeline.fieldMeta || {};
+        function inferredClock(display, abs, field) {
+          var m = meta[field];
+          if (m && m.source === 'beacon-mmss' && abs != null && LatTimelineCore.latFormatAbsClock) {
+            return LatTimelineCore.latFormatAbsClock(abs);
+          }
+          return display;
+        }
+        dsArrival = inferredClock(dsArrival, timeline.arrivalAbs, 'arrival');
+        dsEntrance = inferredClock(dsEntrance, timeline.entranceAbs, 'entrance');
+        firstScan = inferredClock(firstScan, timeline.firstScanAbs, 'firstScan');
+        lastScan = inferredClock(lastScan, timeline.lastScanAbs, 'lastScan');
+        actualDep = inferredClock(actualDep, timeline.departureAbs, 'departure');
+        dsExit = inferredClock(dsExit, timeline.exitAbs, 'exit');
 
         var loadingMin = (timeline.lastScanAbs != null && timeline.firstScanAbs != null) ? (timeline.lastScanAbs - timeline.firstScanAbs) : null;
+        if (loadingMin != null) loadingMin = Math.round(loadingMin * 10) / 10;
         var stayMin = lat.turnover ? parseFloat(lat.turnover) : ((timeline.exitAbs != null && timeline.entranceAbs != null) ? (timeline.exitAbs - timeline.entranceAbs) : null);
 
         var diffMin = (timeline.departureAbs != null && timeline.plannedDepartureAbs != null) ? (timeline.departureAbs - timeline.plannedDepartureAbs) : null;

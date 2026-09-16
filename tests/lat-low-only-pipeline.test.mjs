@@ -22,6 +22,7 @@ function extractBlock(html, startMarker, endMarker) {
 const indexHtml = readFileSync(join(repoRoot, 'index.html'), 'utf8');
 const latSource = extractBlock(indexHtml, '// ===== LAT分析 =====', '// ===== DNR分析 =====');
 const coreSource = readFileSync(join(repoRoot, 'lat-departure-core.js'), 'utf8');
+const timelineSource = readFileSync(join(repoRoot, 'lat-timeline-core.js'), 'utf8');
 
 function newElement() {
   var el = {
@@ -107,6 +108,7 @@ function runTests() {
   var ctx = buildSandbox();
   var sandbox = ctx.sandbox;
   vm.runInContext(coreSource, vm.createContext(sandbox), { filename: 'lat-departure-core.js' });
+  vm.runInContext(timelineSource, vm.createContext(sandbox), { filename: 'lat-timeline-core.js' });
 
   var dnrStub = 'var dnrResultData = []; function getTodayJst(){ return "2026-08-23"; } var driverJapaneseNames = {}; function updateQualitySummary(){} function buildTeamQualitySnapshot(){} function latFormatDate(d){ return d||""; } function resolveDriverKeyByTid(tid){ return ""; }\n';
   vm.runInContext(dnrStub + latSource, vm.createContext(sandbox), { filename: 'index.html#LAT block' });
