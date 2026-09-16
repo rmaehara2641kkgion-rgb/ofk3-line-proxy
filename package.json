@@ -8,7 +8,7 @@
     "dev": "node inject-tenko-audit.js",
     "test:assign-support": "node tests/assign-support.test.mjs && node tests/auto-assign-amazon-schedule.test.mjs",
     "test:transport-audit": "node tests/test-transport-audit.mjs",
-    "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-low-only-pipeline.test.mjs",
+    "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-low-only-pipeline.test.mjs && node tests/lat-timeline-normalization.test.mjs",
     "test:manual-assign-board": "node tests/manual-assign-board-core.test.mjs",
     "test:rolling60h": "node tests/rolling60h-core.test.mjs",
     "test:twc": "node tests/twc-core.test.mjs",
