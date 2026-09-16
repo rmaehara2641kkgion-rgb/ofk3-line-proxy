@@ -17462,8 +17462,11 @@ var driverDB = {
         var rid = row && row[routeIdx] ? String(row[routeIdx]).trim() : '';
         if (!rid) continue;
         if (rows[rid]) { duplicateCount++; continue; } // 重複route_idは最初の行を正とし、件数のみ記録（黙って上書き・展開しない）
+        var rowDateStr = dateIdx >= 0 && row[dateIdx] ? String(row[dateIdx]).trim() : '';
+        var rowDayNum = latParseDateToDayNumber(rowDateStr);
         rows[rid] = {
-          date: dateIdx >= 0 && row[dateIdx] ? String(row[dateIdx]).trim() : '',
+          date: rowDateStr,
+          dayNumber: rowDayNum,
           wave: waveIdx >= 0 && row[waveIdx] ? String(row[waveIdx]).trim() : '',
           routeCode: rcIdx >= 0 && row[rcIdx] ? String(row[rcIdx]).trim() : '',
           turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : '',
@@ -17472,7 +17475,13 @@ var driverDB = {
           departure: bdIdx >= 0 && row[bdIdx] ? latExtractTime(String(row[bdIdx])) : '',
           exit: bexIdx >= 0 && row[bexIdx] ? latExtractTime(String(row[bexIdx])) : '',
           firstScan: fsIdx >= 0 && row[fsIdx] ? latExtractTime(String(row[fsIdx])) : '',
-          lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : ''
+          lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : '',
+          // 積込時間・滞在時間・差分(分)の計算専用（日跨ぎ保持の絶対分。表示用arrival/entrance等とは別軸）
+          entranceAbs: benIdx >= 0 ? latExtractAbsoluteMinutes(row[benIdx], rowDayNum) : null,
+          departureAbs: bdIdx >= 0 ? latExtractAbsoluteMinutes(row[bdIdx], rowDayNum) : null,
+          exitAbs: bexIdx >= 0 ? latExtractAbsoluteMinutes(row[bexIdx], rowDayNum) : null,
+          firstScanAbs: fsIdx >= 0 ? latExtractAbsoluteMinutes(row[fsIdx], rowDayNum) : null,
+          lastScanAbs: lsIdx >= 0 ? latExtractAbsoluteMinutes(row[lsIdx], rowDayNum) : null
         };
       }
       return { rows: rows, count: Object.keys(rows).length, duplicateRouteIdCount: duplicateCount };
@@ -17493,7 +17502,10 @@ var driverDB = {
         if (rows[rid]) { duplicateCount++; continue; } // 重複route_idは最初の行を正とし、件数のみ記録
         rows[rid] = {
           employeeId: empIdx >= 0 && row[empIdx] ? String(row[empIdx]).trim() : '',
-          plannedDeparture: pdIdx >= 0 && row[pdIdx] != null && row[pdIdx] !== '' ? latExtractTime(String(row[pdIdx])) : ''
+          plannedDeparture: pdIdx >= 0 && row[pdIdx] != null && row[pdIdx] !== '' ? latExtractTime(String(row[pdIdx])) : '',
+          // 絶対分計算用にraw値をそのまま保持（latExtractTimeは日付を捨てるため）。
+          // route日（Turnover側date列）との突き合わせはlatTryCombineRaw側で行う。
+          plannedDepartureRaw: pdIdx >= 0 && row[pdIdx] != null && row[pdIdx] !== '' ? row[pdIdx] : ''
         };
       }
       return { rows: rows, count: Object.keys(rows).length, duplicateRouteIdCount: duplicateCount };
@@ -17528,7 +17540,14 @@ var driverDB = {
           firstScan: t.firstScan, lastScan: t.lastScan, turnover: t.turnover,
           date: t.date, wave: t.wave, routeCode: t.routeCode,
           employeeId: r ? r.employeeId : '',
-          plannedDeparture: r ? r.plannedDeparture : ''
+          plannedDeparture: r ? r.plannedDeparture : '',
+          // 積込時間・滞在時間・差分(分)計算専用の絶対分。entrance/exit/firstScan/lastScanはTurnover側
+          // （t）がroute日を基準に既に算出済みのものをそのまま引き継ぐ。plannedDepartureAbsだけは
+          // 別ファイル（Total Number of DSP Routes）由来のため、route日（t.dayNumber）を基準に
+          // ここで算出する（raw値自身が日付を持つ場合はそちらを優先＝latExtractAbsoluteMinutes側の仕様）。
+          entranceAbs: t.entranceAbs, departureAbs: t.departureAbs, exitAbs: t.exitAbs,
+          firstScanAbs: t.firstScanAbs, lastScanAbs: t.lastScanAbs,
+          plannedDepartureAbs: r ? latExtractAbsoluteMinutes(r.plannedDepartureRaw, t.dayNumber) : null
         };
       }
       var routesOnlyCount = 0; // Total Number of DSP Routesには存在するがLoading Area Turnoverに無いroute_id（=当該ルートは今回のLOW相当データには含めない。LOW原本も元々ターンオーバーがあるルートのみを持つため）
@@ -17639,6 +17658,8 @@ var driverDB = {
           var row = json[i];
           var rid = row[routeIdx] ? String(row[routeIdx]).trim() : '';
           if (!rid) continue;
+          var lowDateStr = latDateIdx >= 0 && row[latDateIdx] ? String(row[latDateIdx]).trim() : '';
+          var lowDayNum = latParseDateToDayNumber(lowDateStr);
           latBeaconMap[rid] = {
             arrival: baIdx >= 0 && row[baIdx] ? latExtractTime(String(row[baIdx])) : '',
             entrance: benIdx >= 0 && row[benIdx] ? latExtractTime(String(row[benIdx])) : '',
@@ -17648,10 +17669,17 @@ var driverDB = {
             lastScan: lsIdx >= 0 && row[lsIdx] ? latExtractTime(String(row[lsIdx])) : '',
             turnover: toIdx >= 0 && row[toIdx] ? String(row[toIdx]).trim() : '',
             employeeId: latEmpIdx >= 0 && row[latEmpIdx] ? String(row[latEmpIdx]).trim() : '',
-            date: latDateIdx >= 0 && row[latDateIdx] ? String(row[latDateIdx]).trim() : '',
+            date: lowDateStr,
             wave: latWaveIdx >= 0 && row[latWaveIdx] ? String(row[latWaveIdx]).trim() : '',
             routeCode: latRcIdx >= 0 && row[latRcIdx] ? String(row[latRcIdx]).trim() : '',
-            plannedDeparture: latPdIdx >= 0 && row[latPdIdx] != null && row[latPdIdx] !== '' ? latExtractTime(String(row[latPdIdx])) : ''
+            plannedDeparture: latPdIdx >= 0 && row[latPdIdx] != null && row[latPdIdx] !== '' ? latExtractTime(String(row[latPdIdx])) : '',
+            // 積込時間・滞在時間・差分(分)計算専用の絶対分（日跨ぎ保持。latExtractAbsoluteMinutes参照）
+            entranceAbs: benIdx >= 0 ? latExtractAbsoluteMinutes(row[benIdx], lowDayNum) : null,
+            departureAbs: bdIdx >= 0 ? latExtractAbsoluteMinutes(row[bdIdx], lowDayNum) : null,
+            exitAbs: bexIdx >= 0 ? latExtractAbsoluteMinutes(row[bexIdx], lowDayNum) : null,
+            firstScanAbs: fsIdx >= 0 ? latExtractAbsoluteMinutes(row[fsIdx], lowDayNum) : null,
+            lastScanAbs: lsIdx >= 0 ? latExtractAbsoluteMinutes(row[lsIdx], lowDayNum) : null,
+            plannedDepartureAbs: latPdIdx >= 0 ? latExtractAbsoluteMinutes(row[latPdIdx], lowDayNum) : null
           };
           if (!latBeaconMap[rid].exit) emptyExitCount++;
           else if (latBeaconMap[rid].exit === latBeaconMap[rid].departure) exitSameAsDepartureCount++;
@@ -17715,6 +17743,64 @@ var driverDB = {
         }
       }
       return str;
+    }
+
+    // ===== LAT内部計算専用: 日跨ぎを保持した絶対分（absoluteMinutes） =====
+    // 問題: latExtractTime()は表示用のHH:mm(:ss)文字列だけを返し、そのセルが本来持っていた
+    // 日付情報（セル自身の日付文字列、またはExcelシリアル値の整数部＝日数）を捨てている。
+    // 積込時間・滞在時間・差分(分)は latMinDiff(HH:mm文字列, HH:mm文字列) の単純な引き算で
+    // 求めていたため、日をまたいだ実績同士を引くと、無関係な日数分（およそ1440分/2880分単位）
+    // ズレた値（1000〜2000分超、-2000〜-3000分等）が出ていた。
+    // 対策: 各セルが「自分の日付」を持っていればそれを最優先で使い、絶対分へ変換する。
+    // 日付情報を持たないセル（裸のHH:mm。24時間超の経過時間表記を含む）は、route日（同一route内
+    // の date列）を day0 とみなす＝現状のlatTimeToMinと同じ扱いに自然に縮退する。
+    // Excel表示（latNormalizeTimeForExcel）は最終出力直前にhour%24へ正規化するだけで、
+    // ここで求める絶対分そのものには一切手を加えない（責務分離を維持）。
+
+    // 日付のみを解析し、日数（latFormatDateと同じExcelシリアル基準=1970-01-01からのUTC日数）を返す。
+    // 解析できなければnull。
+    function latParseDateToDayNumber(raw) {
+      if (raw === null || raw === undefined || raw === '') return null;
+      var str = String(raw).trim();
+      if (!str) return null;
+      var m = str.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+      if (m) return Math.floor(Date.UTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)) / 86400000);
+      var num = parseFloat(str);
+      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/) && num > 40000) {
+        return Math.floor(num) - 25569; // latFormatDateと同じExcelシリアル→JS日数変換
+      }
+      var m8 = str.match(/^(\d{4})(\d{2})(\d{2})$/);
+      if (m8) return Math.floor(Date.UTC(parseInt(m8[1], 10), parseInt(m8[2], 10) - 1, parseInt(m8[3], 10)) / 86400000);
+      return null;
+    }
+
+    // 時刻セル(raw)を、routeDayNumber（同一routeのdate列から求めた日数。latParseDateToDayNumber）
+    // を基準0とした絶対分に変換する。rawが自分自身の日付を持つ場合はそちらを優先する。
+    function latExtractAbsoluteMinutes(raw, routeDayNumber) {
+      if (raw === null || raw === undefined || raw === '') return null;
+      var str = String(raw).trim();
+      if (!str) return null;
+
+      var num = parseFloat(str);
+      if (!isNaN(num) && str.match(/^-?\d+\.?\d*$/)) {
+        if (num > 40000) {
+          var ownDay = Math.floor(num) - 25569;
+          var timeMin = Math.round((num - Math.floor(num)) * 1440);
+          var base = (routeDayNumber !== null && routeDayNumber !== undefined) ? routeDayNumber : ownDay;
+          return (ownDay - base) * 1440 + timeMin;
+        }
+        if (num >= 0 && num < 1) return Math.round(num * 1440);
+        if (num >= 1 && num < 86400) return Math.round(num / 60);
+      }
+
+      var ownDay2 = latParseDateToDayNumber(str);
+      var tm = str.match(/(\d{1,3}):(\d{2})/);
+      if (!tm) return null;
+      var timeMin2 = parseInt(tm[1], 10) * 60 + parseInt(tm[2], 10);
+      if (ownDay2 !== null && routeDayNumber !== null && routeDayNumber !== undefined) {
+        return (ownDay2 - routeDayNumber) * 1440 + timeMin2;
+      }
+      return timeMin2; // 日付情報なし＝route日と同一日とみなす（24時間超のHH:mmはそのまま経過時間として保持）
     }
 
     // Excelシリアル日付 or 文字列日付を表示用に整形
@@ -17804,10 +17890,14 @@ var driverDB = {
         var lastScan = lat.lastScan || '';
         var dsExit = lat.exit || '';
 
-        var loadingMin = latMinDiff(lastScan, firstScan);
-        var stayMin = lat.turnover ? parseFloat(lat.turnover) : latMinDiff(dsExit, dsEntrance);
+        // 積込時間・滞在時間・差分(分)は、表示用のHH:mm文字列（latMinDiff）ではなく、日跨ぎを
+        // 保持した絶対分（*Abs。latExtractAbsoluteMinutes参照）で計算する。文字列ベースの
+        // latMinDiffは日付情報を持たないため、日をまたいだ実績同士を引くと無関係な日数分
+        // ズレた値になっていた（詳細はlatExtractAbsoluteMinutesのコメント参照）。
+        var loadingMin = (lat.lastScanAbs != null && lat.firstScanAbs != null) ? (lat.lastScanAbs - lat.firstScanAbs) : null;
+        var stayMin = lat.turnover ? parseFloat(lat.turnover) : ((lat.exitAbs != null && lat.entranceAbs != null) ? (lat.exitAbs - lat.entranceAbs) : null);
 
-        var diffMin = LatDepartureCore.latResolveDiffMin(null, actualDep, plannedDep);
+        var diffMin = (lat.departureAbs != null && lat.plannedDepartureAbs != null) ? (lat.departureAbs - lat.plannedDepartureAbs) : null;
         var judgment = LatDepartureCore.latResolveJudgment(diffMin);
         var judgmentDisplay = judgment || '判定不可';
 
