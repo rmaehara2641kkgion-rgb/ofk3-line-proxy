@@ -87,6 +87,9 @@
 
   function note(url, status, body) {
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
+    if (/\/route-details\//.test(String(url || '')) && status >= 200 && status < 300) {
+      setClickDebug({ waitState: 'captured', timeoutReason: '-' });
+    }
     paint();
   }
 
@@ -99,6 +102,20 @@
     if (el) el.textContent = value == null ? '' : String(value);
   }
 
+  var clickDebug = {
+    tagName: '-',
+    role: '-',
+    hasHref: 'なし',
+    waitState: 'idle',
+    timeoutReason: '-'
+  };
+
+  function setClickDebug(partial) {
+    Object.keys(partial || {}).forEach(function (k) {
+      clickDebug[k] = partial[k];
+    });
+  }
+
   function paint() {
     var p = progress();
     var box = document.getElementById(PANEL_ID);
@@ -109,6 +126,11 @@
     setText('ofk3-cortex-current', p.currentRouteCode || (p.status === 'done' ? '完了' : (p.status === 'stopped' ? '停止' : '-')));
     setText('ofk3-cortex-ok', String(p.successCount));
     setText('ofk3-cortex-fail', String(p.failureCount));
+    setText('ofk3-cortex-tag', clickDebug.tagName || '-');
+    setText('ofk3-cortex-role', clickDebug.role || '-');
+    setText('ofk3-cortex-href', clickDebug.hasHref || 'なし');
+    setText('ofk3-cortex-wait', clickDebug.waitState || '-');
+    setText('ofk3-cortex-timeout', clickDebug.timeoutReason || '-');
   }
 
   function ensurePanel() {
@@ -128,7 +150,12 @@
       '<div>details: <span id="ofk3-cortex-det">0 / 0</span></div>' +
       '<div>現在: <span id="ofk3-cortex-current">-</span></div>' +
       '<div>成功: <span id="ofk3-cortex-ok">0</span></div>' +
-      '<div>失敗: <span id="ofk3-cortex-fail">0</span></div>';
+      '<div>失敗: <span id="ofk3-cortex-fail">0</span></div>' +
+      '<div style="margin-top:6px;opacity:.9">tag: <span id="ofk3-cortex-tag">-</span></div>' +
+      '<div>role: <span id="ofk3-cortex-role">-</span></div>' +
+      '<div>href: <span id="ofk3-cortex-href">なし</span></div>' +
+      '<div>待機: <span id="ofk3-cortex-wait">idle</span></div>' +
+      '<div>TIMEOUT: <span id="ofk3-cortex-timeout">-</span></div>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
@@ -177,25 +204,91 @@
     }
   }
 
-  function collectCandidates(root) {
+  function inPanel(el) {
+    var panel = document.getElementById(PANEL_ID);
+    return !!(panel && el && panel.contains(el));
+  }
+
+  function nodeInfo(el) {
+    return {
+      el: el,
+      tag: (el.tagName || '').toLowerCase(),
+      role: (el.getAttribute && el.getAttribute('role')) || '',
+      text: String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+      href: (el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-href'))) || '',
+      dataRouteId: (el.getAttribute && (el.getAttribute('data-route-id') || el.getAttribute('data-routeid'))) || '',
+      dataRouteCode: (el.getAttribute && el.getAttribute('data-route-code')) || ''
+    };
+  }
+
+  function collectPreferredLinks(root) {
     var out = [];
     if (!root || !root.querySelectorAll) return out;
-    var panel = root.querySelector('#' + PANEL_ID);
-    var els = root.querySelectorAll('a, button, tr, [role="row"], [role="link"], [role="button"], [data-route-id], [data-routeid], td, li, span');
+    var els = root.querySelectorAll('a[href*="/operations/execution/dv/routes/"]');
     for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (panel && panel.contains(el)) continue;
-      out.push({
-        el: el,
-        tag: (el.tagName || '').toLowerCase(),
-        role: (el.getAttribute && el.getAttribute('role')) || '',
-        text: String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
-        href: (el.getAttribute && el.getAttribute('href')) || '',
-        dataRouteId: (el.getAttribute && (el.getAttribute('data-route-id') || el.getAttribute('data-routeid'))) || '',
-        dataRouteCode: (el.getAttribute && el.getAttribute('data-route-code')) || ''
-      });
+      if (inPanel(els[i])) continue;
+      out.push(nodeInfo(els[i]));
     }
     return out;
+  }
+
+  function collectClickableControls(root) {
+    var out = [];
+    if (!root || !root.querySelectorAll) return out;
+    var els = root.querySelectorAll('a[href], [role="link"], [role="button"], button, tr, [role="row"]');
+    for (var i = 0; i < els.length; i++) {
+      if (inPanel(els[i])) continue;
+      var info = nodeInfo(els[i]);
+      if (Core.isClickableRouteControl(info)) out.push(info);
+    }
+    return out;
+  }
+
+  function ancestorChain(el) {
+    var chain = [];
+    var cur = el;
+    var guard = 0;
+    while (cur && cur.nodeType === 1 && guard < 20) {
+      if (inPanel(cur)) break;
+      chain.push(nodeInfo(cur));
+      cur = cur.parentElement;
+      guard += 1;
+    }
+    return chain;
+  }
+
+  function resolveFromInner(inner, route) {
+    if (!inner) return null;
+    var chain = ancestorChain(inner);
+    var idx = Core.resolveClickableAncestor(chain, route);
+    if (idx < 0) return null;
+    return chain[idx].el;
+  }
+
+  function describeClickTarget(el) {
+    if (!el) {
+      return { tagName: '-', role: '-', hasHref: 'なし' };
+    }
+    var href = (el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-href'))) || '';
+    return {
+      tagName: el.tagName || '-',
+      role: (el.getAttribute && el.getAttribute('role')) || '-',
+      hasHref: href ? 'あり' : 'なし'
+    };
+  }
+
+  function synthesizeUserClick(el) {
+    var opts = { bubbles: true, cancelable: true, composed: true, view: global, buttons: 1 };
+    try { el.scrollIntoView({ block: 'center' }); } catch (e1) {}
+    try { el.focus(); } catch (e2) {}
+    var types = ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    for (var i = 0; i < types.length; i++) {
+      var type = types[i];
+      try {
+        var Ctor = (type.indexOf('pointer') === 0 && typeof PointerEvent === 'function') ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(type, opts));
+      } catch (e3) {}
+    }
   }
 
   function largestScroller() {
@@ -219,20 +312,39 @@
   }
 
   function findRouteElement(route) {
-    var mapped = collectCandidates(document);
-    var idx = Core.pickRouteClickCandidate(mapped, route);
-    if (idx >= 0) return mapped[idx].el;
+    var preferred = collectPreferredLinks(document);
+    var idx = Core.pickRouteClickCandidate(preferred, route);
+    if (idx >= 0) return preferred[idx].el;
+
+    var controls = collectClickableControls(document);
+    idx = Core.pickRouteClickCandidate(controls, route);
+    if (idx >= 0) return controls[idx].el;
+
+    var inners = document.querySelectorAll('a, button, tr, [role="row"], [role="link"], [role="button"], td, span, div, li');
+    var resolved = [];
+    for (var i = 0; i < inners.length; i++) {
+      var el = inners[i];
+      if (inPanel(el)) continue;
+      var text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!(text === route.routeCode || Core.textHasRouteCode(text, route.routeCode))) continue;
+      if (text.length > 120) continue;
+      var found = resolveFromInner(el, route);
+      if (found) resolved.push(nodeInfo(found));
+    }
+    idx = Core.pickRouteClickCandidate(resolved, route);
+    if (idx >= 0) return resolved[idx].el;
+
     var scroller = largestScroller();
     if (!scroller) return null;
     var y = 0;
     var guard = 0;
-    var step = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.7));
+    var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.7));
     while (y <= scroller.scrollHeight && guard < 40) {
       scroller.scrollTop = y;
-      mapped = collectCandidates(document);
-      idx = Core.pickRouteClickCandidate(mapped, route);
-      if (idx >= 0) return mapped[idx].el;
-      y += step;
+      preferred = collectPreferredLinks(document);
+      idx = Core.pickRouteClickCandidate(preferred, route);
+      if (idx >= 0) return preferred[idx].el;
+      y += stepPx;
       guard += 1;
     }
     return null;
@@ -253,24 +365,36 @@
   function clickRoute(route, done) {
     var el = findRouteElement(route);
     if (el) {
-      try { el.scrollIntoView({ block: 'center' }); } catch (e1) {}
-      try { el.click(); } catch (e2) {}
+      setClickDebug(describeClickTarget(el));
+      setClickDebug({ waitState: 'click', timeoutReason: '-' });
+      paint();
+      synthesizeUserClick(el);
       done(true);
       return;
     }
     var back = findBackButton();
     if (back) {
-      try { back.click(); } catch (e3) {}
+      setClickDebug({ waitState: 'back', tagName: back.tagName || '-', role: (back.getAttribute && back.getAttribute('role')) || '-', hasHref: 'なし' });
+      paint();
+      synthesizeUserClick(back);
       waitTimer = setTimeout(function () {
         var el2 = findRouteElement(route);
         if (el2) {
-          try { el2.scrollIntoView({ block: 'center' }); } catch (e4) {}
-          try { el2.click(); } catch (e5) {}
+          setClickDebug(describeClickTarget(el2));
+          setClickDebug({ waitState: 'click', timeoutReason: '-' });
+          paint();
+          synthesizeUserClick(el2);
           done(true);
-        } else done(false);
+        } else {
+          setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
+          paint();
+          done(false);
+        }
       }, 600);
       return;
     }
+    setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
+    paint();
     done(false);
   }
 
@@ -297,14 +421,22 @@
 
   function waitForDetails(route) {
     var started = Date.now();
+    setClickDebug({ waitState: 'waiting-details', timeoutReason: '-' });
+    paint();
     function poll() {
       if (tour.status !== 'running') return;
       if (route.routeId && store.detailsByRouteId[route.routeId]) {
+        setClickDebug({ waitState: 'captured', timeoutReason: '-' });
+        paint();
         tour.index += 1;
         stepTimer = setTimeout(step, 400);
         return;
       }
       if (Date.now() - started >= tour.timeoutMs) {
+        setClickDebug({
+          waitState: 'timeout',
+          timeoutReason: 'route-details XHRなし'
+        });
         Core.applyTourTimeout(store, tour);
         paint();
         stepTimer = setTimeout(step, 400);
@@ -326,9 +458,10 @@
     clickRoute(route, function (ok) {
       if (tour.status !== 'running') return;
       if (!ok) {
+        setClickDebug({ waitState: 'dom-not-found', timeoutReason: '-' });
         Core.recordTourFailure(store, route, {
           error: Core.ERROR.DOM_NOT_FOUND,
-          message: '一覧に Route 行が見つかりませんでした'
+          message: '一覧に Route のクリック対象リンク/行が見つかりませんでした'
         });
         tour.index += 1;
         paint();

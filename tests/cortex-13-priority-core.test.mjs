@@ -469,10 +469,28 @@ function run() {
   assert(dirtyFail.indexOf('NOPE') < 0, 'recordTourFailure sanitizes secrets');
 
   var pick = Core.pickRouteClickCandidate([
-    { tag: 'span', text: 'DCX470', href: '', dataRouteId: '' },
-    { tag: 'a', text: 'DCX47', href: '/routes/2894472-47', dataRouteId: '2894472-47' }
+    { tag: 'span', text: 'DCX47', href: '', dataRouteId: '' },
+    { tag: 'td', text: 'DCX47', href: '', dataRouteId: '' },
+    { tag: 'a', text: 'DCX47', href: '/operations/execution/dv/routes/2894472-47', role: 'link' }
   ], { routeId: '2894472-47', routeCode: 'DCX47' });
-  assert(pick === 1, 'click target prefers exact DCX47, not DCX470');
+  assert(pick === 2, 'click target is route link, not span/td');
+  assert(Core.isLeafTextClickTarget({ tag: 'span', text: 'DCX47' }), 'span is not a click target');
+  assert(Core.isClickableRouteControl({ tag: 'a', href: '/operations/execution/dv/routes/2894472-47' }), 'dv/routes link is clickable');
+  var chainIdx = Core.resolveClickableAncestor([
+    { tag: 'span', text: 'DCX25' },
+    { tag: 'td', text: 'DCX25 driver' },
+    { tag: 'a', href: '/operations/execution/dv/routes/2894472-25', role: 'link', text: 'DCX25' }
+  ], { routeId: '2894472-25', routeCode: 'DCX25' });
+  assert(chainIdx === 2, 'inner span resolves to ancestor route link, got ' + chainIdx);
+  assert(Core.resolveClickableAncestor([
+    { tag: 'span', text: 'DCX25' },
+    { tag: 'td', text: 'DCX25' }
+  ], { routeId: '2894472-25', routeCode: 'DCX25' }) === -1, 'span/td only chain is not clicked');
+  var wrongLink = Core.pickRouteClickCandidate([
+    { tag: 'a', href: '/operations/execution/dv/routes/OTHER', text: 'DCX99' },
+    { tag: 'a', href: '/operations/execution/dv/routes/2894472-25', text: 'DCX25', role: 'link' }
+  ], { routeId: '2894472-25', routeCode: 'DCX25' });
+  assert(wrongLink === 1, 'href routeId selects the matching route link');
   assert(Core.textHasRouteCode('Route DCX47 assigned', 'DCX47'), 'token match DCX47');
   assert(!Core.textHasRouteCode('DCX470', 'DCX47'), 'DCX470 is not DCX47');
 
@@ -506,6 +524,9 @@ function run() {
   assertNoDirectFetch(glueSrc, 'glue');
   assertNoDirectFetch(bgSrc, 'extension background');
   assert(runnerSrc.indexOf('origFetch.apply') >= 0, 'runner wraps SPA fetch only');
+  assert(runnerSrc.indexOf('/operations/execution/dv/routes/') >= 0, 'runner prefers Cortex route UI href');
+  assert(runnerSrc.indexOf('resolveClickableAncestor') >= 0, 'runner walks to clickable ancestor');
+  assert(runnerSrc.indexOf('synthesizeUserClick') >= 0, 'runner synthesizes UI click on ancestor');
   assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');

@@ -746,7 +746,7 @@
     if (route.routeId && store.detailsByRouteId[route.routeId]) return store;
     recordTourFailure(store, route, {
       error: ERROR.TIMEOUT,
-      message: 'route-details が時間内に捕捉できませんでした'
+      message: 'route-details が時間内に捕捉できませんでした（XHR未検出）'
     });
     tour.index += 1;
     return store;
@@ -761,6 +761,44 @@
     return new RegExp('(?:^|[^A-Za-z0-9])' + escapeRegExp(code) + '(?:$|[^A-Za-z0-9])').test(String(text || ''));
   }
 
+  function isPreferredRouteHref(href) {
+    return /\/operations\/execution\/dv\/routes\//.test(String(href || ''));
+  }
+
+  function hrefMatchesRoute(href, route) {
+    route = route || {};
+    var h = String(href || '');
+    if (!h) return false;
+    var id = String(route.routeId || '');
+    var code = String(route.routeCode || '');
+    if (id && h.indexOf(id) >= 0) return true;
+    if (code && h.indexOf(encodeURIComponent(code)) >= 0) return true;
+    if (code && h.indexOf(code) >= 0) return true;
+    return false;
+  }
+
+  function isLeafTextClickTarget(node) {
+    node = node || {};
+    if (isPreferredRouteHref(node.href) || (String(node.tag || '').toLowerCase() === 'a' && node.href)) {
+      return false;
+    }
+    var tag = String(node.tag || '').toLowerCase();
+    return tag === 'span' || tag === 'td' || tag === 'th' || tag === 'li' || tag === 'p' || tag === 'label';
+  }
+
+  function isClickableRouteControl(node) {
+    node = node || {};
+    if (isLeafTextClickTarget(node)) return false;
+    if (isPreferredRouteHref(node.href)) return true;
+    var tag = String(node.tag || '').toLowerCase();
+    var role = String(node.role || '').toLowerCase();
+    if (tag === 'a' && node.href) return true;
+    if (role === 'link' || role === 'button') return true;
+    if (tag === 'button') return true;
+    if (tag === 'tr' || role === 'row') return true;
+    return false;
+  }
+
   function pickRouteClickCandidate(nodes, route) {
     nodes = nodes || [];
     route = route || {};
@@ -770,6 +808,8 @@
     var bestScore = 0;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i] || {};
+      if (isLeafTextClickTarget(n)) continue;
+      if (!isClickableRouteControl(n)) continue;
       var score = 0;
       var text = String(n.text || '');
       var href = String(n.href || '');
@@ -777,23 +817,41 @@
       var dcode = String(n.dataRouteCode || '');
       var tag = String(n.tag || '').toLowerCase();
       var role = String(n.role || '').toLowerCase();
+      if (isPreferredRouteHref(href) && hrefMatchesRoute(href, route)) score += 220;
+      else if (isPreferredRouteHref(href) && (textHasRouteCode(text, code) || text === code)) score += 160;
       if (id && did === id) score += 100;
       if (id && href.indexOf(id) >= 0) score += 80;
       if (code && dcode === code) score += 70;
-      if (code && text === code) score += 60;
+      if (code && text === code) score += 30;
       else if (code && textHasRouteCode(text, code)) {
-        score += 40;
+        score += 20;
         if (text.length > 80) score -= 10;
       }
       if (score <= 0) continue;
-      if (tag === 'a' || tag === 'button') score += 8;
-      if (tag === 'tr' || role === 'row') score += 6;
+      if (tag === 'a' || role === 'link') score += 12;
+      if (tag === 'button' || role === 'button') score += 8;
+      if (tag === 'tr' || role === 'row') score += 4;
       if (score > bestScore) {
         bestScore = score;
         best = i;
       }
     }
     return best;
+  }
+
+  function resolveClickableAncestor(chain, route) {
+    chain = chain || [];
+    var clickable = [];
+    var indices = [];
+    for (var i = 0; i < chain.length; i++) {
+      if (isClickableRouteControl(chain[i])) {
+        clickable.push(chain[i]);
+        indices.push(i);
+      }
+    }
+    var pick = pickRouteClickCandidate(clickable, route);
+    if (pick < 0) return -1;
+    return indices[pick];
   }
 
   function emptySummary(extra) {
@@ -929,7 +987,12 @@
     nextTourRoute: nextTourRoute,
     applyTourTimeout: applyTourTimeout,
     textHasRouteCode: textHasRouteCode,
+    isPreferredRouteHref: isPreferredRouteHref,
+    hrefMatchesRoute: hrefMatchesRoute,
+    isLeafTextClickTarget: isLeafTextClickTarget,
+    isClickableRouteControl: isClickableRouteControl,
     pickRouteClickCandidate: pickRouteClickCandidate,
+    resolveClickableAncestor: resolveClickableAncestor,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
     extractFromCortexCsv: extractFromCortexCsv,
