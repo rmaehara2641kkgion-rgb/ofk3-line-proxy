@@ -223,6 +223,7 @@ function run() {
   });
   assert(eighteen.ok === true, '18-route bundle still ok after 1 failure');
   assert(eighteen.selectedRouteCount === 18, 'selected 18, got ' + eighteen.selectedRouteCount);
+  assert(eighteen.totalRouteCount === 18, 'total from summaries 18, got ' + eighteen.totalRouteCount);
   assert(eighteen.successCount === 17, 'success 17, got ' + eighteen.successCount);
   assert(eighteen.failureCount === 1, 'failure 1, got ' + eighteen.failureCount);
   assert(eighteen.packageCount === 17, 'kept 17 packages, got ' + eighteen.packageCount);
@@ -248,6 +249,52 @@ function run() {
   assert(Core.classifyHttpError(401) === Core.ERROR.UNAUTHORIZED, 'classify 401');
   assert(Core.classifyHttpError(403) === Core.ERROR.FORBIDDEN, 'classify 403');
 
+  var okReport = Core.formatFetchReport({
+    summariesOk: true,
+    totalRouteCount: 22,
+    selectedRouteCount: 18,
+    successCount: 18,
+    failureCount: 0,
+    saved: true
+  });
+  assert(okReport.indexOf('Cortex取得完了') >= 0, 'report title');
+  assert(okReport.indexOf('全Route: 22') >= 0, 'report total routes');
+  assert(okReport.indexOf('11時Route: 18') >= 0, 'report 11 hour routes');
+  assert(okReport.indexOf('取得成功: 18') >= 0, 'report success');
+  assert(okReport.indexOf('取得失敗: 0') >= 0, 'report fail 0');
+  assert(okReport.indexOf('JSONを保存しました') >= 0, 'report saved');
+  assert(okReport.indexOf('FAILED') < 0, 'no FAILED block on success');
+
+  var failReport = Core.formatFetchReport({
+    summariesOk: true,
+    totalRouteCount: 22,
+    selectedRouteCount: 18,
+    successCount: 17,
+    failureCount: 1,
+    saved: true,
+    failures: [{ routeCode: 'DCX37', routeId: 'R7', httpStatus: 401, error: 'UNAUTHORIZED' }]
+  });
+  assert(failReport.indexOf('取得成功: 17') >= 0 && failReport.indexOf('取得失敗: 1') >= 0, 'partial fail counts');
+  assert(failReport.indexOf('FAILED') >= 0 && failReport.indexOf('DCX37') >= 0, 'FAILED route code');
+  assert(failReport.indexOf('HTTP 401') >= 0 && failReport.indexOf('UNAUTHORIZED') >= 0, 'FAILED http status');
+
+  var sum401 = Core.formatFetchReport({
+    summariesOk: false,
+    summariesStatus: 401,
+    summariesError: 'UNAUTHORIZED',
+    saved: true
+  });
+  assert(sum401.indexOf('route-summaries 取得失敗') >= 0, 'summaries fail title');
+  assert(sum401.indexOf('HTTP 401') >= 0 && sum401.indexOf('UNAUTHORIZED') >= 0, 'summaries 401');
+  assert(sum401.indexOf('セッション切れ・未ログイン') >= 0, '401 meaning');
+  var sum403 = Core.formatFetchReport({
+    summariesOk: false,
+    summariesStatus: 403,
+    summariesError: 'FORBIDDEN',
+    saved: true
+  });
+  assert(sum403.indexOf('FORBIDDEN') >= 0 && sum403.indexOf('権限不足') >= 0, '403 meaning');
+
   var Glue = require('../cortex-13-priority.js');
   var src = Glue.bookmarkletSource();
   assert(src.indexOf('hour===11') >= 0, 'bookmarklet selects JST hour===11');
@@ -255,7 +302,11 @@ function run() {
   assert(src.indexOf('UNAUTHORIZED') >= 0 && src.indexOf('FORBIDDEN') >= 0, 'bookmarklet labels 401/403');
   assert(src.indexOf('credentials:"include"') >= 0, 'bookmarklet same-origin cookies only');
   assert(src.indexOf('document.cookie') < 0 && src.indexOf('Authorization') < 0, 'bookmarklet does not copy cookies/tokens');
-  assert(src.indexOf('取得成功') >= 0 && src.indexOf('失敗') >= 0, 'bookmarklet reports success/fail counts');
+  assert(src.indexOf('localStorage') < 0, 'bookmarklet does not write localStorage');
+  assert(src.indexOf('Cortex取得完了') >= 0 && src.indexOf('全Route:') >= 0, 'bookmarklet completion report');
+  assert(src.indexOf('JSONを保存しました') >= 0, 'bookmarklet save confirmation');
+  assert(src.indexOf('totalRouteCount') >= 0 && src.indexOf('selectedRouteCount') >= 0, 'bookmarklet stores counts not hardcoded 18');
+  assert(!/\b18\b/.test(src.replace(/20260918/g, '')), 'bookmarklet does not hardcode 18');
   assert(src.indexOf('continue;') >= 0, 'bookmarklet continues after a failed route');
 
   var ingestedAuth = Glue.ingestJsonText(JSON.stringify({ authError: 'UNAUTHORIZED', httpStatus: 401, details: [] }), { refresh: true });

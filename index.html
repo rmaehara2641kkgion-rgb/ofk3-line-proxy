@@ -2363,7 +2363,7 @@
           </div>
         </div>
 
-        <div class="card p-4 mb-4" id="cortex13-card">
+        <div class="card p-4 mb-4" id="cortex13-card" ondragover="event.preventDefault(); this.classList.add('ring-2','ring-blue-400')" ondragleave="this.classList.remove('ring-2','ring-blue-400')" ondrop="cortex13OnDrop(event)">
           <div class="flex items-center justify-between mb-2">
             <div>
               <h3 class="text-sm font-bold">Cortex 13時優先</h3>
@@ -2376,8 +2376,12 @@
             </div>
           </div>
           <input type="file" id="cortex13-file" accept="application/json,.json" class="hidden" onchange="cortex13OnFileInput(this)">
-          <p class="text-xs text-ink-lighter mb-3">CortexにログインしたタブでBookmarkletを実行 → 保存されたJSONをここにドロップ。CSVを18本ダウンロードする方式は使いません。</p>
-          <div class="grid grid-cols-5 gap-3 mb-3">
+          <p class="text-xs text-ink-lighter mb-3">CortexにログインしたタブでBookmarkletを実行 → 保存JSONをこのカードへドロップ。CSVを18本ダウンロードする方式は使いません。</p>
+          <div class="grid grid-cols-6 gap-3 mb-3">
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold" id="cortex13-total">-</div>
+              <div class="text-xs text-ink-lighter">全Route</div>
+            </div>
             <div class="card p-3 text-center">
               <div class="text-2xl font-bold" id="cortex13-selected">-</div>
               <div class="text-xs text-ink-lighter">11時Route</div>
@@ -14774,6 +14778,25 @@ var driverDB = {
     function cortex13OnFileInput(input) {
       var file = input && input.files && input.files[0];
       if (!file) return;
+      cortex13ReadFile(file);
+      input.value = '';
+    }
+
+    function cortex13OnDrop(event) {
+      event.preventDefault();
+      var card = document.getElementById('cortex13-card');
+      if (card) card.classList.remove('ring-2', 'ring-blue-400');
+      var files = event.dataTransfer && event.dataTransfer.files;
+      if (!files || !files.length) return;
+      var file = files[0];
+      if (!file || (!/\.json$/i.test(file.name) && file.type !== 'application/json')) {
+        alert('Cortex Bookmarkletが保存した JSON をドロップしてください');
+        return;
+      }
+      cortex13ReadFile(file);
+    }
+
+    function cortex13ReadFile(file) {
       var reader = new FileReader();
       reader.onload = function () {
         cortex13LastText = String(reader.result || '');
@@ -14781,7 +14804,6 @@ var driverDB = {
         cortex13Render(Cortex13Priority.ingestJsonText(cortex13LastText, { cacheKey: file.name + ':' + file.size, refresh: true }));
       };
       reader.readAsText(file);
-      input.value = '';
     }
 
     function cortex13Reload() {
@@ -14795,7 +14817,7 @@ var driverDB = {
 
     function cortex13CopyBookmarklet() {
       Cortex13Priority.copyBookmarklet().then(function (ok) {
-        if (ok) alert('Bookmarkletをコピーしました。Cortex（logistics.amazon.*）のタブでアドレスバーに貼り付けて実行してください。');
+        if (ok) alert('Bookmarkletをコピーしました。logistics.amazon.co.jp のログイン済みCortexタブでアドレスバーに貼り付けて実行し、表示件数を確認してから保存JSONをこのカードへドロップしてください。');
         else alert('コピーに失敗しました。Cortex画面で DevTools から route-details JSON を保存して読み込んでください。');
       });
     }
@@ -14808,7 +14830,9 @@ var driverDB = {
       return f.message || f.error || '';
     }
 
-    function cortex13SetKpis(selected, success, stops, packages, failures) {
+    function cortex13SetKpis(total, selected, success, stops, packages, failures) {
+      var totalEl = document.getElementById('cortex13-total');
+      if (totalEl) totalEl.textContent = total == null ? '-' : String(total);
       var selEl = document.getElementById('cortex13-selected');
       if (selEl) selEl.textContent = selected == null ? '-' : String(selected);
       document.getElementById('cortex13-routes').textContent = String(success);
@@ -14827,36 +14851,40 @@ var driverDB = {
       if (selected == null && result.elevenOClock && result.elevenOClock.routes) {
         selected = result.elevenOClock.routes.length;
       }
+      var total = result.totalRouteCount;
       var isAuth = result.error === 'UNAUTHORIZED' || result.error === 'FORBIDDEN';
       status.className = isAuth ? 'text-xs text-red-400 mb-2' : 'text-xs text-ink-lighter mb-2';
       if (!result.ok && !(result.routes && result.routes.length)) {
-        cortex13SetKpis(selected || 0, 0, 0, 0, failures.length);
+        cortex13SetKpis(total || 0, selected || 0, 0, 0, 0, failures.length);
         status.textContent = (result.message || '解析失敗') + (result.error ? ' [' + result.error + ']' : '');
         routeBody.innerHTML = failures.map(function (f) {
           return '<tr class="hover:bg-surface-secondary"><td class="p-2 font-mono">' +
             escapeHtml(f.routeCode || f.routeId || '-') +
             '</td><td class="p-2"></td><td class="p-2 text-yellow-400 font-bold" colspan="3">' +
-            escapeHtml(cortex13ErrorLabel(f)) + '</td></tr>';
+            escapeHtml(cortex13ErrorLabel(f)) +
+            (f.httpStatus ? ' / HTTP ' + f.httpStatus : '') + '</td></tr>';
         }).join('');
         pkgBody.innerHTML = '';
         return;
       }
       var success = result.successCount != null ? result.successCount : (result.routeCount || 0);
-      cortex13SetKpis(selected != null ? selected : success + failures.length, success, result.stopCount || 0, result.packageCount || 0, failures.length);
+      cortex13SetKpis(total != null ? total : '-', selected != null ? selected : success + failures.length, success, result.stopCount || 0, result.packageCount || 0, failures.length);
       var failTxt = failures.length ? (' / 失敗 ' + failures.map(function (f) {
-        return (f.routeCode || f.routeId || '?') + ':' + cortex13ErrorLabel(f);
+        return (f.routeCode || f.routeId || '?') + ':' + cortex13ErrorLabel(f) + (f.httpStatus ? ' HTTP ' + f.httpStatus : '');
       }).join(', ')) : '';
-      status.textContent = '11時出発 ' + (selected != null ? selected : '-') +
-        ' Route / 成功 ' + success + failTxt +
+      status.textContent = '全Route ' + (total != null ? total : '-') +
+        ' / 11時Route ' + (selected != null ? selected : '-') +
+        ' / 成功 ' + success + failTxt +
         ' / Stops ' + result.stopCount + ' / Packages ' + result.packageCount;
 
       var rh = '';
       (result.routes || []).forEach(function (r) {
         var driver = cortex13DriverFor(r.routeCode, r.driverName);
+        var stopList = (r.stopNumbers && r.stopNumbers.length) ? ' [' + r.stopNumbers.join(',') + ']' : '';
         rh += '<tr class="hover:bg-surface-secondary">';
         rh += '<td class="p-2 font-mono">' + escapeHtml(r.routeCode || '') + '</td>';
         rh += '<td class="p-2">' + escapeHtml(driver) + '</td>';
-        rh += '<td class="p-2 font-bold text-red-400">' + r.stopCount + ' Stops / ' + r.packageCount + ' Packages</td>';
+        rh += '<td class="p-2 font-bold text-red-400">' + r.stopCount + ' Stops / ' + r.packageCount + ' Packages' + escapeHtml(stopList) + '</td>';
         rh += '<td class="p-2 text-center">' + (r.lastStop != null ? r.lastStop : '-') + '</td>';
         rh += '<td class="p-2 font-mono">' + escapeHtml(r.lastPlannedEndClock || '') + '</td>';
         rh += '</tr>';
@@ -14865,7 +14893,7 @@ var driverDB = {
         rh += '<tr class="hover:bg-surface-secondary">';
         rh += '<td class="p-2 font-mono">' + escapeHtml(f.routeCode || f.routeId || '?') + '</td>';
         rh += '<td class="p-2"></td>';
-        rh += '<td class="p-2 text-yellow-400 font-bold" colspan="3">' + escapeHtml(cortex13ErrorLabel(f)) + '</td>';
+        rh += '<td class="p-2 text-yellow-400 font-bold" colspan="3">' + escapeHtml(cortex13ErrorLabel(f)) + (f.httpStatus ? ' / HTTP ' + f.httpStatus : '') + '</td>';
         rh += '</tr>';
       });
       routeBody.innerHTML = rh;
@@ -21129,7 +21157,7 @@ var driverDB = {
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
   <script src="/rolling60h-ui.js?v=20260904-1"></script>
-  <script src="/cortex-13-priority-core.js?v=20260918-2"></script>
-  <script src="/cortex-13-priority.js?v=20260918-2"></script>
+  <script src="/cortex-13-priority-core.js?v=20260918-3"></script>
+  <script src="/cortex-13-priority.js?v=20260918-3"></script>
 </body>
 </html>

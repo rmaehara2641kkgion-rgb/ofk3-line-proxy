@@ -29,9 +29,13 @@
   }
 
   function bookmarkletSource() {
+    var fmtSrc = (core() && typeof core().formatFetchReport === 'function')
+      ? core().formatFetchReport.toString()
+      : 'function formatFetchReport(s){s=s||{};return "Cortex取得完了";}';
     return [
       '(async()=>{',
       'try{',
+      fmtSrc + ';',
       'const origin=location.origin;',
       'if(!/logistics\\.amazon\\./.test(origin)){alert("Cortex (logistics.amazon.*) の画面で実行してください");return;}',
       'const params=new URLSearchParams(location.search);',
@@ -40,11 +44,11 @@
       'if(!serviceAreaId&&m)serviceAreaId=m[1];',
       'if(!serviceAreaId){alert("serviceAreaId がURLから取れませんでした");return;}',
       'const localDate=params.get("localDate")||new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());',
-      'function httpErr(status){if(status===401)return{error:"UNAUTHORIZED",message:"UNAUTHORIZED（未ログイン）。Cortexにログインしたタブで再実行してください"};if(status===403)return{error:"FORBIDDEN",message:"FORBIDDEN（権限不足）。このアカウントではCortex APIを取得できません"};return{error:"HTTP_"+status,message:"HTTP "+status};}',
-      'function save(obj){const blob=new Blob([JSON.stringify(obj,null,0)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="cortex-13-bundle_"+localDate+".json";a.click();}',
+      'function httpErr(status){if(status===401)return{error:"UNAUTHORIZED",message:"UNAUTHORIZED"};if(status===403)return{error:"FORBIDDEN",message:"FORBIDDEN"};return{error:"HTTP_"+status,message:"HTTP "+status};}',
+      'function save(obj){try{const blob=new Blob([JSON.stringify(obj,null,0)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="cortex-13-bundle_"+localDate+".json";a.click();return true;}catch(err){return false;}}',
       'const sumUrl=origin+"/operations/execution/api/route-summaries?historicalDay=false&localDate="+encodeURIComponent(localDate)+"&serviceAreaId="+encodeURIComponent(serviceAreaId)+"&statsFromSummaries=true";',
       'const sumRes=await fetch(sumUrl,{credentials:"include"});',
-      'if(!sumRes.ok){const e=httpErr(sumRes.status);save({localDate,authError:e.error,httpStatus:sumRes.status,selectedRouteCount:0,details:[],failures:[{error:e.error,httpStatus:sumRes.status,message:e.message}]});alert("route-summaries "+e.message);return;}',
+      'if(!sumRes.ok){const e=httpErr(sumRes.status);const saved=save({localDate,authError:e.error,httpStatus:sumRes.status,totalRouteCount:0,selectedRouteCount:0,details:[],failures:[{error:e.error,httpStatus:sumRes.status,message:e.message}]});alert(formatFetchReport({summariesOk:false,summariesStatus:sumRes.status,summariesError:e.error,saved:saved}));return;}',
       'const summaries=await sumRes.json();',
       'const rows=summaries.rmsRouteSummaries||[];',
       'const selected=[];',
@@ -64,8 +68,8 @@
       '    details.push(await r.json());',
       '  }catch(err){failures.push({routeId:row.routeId,routeCode:row.routeCode,error:"NETWORK",message:"NETWORK"});} ',
       '}',
-      'save({localDate,selectedRouteCount:selected.length,summaries,details,failures});',
-      'alert("11時出発 "+selected.length+" Route / 取得成功 "+details.length+" / 失敗 "+failures.length+"。OFK3の時間指定タブへJSONをドロップしてください");',
+      'const saved=save({localDate,totalRouteCount:rows.length,selectedRouteCount:selected.length,summaries,details,failures});',
+      'alert(formatFetchReport({summariesOk:true,totalRouteCount:rows.length,selectedRouteCount:selected.length,successCount:details.length,failureCount:failures.length,failures:failures,saved:saved}));',
       '}catch(e){alert("取得失敗: "+(e&&e.message||e));}',
       '})();'
     ].join('');

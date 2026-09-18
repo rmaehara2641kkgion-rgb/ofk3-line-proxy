@@ -502,6 +502,46 @@
     };
   }
 
+  function formatFetchReport(stats) {
+    stats = stats || {};
+    var savedLine = stats.saved === false ? 'JSON保存に失敗しました。' : 'JSONを保存しました。';
+    var lines;
+    if (stats.summariesOk === false) {
+      lines = ['route-summaries 取得失敗', ''];
+      if (stats.summariesStatus != null && stats.summariesStatus !== '') {
+        lines.push('HTTP ' + stats.summariesStatus);
+      }
+      lines.push(stats.summariesError || 'ERROR');
+      if (stats.summariesError === 'UNAUTHORIZED' || stats.summariesStatus === 401) {
+        lines.push('セッション切れ・未ログイン');
+      } else if (stats.summariesError === 'FORBIDDEN' || stats.summariesStatus === 403) {
+        lines.push('権限不足');
+      }
+      lines.push('');
+      lines.push(savedLine);
+      return lines.join('\n');
+    }
+    lines = [
+      'Cortex取得完了',
+      '',
+      '全Route: ' + (stats.totalRouteCount != null ? stats.totalRouteCount : '-'),
+      '11時Route: ' + (stats.selectedRouteCount != null ? stats.selectedRouteCount : '-'),
+      '取得成功: ' + (stats.successCount != null ? stats.successCount : '-'),
+      '取得失敗: ' + (stats.failureCount != null ? stats.failureCount : '-')
+    ];
+    (stats.failures || []).forEach(function (f) {
+      if (!f) return;
+      lines.push('');
+      lines.push('FAILED');
+      lines.push(f.routeCode || f.routeId || '?');
+      if (f.httpStatus != null && f.httpStatus !== '') lines.push('HTTP ' + f.httpStatus);
+      lines.push(f.error || 'ERROR');
+    });
+    lines.push('');
+    lines.push(savedLine);
+    return lines.join('\n');
+  }
+
   function emptySummary(extra) {
     return Object.assign({
       ok: false,
@@ -512,6 +552,7 @@
       stopCount: 0,
       packageCount: 0,
       selectedRouteCount: 0,
+      totalRouteCount: 0,
       successCount: 0,
       failureCount: 0
     }, extra || {});
@@ -579,6 +620,13 @@
     var summary = summarizeResults(results, failures);
     summary.successCount = results.length;
     summary.failureCount = failures.length;
+    if (bundle.summaries && Array.isArray(bundle.summaries.rmsRouteSummaries)) {
+      summary.totalRouteCount = bundle.summaries.rmsRouteSummaries.length;
+    } else if (typeof bundle.totalRouteCount === 'number') {
+      summary.totalRouteCount = bundle.totalRouteCount;
+    } else {
+      summary.totalRouteCount = 0;
+    }
     if (bundle.summaries) {
       summary.elevenOClock = selectElevenOClockRoutes(bundle.summaries);
       summary.selectedRouteCount = summary.elevenOClock.ok ? summary.elevenOClock.routes.length : 0;
@@ -611,6 +659,7 @@
     isExact1300Clock: isExact1300Clock,
     classifyHttpError: classifyHttpError,
     describeHttpError: describeHttpError,
+    formatFetchReport: formatFetchReport,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
     extractFromCortexCsv: extractFromCortexCsv,
