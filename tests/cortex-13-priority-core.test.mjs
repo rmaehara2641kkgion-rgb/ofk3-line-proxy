@@ -364,24 +364,154 @@ function run() {
   assert(ingestedCap.packageCount === 13, 'captured ingest packages 13, got ' + ingestedCap.packageCount);
   assert(ingestedCap.selectedRouteCount === 1, 'captured summaries still use 11:00 selection');
 
+  var nCounts = [17, 19];
+  nCounts.forEach(function (n) {
+    var rows = [];
+    for (var i = 0; i < n; i++) {
+      rows.push({
+        routeId: 'R' + i,
+        routeCode: 'DCX' + (30 + i),
+        plannedDepartureTime: Date.parse('2026-09-18T11:12:00+09:00')
+      });
+    }
+    rows.push({
+      routeId: 'BIKE',
+      routeCode: 'DCX99',
+      plannedDepartureTime: Date.parse('2026-09-18T09:07:00+09:00')
+    });
+    var picked = Core.tourRoutesFromSummaries({ rmsRouteSummaries: rows });
+    assert(picked.length === n, '11:00 count is dynamic ' + n + ', got ' + picked.length);
+  });
+
+  var tourStore = Core.createCaptureStore();
+  Core.applyCapturedCortexResponse(tourStore, {
+    url: summariesUrl,
+    status: 200,
+    headers: secretHeaders,
+    body: {
+      rmsRouteSummaries: [
+        { routeId: 'R1', routeCode: 'DCX31', plannedDepartureTime: Date.parse('2026-09-18T11:12:00+09:00') },
+        { routeId: 'R2', routeCode: 'DCX47', plannedDepartureTime: Date.parse('2026-09-18T11:07:00+09:00') },
+        { routeId: 'R3', routeCode: 'DCX48', plannedDepartureTime: Date.parse('2026-09-18T11:20:00+09:00') },
+        { routeId: 'R9', routeCode: 'DCX10', plannedDepartureTime: Date.parse('2026-09-18T09:07:00+09:00') }
+      ]
+    }
+  });
+  var tour = Core.armTour(tourStore, Core.createTourState({ timeoutMs: 50 }));
+  assert(tour.routes.length === 3, 'tour targets 11:00 routes only, got ' + tour.routes.length);
+  var p0 = Core.tourProgress(tourStore, tour);
+  assert(p0.selectedCount === 3 && p0.detailsCount === 0 && p0.detailsTotal === 3, 'N-route progress 0/3');
+  var first = Core.nextTourRoute(tourStore, tour);
+  assert(first.routeCode === 'DCX31', 'first pending is DCX31');
+  Core.applyCapturedCortexResponse(tourStore, {
+    url: '/operations/execution/api/route-details/R1',
+    status: 200,
+    body: details([stop(1, Date.parse('2026-09-18T12:30:00+09:00'), [task({ domainMap: { scannableId: 'DAA' } })])], {
+      rmsRouteDetails: {
+        routeId: 'R1',
+        routeCode: 'DCX31',
+        localDate: [2026, 9, 18],
+        plannedDepartureTime: Date.parse('2026-09-18T11:12:00+09:00'),
+        stops: [stop(1, Date.parse('2026-09-18T12:30:00+09:00'), [task({ domainMap: { scannableId: 'DAA' } })])]
+      }
+    })
+  });
+  Core.applyCapturedCortexResponse(tourStore, {
+    url: '/operations/execution/api/route-details/R1',
+    status: 200,
+    body: tourStore.detailsByRouteId.R1
+  });
+  assert(Object.keys(tourStore.detailsByRouteId).length === 1, 'duplicate details still 1 route');
+  var p1 = Core.tourProgress(tourStore, tour);
+  assert(p1.detailsCount === 1 && p1.successCount === 1, 'progress 1/3 after first capture');
+  var second = Core.nextTourRoute(tourStore, tour);
+  assert(second.routeCode === 'DCX47', 'second pending DCX47');
+  Core.applyTourTimeout(tourStore, tour);
+  assert(tourStore.failures.length === 1, 'timeout recorded');
+  assert(tourStore.failures[0].routeId === 'R2', 'timeout keeps routeId');
+  assert(tourStore.failures[0].routeCode === 'DCX47', 'timeout keeps routeCode');
+  assert(tourStore.failures[0].error === Core.ERROR.TIMEOUT, 'timeout error code');
+  assert(tourStore.failures[0].message.indexOf('捕捉') >= 0, 'timeout message');
+  var failDump = JSON.stringify(tourStore.failures);
+  assert(failDump.indexOf('Cookie') < 0 && failDump.indexOf('hmac') < 0, 'failures have no auth');
+  var third = Core.nextTourRoute(tourStore, tour);
+  assert(third && third.routeCode === 'DCX48', 'continues to next after timeout, got ' + (third && third.routeCode));
+  Core.applyCapturedCortexResponse(tourStore, {
+    url: '/operations/execution/api/route-details/R3',
+    status: 200,
+    body: details([stop(1, Date.parse('2026-09-18T12:40:00+09:00'), [task({ domainMap: { scannableId: 'DAC' } })])], {
+      rmsRouteDetails: {
+        routeId: 'R3',
+        routeCode: 'DCX48',
+        localDate: [2026, 9, 18],
+        plannedDepartureTime: Date.parse('2026-09-18T11:20:00+09:00'),
+        stops: [stop(1, Date.parse('2026-09-18T12:40:00+09:00'), [task({ domainMap: { scannableId: 'DAC' } })])]
+      }
+    })
+  });
+  var last = Core.nextTourRoute(tourStore, tour);
+  assert(last == null && tour.status === 'done', 'tour completes remaining routes');
+  var pDone = Core.tourProgress(tourStore, tour);
+  assert(pDone.successCount === 2 && pDone.failureCount === 1, '2 success / 1 timeout');
+  var tourBundle = Core.buildCaptureBundle(tourStore, { localDate: '2026-09-18' });
+  assert(tourBundle.selectedRouteCount === 3, 'bundle selectedRouteCount from 11:00 routes');
+  assert(tourBundle.details.length === 2 && tourBundle.failures.length === 1, 'bundle keeps successes and failure');
+
+  var dirtyFailStore = Core.createCaptureStore();
+  Core.recordTourFailure(dirtyFailStore, { routeId: 'Rx', routeCode: 'DCX1' }, {
+    error: 'TIMEOUT',
+    message: 'route-details が時間内に捕捉できませんでした',
+    Cookie: 'NOPE',
+    Authorization: 'NOPE',
+    'x-cortex-hmac-signature': 'NOPE'
+  });
+  var dirtyFail = JSON.stringify(dirtyFailStore.failures);
+  assert(dirtyFail.indexOf('NOPE') < 0, 'recordTourFailure sanitizes secrets');
+
+  var pick = Core.pickRouteClickCandidate([
+    { tag: 'span', text: 'DCX470', href: '', dataRouteId: '' },
+    { tag: 'a', text: 'DCX47', href: '/routes/2894472-47', dataRouteId: '2894472-47' }
+  ], { routeId: '2894472-47', routeCode: 'DCX47' });
+  assert(pick === 1, 'click target prefers exact DCX47, not DCX470');
+  assert(Core.textHasRouteCode('Route DCX47 assigned', 'DCX47'), 'token match DCX47');
+  assert(!Core.textHasRouteCode('DCX470', 'DCX47'), 'DCX470 is not DCX47');
+
   var src = Glue.bookmarkletSource();
-  assert(src.indexOf('XMLHttpRequest.prototype.open') >= 0, 'bookmarklet wraps XHR');
-  assert(src.indexOf('window.fetch') >= 0 && src.indexOf('origFetch.apply') >= 0, 'bookmarklet wraps SPA fetch only');
-  assert(src.indexOf('clone().json()') >= 0 && src.indexOf('responseText') >= 0, 'bookmarklet reads SPA response body only');
-  assert(src.indexOf('route-summaries') >= 0 && src.indexOf('route-details') >= 0, 'bookmarklet matches Cortex API URLs');
-  assert(src.indexOf('sumUrl') < 0 && src.indexOf('detUrl') < 0, 'bookmarklet does not construct API URLs');
-  assert(src.indexOf('fetch(sum') < 0 && src.indexOf('fetch(det') < 0, 'bookmarklet does not initiate Cortex fetch');
-  assert(src.indexOf('credentials') < 0, 'bookmarklet does not set credentials');
-  assert(src.indexOf('document.cookie') < 0, 'bookmarklet does not read cookies');
-  assert(src.indexOf('getResponseHeader') < 0 && src.indexOf('getAllResponseHeaders') < 0, 'bookmarklet does not read response headers');
-  assert(src.indexOf('setRequestHeader') < 0, 'bookmarklet does not set HMAC headers');
-  assert(src.indexOf('x-cortex-hmac-signature') < 0 && src.indexOf('x-cortex-session') < 0 && src.indexOf('x-cortex-timestamp') < 0, 'bookmarklet does not name Cortex auth headers');
-  assert(src.indexOf('localStorage') < 0, 'bookmarklet does not write localStorage');
-  assert(src.indexOf('JSONを保存しました') >= 0, 'bookmarklet save confirmation');
-  assert(src.indexOf('spa-intercept') >= 0 || src.indexOf('captureMode') >= 0, 'bookmarklet builds intercept bundle');
-  assert(src.indexOf('hour===11') < 0, 'bookmarklet does not reimplement 11:00 filter');
-  assert(!/\b18\b/.test(src.replace(/20260918/g, '')), 'bookmarklet does not hardcode 18');
-  assert(src.indexOf('querySelectorAll') < 0, 'bookmarklet does not auto-tour routes');
+  assert(src.length < 800, 'tiny launcher, got ' + src.length);
+  assert(src.indexOf('__OFK3_CORTEX_CAPTURE__') >= 0, 'tiny launcher starts injected runner');
+  assert(src.indexOf('sumUrl') < 0 && src.indexOf('detUrl') < 0, 'launcher does not construct API URLs');
+  assert(src.indexOf('fetch(') < 0, 'launcher does not fetch');
+  assert(src.indexOf('credentials') < 0, 'launcher does not set credentials');
+  assert(src.indexOf('document.cookie') < 0, 'launcher does not read cookies');
+  assert(src.indexOf('x-cortex-hmac-signature') < 0 && src.indexOf('x-cortex-session') < 0 && src.indexOf('x-cortex-timestamp') < 0, 'launcher does not name Cortex auth headers');
+  assert(src.indexOf('localStorage') < 0, 'launcher does not write localStorage');
+  assert(src.indexOf('hour===11') < 0, 'launcher does not reimplement 11:00 filter');
+
+  var runnerSrc = readFileSync(join(__dirname, '..', 'cortex-13-capture-runner.js'), 'utf8');
+  var coreSrc = readFileSync(join(__dirname, '..', 'cortex-13-priority-core.js'), 'utf8');
+  var bgSrc = readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'background.js'), 'utf8');
+  var glueSrc = readFileSync(join(__dirname, '..', 'cortex-13-priority.js'), 'utf8');
+  function assertNoDirectFetch(text, name) {
+    assert(!/fetch\s*\(\s*['"`][^'"`]*\/operations\/execution\/api\//.test(text), name + ' no Cortex API fetch URL');
+    assert(text.indexOf('sumUrl') < 0 && text.indexOf('detUrl') < 0, name + ' no constructed API URLs');
+    assert(text.indexOf('credentials:"include"') < 0 && text.indexOf("credentials:'include'") < 0, name + ' no credentials include');
+    assert(text.indexOf('x-cortex-hmac-signature') < 0, name + ' no hmac header');
+    assert(text.indexOf('document.cookie') < 0, name + ' no document.cookie');
+    assert(text.indexOf('setRequestHeader') < 0, name + ' no HMAC setRequestHeader');
+    assert(!/selectedRouteCount\s*[:=]\s*18/.test(text), name + ' no hardcoded selectedRouteCount 18');
+    assert(!/\bfor\s*\([^)]*<\s*18\s*;/.test(text), name + ' no for i<18');
+  }
+  assertNoDirectFetch(runnerSrc, 'runner');
+  assertNoDirectFetch(coreSrc, 'core');
+  assertNoDirectFetch(glueSrc, 'glue');
+  assertNoDirectFetch(bgSrc, 'extension background');
+  assert(runnerSrc.indexOf('origFetch.apply') >= 0, 'runner wraps SPA fetch only');
+  assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
+  assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
+  assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');
+  assert(runnerSrc.indexOf('selectElevenOClockRoutes') >= 0 || runnerSrc.indexOf('armTour') >= 0, 'runner uses core 11:00 selection');
+  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-priority-core.js'), 'utf8') === coreSrc, 'extension core matches');
+  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-capture-runner.js'), 'utf8') === runnerSrc, 'extension runner matches');
 
   var ingestedAuth = Glue.ingestJsonText(JSON.stringify({ authError: 'UNAUTHORIZED', httpStatus: 401, details: [] }), { refresh: true });
   assert(ingestedAuth.error === Core.ERROR.UNAUTHORIZED, 'glue surfaces 401');
