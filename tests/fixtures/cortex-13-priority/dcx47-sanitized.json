@@ -1,0 +1,268 @@
+{
+  "rmsRouteDetails": {
+    "routeId": "TEST-47",
+    "routeCode": "DCX47",
+    "localDate": [2026, 9, 18],
+    "plannedDepartureTime": 1789697520000,
+    "serviceTypeName": "Standard Parcel",
+    "stops": [
+      {
+        "sequenceNumber": 2,
+        "plannedStartTime": 1789698469000,
+        "plannedEndTime": 1789698550000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00000201" }
+          },
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "STANDARD",
+            "timeWindowed": false,
+            "windowStartTime": 1789657260.0,
+            "windowEndTime": 1789734600.0,
+            "domainMap": { "scannableId": "DA00000202" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 3,
+        "plannedStartTime": 1789698620000,
+        "plannedEndTime": 1789698719000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00000301" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 10,
+        "plannedStartTime": 1789699995000,
+        "plannedEndTime": 1789700041000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001001" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 11,
+        "plannedStartTime": 1789700161000,
+        "plannedEndTime": 1789700223000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001101" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 12,
+        "plannedStartTime": 1789700379000,
+        "plannedEndTime": 1789700533000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001201" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 13,
+        "plannedStartTime": 1789700720000,
+        "plannedEndTime": 1789700790000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001301" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 16,
+        "plannedStartTime": 1789701205000,
+        "plannedEndTime": 1789701488000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001601" }
+          },
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "STANDARD",
+            "timeWindowed": false,
+            "windowStartTime": 1789657260.0,
+            "windowEndTime": 1789734600.0,
+            "domainMap": { "scannableId": "DA00001602" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 18,
+        "plannedStartTime": 1789701729000,
+        "plannedEndTime": 1789701863000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00001801" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 21,
+        "plannedStartTime": 1789702382000,
+        "plannedEndTime": 1789702440000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00002101" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 23,
+        "plannedStartTime": 1789702589000,
+        "plannedEndTime": 1789702641000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00002301" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 26,
+        "plannedStartTime": 1789703067000,
+        "plannedEndTime": 1789703189000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "STANDARD",
+            "timeWindowed": false,
+            "windowStartTime": 1789657260.0,
+            "windowEndTime": 1789734600.0,
+            "domainMap": { "scannableId": "DA00002601" }
+          },
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00002602" }
+          },
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00002603" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 27,
+        "plannedStartTime": 1789703230000,
+        "plannedEndTime": 1789703362000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00002701" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 31,
+        "plannedStartTime": 1789703927000,
+        "plannedEndTime": 1789704050000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "STANDARD",
+            "timeWindowed": false,
+            "windowStartTime": 1789657260.0,
+            "windowEndTime": 1789734600.0,
+            "domainMap": { "scannableId": "DA00003101" }
+          }
+        ]
+      },
+      {
+        "sequenceNumber": 33,
+        "plannedStartTime": 1789704256000,
+        "plannedEndTime": 1789704391000,
+        "status": "NOT_STARTED",
+        "tasks": [
+          {
+            "taskType": "DROP_OFF",
+            "promiseType": "SCHEDULED",
+            "timeWindowed": true,
+            "windowStartTime": 1789675200.0,
+            "windowEndTime": 1789704000.0,
+            "domainMap": { "scannableId": "DA00003301" }
+          }
+        ]
+      }
+    ]
+  },
+  "transporters": [{ "firstName": "Driver", "lastName": "Test", "transporterId": "T-TEST" }]
+}
