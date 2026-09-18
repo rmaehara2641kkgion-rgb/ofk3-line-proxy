@@ -1,0 +1,1 @@
+{"localDate":"2026-09-18","authError":"FORBIDDEN","httpStatus":403,"selectedRouteCount":0,"details":[],"failures":[{"error":"FORBIDDEN","httpStatus":403,"message":"FORBIDDEN（権限不足）。このアカウントではCortex APIを取得できません"}]}
