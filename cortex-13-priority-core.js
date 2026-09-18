@@ -542,6 +542,103 @@
     return lines.join('\n');
   }
 
+  function createCaptureStore() {
+    return { summaries: null, detailsByRouteId: {}, failures: [] };
+  }
+
+  function isCortexApiCaptureUrl(url) {
+    var s = String(url || '');
+    return /\/operations\/execution\/api\/route-summaries(?:[/?#]|$)/.test(s) ||
+      /\/operations\/execution\/api\/route-details\//.test(s);
+  }
+
+  function routeIdFromDetailsUrl(url) {
+    var s = String(url || '');
+    var m = s.match(/\/route-details\/([^/?#]+)/);
+    if (!m) return '';
+    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+  }
+
+  function secretCaptureKey(key) {
+    var k = String(key || '').toLowerCase();
+    return k === 'cookie' || k === 'set-cookie' || k === 'authorization' ||
+      k.indexOf('hmac') >= 0 || k.indexOf('x-cortex-') === 0 || k === 'user-ref';
+  }
+
+  function sanitizeCapturedJson(value) {
+    try {
+      return JSON.parse(JSON.stringify(value, function (k, v) {
+        if (k && secretCaptureKey(k)) return undefined;
+        return v;
+      }));
+    } catch (e) {
+      return {
+        details: [],
+        failures: [{ error: 'JSON_PARSE', message: '捕捉データの出力に失敗しました' }]
+      };
+    }
+  }
+
+  function applyCapturedCortexResponse(store, evt) {
+    if (!store) store = createCaptureStore();
+    evt = evt || {};
+    var url = evt.url || '';
+    var status = Number(evt.status);
+    var body = evt.body;
+    // Response JSON only. Never read Cookie / Authorization / HMAC / session / timestamp.
+    if (body && typeof body === 'object') body = sanitizeCapturedJson(body);
+    if (!isCortexApiCaptureUrl(url)) return store;
+    if (/\/route-summaries(?:[/?#]|$)/.test(url)) {
+      if (status >= 200 && status < 300 && body && Array.isArray(body.rmsRouteSummaries)) {
+        store.summaries = body;
+      } else {
+        store.failures.push({
+          error: status === 401 ? 'UNAUTHORIZED' : status === 403 ? 'FORBIDDEN' : ('HTTP_' + status),
+          httpStatus: status,
+          message: 'route-summaries HTTP ' + status
+        });
+      }
+      return store;
+    }
+    var routeId = routeIdFromDetailsUrl(url);
+    if (!routeId && body && body.rmsRouteDetails && body.rmsRouteDetails.routeId) {
+      routeId = String(body.rmsRouteDetails.routeId);
+    }
+    if (status >= 200 && status < 300 && body && body.rmsRouteDetails) {
+      if (routeId) store.detailsByRouteId[routeId] = body;
+    } else {
+      store.failures.push({
+        routeId: routeId,
+        routeCode: body && body.rmsRouteDetails && body.rmsRouteDetails.routeCode,
+        error: status === 401 ? 'UNAUTHORIZED' : status === 403 ? 'FORBIDDEN' : ('HTTP_' + status),
+        httpStatus: status
+      });
+    }
+    return store;
+  }
+
+  function buildCaptureBundle(store, extras) {
+    extras = extras || {};
+    store = store || createCaptureStore();
+    var details = [];
+    Object.keys(store.detailsByRouteId).forEach(function (id) {
+      details.push(store.detailsByRouteId[id]);
+    });
+    var summaries = store.summaries || null;
+    var total = summaries && Array.isArray(summaries.rmsRouteSummaries)
+      ? summaries.rmsRouteSummaries.length
+      : details.length;
+    var bundle = {
+      localDate: extras.localDate || '',
+      captureMode: 'spa-intercept',
+      summaries: summaries,
+      details: details,
+      failures: (store.failures || []).slice(),
+      totalRouteCount: total
+    };
+    return sanitizeCapturedJson(bundle);
+  }
+
   function emptySummary(extra) {
     return Object.assign({
       ok: false,
@@ -660,6 +757,13 @@
     classifyHttpError: classifyHttpError,
     describeHttpError: describeHttpError,
     formatFetchReport: formatFetchReport,
+    createCaptureStore: createCaptureStore,
+    isCortexApiCaptureUrl: isCortexApiCaptureUrl,
+    routeIdFromDetailsUrl: routeIdFromDetailsUrl,
+    applyCapturedCortexResponse: applyCapturedCortexResponse,
+    secretCaptureKey: secretCaptureKey,
+    sanitizeCapturedJson: sanitizeCapturedJson,
+    buildCaptureBundle: buildCaptureBundle,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
     extractFromCortexCsv: extractFromCortexCsv,

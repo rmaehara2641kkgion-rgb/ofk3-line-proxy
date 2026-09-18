@@ -295,19 +295,93 @@ function run() {
   });
   assert(sum403.indexOf('FORBIDDEN') >= 0 && sum403.indexOf('権限不足') >= 0, '403 meaning');
 
+  var dcx47Url = '/operations/execution/api/route-details/2894472-47?historicalDay=false&routeId=2894472-47&serviceAreaId=4b1373ef-71d3-4239-98e1-4d7fafc93877';
+  var summariesUrl = '/operations/execution/api/route-summaries?historicalDay=false&serviceAreaId=4b1373ef-71d3-4239-98e1-4d7fafc93877';
+  assert(Core.isCortexApiCaptureUrl(dcx47Url), 'dcx47 route-details URL is captured');
+  assert(Core.isCortexApiCaptureUrl(summariesUrl), 'route-summaries URL is captured');
+  assert(Core.routeIdFromDetailsUrl(dcx47Url) === '2894472-47', 'routeId from details URL');
+  assert(!Core.isCortexApiCaptureUrl('https://logistics.amazon.co.jp/operations/execution/routes'), 'non-API Cortex page is not captured');
+
+  var capStore = Core.createCaptureStore();
+  var secretHeaders = {
+    Cookie: 'session=NOPE',
+    Authorization: 'Bearer NOPE',
+    'x-cortex-hmac-signature': 'NOPE-HMAC',
+    'x-cortex-session': 'NOPE-SESSION',
+    'x-cortex-timestamp': 'NOPE-TS'
+  };
+  Core.applyCapturedCortexResponse(capStore, {
+    url: summariesUrl,
+    status: 200,
+    headers: secretHeaders,
+    body: {
+      rmsRouteSummaries: [{
+        routeId: '2894472-47',
+        routeCode: 'DCX47',
+        plannedDepartureTime: Date.parse('2026-09-18T11:12:00+09:00')
+      }],
+      Cookie: 'NOPE-BODY',
+      Authorization: 'NOPE-BODY',
+      'x-cortex-hmac-signature': 'NOPE-BODY'
+    }
+  });
+  Core.applyCapturedCortexResponse(capStore, {
+    url: dcx47Url,
+    status: 200,
+    headers: secretHeaders,
+    body: Object.assign({
+      Cookie: 'NOPE-BODY',
+      Authorization: 'NOPE-BODY',
+      'x-cortex-hmac-signature': 'NOPE-BODY',
+      'x-cortex-session': 'NOPE-BODY',
+      'x-cortex-timestamp': 'NOPE-BODY'
+    }, dcx47)
+  });
+  Core.applyCapturedCortexResponse(capStore, {
+    url: dcx47Url,
+    status: 200,
+    headers: secretHeaders,
+    body: dcx47
+  });
+  assert(Object.keys(capStore.detailsByRouteId).join(',') === '2894472-47', 'details deduped by routeId');
+  var capBundle = Core.buildCaptureBundle(capStore, { localDate: '2026-09-18' });
+  assert(capBundle.captureMode === 'spa-intercept', 'captureMode spa-intercept');
+  assert(Array.isArray(capBundle.details) && Array.isArray(capBundle.failures), '{details,failures} shape');
+  assert(capBundle.details.length === 1, 'captured 1 details body');
+  assert(capBundle.summaries && capBundle.summaries.rmsRouteSummaries.length === 1, 'captured summaries');
+  var dumped = JSON.stringify(capBundle);
+  assert(dumped.indexOf('NOPE') < 0, 'secret header/body keys not saved');
+  assert(dumped.indexOf('x-cortex-hmac-signature') < 0, 'hmac key not saved');
+  assert(dumped.indexOf('x-cortex-session') < 0, 'session key not saved');
+  assert(dumped.indexOf('x-cortex-timestamp') < 0, 'timestamp key not saved');
+  var capExtract = Core.extractFromRouteDetails(capBundle.details[0]);
+  assert(capExtract.stopCount === 12 && capExtract.packageCount === 13, 'captured DCX47 still 12/13');
+
   var Glue = require('../cortex-13-priority.js');
+  var ingestedCap = Glue.ingestJsonText(JSON.stringify(capBundle), { refresh: true });
+  assert(ingestedCap.ok, 'ingestJsonText reads captured bundle');
+  assert(ingestedCap.stopCount === 12, 'captured ingest stops 12, got ' + ingestedCap.stopCount);
+  assert(ingestedCap.packageCount === 13, 'captured ingest packages 13, got ' + ingestedCap.packageCount);
+  assert(ingestedCap.selectedRouteCount === 1, 'captured summaries still use 11:00 selection');
+
   var src = Glue.bookmarkletSource();
-  assert(src.indexOf('hour===11') >= 0, 'bookmarklet selects JST hour===11');
-  assert(src.indexOf('route-summaries') >= 0 && src.indexOf('route-details') >= 0, 'bookmarklet hits both APIs');
-  assert(src.indexOf('UNAUTHORIZED') >= 0 && src.indexOf('FORBIDDEN') >= 0, 'bookmarklet labels 401/403');
-  assert(src.indexOf('credentials:"include"') >= 0, 'bookmarklet same-origin cookies only');
-  assert(src.indexOf('document.cookie') < 0 && src.indexOf('Authorization') < 0, 'bookmarklet does not copy cookies/tokens');
+  assert(src.indexOf('XMLHttpRequest.prototype.open') >= 0, 'bookmarklet wraps XHR');
+  assert(src.indexOf('window.fetch') >= 0 && src.indexOf('origFetch.apply') >= 0, 'bookmarklet wraps SPA fetch only');
+  assert(src.indexOf('clone().json()') >= 0 && src.indexOf('responseText') >= 0, 'bookmarklet reads SPA response body only');
+  assert(src.indexOf('route-summaries') >= 0 && src.indexOf('route-details') >= 0, 'bookmarklet matches Cortex API URLs');
+  assert(src.indexOf('sumUrl') < 0 && src.indexOf('detUrl') < 0, 'bookmarklet does not construct API URLs');
+  assert(src.indexOf('fetch(sum') < 0 && src.indexOf('fetch(det') < 0, 'bookmarklet does not initiate Cortex fetch');
+  assert(src.indexOf('credentials') < 0, 'bookmarklet does not set credentials');
+  assert(src.indexOf('document.cookie') < 0, 'bookmarklet does not read cookies');
+  assert(src.indexOf('getResponseHeader') < 0 && src.indexOf('getAllResponseHeaders') < 0, 'bookmarklet does not read response headers');
+  assert(src.indexOf('setRequestHeader') < 0, 'bookmarklet does not set HMAC headers');
+  assert(src.indexOf('x-cortex-hmac-signature') < 0 && src.indexOf('x-cortex-session') < 0 && src.indexOf('x-cortex-timestamp') < 0, 'bookmarklet does not name Cortex auth headers');
   assert(src.indexOf('localStorage') < 0, 'bookmarklet does not write localStorage');
-  assert(src.indexOf('Cortex取得完了') >= 0 && src.indexOf('全Route:') >= 0, 'bookmarklet completion report');
   assert(src.indexOf('JSONを保存しました') >= 0, 'bookmarklet save confirmation');
-  assert(src.indexOf('totalRouteCount') >= 0 && src.indexOf('selectedRouteCount') >= 0, 'bookmarklet stores counts not hardcoded 18');
+  assert(src.indexOf('spa-intercept') >= 0 || src.indexOf('captureMode') >= 0, 'bookmarklet builds intercept bundle');
+  assert(src.indexOf('hour===11') < 0, 'bookmarklet does not reimplement 11:00 filter');
   assert(!/\b18\b/.test(src.replace(/20260918/g, '')), 'bookmarklet does not hardcode 18');
-  assert(src.indexOf('continue;') >= 0, 'bookmarklet continues after a failed route');
+  assert(src.indexOf('querySelectorAll') < 0, 'bookmarklet does not auto-tour routes');
 
   var ingestedAuth = Glue.ingestJsonText(JSON.stringify({ authError: 'UNAUTHORIZED', httpStatus: 401, details: [] }), { refresh: true });
   assert(ingestedAuth.error === Core.ERROR.UNAUTHORIZED, 'glue surfaces 401');

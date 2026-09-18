@@ -2376,7 +2376,7 @@
             </div>
           </div>
           <input type="file" id="cortex13-file" accept="application/json,.json" class="hidden" onchange="cortex13OnFileInput(this)">
-          <p class="text-xs text-ink-lighter mb-3">CortexにログインしたタブでBookmarkletを実行 → 保存JSONをこのカードへドロップ。CSVを18本ダウンロードする方式は使いません。</p>
+          <p class="text-xs text-ink-lighter mb-3">CortexでBookmarklet実行（フック）→ 一覧を再表示 → 対象Routeをクリック → JSON保存をこのカードへドロップ。APIは直接呼びません。</p>
           <div class="grid grid-cols-6 gap-3 mb-3">
             <div class="card p-3 text-center">
               <div class="text-2xl font-bold" id="cortex13-total">-</div>
@@ -14817,7 +14817,7 @@ var driverDB = {
 
     function cortex13CopyBookmarklet() {
       Cortex13Priority.copyBookmarklet().then(function (ok) {
-        if (ok) alert('Bookmarkletをコピーしました。logistics.amazon.co.jp のログイン済みCortexタブでアドレスバーに貼り付けて実行し、表示件数を確認してから保存JSONをこのカードへドロップしてください。');
+        if (ok) alert('Bookmarkletをコピーしました。logistics.amazon.co.jp のログイン済みCortexタブで実行し、一覧を再表示してから対象Routeをクリックし、パネルのJSON保存を押してください。');
         else alert('コピーに失敗しました。Cortex画面で DevTools から route-details JSON を保存して読み込んでください。');
       });
     }
@@ -21157,7 +21157,7 @@ var driverDB = {
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
   <script src="/rolling60h-ui.js?v=20260904-1"></script>
-  <script src="/cortex-13-priority-core.js?v=20260918-3"></script>
-  <script src="/cortex-13-priority.js?v=20260918-3"></script>
+  <script src="/cortex-13-priority-core.js?v=20260918-4"></script>
+  <script src="/cortex-13-priority.js?v=20260918-4"></script>
 </body>
 </html>
