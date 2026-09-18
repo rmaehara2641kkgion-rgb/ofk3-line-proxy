@@ -126,6 +126,26 @@
     return ERROR.NETWORK;
   }
 
+  function describeHttpError(status, error) {
+    var st = Number(status);
+    var code = error || (st ? classifyHttpError(st) : '');
+    if (code === ERROR.UNAUTHORIZED || code === 'UNAUTHORIZED' || st === 401) {
+      return {
+        error: ERROR.UNAUTHORIZED,
+        message: 'UNAUTHORIZED（未ログイン）。CortexにログインしたタブでBookmarkletを再実行してください'
+      };
+    }
+    if (code === ERROR.FORBIDDEN || code === 'FORBIDDEN' || st === 403) {
+      return {
+        error: ERROR.FORBIDDEN,
+        message: 'FORBIDDEN（権限不足）。このアカウントではCortex APIを取得できません'
+      };
+    }
+    if (code) return { error: code, message: String(code) };
+    if (st) return { error: classifyHttpError(st), message: 'HTTP ' + st };
+    return { error: ERROR.NETWORK, message: '取得失敗' };
+  }
+
   function driverNameFromDetails(details) {
     var list = (details && details.transporters) || [];
     if (!list.length) return '';
@@ -316,6 +336,144 @@
     };
   }
 
+  function parseCsv(text) {
+    var rows = [];
+    var row = [];
+    var cur = '';
+    var inQuotes = false;
+    var s = String(text || '').replace(/^\uFEFF/, '');
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (s[i + 1] === '"') { cur += '"'; i += 1; }
+          else inQuotes = false;
+        } else {
+          cur += c;
+        }
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        row.push(cur);
+        cur = '';
+      } else if (c === '\n') {
+        row.push(cur);
+        rows.push(row);
+        row = [];
+        cur = '';
+      } else if (c !== '\r') {
+        cur += c;
+      }
+    }
+    if (cur.length || row.length) {
+      row.push(cur);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function parseTokyoDateTime(value) {
+    var t = String(value || '').trim();
+    if (!t) return null;
+    t = t.replace(' ', 'T');
+    if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(t)) t += '+09:00';
+    var ms = Date.parse(t);
+    return isFinite(ms) ? ms : null;
+  }
+
+  function csvWindowEndMs(label) {
+    var raw = String(label || '').trim();
+    if (!raw) return null;
+    var parts = raw.split(/\s+-\s+/);
+    return parseTokyoDateTime(parts[parts.length - 1]);
+  }
+
+  function csvCol(headers, names) {
+    var i, j, h;
+    for (i = 0; i < headers.length; i++) {
+      h = String(headers[i] || '').trim();
+      for (j = 0; j < names.length; j++) {
+        if (h === names[j]) return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Same 13:00 rule as extractFromRouteDetails, applied to Cortex Route CSV columns.
+   * Time Window end == 13:00:00 JST, plannedEnd (予定時間) <= 13:00:00.000 JST,
+   * 集荷 / PICK_UP excluded. Stop 2/3 stay included — no extra filter.
+   */
+  function extractFromCortexCsv(text, options) {
+    options = options || {};
+    var rows = parseCsv(text);
+    if (!rows.length) {
+      return { ok: false, error: ERROR.SCHEMA, message: 'CSVが空です', packages: [], stopCount: 0, packageCount: 0, stopNumbers: [] };
+    }
+    var headers = rows[0];
+    var iStop = csvCol(headers, ['stop', '停留所番号']);
+    var iWindow = csvCol(headers, ['timeWindow', 'Time Window']);
+    var iPlanned = csvCol(headers, ['plannedEnd', '予定時間']);
+    var iLabel = csvCol(headers, ['labelKind', '停止ラベル']);
+    var iTrack = csvCol(headers, ['trackingId', '追跡ID', 'Tracking ID']);
+    var iRoute = csvCol(headers, ['routeCode', 'ルート', 'Route']);
+    if (iStop < 0 || iWindow < 0 || iPlanned < 0) {
+      return { ok: false, error: ERROR.SCHEMA, message: 'CSV列（停留所番号 / Time Window / 予定時間）が見つかりません', packages: [], stopCount: 0, packageCount: 0, stopNumbers: [] };
+    }
+
+    var localDate = options.localDate || null;
+    var packages = [];
+    var routeCode = options.routeCode || '';
+    var i;
+    for (i = 1; i < rows.length; i++) {
+      var row = rows[i] || [];
+      var label = iLabel >= 0 ? String(row[iLabel] || '') : '';
+      if (label === 'PICKUP' || label.indexOf('集荷') >= 0) continue;
+      var windowEndMs = csvWindowEndMs(row[iWindow]);
+      if (windowEndMs == null) continue;
+      if (!isExact1300Clock(windowEndMs)) continue;
+      var plannedEndMs = parseTokyoDateTime(row[iPlanned]);
+      if (plannedEndMs == null) continue;
+      if (!localDate) {
+        var p0 = tokyoParts(windowEndMs);
+        if (p0) localDate = [p0.year, p0.month, p0.day];
+      }
+      if (!isSameLocalDate(windowEndMs, localDate)) continue;
+      if (!isOnOrBeforeCutoff(plannedEndMs)) continue;
+      var stopNo = parseInt(row[iStop], 10);
+      if (!routeCode && iRoute >= 0) routeCode = String(row[iRoute] || '').trim();
+      var windowParts = String(row[iWindow] || '').split(/\s+-\s+/);
+      packages.push({
+        routeCode: iRoute >= 0 ? String(row[iRoute] || routeCode || '').trim() : routeCode,
+        stop: isFinite(stopNo) ? stopNo : row[iStop],
+        trackingId: iTrack >= 0 ? String(row[iTrack] || '').trim() : '',
+        windowEndTime: windowEndMs,
+        windowLabel: formatTokyoClock(parseTokyoDateTime(windowParts[0])) + '-' + formatTokyoClock(windowEndMs),
+        plannedEndTime: plannedEndMs,
+        plannedEndClock: formatTokyoClock(plannedEndMs)
+      });
+    }
+
+    var stopSet = {};
+    packages.forEach(function (p) { stopSet[p.stop] = true; });
+    var stopNumbers = Object.keys(stopSet).map(function (s) { return parseInt(s, 10); }).sort(function (a, b) { return a - b; });
+    var lastStop = stopNumbers.length ? stopNumbers[stopNumbers.length - 1] : null;
+    var lastPkg = null;
+    packages.forEach(function (p) { if (p.stop === lastStop) lastPkg = p; });
+    return {
+      ok: true,
+      routeCode: routeCode,
+      localDate: localDate,
+      localDateKey: localDateKey(localDate),
+      packages: packages,
+      stopNumbers: stopNumbers,
+      stopCount: stopNumbers.length,
+      packageCount: packages.length,
+      lastStop: lastStop,
+      lastPlannedEndClock: lastPkg ? lastPkg.plannedEndClock : ''
+    };
+  }
+
   function summarizeResults(results, failures) {
     var routes = [];
     var packages = [];
@@ -344,24 +502,49 @@
     };
   }
 
+  function emptySummary(extra) {
+    return Object.assign({
+      ok: false,
+      routes: [],
+      packages: [],
+      failures: [],
+      routeCount: 0,
+      stopCount: 0,
+      packageCount: 0,
+      selectedRouteCount: 0,
+      successCount: 0,
+      failureCount: 0
+    }, extra || {});
+  }
+
   function ingestBundle(bundle) {
+    if (!bundle || typeof bundle !== 'object') {
+      return emptySummary({ error: ERROR.SCHEMA, message: 'JSON bundle がありません' });
+    }
+
+    if (bundle.authError || bundle.httpStatus === 401 || bundle.httpStatus === 403) {
+      var authDesc = describeHttpError(bundle.httpStatus, bundle.authError);
+      var authFails = Array.isArray(bundle.failures) && bundle.failures.length
+        ? bundle.failures
+        : [{ error: authDesc.error, httpStatus: bundle.httpStatus, message: authDesc.message }];
+      return emptySummary({
+        error: authDesc.error,
+        message: authDesc.message,
+        failures: authFails,
+        failureCount: authFails.length
+      });
+    }
+
     var failures = [];
     var results = [];
-    if (!bundle || typeof bundle !== 'object') {
-      return { ok: false, error: ERROR.SCHEMA, message: 'JSON bundle がありません', routes: [], packages: [], failures: [] };
-    }
     var detailsList = [];
     if (Array.isArray(bundle.details)) detailsList = bundle.details;
     else if (bundle.rmsRouteDetails) detailsList = [bundle];
     else if (bundle.rmsRouteSummaries && !bundle.details) {
-      return {
-        ok: false,
+      return emptySummary({
         error: ERROR.MISSING_DETAILS,
-        message: 'route-summaries のみです。route-details が必要です',
-        routes: [],
-        packages: [],
-        failures: []
-      };
+        message: 'route-summaries のみです。route-details が必要です'
+      });
     }
 
     detailsList.forEach(function (d, idx) {
@@ -379,14 +562,40 @@
       results.push(extracted);
     });
 
+    if (Array.isArray(bundle.failures)) {
+      bundle.failures.forEach(function (f) {
+        if (!f) return;
+        var desc = describeHttpError(f.httpStatus, f.error);
+        failures.push({
+          routeId: f.routeId,
+          routeCode: f.routeCode,
+          error: desc.error,
+          httpStatus: f.httpStatus,
+          message: f.message || desc.message
+        });
+      });
+    }
+
     var summary = summarizeResults(results, failures);
-    summary.ok = results.length > 0 || detailsList.length === 0;
-    if (detailsList.length > 0 && results.length === 0) {
+    summary.successCount = results.length;
+    summary.failureCount = failures.length;
+    if (bundle.summaries) {
+      summary.elevenOClock = selectElevenOClockRoutes(bundle.summaries);
+      summary.selectedRouteCount = summary.elevenOClock.ok ? summary.elevenOClock.routes.length : 0;
+    } else if (typeof bundle.selectedRouteCount === 'number') {
+      summary.selectedRouteCount = bundle.selectedRouteCount;
+    } else {
+      summary.selectedRouteCount = results.length + failures.length;
+    }
+
+    if (results.length > 0) {
+      summary.ok = true;
+    } else if (detailsList.length === 0 && failures.length === 0) {
+      summary.ok = true;
+    } else {
       summary.ok = false;
       summary.error = failures[0] && failures[0].error;
-      summary.message = '全 Route の route-details 解析に失敗しました';
-    } else {
-      summary.ok = true;
+      summary.message = (failures[0] && failures[0].message) || '全 Route の route-details 解析に失敗しました';
     }
     return summary;
   }
@@ -401,8 +610,10 @@
     isOnOrBeforeCutoff: isOnOrBeforeCutoff,
     isExact1300Clock: isExact1300Clock,
     classifyHttpError: classifyHttpError,
+    describeHttpError: describeHttpError,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
+    extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
     ingestBundle: ingestBundle
   };

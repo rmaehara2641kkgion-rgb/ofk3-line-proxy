@@ -2377,10 +2377,14 @@
           </div>
           <input type="file" id="cortex13-file" accept="application/json,.json" class="hidden" onchange="cortex13OnFileInput(this)">
           <p class="text-xs text-ink-lighter mb-3">CortexにログインしたタブでBookmarkletを実行 → 保存されたJSONをここにドロップ。CSVを18本ダウンロードする方式は使いません。</p>
-          <div class="grid grid-cols-4 gap-3 mb-3">
+          <div class="grid grid-cols-5 gap-3 mb-3">
+            <div class="card p-3 text-center">
+              <div class="text-2xl font-bold" id="cortex13-selected">-</div>
+              <div class="text-xs text-ink-lighter">11時Route</div>
+            </div>
             <div class="card p-3 text-center">
               <div class="text-2xl font-bold" id="cortex13-routes">-</div>
-              <div class="text-xs text-ink-lighter">取得Route</div>
+              <div class="text-xs text-ink-lighter">取得成功</div>
             </div>
             <div class="card p-3 text-center border-l-4 border-red-500">
               <div class="text-2xl font-bold text-red-500" id="cortex13-stops">-</div>
@@ -14796,28 +14800,55 @@ var driverDB = {
       });
     }
 
+    function cortex13ErrorLabel(f) {
+      if (!f) return '';
+      if (typeof Cortex13PriorityCore !== 'undefined' && Cortex13PriorityCore.describeHttpError) {
+        return Cortex13PriorityCore.describeHttpError(f.httpStatus, f.error).message;
+      }
+      return f.message || f.error || '';
+    }
+
+    function cortex13SetKpis(selected, success, stops, packages, failures) {
+      var selEl = document.getElementById('cortex13-selected');
+      if (selEl) selEl.textContent = selected == null ? '-' : String(selected);
+      document.getElementById('cortex13-routes').textContent = String(success);
+      document.getElementById('cortex13-stops').textContent = String(stops);
+      document.getElementById('cortex13-packages').textContent = String(packages);
+      document.getElementById('cortex13-failures').textContent = String(failures);
+    }
+
     function cortex13Render(result) {
       var status = document.getElementById('cortex13-status');
       var routeBody = document.getElementById('cortex13-route-tbody');
       var pkgBody = document.getElementById('cortex13-pkg-tbody');
       if (!result) return;
+      var failures = result.failures || [];
+      var selected = result.selectedRouteCount;
+      if (selected == null && result.elevenOClock && result.elevenOClock.routes) {
+        selected = result.elevenOClock.routes.length;
+      }
+      var isAuth = result.error === 'UNAUTHORIZED' || result.error === 'FORBIDDEN';
+      status.className = isAuth ? 'text-xs text-red-400 mb-2' : 'text-xs text-ink-lighter mb-2';
       if (!result.ok && !(result.routes && result.routes.length)) {
-        document.getElementById('cortex13-routes').textContent = '0';
-        document.getElementById('cortex13-stops').textContent = '0';
-        document.getElementById('cortex13-packages').textContent = '0';
-        document.getElementById('cortex13-failures').textContent = String((result.failures || []).length);
+        cortex13SetKpis(selected || 0, 0, 0, 0, failures.length);
         status.textContent = (result.message || '解析失敗') + (result.error ? ' [' + result.error + ']' : '');
-        routeBody.innerHTML = '';
+        routeBody.innerHTML = failures.map(function (f) {
+          return '<tr class="hover:bg-surface-secondary"><td class="p-2 font-mono">' +
+            escapeHtml(f.routeCode || f.routeId || '-') +
+            '</td><td class="p-2"></td><td class="p-2 text-yellow-400 font-bold" colspan="3">' +
+            escapeHtml(cortex13ErrorLabel(f)) + '</td></tr>';
+        }).join('');
         pkgBody.innerHTML = '';
         return;
       }
-      var failures = result.failures || [];
-      document.getElementById('cortex13-routes').textContent = String(result.routeCount || 0);
-      document.getElementById('cortex13-stops').textContent = String(result.stopCount || 0);
-      document.getElementById('cortex13-packages').textContent = String(result.packageCount || 0);
-      document.getElementById('cortex13-failures').textContent = String(failures.length);
-      var failTxt = failures.length ? (' / 失敗 ' + failures.map(function (f) { return (f.routeCode || f.routeId || '?') + ':' + (f.error || ''); }).join(', ')) : '';
-      status.textContent = 'Stops ' + result.stopCount + ' / Packages ' + result.packageCount + failTxt;
+      var success = result.successCount != null ? result.successCount : (result.routeCount || 0);
+      cortex13SetKpis(selected != null ? selected : success + failures.length, success, result.stopCount || 0, result.packageCount || 0, failures.length);
+      var failTxt = failures.length ? (' / 失敗 ' + failures.map(function (f) {
+        return (f.routeCode || f.routeId || '?') + ':' + cortex13ErrorLabel(f);
+      }).join(', ')) : '';
+      status.textContent = '11時出発 ' + (selected != null ? selected : '-') +
+        ' Route / 成功 ' + success + failTxt +
+        ' / Stops ' + result.stopCount + ' / Packages ' + result.packageCount;
 
       var rh = '';
       (result.routes || []).forEach(function (r) {
@@ -14828,6 +14859,13 @@ var driverDB = {
         rh += '<td class="p-2 font-bold text-red-400">' + r.stopCount + ' Stops / ' + r.packageCount + ' Packages</td>';
         rh += '<td class="p-2 text-center">' + (r.lastStop != null ? r.lastStop : '-') + '</td>';
         rh += '<td class="p-2 font-mono">' + escapeHtml(r.lastPlannedEndClock || '') + '</td>';
+        rh += '</tr>';
+      });
+      failures.forEach(function (f) {
+        rh += '<tr class="hover:bg-surface-secondary">';
+        rh += '<td class="p-2 font-mono">' + escapeHtml(f.routeCode || f.routeId || '?') + '</td>';
+        rh += '<td class="p-2"></td>';
+        rh += '<td class="p-2 text-yellow-400 font-bold" colspan="3">' + escapeHtml(cortex13ErrorLabel(f)) + '</td>';
         rh += '</tr>';
       });
       routeBody.innerHTML = rh;
@@ -21091,7 +21129,7 @@ var driverDB = {
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
   <script src="/rolling60h-ui.js?v=20260904-1"></script>
-  <script src="/cortex-13-priority-core.js?v=20260918-1"></script>
-  <script src="/cortex-13-priority.js?v=20260918-1"></script>
+  <script src="/cortex-13-priority-core.js?v=20260918-2"></script>
+  <script src="/cortex-13-priority.js?v=20260918-2"></script>
 </body>
 </html>

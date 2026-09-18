@@ -35,37 +35,37 @@
       'const origin=location.origin;',
       'if(!/logistics\\.amazon\\./.test(origin)){alert("Cortex (logistics.amazon.*) の画面で実行してください");return;}',
       'const params=new URLSearchParams(location.search);',
-      'const u=new URL(location.href);',
       'let serviceAreaId=params.get("serviceAreaId")||params.get("serviceAreaID")||"";',
       'const m=location.href.match(/serviceAreaId=([0-9a-f-]{36})/i);',
       'if(!serviceAreaId&&m)serviceAreaId=m[1];',
       'if(!serviceAreaId){alert("serviceAreaId がURLから取れませんでした");return;}',
       'const localDate=params.get("localDate")||new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());',
+      'function httpErr(status){if(status===401)return{error:"UNAUTHORIZED",message:"UNAUTHORIZED（未ログイン）。Cortexにログインしたタブで再実行してください"};if(status===403)return{error:"FORBIDDEN",message:"FORBIDDEN（権限不足）。このアカウントではCortex APIを取得できません"};return{error:"HTTP_"+status,message:"HTTP "+status};}',
+      'function save(obj){const blob=new Blob([JSON.stringify(obj,null,0)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="cortex-13-bundle_"+localDate+".json";a.click();}',
       'const sumUrl=origin+"/operations/execution/api/route-summaries?historicalDay=false&localDate="+encodeURIComponent(localDate)+"&serviceAreaId="+encodeURIComponent(serviceAreaId)+"&statsFromSummaries=true";',
       'const sumRes=await fetch(sumUrl,{credentials:"include"});',
-      'if(!sumRes.ok){alert("route-summaries HTTP "+sumRes.status+"（未ログインの可能性）");return;}',
+      'if(!sumRes.ok){const e=httpErr(sumRes.status);save({localDate,authError:e.error,httpStatus:sumRes.status,selectedRouteCount:0,details:[],failures:[{error:e.error,httpStatus:sumRes.status,message:e.message}]});alert("route-summaries "+e.message);return;}',
       'const summaries=await sumRes.json();',
       'const rows=summaries.rmsRouteSummaries||[];',
-      'const failures=[]; const details=[];',
+      'const selected=[];',
       'for(const row of rows){',
       '  const dep=Number(row.plannedDepartureTime);',
-      '  if(!dep){failures.push({routeId:row.routeId,routeCode:row.routeCode,error:"PLANNED_DEPARTURE_MISSING"});continue;}',
+      '  if(!dep)continue;',
       '  const hp=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Tokyo",hour:"numeric",hour12:false}).formatToParts(new Date(dep));',
       '  const hour=Number((hp.find(function(p){return p.type==="hour";})||{}).value);',
-      '  if(hour!==11)continue;',
+      '  if(hour===11)selected.push(row);',
+      '}',
+      'const failures=[]; const details=[];',
+      'for(const row of selected){',
       '  const detUrl=origin+"/operations/execution/api/route-details/"+encodeURIComponent(row.routeId)+"?historicalDay=false&routeId="+encodeURIComponent(row.routeId)+"&serviceAreaId="+encodeURIComponent(serviceAreaId);',
       '  try{',
       '    const r=await fetch(detUrl,{credentials:"include"});',
-      '    if(!r.ok){failures.push({routeId:row.routeId,routeCode:row.routeCode,error:"HTTP_"+r.status});continue;}',
+      '    if(!r.ok){const e=httpErr(r.status);failures.push({routeId:row.routeId,routeCode:row.routeCode,error:e.error,httpStatus:r.status,message:e.message});continue;}',
       '    details.push(await r.json());',
-      '  }catch(err){failures.push({routeId:row.routeId,routeCode:row.routeCode,error:"NETWORK"});} ',
+      '  }catch(err){failures.push({routeId:row.routeId,routeCode:row.routeCode,error:"NETWORK",message:"NETWORK"});} ',
       '}',
-      'const blob=new Blob([JSON.stringify({localDate,summaries,details,failures},null,0)],{type:"application/json"});',
-      'const a=document.createElement("a");',
-      'a.href=URL.createObjectURL(blob);',
-      'a.download="cortex-13-bundle_"+localDate+".json";',
-      'a.click();',
-      'alert("取得 "+details.length+" / 失敗 "+failures.length+"。OFK3の時間指定タブへJSONをドロップしてください");',
+      'save({localDate,selectedRouteCount:selected.length,summaries,details,failures});',
+      'alert("11時出発 "+selected.length+" Route / 取得成功 "+details.length+" / 失敗 "+failures.length+"。OFK3の時間指定タブへJSONをドロップしてください");',
       '}catch(e){alert("取得失敗: "+(e&&e.message||e));}',
       '})();'
     ].join('');
@@ -98,12 +98,6 @@
       cacheClear();
     }
     var result = core().ingestBundle(parsed);
-    if (parsed.failures && parsed.failures.length) {
-      result.failures = (result.failures || []).concat(parsed.failures);
-    }
-    if (parsed.summaries) {
-      result.elevenOClock = core().selectElevenOClockRoutes(parsed.summaries);
-    }
     result.fromCache = false;
     cacheSet(cacheKey, result);
     return result;
