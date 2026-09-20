@@ -2,7 +2,7 @@
  * OFK3 Cortex capture runner — page MAIN world only.
  * Wraps SPA fetch/XHR response JSON. Does not call Cortex APIs.
  * Does not read Cookie / Authorization / HMAC / session / timestamp.
- * Phase 1: one start() click = one Route CDP trial = always end.
+ * Phase 2: one start() walks all uncaptured 11:00 routes sequentially.
  */
 (function (global) {
   'use strict';
@@ -91,6 +91,8 @@
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
     if (pocRun && !pocRun.ended && pocRun.route && pocRun.route.routeId && store.detailsByRouteId[pocRun.route.routeId]) {
       pocRun.diagnostics.details = 'success';
+      pocRun.diagnostics.error = '';
+      pocRun.diagnostics.message = '';
     }
     paint();
   }
@@ -151,7 +153,7 @@
     box = document.createElement('div');
     box.id = PANEL_ID;
     box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:320px;max-height:70vh;overflow:auto;');
-    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 1</span>' +
+    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 2</span>' +
       '<div>対象Route: <span id="ofk3-poc-code">-</span></div>' +
       '<div>routeId: <span id="ofk3-poc-id">-</span></div>' +
       '<div>DOM発見: <span id="ofk3-poc-dom">no</span></div>' +
@@ -450,7 +452,62 @@
     paint();
   }
 
-  function waitForOneRoute(route, runId) {
+  function runNextRoute() {
+    var route = Core.firstUncapturedTourRoute(store, tour);
+    if (!route) {
+      sessionBusy = false;
+      tour.status = 'done';
+      if (pocRun && pocRun.diagnostics) {
+        pocRun.diagnostics.error = '';
+        pocRun.diagnostics.message = '';
+      }
+      paint();
+      return;
+    }
+    pocRun = Core.createPocRun(route);
+    var runId = pocRun.id;
+    tour.status = 'running';
+    tour.currentRouteId = route.routeId;
+    tour.currentRouteCode = route.routeCode || '';
+    Core.markRouteVisited(tour, route.routeId);
+    paint();
+
+    clickRoute(route, runId, function (ok, cdpRes) {
+      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
+      if (!ok) {
+        applyCdpStages(cdpRes);
+        finishCurrentAndContinue({
+          error: (cdpRes && cdpRes.error) || Core.ERROR.DOM_NOT_FOUND,
+          message: (cdpRes && cdpRes.message) || 'RouteカードのCDPクリックに失敗しました'
+        });
+        return;
+      }
+      waitForCurrentRoute(route, runId);
+    });
+  }
+
+  function finishCurrentAndContinue(failureInfo) {
+    clearTimers();
+    setPanelClickable(true);
+    if (pocRun && pocRun.diagnostics) {
+      if (failureInfo) {
+        pocRun.diagnostics.error = failureInfo.error || '';
+        pocRun.diagnostics.message = failureInfo.message || failureInfo.error || '';
+      } else {
+        pocRun.diagnostics.error = '';
+        pocRun.diagnostics.message = '';
+      }
+    }
+    if (pocRun) Core.endPocRun(pocRun, store, failureInfo || null);
+    paint();
+    waitTimer = setTimeout(function () {
+      waitTimer = 0;
+      if (!sessionBusy) return;
+      runNextRoute();
+    }, 350);
+  }
+
+  function waitForCurrentRoute(route, runId) {
     var started = Date.now();
     if (pocRun && pocRun.diagnostics && pocRun.diagnostics.details !== 'success') {
       pocRun.diagnostics.details = '-';
@@ -460,12 +517,12 @@
       if (!Core.pocRunIsCurrent(pocRun, runId)) return;
       if (route.routeId && store.detailsByRouteId[route.routeId]) {
         pocRun.diagnostics.details = 'success';
-        finishPoc(null);
+        finishCurrentAndContinue(null);
         return;
       }
       if (Date.now() - started >= tour.timeoutMs) {
         pocRun.diagnostics.details = 'timeout';
-        finishPoc({
+        finishCurrentAndContinue({
           error: Core.ERROR.TIMEOUT,
           message: 'route-details が時間内に捕捉できませんでした（XHR未検出）'
         });
@@ -481,6 +538,7 @@
     tour.routes = store.summaries ? Core.tourRoutesFromSummaries(store.summaries) : [];
     tour.index = 0;
     tour.status = 'idle';
+    tour.visitedRouteIds = {};
     if (!store.summaries) {
       pocRun = Core.createPocRun({});
       finishPoc({
@@ -489,31 +547,7 @@
       });
       return;
     }
-    var route = Core.firstUncapturedTourRoute(store, tour);
-    if (!route) {
-      pocRun = Core.createPocRun({});
-      finishPoc(null);
-      return;
-    }
-    pocRun = Core.createPocRun(route);
-    var runId = pocRun.id;
-    tour.status = 'running';
-    tour.currentRouteId = route.routeId;
-    tour.currentRouteCode = route.routeCode || '';
-    Core.markRouteVisited(tour, route.routeId);
-    paint();
-    clickRoute(route, runId, function (ok, cdpRes) {
-      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
-      if (!ok) {
-        applyCdpStages(cdpRes);
-        finishPoc({
-          error: (cdpRes && cdpRes.error) || Core.ERROR.DOM_NOT_FOUND,
-          message: (cdpRes && cdpRes.message) || 'RouteカードのCDPクリックに失敗しました'
-        });
-        return;
-      }
-      waitForOneRoute(route, runId);
-    });
+    runNextRoute();
   }
 
   function start() {
@@ -553,7 +587,7 @@
   });
 
   global.__OFK3_CORTEX_CAPTURE__ = {
-    phase: 'poc-1',
+    phase: 'poc-2',
     show: show,
     start: start,
     stop: stopPoc,
