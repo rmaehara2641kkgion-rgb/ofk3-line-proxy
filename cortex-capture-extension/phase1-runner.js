@@ -504,15 +504,31 @@
   }
 
   function routeViewportPoint() {
+    var scrollers = candidateScrollers();
+    for (var s = 0; s < scrollers.length; s++) {
+      var scroller = scrollers[s];
+      var routeCount = 0;
+      try { routeCount = scroller.querySelectorAll('[class*="route-"]').length; } catch (e0) {}
+      if (!routeCount) continue;
+      var sr = null;
+      try { sr = scroller.getBoundingClientRect(); } catch (e1) {}
+      if (!sr || sr.width <= 0 || sr.height <= 0) continue;
+      var x = Math.max(sr.left + 8, Math.min(sr.right - 8, sr.left + sr.width / 2));
+      var y = Math.max(sr.top + 8, Math.min(sr.bottom - 8, sr.top + sr.height / 2));
+      if (x > 0 && x < global.innerWidth && y > 0 && y < global.innerHeight) {
+        return { x: x, y: y };
+      }
+    }
+
     var cards = visibleRouteCards();
     for (var i = 0; i < cards.length; i++) {
       var rect = null;
-      try { rect = cards[i].getBoundingClientRect(); } catch (e1) {}
+      try { rect = cards[i].getBoundingClientRect(); } catch (e2) {}
       if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-      if (rect.bottom < 0 || rect.top > global.innerHeight) continue;
+      if (rect.bottom < 0 || rect.top > global.innerHeight || rect.right < 0 || rect.left > global.innerWidth) continue;
       return { x: Math.max(1, Math.min(global.innerWidth - 1, rect.left + rect.width / 2)), y: Math.max(1, Math.min(global.innerHeight - 1, rect.top + rect.height / 2)) };
     }
-    return { x: Math.max(1, Math.floor(global.innerWidth * 0.35)), y: Math.max(1, Math.floor(global.innerHeight * 0.55)) };
+    return { x: Math.max(1, Math.floor(global.innerWidth * 0.22)), y: Math.max(1, Math.floor(global.innerHeight * 0.72)) };
   }
 
   function applyCdpStages(res) {
