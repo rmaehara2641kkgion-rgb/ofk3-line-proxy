@@ -272,19 +272,43 @@
     return null;
   }
 
+  function findVisibleRouteByCode(route) {
+    route = route || {};
+    var code = String(route.routeCode || '');
+    if (!code) return null;
+    var nodes = document.querySelectorAll('p[title], span, a, button, [role="button"], [role="link"]');
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (inPanel(node)) continue;
+      var title = (node.getAttribute && node.getAttribute('title')) || '';
+      var text = String(node.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (title !== code && text !== code) continue;
+      var cur = node;
+      for (var depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
+        if (inPanel(cur)) break;
+        if (cur.className && String(cur.className).indexOf('route-') >= 0) return cur;
+      }
+      return node;
+    }
+    return null;
+  }
+
   function findRouteElement(route) {
     route = route || {};
-    var el = findRouteCardByRouteId(route.routeId);
+    var el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
     if (el) return el;
     var scroller = largestScroller();
     if (!scroller) return null;
+    var maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.65));
     var y = 0;
     var guard = 0;
-    var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.7));
-    while (y <= scroller.scrollHeight && guard < 40) {
-      scroller.scrollTop = y;
-      el = findRouteCardByRouteId(route.routeId);
+    while (guard < 80) {
+      scroller.scrollTop = Math.min(y, maxScroll);
+      try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
+      el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
       if (el) return el;
+      if (y >= maxScroll) break;
       y += stepPx;
       guard += 1;
     }
@@ -345,7 +369,11 @@
     if (!card) {
       if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'no';
       paint();
-      done(false);
+      done(false, {
+        ok: false,
+        error: Core.ERROR.DOM_NOT_FOUND,
+        message: 'Route DOM未発見: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+      });
       return;
     }
     if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'yes';
@@ -395,6 +423,10 @@
     clearTimers();
     setPanelClickable(true);
     sessionBusy = false;
+    if (pocRun && pocRun.diagnostics && failureInfo) {
+      pocRun.diagnostics.error = failureInfo.error || '';
+      pocRun.diagnostics.message = failureInfo.message || failureInfo.error || '';
+    }
     if (pocRun) Core.endPocRun(pocRun, store, failureInfo || null);
     tour.status = 'done';
     paint();
