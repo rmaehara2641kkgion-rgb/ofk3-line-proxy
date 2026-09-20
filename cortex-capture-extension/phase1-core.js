@@ -290,7 +290,7 @@
         if (!isSameLocalDate(windowEndMs, localDate)) return;
         if (!isOnOrBeforeCutoff(plannedEndMs)) return;
 
-        var addr = addressById[task.addressId || stop.addressId] || {};
+        var location = resolveStopAddress(details, stop, task);
         packages.push({
           routeCode: rd.routeCode,
           routeId: rd.routeId,
@@ -304,9 +304,9 @@
           plannedStartTime: plannedStartMs,
           plannedEndTime: plannedEndMs,
           plannedEndClock: formatTokyoClock(plannedEndMs),
-          address: [addr.address1, addr.address2, addr.city, addr.state, addr.postalCode].filter(Boolean).join(' '),
-          latitude: Number(addr.latitude != null ? addr.latitude : (addr.lat != null ? addr.lat : (addr.geoLocation && addr.geoLocation.latitude))),
-          longitude: Number(addr.longitude != null ? addr.longitude : (addr.lng != null ? addr.lng : (addr.geoLocation && addr.geoLocation.longitude)))
+          address: location.address,
+          latitude: location.latitude,
+          longitude: location.longitude
         });
       });
     });
@@ -475,6 +475,48 @@
       lastStop: lastStop,
       lastPlannedEndClock: lastPkg ? lastPkg.plannedEndClock : ''
     };
+  }
+
+  function finiteCoord(value) {
+    var n = Number(value);
+    return isFinite(n) ? n : null;
+  }
+
+  function addressText(addr) {
+    addr = addr || {};
+    if (addr.fullAddress) return String(addr.fullAddress);
+    if (addr.address) return String(addr.address);
+    return [addr.address1, addr.address2, addr.address3, addr.city, addr.state, addr.postalCode]
+      .filter(Boolean).join(' ');
+  }
+
+  function resolveStopAddress(details, stop, task) {
+    var addresses = (details && Array.isArray(details.addresses)) ? details.addresses : [];
+    var ids = [];
+    function addId(v) {
+      if (v == null || v === '') return;
+      v = String(v);
+      if (ids.indexOf(v) < 0) ids.push(v);
+    }
+    addId(task && task.addressId);
+    addId(stop && stop.addressId);
+    addId(task && task.destinationAddressId);
+    addId(stop && stop.destinationAddressId);
+
+    var addr = null;
+    for (var i = 0; i < addresses.length && !addr; i++) {
+      var a = addresses[i] || {};
+      var aid = a.addressId != null ? String(a.addressId) : '';
+      var id = a.id != null ? String(a.id) : '';
+      if ((aid && ids.indexOf(aid) >= 0) || (id && ids.indexOf(id) >= 0)) addr = a;
+    }
+    if (!addr && addresses.length === 1) addr = addresses[0] || {};
+
+    var lat = finiteCoord(addr && (addr.latitude != null ? addr.latitude :
+      (addr.lat != null ? addr.lat : (addr.geoLocation && addr.geoLocation.latitude))));
+    var lng = finiteCoord(addr && (addr.longitude != null ? addr.longitude :
+      (addr.lng != null ? addr.lng : (addr.geoLocation && addr.geoLocation.longitude))));
+    return { address: addressText(addr), latitude: lat, longitude: lng };
   }
 
   function summarizeResults(results, failures) {
@@ -1147,6 +1189,7 @@
     pickRouteClickCandidate: pickRouteClickCandidate,
     resolveClickableAncestor: resolveClickableAncestor,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
+    resolveStopAddress: resolveStopAddress,
     extractFromRouteDetails: extractFromRouteDetails,
     extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
