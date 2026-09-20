@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OFK3 Cortex Capture",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Capture Cortex SPA route JSON locally. Does not read cookies or send data.",
   "action": {
     "default_title": "OFK3取得"
