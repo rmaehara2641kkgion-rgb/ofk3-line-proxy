@@ -333,6 +333,66 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+// Cortex 13:00優先データ受信（拡張 → OFK3本体）
+// 日付ごとに最新1件を保持。Render再起動で消える一時運用ストア。
+var cortexPriorityStore = {};
+function cortexPriorityStopKey(p) {
+  return String((p && p.routeCode) || '') + '#' + String((p && p.stop) == null ? '' : p.stop);
+}
+function sanitizeCortexPriorityPackage(p) {
+  p = p || {};
+  var lat = Number(p.latitude);
+  var lng = Number(p.longitude);
+  return {
+    routeCode: String(p.routeCode || ''),
+    routeId: String(p.routeId || ''),
+    stop: p.stop == null ? null : Number(p.stop),
+    driverName: String(p.driverName || ''),
+    trackingId: String(p.trackingId || ''),
+    plannedEndTime: p.plannedEndTime == null ? null : Number(p.plannedEndTime),
+    plannedEndClock: String(p.plannedEndClock || ''),
+    windowLabel: String(p.windowLabel || ''),
+    address: String(p.address || ''),
+    latitude: isFinite(lat) ? lat : null,
+    longitude: isFinite(lng) ? lng : null
+  };
+}
+function summarizeCortexPriority(packages) {
+  var stopKeys = {};
+  packages.forEach(function (p) { stopKeys[cortexPriorityStopKey(p)] = true; });
+  return { stopCount: Object.keys(stopKeys).length, packageCount: packages.length };
+}
+app.post('/cortex-priority/import', function(req, res) {
+  var body = req.body || {};
+  var localDate = String(body.localDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+    return res.status(400).json({ status: 'error', message: 'localDate required (YYYY-MM-DD)' });
+  }
+  if (!Array.isArray(body.packages)) {
+    return res.status(400).json({ status: 'error', message: 'packages array required' });
+  }
+  var packages = body.packages.map(sanitizeCortexPriorityPackage).filter(function (p) {
+    return p.routeCode && p.stop != null && isFinite(p.stop);
+  });
+  var counts = summarizeCortexPriority(packages);
+  cortexPriorityStore[localDate] = {
+    localDate: localDate,
+    source: String(body.source || 'cortex-capture-extension'),
+    receivedAt: new Date().toISOString(),
+    packages: packages,
+    stopCount: counts.stopCount,
+    packageCount: counts.packageCount
+  };
+  log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount + ' Packages');
+  res.json({ status: 'ok', localDate: localDate, stopCount: counts.stopCount, packageCount: counts.packageCount });
+});
+app.get('/cortex-priority', function(req, res) {
+  var localDate = String(req.query.localDate || getTodayJst());
+  var entry = cortexPriorityStore[localDate];
+  if (!entry) return res.status(404).json({ status: 'empty', localDate: localDate, packages: [], stopCount: 0, packageCount: 0 });
+  res.json(Object.assign({ status: 'ok' }, entry));
+});
+
 // 住所→緯度経度取得
 app.get('/geocode', async (req, res) => {
   try {
