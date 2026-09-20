@@ -159,6 +159,18 @@
     if (wheelTrace.length > 60) wheelTrace.shift();
   }
 
+  function prioritySummary() {
+    var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
+    var summary = Core.ingestBundle(bundle);
+    return {
+      routes: summary.successCount || 0,
+      selected: summary.selectedRouteCount || 0,
+      stops: summary.stopCount || 0,
+      packages: summary.packageCount || 0,
+      failures: summary.failureCount || 0
+    };
+  }
+
   function paint() {
     var d = diag();
     var box = document.getElementById(PANEL_ID);
@@ -173,6 +185,9 @@
     setText('ofk3-poc-details', d.details || '-');
     setText('ofk3-poc-ended', d.runEnded || 'no');
     setText('ofk3-poc-error', d.message || d.error || '-');
+    var ps = prioritySummary();
+    setText('ofk3-poc-priority', ps.stops + ' Stops / ' + ps.packages + ' Packages');
+    setText('ofk3-poc-progress', ps.routes + ' / ' + ps.selected + ' Routes（失敗 ' + ps.failures + '）');
     setText('ofk3-poc-domroutes', domRouteSnapshot());
     var traceView = wheelTraceEarly.concat(wheelTrace.slice(-12));
     setText('ofk3-poc-wheeltrace', traceView.length ? traceView.join(' | ') : '-');
@@ -209,6 +224,8 @@
       '<div>mouseReleased: <span id="ofk3-poc-up">-</span></div>' +
       '<div>Route詳細捕捉: <span id="ofk3-poc-details">-</span></div>' +
       '<div>run終了: <span id="ofk3-poc-ended">no</span></div>' +
+      '<div style="margin-top:6px;font-weight:bold">13:00優先: <span id="ofk3-poc-priority">0 Stops / 0 Packages</span></div>' +
+      '<div>取得進捗: <span id="ofk3-poc-progress">0 / 0 Routes</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div>';
@@ -224,6 +241,17 @@
     }
     row.appendChild(mk('取得開始', function () { start(); }));
     row.appendChild(mk('JSON保存', function () { saveBundle(); }));
+    row.appendChild(mk('13時結果保存', function () {
+      var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
+      var result = Core.ingestBundle(bundle);
+      try {
+        var blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'cortex-13-priority_' + currentLocalDate() + '.json';
+        a.click();
+      } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
+    }));
     row.appendChild(mk('停止', function () { stopPoc(); }));
     box.appendChild(row);
     document.documentElement.appendChild(box);
