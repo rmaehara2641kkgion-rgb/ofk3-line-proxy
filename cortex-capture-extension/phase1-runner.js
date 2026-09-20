@@ -467,23 +467,18 @@
 
   function visibleTargetRoute() {
     var routes = tour.routes || [];
-    var byId = {};
-    for (var i = 0; i < routes.length; i++) byId[String(routes[i].routeId)] = routes[i];
-    var cards = document.querySelectorAll('[class*="route-"]');
-    for (var j = 0; j < cards.length; j++) {
-      if (inPanel(cards[j])) continue;
-      var cls = String(cards[j].className || '');
-      var m = cls.match(/(?:^|\s)route-([^\s]+)/);
-      if (!m) continue;
-      var route = byId[String(m[1])];
-      if (!route) continue;
+    for (var i = 0; i < routes.length; i++) {
+      var route = routes[i];
+      if (!route || !route.routeId) continue;
       if (store.detailsByRouteId[route.routeId]) continue;
       if (tour.visitedRouteIds && tour.visitedRouteIds[route.routeId]) continue;
+      var card = findRouteCardByRouteId(route.routeId);
+      if (!card) continue;
       var rect = null;
-      try { rect = cards[j].getBoundingClientRect(); } catch (e1) {}
+      try { rect = card.getBoundingClientRect(); } catch (e1) {}
       if (!rect || rect.width <= 0 || rect.height <= 0) continue;
       if (rect.bottom < 0 || rect.top > global.innerHeight || rect.right < 0 || rect.left > global.innerWidth) continue;
-      return { route: route, card: cards[j] };
+      return { route: route, card: card };
     }
     return null;
   }
