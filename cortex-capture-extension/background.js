@@ -70,7 +70,7 @@ function dispatchLeftClick(target, x, y, done) {
         mousePressed: 'fail',
         mouseReleased: 'fail',
         error: 'DEBUGGER_INPUT',
-        message: 'CDPクリックに失敗しました'
+        message: 'CDP mousePressed失敗: ' + chrome.runtime.lastError.message
       }));
       return;
     }
@@ -88,7 +88,7 @@ function dispatchLeftClick(target, x, y, done) {
           mousePressed: 'success',
           mouseReleased: 'fail',
           error: 'DEBUGGER_INPUT',
-          message: 'CDPクリックに失敗しました'
+          message: 'CDP mouseReleased失敗: ' + chrome.runtime.lastError.message
         }));
         return;
       }
@@ -126,7 +126,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         mousePressed: 'fail',
         mouseReleased: 'fail',
         error: 'DEBUGGER_ATTACH',
-        message: 'DevToolsを閉じて再実行してください'
+        message: 'CDP attach失敗: ' + chrome.runtime.lastError.message
       }));
       return;
     }
