@@ -16,6 +16,9 @@
         source: 'OFK3_CORTEX',
         type: 'cdp-click-result',
         ok: !!(res && res.ok),
+        attach: (res && res.attach) || 'fail',
+        mousePressed: (res && res.mousePressed) || 'fail',
+        mouseReleased: (res && res.mouseReleased) || 'fail',
         error: (res && res.error) || (err ? 'DEBUGGER_BRIDGE' : 'DEBUGGER'),
         message: (res && res.message) || (err ? '拡張との通信に失敗しました' : 'CDP失敗')
       }, location.origin);

@@ -2,25 +2,25 @@
  * OFK3 Cortex capture runner — page MAIN world only.
  * Wraps SPA fetch/XHR response JSON. Does not call Cortex APIs.
  * Does not read Cookie / Authorization / HMAC / session / timestamp.
+ * Phase 1: one start() click = one Route CDP trial = always end.
  */
 (function (global) {
   'use strict';
 
   var Core = global.Cortex13PriorityCore;
   if (!Core) return;
-  if (global.__OFK3_CORTEX_CAPTURE__) {
-    if (typeof global.__OFK3_CORTEX_CAPTURE__.show === 'function') {
-      global.__OFK3_CORTEX_CAPTURE__.show();
-    }
-    return;
+
+  var prev = global.__OFK3_CORTEX_CAPTURE__;
+  if (prev && typeof prev.stop === 'function') {
+    try { prev.stop(); } catch (e0) {}
   }
 
   var PANEL_ID = 'ofk3-cortex-capture-panel';
-  var store = Core.createCaptureStore();
+  var store = (prev && prev._store) ? prev._store : Core.createCaptureStore();
   var tour = Core.createTourState();
+  var pocRun = null;
+  var sessionBusy = false;
   var localDate = '';
-  var hooked = false;
-  var stepTimer = 0;
   var waitTimer = 0;
   var summariesWaitTimer = 0;
 
@@ -45,8 +45,6 @@
   localDate = currentLocalDate();
 
   function installHooks() {
-    if (hooked) return;
-    hooked = true;
     var origFetch = global.fetch;
     if (typeof origFetch === 'function') {
       global.fetch = function (input) {
@@ -60,7 +58,9 @@
           var u = url || res.url || '';
           if (Core.isCortexApiCaptureUrl(u)) {
             res.clone().json().then(function (body) {
-              note(u, res.status, body);
+              if (typeof global.__OFK3_CORTEX_NOTE__ === 'function') {
+                global.__OFK3_CORTEX_NOTE__(u, res.status, body);
+              }
             }).catch(function () {});
           }
           return res;
@@ -79,7 +79,9 @@
         if (!Core.isCortexApiCaptureUrl(u)) return;
         var body = null;
         try { body = JSON.parse(this.responseText); } catch (e2) { return; }
-        note(u, this.status, body);
+        if (typeof global.__OFK3_CORTEX_NOTE__ === 'function') {
+          global.__OFK3_CORTEX_NOTE__(u, this.status, body);
+        }
       });
       return xhrSend.apply(this, arguments);
     };
@@ -87,10 +89,16 @@
 
   function note(url, status, body) {
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
-    if (/\/route-details\//.test(String(url || '')) && status >= 200 && status < 300) {
-      setClickDebug({ waitState: 'captured', timeoutReason: '-' });
+    if (pocRun && !pocRun.ended && pocRun.route && pocRun.route.routeId && store.detailsByRouteId[pocRun.route.routeId]) {
+      pocRun.diagnostics.details = 'success';
     }
     paint();
+  }
+
+  global.__OFK3_CORTEX_NOTE__ = note;
+  if (!global.__OFK3_CORTEX_HOOKED__) {
+    installHooks();
+    global.__OFK3_CORTEX_HOOKED__ = true;
   }
 
   function progress() {
@@ -102,40 +110,38 @@
     if (el) el.textContent = value == null ? '' : String(value);
   }
 
-  var clickDebug = {
-    tagName: '-',
-    role: '-',
-    hasHref: 'なし',
-    waitState: 'idle',
-    timeoutReason: '-'
-  };
-
-  function setClickDebug(partial) {
-    Object.keys(partial || {}).forEach(function (k) {
-      clickDebug[k] = partial[k];
-    });
+  function diag() {
+    return (pocRun && pocRun.diagnostics) || Core.createPocDiagnostics();
   }
 
   function paint() {
-    var p = progress();
+    var d = diag();
     var box = document.getElementById(PANEL_ID);
     if (!box) return;
-    setText('ofk3-cortex-sum', p.summariesReady ? '捕捉済' : '未捕捉');
-    setText('ofk3-cortex-eleven', String(p.selectedCount));
-    setText('ofk3-cortex-det', p.detailsCount + ' / ' + p.detailsTotal);
-    setText('ofk3-cortex-current', p.currentRouteCode || (p.status === 'done' ? '完了' : (p.status === 'stopped' ? '停止' : '-')));
-    setText('ofk3-cortex-ok', String(p.successCount));
-    setText('ofk3-cortex-fail', String(p.failureCount));
-    setText('ofk3-cortex-tag', clickDebug.tagName || '-');
-    setText('ofk3-cortex-role', clickDebug.role || '-');
-    setText('ofk3-cortex-href', clickDebug.hasHref || 'なし');
-    setText('ofk3-cortex-wait', clickDebug.waitState || '-');
-    setText('ofk3-cortex-timeout', clickDebug.timeoutReason || '-');
+    setText('ofk3-poc-code', d.routeCode ? d.routeCode : '-');
+    setText('ofk3-poc-id', d.routeId ? d.routeId : '-');
+    setText('ofk3-poc-dom', d.domFound || 'no');
+    setText('ofk3-poc-xy', d.coords || 'no');
+    setText('ofk3-poc-attach', d.attach || '-');
+    setText('ofk3-poc-down', d.mousePressed || '-');
+    setText('ofk3-poc-up', d.mouseReleased || '-');
+    setText('ofk3-poc-details', d.details || '-');
+    setText('ofk3-poc-ended', d.runEnded || 'no');
+  }
+
+  function setPanelClickable(on) {
+    var box = document.getElementById(PANEL_ID);
+    if (!box) return;
+    box.style.pointerEvents = on ? 'auto' : 'none';
   }
 
   function ensurePanel() {
     if (!document.documentElement) return;
     var box = document.getElementById(PANEL_ID);
+    if (box && !document.getElementById('ofk3-poc-ended')) {
+      try { box.parentNode.removeChild(box); } catch (e1) {}
+      box = null;
+    }
     if (box) {
       box.style.display = 'block';
       paint();
@@ -144,18 +150,16 @@
     box = document.createElement('div');
     box.id = PANEL_ID;
     box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:280px;');
-    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">CDP 1 Route</span>' +
-      '<div>summaries: <span id="ofk3-cortex-sum">未捕捉</span></div>' +
-      '<div>11時Route: <span id="ofk3-cortex-eleven">0</span></div>' +
-      '<div>details: <span id="ofk3-cortex-det">0 / 0</span></div>' +
-      '<div>現在: <span id="ofk3-cortex-current">-</span></div>' +
-      '<div>成功: <span id="ofk3-cortex-ok">0</span></div>' +
-      '<div>失敗: <span id="ofk3-cortex-fail">0</span></div>' +
-      '<div style="margin-top:6px;opacity:.9">tag: <span id="ofk3-cortex-tag">-</span></div>' +
-      '<div>role: <span id="ofk3-cortex-role">-</span></div>' +
-      '<div>href: <span id="ofk3-cortex-href">なし</span></div>' +
-      '<div>待機: <span id="ofk3-cortex-wait">idle</span></div>' +
-      '<div>TIMEOUT: <span id="ofk3-cortex-timeout">-</span></div>';
+    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 1</span>' +
+      '<div>対象Route: <span id="ofk3-poc-code">-</span></div>' +
+      '<div>routeId: <span id="ofk3-poc-id">-</span></div>' +
+      '<div>DOM発見: <span id="ofk3-poc-dom">no</span></div>' +
+      '<div>座標取得: <span id="ofk3-poc-xy">no</span></div>' +
+      '<div>CDP attach: <span id="ofk3-poc-attach">-</span></div>' +
+      '<div>mousePressed: <span id="ofk3-poc-down">-</span></div>' +
+      '<div>mouseReleased: <span id="ofk3-poc-up">-</span></div>' +
+      '<div>Route詳細捕捉: <span id="ofk3-poc-details">-</span></div>' +
+      '<div>run終了: <span id="ofk3-poc-ended">no</span></div>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
@@ -168,7 +172,7 @@
     }
     row.appendChild(mk('取得開始', function () { start(); }));
     row.appendChild(mk('JSON保存', function () { saveBundle(); }));
-    row.appendChild(mk('停止', function () { stopTour(); }));
+    row.appendChild(mk('停止', function () { stopPoc(); }));
     box.appendChild(row);
     document.documentElement.appendChild(box);
     paint();
@@ -194,8 +198,8 @@
       a.download = 'cortex-13-bundle_' + localDate + '.json';
       a.click();
       if (!opts.quiet) {
-        var p = progress();
-        alert('Cortex捕捉完了\n11時Route: ' + p.selectedCount + '\ndetails: ' + p.detailsCount + ' / ' + p.detailsTotal + '\nfailures: ' + (bundle.failures || []).length + '\n\nJSONを保存しました。');
+        var d = diag();
+        alert('Cortex捕捉 JSONを保存しました。\n対象: ' + (d.routeCode || '-') + '\n詳細捕捉: ' + (d.details || '-'));
       }
       return true;
     } catch (err) {
@@ -207,62 +211,6 @@
   function inPanel(el) {
     var panel = document.getElementById(PANEL_ID);
     return !!(panel && el && panel.contains(el));
-  }
-
-  function nodeInfo(el) {
-    return {
-      el: el,
-      tag: (el.tagName || '').toLowerCase(),
-      role: (el.getAttribute && el.getAttribute('role')) || '',
-      text: String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
-      href: (el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-href'))) || '',
-      dataRouteId: (el.getAttribute && (el.getAttribute('data-route-id') || el.getAttribute('data-routeid'))) || '',
-      dataRouteCode: (el.getAttribute && el.getAttribute('data-route-code')) || ''
-    };
-  }
-
-  function collectPreferredLinks(root) {
-    var out = [];
-    if (!root || !root.querySelectorAll) return out;
-    var els = root.querySelectorAll('a[href*="/operations/execution/dv/routes/"]');
-    for (var i = 0; i < els.length; i++) {
-      if (inPanel(els[i])) continue;
-      out.push(nodeInfo(els[i]));
-    }
-    return out;
-  }
-
-  function collectClickableControls(root) {
-    var out = [];
-    if (!root || !root.querySelectorAll) return out;
-    var els = root.querySelectorAll('a[href], [role="link"], [role="button"], button, tr, [role="row"]');
-    for (var i = 0; i < els.length; i++) {
-      if (inPanel(els[i])) continue;
-      var info = nodeInfo(els[i]);
-      if (Core.isClickableRouteControl(info)) out.push(info);
-    }
-    return out;
-  }
-
-  function ancestorChain(el) {
-    var chain = [];
-    var cur = el;
-    var guard = 0;
-    while (cur && cur.nodeType === 1 && guard < 20) {
-      if (inPanel(cur)) break;
-      chain.push(nodeInfo(cur));
-      cur = cur.parentElement;
-      guard += 1;
-    }
-    return chain;
-  }
-
-  function resolveFromInner(inner, route) {
-    if (!inner) return null;
-    var chain = ancestorChain(inner);
-    var idx = Core.resolveClickableAncestor(chain, route);
-    if (idx < 0) return null;
-    return chain[idx].el;
   }
 
   function collectCardClickNodes(card) {
@@ -286,18 +234,6 @@
     var idx = Core.pickRouteCardClickTarget(nodes, route);
     if (idx >= 0) return nodes[idx].el;
     return card;
-  }
-
-  function describeClickTarget(el) {
-    if (!el) {
-      return { tagName: '-', role: '-', hasHref: 'なし' };
-    }
-    var href = (el.getAttribute && (el.getAttribute('href') || el.getAttribute('data-href'))) || '';
-    return {
-      tagName: el.tagName || '-',
-      role: (el.getAttribute && el.getAttribute('role')) || '-',
-      hasHref: href ? 'あり' : 'なし'
-    };
   }
 
   function largestScroller() {
@@ -353,18 +289,6 @@
     return null;
   }
 
-  function findBackButton() {
-    var panel = document.getElementById(PANEL_ID);
-    var els = document.querySelectorAll('button, a, [role="button"]');
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (panel && panel.contains(el)) continue;
-      var label = ((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '')).replace(/\s+/g, ' ');
-      if (/戻る|back/i.test(label) && label.length < 40) return el;
-    }
-    return null;
-  }
-
   function requestCdpClick(point, cb) {
     var finished = false;
     var timer = 0;
@@ -373,7 +297,14 @@
       finished = true;
       window.removeEventListener('message', onMsg);
       if (timer) clearTimeout(timer);
-      cb(result || { ok: false, error: 'DEBUGGER', message: 'CDP失敗' });
+      cb(result || {
+        ok: false,
+        attach: 'fail',
+        mousePressed: 'fail',
+        mouseReleased: 'fail',
+        error: 'DEBUGGER',
+        message: 'CDP失敗'
+      });
     }
     function onMsg(ev) {
       if (ev.source !== window) return;
@@ -389,22 +320,38 @@
       y: point.y
     }, location.origin);
     timer = setTimeout(function () {
-      finish({ ok: false, error: 'DEBUGGER_TIMEOUT', message: 'CDP応答なし。DevToolsを閉じて再実行してください' });
+      finish({
+        ok: false,
+        attach: 'fail',
+        mousePressed: 'fail',
+        mouseReleased: 'fail',
+        error: 'DEBUGGER_TIMEOUT',
+        message: 'CDP応答なし。DevToolsを閉じて再実行してください'
+      });
     }, 8000);
   }
 
-  function clickRoute(route, done) {
+  function applyCdpStages(res) {
+    if (!pocRun || !pocRun.diagnostics) return;
+    pocRun.diagnostics.attach = (res && res.attach) || 'fail';
+    pocRun.diagnostics.mousePressed = (res && res.mousePressed) || 'fail';
+    pocRun.diagnostics.mouseReleased = (res && res.mouseReleased) || 'fail';
+  }
+
+  function clickRoute(route, runId, done) {
     var card = findRouteElement(route);
     if (!card) {
-      setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
+      if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'no';
       paint();
       done(false);
       return;
     }
+    if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'yes';
     try {
       card.scrollIntoView({ block: 'center', inline: 'center' });
     } catch (e1) {}
     function afterLayout() {
+      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
       var target = findInnerClickTarget(card, route) || card;
       var rect = null;
       try { rect = target.getBoundingClientRect(); } catch (e2) {}
@@ -413,28 +360,21 @@
         try { rect = card.getBoundingClientRect(); } catch (e3) {}
         point = Core.viewportClickPoint(rect);
       }
-      setClickDebug(describeClickTarget(target));
       if (!point) {
-        setClickDebug({ waitState: 'dom-not-found', timeoutReason: '座標なし' });
+        if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'no';
         paint();
         done(false);
         return;
       }
-      setClickDebug({ waitState: 'cdp-click', timeoutReason: '-' });
+      if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'yes';
       paint();
+      setPanelClickable(false);
       requestCdpClick(point, function (res) {
-        if (res && res.ok) {
-          setClickDebug({ waitState: 'waiting-details', timeoutReason: '-' });
-          paint();
-          done(true);
-          return;
-        }
-        setClickDebug({
-          waitState: 'cdp-error',
-          timeoutReason: (res && res.message) || 'DevToolsを閉じて再実行してください'
-        });
+        setPanelClickable(true);
+        if (!Core.pocRunIsCurrent(pocRun, runId)) return;
+        applyCdpStages(res);
         paint();
-        done(false, res);
+        done(!!(res && res.ok), res);
       });
     }
     if (typeof requestAnimationFrame === 'function') {
@@ -445,42 +385,52 @@
   }
 
   function clearTimers() {
-    if (stepTimer) { clearTimeout(stepTimer); stepTimer = 0; }
     if (waitTimer) { clearTimeout(waitTimer); waitTimer = 0; }
     if (summariesWaitTimer) { clearInterval(summariesWaitTimer); summariesWaitTimer = 0; }
   }
 
-  function stopTour() {
+  function finishPoc(failureInfo) {
+    clearTimers();
+    setPanelClickable(true);
+    sessionBusy = false;
+    if (pocRun) Core.endPocRun(pocRun, store, failureInfo || null);
+    tour.status = 'done';
+    paint();
+  }
+
+  function stopPoc() {
+    if (pocRun && !pocRun.ended) {
+      finishPoc({
+        error: Core.ERROR.NETWORK,
+        message: '手動停止'
+      });
+      return;
+    }
+    sessionBusy = false;
+    clearTimers();
     tour.status = 'stopped';
-    clearTimers();
     paint();
   }
 
-  function finishPoc() {
-    if (tour.status !== 'stopped') tour.status = 'done';
-    clearTimers();
-    paint();
-  }
-
-  function waitForOneRoute(route) {
+  function waitForOneRoute(route, runId) {
     var started = Date.now();
-    setClickDebug({ waitState: 'waiting-details', timeoutReason: '-' });
+    if (pocRun && pocRun.diagnostics && pocRun.diagnostics.details !== 'success') {
+      pocRun.diagnostics.details = '-';
+    }
     paint();
     function poll() {
-      if (tour.status !== 'running') return;
+      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
       if (route.routeId && store.detailsByRouteId[route.routeId]) {
-        setClickDebug({ waitState: 'captured', timeoutReason: '-' });
-        finishPoc();
-        saveBundle({ quiet: false });
+        pocRun.diagnostics.details = 'success';
+        finishPoc(null);
         return;
       }
       if (Date.now() - started >= tour.timeoutMs) {
-        setClickDebug({
-          waitState: 'timeout',
-          timeoutReason: 'route-details XHRなし'
+        pocRun.diagnostics.details = 'timeout';
+        finishPoc({
+          error: Core.ERROR.TIMEOUT,
+          message: 'route-details が時間内に捕捉できませんでした（XHR未検出）'
         });
-        Core.applyTourTimeout(store, tour);
-        finishPoc();
         return;
       }
       waitTimer = setTimeout(poll, 200);
@@ -490,43 +440,49 @@
 
   function beginPoc() {
     localDate = currentLocalDate();
-    Core.armTour(store, tour);
-    paint();
+    tour.routes = store.summaries ? Core.tourRoutesFromSummaries(store.summaries) : [];
+    tour.index = 0;
+    tour.status = 'idle';
     if (!store.summaries) {
-      Core.recordTourFailure(store, {}, {
+      pocRun = Core.createPocRun({});
+      finishPoc({
         error: Core.ERROR.MISSING_SUMMARIES,
         message: 'route-summaries が捕捉できません。Route一覧を開いた状態で再実行してください'
       });
-      finishPoc();
       return;
     }
     var route = Core.firstUncapturedTourRoute(store, tour);
     if (!route) {
-      finishPoc();
+      pocRun = Core.createPocRun({});
+      finishPoc(null);
       return;
     }
+    pocRun = Core.createPocRun(route);
+    var runId = pocRun.id;
     tour.status = 'running';
     tour.currentRouteId = route.routeId;
     tour.currentRouteCode = route.routeCode || '';
     Core.markRouteVisited(tour, route.routeId);
     paint();
-    clickRoute(route, function (ok, cdpRes) {
-      if (tour.status !== 'running') return;
+    clickRoute(route, runId, function (ok, cdpRes) {
+      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
       if (!ok) {
-        Core.recordTourFailure(store, route, {
+        applyCdpStages(cdpRes);
+        finishPoc({
           error: (cdpRes && cdpRes.error) || Core.ERROR.DOM_NOT_FOUND,
           message: (cdpRes && cdpRes.message) || 'RouteカードのCDPクリックに失敗しました'
         });
-        finishPoc();
         return;
       }
-      waitForOneRoute(route);
+      waitForOneRoute(route, runId);
     });
   }
 
   function start() {
     show();
-    if (tour.status === 'running') return;
+    if (sessionBusy) return;
+    if (pocRun && pocRun.active && !pocRun.ended) return;
+    sessionBusy = true;
     clearTimers();
     if (store.summaries) {
       beginPoc();
@@ -553,7 +509,6 @@
     else document.addEventListener('DOMContentLoaded', fn);
   }
 
-  installHooks();
   onReady(function () {
     localDate = currentLocalDate();
     ensurePanel();
@@ -562,7 +517,8 @@
   global.__OFK3_CORTEX_CAPTURE__ = {
     show: show,
     start: start,
-    stop: stopTour,
-    save: saveBundle
+    stop: stopPoc,
+    save: saveBundle,
+    _store: store
   };
 })(typeof window !== 'undefined' ? window : global);

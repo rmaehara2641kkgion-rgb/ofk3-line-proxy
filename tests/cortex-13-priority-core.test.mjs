@@ -488,6 +488,13 @@ function run() {
   pocStore.detailsByRouteId['R-first'] = { rmsRouteDetails: { routeId: 'R-first' } };
   var pocSecond = Core.firstUncapturedTourRoute(pocStore, pocTour);
   assert(pocSecond && pocSecond.routeId === 'R-second', 'PoC skips already captured details');
+  var pocFailStore = Core.createCaptureStore();
+  var pocOnce = Core.createPocRun({ routeId: 'R-poc', routeCode: 'DCX01' });
+  Core.endPocRun(pocOnce, pocFailStore, { error: 'TIMEOUT', message: 'route-details が時間内に捕捉できませんでした（XHR未検出）' });
+  Core.endPocRun(pocOnce, pocFailStore, { error: 'TIMEOUT', message: 'should not add a second failure' });
+  assert(pocFailStore.failures.length === 1, 'one PoC run records at most one failure');
+  assert(pocOnce.ended && pocOnce.diagnostics.runEnded === 'yes', 'PoC runEnded is yes after finish');
+  assert(!Core.pocRunIsCurrent(pocOnce, pocOnce.id), 'ended PoC run is not current');
 
   var dirtyFailStore = Core.createCaptureStore();
   Core.recordTourFailure(dirtyFailStore, { routeId: 'Rx', routeCode: 'DCX1' }, {
@@ -565,7 +572,11 @@ function run() {
   assert(runnerSrc.indexOf('devicePixelRatio') < 0 && bgSrc.indexOf('devicePixelRatio') < 0, 'no DPR correction');
   assert(runnerSrc.indexOf('synthesizeUserClick') < 0 && runnerSrc.indexOf('dispatchEvent') < 0, 'runner does not synthesize DOM events');
   assert(runnerSrc.indexOf('function step(') < 0 && runnerSrc.indexOf('beginTour') < 0, 'Phase 1 does not auto-tour all 11:00 Routes');
+  assert(runnerSrc.indexOf('nextTourRoute') < 0 && runnerSrc.indexOf('applyTourTimeout') < 0, 'Phase 1 does not advance to the next Route');
   assert(runnerSrc.indexOf('beginPoc') >= 0 && runnerSrc.indexOf('firstUncapturedTourRoute') >= 0, 'Phase 1 clicks one uncaptured summaries Route');
+  assert(runnerSrc.indexOf('sessionBusy') >= 0 && runnerSrc.indexOf('endPocRun') >= 0, 'one start() cannot overlap another PoC run');
+  assert(runnerSrc.indexOf('prev.stop') >= 0, 're-inject stops the previous MAIN-world runner');
+  assert(runnerSrc.indexOf('ofk3-poc-ended') >= 0 && runnerSrc.indexOf('mousePressed') >= 0, 'Phase 1 diagnostics are on the panel');
   assert(runnerSrc.indexOf('2899328-44') < 0 && runnerSrc.indexOf('DCX44') < 0, 'runner does not hardcode DCX44/routeId');
   assert(bgSrc.indexOf('2899328-44') < 0 && bridgeSrc.indexOf('DCX44') < 0, 'CDP path does not hardcode a Route');
   assert(runnerSrc.indexOf('pointerover') < 0 && runnerSrc.indexOf('mouseover') < 0, 'runner does not add hover events');
@@ -578,7 +589,7 @@ function run() {
   assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');
-  assert(runnerSrc.indexOf('selectElevenOClockRoutes') >= 0 || runnerSrc.indexOf('armTour') >= 0, 'runner uses core 11:00 selection');
+  assert(runnerSrc.indexOf('tourRoutesFromSummaries') >= 0 || runnerSrc.indexOf('selectElevenOClockRoutes') >= 0 || runnerSrc.indexOf('armTour') >= 0, 'runner uses core 11:00 selection');
   assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-priority-core.js'), 'utf8') === coreSrc, 'extension core matches');
   assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-capture-runner.js'), 'utf8') === runnerSrc, 'extension runner matches');
 

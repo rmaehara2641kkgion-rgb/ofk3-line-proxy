@@ -778,6 +778,51 @@
     return null;
   }
 
+  var pocRunSeq = 0;
+
+  function createPocDiagnostics(route) {
+    route = route || {};
+    return {
+      routeCode: String(route.routeCode || ''),
+      routeId: String(route.routeId || ''),
+      domFound: 'no',
+      coords: 'no',
+      attach: '-',
+      mousePressed: '-',
+      mouseReleased: '-',
+      details: '-',
+      runEnded: 'no'
+    };
+  }
+
+  function createPocRun(route) {
+    pocRunSeq += 1;
+    return {
+      id: pocRunSeq,
+      active: true,
+      ended: false,
+      failureRecorded: false,
+      route: route || null,
+      diagnostics: createPocDiagnostics(route)
+    };
+  }
+
+  function pocRunIsCurrent(run, id) {
+    return !!(run && run.active && !run.ended && run.id === id);
+  }
+
+  function endPocRun(run, store, failureInfo) {
+    if (!run || run.ended) return run;
+    run.ended = true;
+    run.active = false;
+    if (run.diagnostics) run.diagnostics.runEnded = 'yes';
+    if (failureInfo && !run.failureRecorded) {
+      run.failureRecorded = true;
+      recordTourFailure(store, run.route || {}, failureInfo);
+    }
+    return run;
+  }
+
   function applyTourTimeout(store, tour) {
     store = store || createCaptureStore();
     tour = tour || createTourState();
@@ -1081,6 +1126,10 @@
     isRouteVisited: isRouteVisited,
     nextTourRoute: nextTourRoute,
     firstUncapturedTourRoute: firstUncapturedTourRoute,
+    createPocDiagnostics: createPocDiagnostics,
+    createPocRun: createPocRun,
+    pocRunIsCurrent: pocRunIsCurrent,
+    endPocRun: endPocRun,
     applyTourTimeout: applyTourTimeout,
     cssEscapeIdent: cssEscapeIdent,
     routeCardSelector: routeCardSelector,

@@ -19,6 +19,22 @@ chrome.action.onClicked.addListener(function (tab) {
   }).catch(function () {});
 });
 
+function cdpResult(partial) {
+  var out = {
+    ok: false,
+    attach: 'fail',
+    mousePressed: 'fail',
+    mouseReleased: 'fail',
+    error: 'DEBUGGER',
+    message: 'CDP失敗'
+  };
+  var key;
+  for (key in partial) {
+    if (Object.prototype.hasOwnProperty.call(partial, key)) out[key] = partial[key];
+  }
+  return out;
+}
+
 function safeDetach(target, cb) {
   chrome.debugger.detach(target, function () {
     void chrome.runtime.lastError;
@@ -36,7 +52,14 @@ function dispatchLeftClick(target, x, y, done) {
   };
   chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', press, function () {
     if (chrome.runtime.lastError) {
-      done({ ok: false, error: 'DEBUGGER_INPUT', message: 'CDPクリックに失敗しました' });
+      done(cdpResult({
+        ok: false,
+        attach: 'success',
+        mousePressed: 'fail',
+        mouseReleased: 'fail',
+        error: 'DEBUGGER_INPUT',
+        message: 'CDPクリックに失敗しました'
+      }));
       return;
     }
     chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
@@ -47,10 +70,24 @@ function dispatchLeftClick(target, x, y, done) {
       clickCount: 1
     }, function () {
       if (chrome.runtime.lastError) {
-        done({ ok: false, error: 'DEBUGGER_INPUT', message: 'CDPクリックに失敗しました' });
+        done(cdpResult({
+          ok: false,
+          attach: 'success',
+          mousePressed: 'success',
+          mouseReleased: 'fail',
+          error: 'DEBUGGER_INPUT',
+          message: 'CDPクリックに失敗しました'
+        }));
         return;
       }
-      done({ ok: true });
+      done(cdpResult({
+        ok: true,
+        attach: 'success',
+        mousePressed: 'success',
+        mouseReleased: 'success',
+        error: '',
+        message: ''
+      }));
     });
   });
 }
@@ -61,17 +98,24 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   var x = Number(msg.x);
   var y = Number(msg.y);
   if (!tabId || !isFinite(x) || !isFinite(y)) {
-    sendResponse({ ok: false, error: 'CLICK_COORD', message: 'クリック座標がありません' });
+    sendResponse(cdpResult({
+      ok: false,
+      error: 'CLICK_COORD',
+      message: 'クリック座標がありません'
+    }));
     return;
   }
   var target = { tabId: tabId };
   chrome.debugger.attach(target, '1.3', function () {
     if (chrome.runtime.lastError) {
-      sendResponse({
+      sendResponse(cdpResult({
         ok: false,
+        attach: 'fail',
+        mousePressed: 'fail',
+        mouseReleased: 'fail',
         error: 'DEBUGGER_ATTACH',
         message: 'DevToolsを閉じて再実行してください'
-      });
+      }));
       return;
     }
     try {
@@ -82,7 +126,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       });
     } catch (e) {
       safeDetach(target, function () {
-        sendResponse({ ok: false, error: 'DEBUGGER', message: 'CDP失敗' });
+        sendResponse(cdpResult({
+          ok: false,
+          attach: 'success',
+          error: 'DEBUGGER',
+          message: 'CDP失敗'
+        }));
       });
     }
   });
