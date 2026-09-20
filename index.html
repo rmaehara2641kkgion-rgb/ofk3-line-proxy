@@ -15082,6 +15082,10 @@ var driverDB = {
 
     async function twShowMap() {
       try {
+        if (window.OFK3DeliveryMap && typeof window.OFK3DeliveryMap.open === 'function') {
+          window.OFK3DeliveryMap.open('allTimeWindow');
+          return;
+        }
         if (twExtractedData.length === 0) {
           alert('先に抽出を実行してください');
           return;
@@ -21176,5 +21180,17 @@ var driverDB = {
   <script src="/cortex-13-priority-core.js?v=20260918-5"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
   <script src="/ofk3-cortex-priority-ui.js?v=20260921-1"></script>
+  <div id="ofk3-delivery-map-overlay" style="display:none;position:fixed;right:14px;bottom:14px;z-index:99998;width:min(920px,calc(100vw - 20px));max-height:80vh;overflow:auto;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:12px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.22);">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <b>配送MAP</b>
+      <button type="button" id="ofk3-dmap-btn-priority" data-dmap-mode="priority" class="px-3 py-1.5 rounded-lg text-xs font-bold">🔴 13:00必達</button>
+      <button type="button" id="ofk3-dmap-btn-all" data-dmap-mode="allTimeWindow" class="px-3 py-1.5 rounded-lg text-xs font-bold">🔵 全時間指定</button>
+      <button type="button" data-dmap="close" style="margin-left:auto" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-200">閉じる</button>
+    </div>
+    <p id="ofk3-dmap-status" class="text-xs text-ink-lighter mb-2"></p>
+    <div id="ofk3-dmap-legend" class="flex flex-wrap gap-1 mb-2"></div>
+    <div id="ofk3-dmap-canvas" style="height:min(430px,55vh);border:1px solid #d1d5db;border-radius:8px;"></div>
+  </div>
+  <script src="/ofk3-delivery-map.js?v=20260921-2"></script>
 </body>
 </html>

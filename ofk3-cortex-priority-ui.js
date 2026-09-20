@@ -379,6 +379,10 @@
 
   function openMap() {
     try {
+      if (window.OFK3DeliveryMap && typeof window.OFK3DeliveryMap.open === 'function') {
+        window.OFK3DeliveryMap.open('priority');
+        return;
+      }
       if (!state.entry) {
         alert('Cortex 13:00データがありません');
         return;
@@ -412,7 +416,10 @@
     onTab: onTab,
     renderCortexPriorityDashboard: renderCortexPriorityDashboard,
     renderDashboardCard: renderCortexPriorityDashboard,
-    renderTimeWindowPanel: renderTimeWindowPanel
+    renderTimeWindowPanel: renderTimeWindowPanel,
+    getStops: function () { return state.stops || []; },
+    getEntry: function () { return state.entry; },
+    ensureStopCoords: geocodeStop
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
