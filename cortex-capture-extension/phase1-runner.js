@@ -675,12 +675,16 @@
   }
 
   function runNextRoute() {
+    pushWheelTrace('runNext/entry', null);
+    paint();
     if (stopRequested || !sessionBusy) {
       tour.status = 'stopped';
       paint();
       return;
     }
     var remaining = firstPendingTourRoute();
+    pushWheelTrace('runNext/pending', null);
+    paint();
     if (!remaining) {
       sessionBusy = false;
       tour.status = 'done';
@@ -692,8 +696,20 @@
       return;
     }
 
+    pushWheelTrace('visible/before', null);
     var visible = visibleTargetRoute();
+    pushWheelTrace('visible/after=' + (visible ? 'yes' : 'no'), null);
+    paint();
     if (!visible) {
+      sessionBusy = false;
+      tour.status = 'done';
+      pocRun = Core.createPocRun(remaining);
+      finishPoc({
+        error: Core.ERROR.DOM_NOT_FOUND,
+        message: '診断停止: wheel送信前。Wheel履歴の start→runNext→visible でDOM消失地点を確認してください'
+      });
+      return;
+
       if (!tour.wheelDirection) tour.wheelDirection = 'up';
       tour.wheelAttempts = (tour.wheelAttempts || 0) + 1;
       if (tour.wheelDirection === 'up' && tour.wheelAttempts > 12) {
