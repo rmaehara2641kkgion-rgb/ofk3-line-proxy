@@ -182,6 +182,6 @@
   }
   function open(mode){ensure();state.mode=mode||'time';var r=document.getElementById(ID);r.style.display='block';render();load();}
   window.OFK3Cortex13={open:open,load:load,exportCsv:exportCsv};
-  function boot(){hideLegacyCortexBlock();syncTimeWindowTab();syncDashboard();new MutationObserver(function(){hideLegacyCortexBlock();syncTimeWindowTab();syncDashboard();}).observe(document.body,{childList:true,subtree:true});}
+  function boot(){hideLegacyCortexBlock();syncTimeWindowTab();syncDashboard();}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();
