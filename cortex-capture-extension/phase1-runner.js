@@ -21,6 +21,7 @@
   var pocRun = null;
   var sessionBusy = false;
   var stopRequested = false;
+  var wheelTrace = [];
   var localDate = '';
   var waitTimer = 0;
   var summariesWaitTimer = 0;
@@ -135,6 +136,25 @@
     return found.length ? found.join(', ') : '0件';
   }
 
+  function domRouteStats() {
+    var raw = [];
+    var nodes = document.querySelectorAll('[class*="route-"]');
+    for (var i = 0; i < nodes.length && raw.length < 4; i++) {
+      if (inPanel(nodes[i])) continue;
+      var cls = String(nodes[i].className || '');
+      var m = cls.match(/route-([^\\s]+)/);
+      if (m) raw.push(m[1]);
+    }
+    return { count: nodes.length, sample: raw.join(',') || '-' };
+  }
+
+  function pushWheelTrace(label, point) {
+    var s = domRouteStats();
+    var xy = point ? Math.round(point.x) + ',' + Math.round(point.y) : '-';
+    wheelTrace.push(label + ':DOM=' + s.count + '[' + s.sample + ']@' + xy);
+    if (wheelTrace.length > 60) wheelTrace.shift();
+  }
+
   function paint() {
     var d = diag();
     var box = document.getElementById(PANEL_ID);
@@ -150,6 +170,7 @@
     setText('ofk3-poc-ended', d.runEnded || 'no');
     setText('ofk3-poc-error', d.message || d.error || '-');
     setText('ofk3-poc-domroutes', domRouteSnapshot());
+    setText('ofk3-poc-wheeltrace', wheelTrace.length ? wheelTrace.slice(-16).join(' | ') : '-');
   }
 
   function setPanelClickable(on) {
@@ -184,7 +205,8 @@
       '<div>Route詳細捕捉: <span id="ofk3-poc-details">-</span></div>' +
       '<div>run終了: <span id="ofk3-poc-ended">no</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
-      '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>';
+      '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>' +
+      '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
@@ -681,7 +703,11 @@
       }
       var point = routeViewportPoint();
       var deltaY = tour.wheelDirection === 'up' ? -720 : 520;
+      pushWheelTrace((tour.wheelDirection || '?') + '#' + tour.wheelAttempts + '/before', point);
+      paint();
       requestCdpWheel(point, deltaY, function (res) {
+        pushWheelTrace((tour.wheelDirection || '?') + '#' + tour.wheelAttempts + '/after=' + ((res && res.ok) ? 'ok' : 'fail'), point);
+        paint();
         if (stopRequested || !sessionBusy) return;
         if (!res || !res.ok) {
           sessionBusy = false;
@@ -779,6 +805,8 @@
     tour.visitedRouteIds = {};
     tour.wheelAttempts = 0;
     tour.wheelDirection = 'up';
+    wheelTrace = [];
+    pushWheelTrace('start', null);
     if (!store.summaries) {
       pocRun = Core.createPocRun({});
       finishPoc({
