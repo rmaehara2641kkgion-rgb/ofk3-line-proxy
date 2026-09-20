@@ -883,9 +883,26 @@
       }
       if (Date.now() - started >= tour.timeoutMs) {
         pocRun.diagnostics.details = 'timeout';
+        var key = String(route.routeId || route.routeCode || '');
+        tour.retryCounts = tour.retryCounts || {};
+        var retries = Number(tour.retryCounts[key] || 0);
+        if (retries < 2) {
+          tour.retryCounts[key] = retries + 1;
+          // Allow this route to be selected again after returning to the list.
+          if (tour.visitedRouteIds && route.routeId) delete tour.visitedRouteIds[route.routeId];
+          pushWheelTrace('retry#' + (retries + 1) + ':' + (route.routeCode || route.routeId || '?'), null);
+          if (pocRun && pocRun.diagnostics) {
+            pocRun.diagnostics.message = 'route-details timeout。自動再試行 ' + (retries + 1) + '/2';
+          }
+          restoreRouteListThenContinue(route, {
+            error: Core.ERROR.TIMEOUT,
+            message: 'route-details timeout。自動再試行 ' + (retries + 1) + '/2'
+          });
+          return;
+        }
         finishCurrentAndContinue({
           error: Core.ERROR.TIMEOUT,
-          message: 'route-details が時間内に捕捉できませんでした（XHR未検出）'
+          message: 'route-details が3回とも捕捉できませんでした（初回＋再試行2回）'
         });
         return;
       }
@@ -902,6 +919,7 @@
     tour.visitedRouteIds = {};
     tour.wheelAttempts = 0;
     tour.wheelDirection = 'up';
+    tour.retryCounts = {};
     wheelTrace = [];
     wheelTraceEarly = [];
     lastRoutePoint = null;
