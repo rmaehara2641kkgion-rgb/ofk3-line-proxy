@@ -311,29 +311,24 @@
     return best;
   }
 
-  function findRouteElement(route) {
-    var preferred = collectPreferredLinks(document);
-    var idx = Core.pickRouteClickCandidate(preferred, route);
-    if (idx >= 0) return preferred[idx].el;
-
-    var controls = collectClickableControls(document);
-    idx = Core.pickRouteClickCandidate(controls, route);
-    if (idx >= 0) return controls[idx].el;
-
-    var inners = document.querySelectorAll('a, button, tr, [role="row"], [role="link"], [role="button"], td, span, div, li');
-    var resolved = [];
-    for (var i = 0; i < inners.length; i++) {
-      var el = inners[i];
-      if (inPanel(el)) continue;
-      var text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!(text === route.routeCode || Core.textHasRouteCode(text, route.routeCode))) continue;
-      if (text.length > 120) continue;
-      var found = resolveFromInner(el, route);
-      if (found) resolved.push(nodeInfo(found));
+  function findRouteCardByRouteId(routeId) {
+    if (!routeId) return null;
+    var sel = Core.routeCardSelector(routeId);
+    var el = null;
+    try { el = document.querySelector(sel); } catch (e1) {}
+    if (el && !inPanel(el)) return el;
+    var nodes = document.querySelectorAll('[class*="route-"]');
+    for (var i = 0; i < nodes.length; i++) {
+      if (inPanel(nodes[i])) continue;
+      if (Core.classListHasRouteCard(nodes[i].className, routeId)) return nodes[i];
     }
-    idx = Core.pickRouteClickCandidate(resolved, route);
-    if (idx >= 0) return resolved[idx].el;
+    return null;
+  }
 
+  function findRouteElement(route) {
+    route = route || {};
+    var el = findRouteCardByRouteId(route.routeId);
+    if (el) return el;
     var scroller = largestScroller();
     if (!scroller) return null;
     var y = 0;
@@ -341,9 +336,8 @@
     var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.7));
     while (y <= scroller.scrollHeight && guard < 40) {
       scroller.scrollTop = y;
-      preferred = collectPreferredLinks(document);
-      idx = Core.pickRouteClickCandidate(preferred, route);
-      if (idx >= 0) return preferred[idx].el;
+      el = findRouteCardByRouteId(route.routeId);
+      if (el) return el;
       y += stepPx;
       guard += 1;
     }

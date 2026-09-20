@@ -457,6 +457,18 @@ function run() {
   assert(tourBundle.selectedRouteCount === 3, 'bundle selectedRouteCount from 11:00 routes');
   assert(tourBundle.details.length === 2 && tourBundle.failures.length === 1, 'bundle keeps successes and failure');
 
+  Core.armTour(tourStore, tour);
+  assert(Core.nextTourRoute(tourStore, tour) == null, 'rerun skips visited routeIds');
+  Core.recordTourFailure(tourStore, { routeId: 'R2', routeCode: 'DCX47' }, {
+    error: 'TIMEOUT',
+    message: 'route-details が時間内に捕捉できませんでした（XHR未検出）'
+  });
+  assert(tourStore.failures.length === 1, 'same routeId failure is not stacked');
+
+  assert(Core.routeCardSelector('2899328-44') === '.route-2899328-44', 'route card selector from routeId');
+  assert(Core.classListHasRouteCard('css-1yz1a18 route-2899328-44 hover', '2899328-44'), 'exact route class token');
+  assert(!Core.classListHasRouteCard('css-1yz1a18 route-2899328-440 hover', '2899328-44'), 'does not match longer route class');
+
   var dirtyFailStore = Core.createCaptureStore();
   Core.recordTourFailure(dirtyFailStore, { routeId: 'Rx', routeCode: 'DCX1' }, {
     error: 'TIMEOUT',
@@ -524,9 +536,8 @@ function run() {
   assertNoDirectFetch(glueSrc, 'glue');
   assertNoDirectFetch(bgSrc, 'extension background');
   assert(runnerSrc.indexOf('origFetch.apply') >= 0, 'runner wraps SPA fetch only');
-  assert(runnerSrc.indexOf('/operations/execution/dv/routes/') >= 0, 'runner prefers Cortex route UI href');
-  assert(runnerSrc.indexOf('resolveClickableAncestor') >= 0, 'runner walks to clickable ancestor');
-  assert(runnerSrc.indexOf('synthesizeUserClick') >= 0, 'runner synthesizes UI click on ancestor');
+  assert(runnerSrc.indexOf('routeCardSelector') >= 0 && runnerSrc.indexOf('findRouteCardByRouteId') >= 0, 'runner selects .route-{routeId} card');
+  assert(runnerSrc.indexOf('querySelector') >= 0, 'runner queries route card class');
   assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');

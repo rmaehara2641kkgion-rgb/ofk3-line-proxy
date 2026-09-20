@@ -658,7 +658,8 @@
       currentRouteId: '',
       currentRouteCode: '',
       timeoutMs: opts.timeoutMs > 0 ? Number(opts.timeoutMs) : 15000,
-      waitingSince: 0
+      waitingSince: 0,
+      visitedRouteIds: {}
     };
   }
 
@@ -670,11 +671,13 @@
 
   function armTour(store, tour) {
     tour = tour || createTourState();
+    var visited = tour.visitedRouteIds || {};
     var routes = (store && store.summaries) ? tourRoutesFromSummaries(store.summaries) : [];
     tour.routes = routes;
     tour.index = 0;
     tour.currentRouteId = '';
     tour.currentRouteCode = '';
+    tour.visitedRouteIds = visited;
     if (!store || !store.summaries) tour.status = 'idle';
     else tour.status = routes.length ? 'running' : 'done';
     return tour;
@@ -705,13 +708,33 @@
     if (!store) store = createCaptureStore();
     route = route || {};
     info = info || {};
+    var routeId = route.routeId || '';
+    if (routeId) {
+      var dup = false;
+      (store.failures || []).forEach(function (f) {
+        if (f && f.routeId === routeId) dup = true;
+      });
+      if (dup) return store;
+    }
     store.failures.push(sanitizeCapturedJson({
-      routeId: route.routeId || '',
+      routeId: routeId,
       routeCode: route.routeCode || '',
       error: info.error || ERROR.NETWORK,
       message: String(info.message || info.error || '取得失敗')
     }));
     return store;
+  }
+
+  function markRouteVisited(tour, routeId) {
+    tour = tour || createTourState();
+    if (!tour.visitedRouteIds) tour.visitedRouteIds = {};
+    if (routeId) tour.visitedRouteIds[String(routeId)] = true;
+    return tour;
+  }
+
+  function isRouteVisited(tour, routeId) {
+    if (!tour || !tour.visitedRouteIds || !routeId) return false;
+    return !!tour.visitedRouteIds[String(routeId)];
   }
 
   function nextTourRoute(store, tour) {
@@ -722,13 +745,15 @@
     var i = tour.index || 0;
     while (i < routes.length) {
       var r = routes[i];
-      if (r && r.routeId && store.detailsByRouteId[r.routeId]) {
+      var id = r && r.routeId;
+      if (id && (store.detailsByRouteId[id] || isRouteVisited(tour, id))) {
         i += 1;
         continue;
       }
       tour.index = i;
-      tour.currentRouteId = r ? (r.routeId || '') : '';
+      tour.currentRouteId = id || '';
       tour.currentRouteCode = r ? (r.routeCode || '') : '';
+      markRouteVisited(tour, id);
       return r || null;
     }
     tour.index = routes.length;
@@ -750,6 +775,30 @@
     });
     tour.index += 1;
     return store;
+  }
+
+  function cssEscapeIdent(value) {
+    var s = String(value == null ? '' : value);
+    try {
+      if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s);
+    } catch (e) {}
+    return s.replace(/[^a-zA-Z0-9_-]/g, function (ch) {
+      return '\\' + ch;
+    });
+  }
+
+  function routeCardSelector(routeId) {
+    return '.route-' + cssEscapeIdent(String(routeId || ''));
+  }
+
+  function classListHasRouteCard(className, routeId) {
+    var token = 'route-' + String(routeId || '');
+    if (!routeId || token === 'route-') return false;
+    var parts = String(className || '').split(/\s+/);
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === token) return true;
+    }
+    return false;
   }
 
   function escapeRegExp(s) {
@@ -984,8 +1033,13 @@
     armTour: armTour,
     tourProgress: tourProgress,
     recordTourFailure: recordTourFailure,
+    markRouteVisited: markRouteVisited,
+    isRouteVisited: isRouteVisited,
     nextTourRoute: nextTourRoute,
     applyTourTimeout: applyTourTimeout,
+    cssEscapeIdent: cssEscapeIdent,
+    routeCardSelector: routeCardSelector,
+    classListHasRouteCard: classListHasRouteCard,
     textHasRouteCode: textHasRouteCode,
     isPreferredRouteHref: isPreferredRouteHref,
     hrefMatchesRoute: hrefMatchesRoute,
