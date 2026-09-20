@@ -474,7 +474,20 @@ function run() {
     { tag: 'span', title: '', text: 'DCX44' }
   ], { routeId: '2899328-44', routeCode: 'DCX44' });
   assert(innerPick === 2, 'click target is titled route span, not the card div, got ' + innerPick);
-  assert(Core.ROUTE_CARD_CLICK_EVENTS.join(',') === 'pointerdown,mousedown,pointerup,mouseup,click', 'bubbling click sequence only');
+  var vp = Core.viewportClickPoint({ left: 10, top: 20, width: 100, height: 40 });
+  assert(vp && vp.x === 60 && vp.y === 40, 'viewport click uses CSS-pixel rect center, no DPR');
+  assert(Core.viewportClickPoint({ left: 0, top: 0, width: 0, height: 10 }) == null, 'zero-width rect is not clickable');
+  var pocTour = Core.createTourState();
+  pocTour.routes = [
+    { routeId: 'R-first', routeCode: 'DCX01' },
+    { routeId: 'R-second', routeCode: 'DCX02' }
+  ];
+  var pocStore = Core.createCaptureStore();
+  var pocFirst = Core.firstUncapturedTourRoute(pocStore, pocTour);
+  assert(pocFirst && pocFirst.routeId === 'R-first' && pocTour.index === 0, 'PoC selects first summaries Route, not a hardcoded routeId');
+  pocStore.detailsByRouteId['R-first'] = { rmsRouteDetails: { routeId: 'R-first' } };
+  var pocSecond = Core.firstUncapturedTourRoute(pocStore, pocTour);
+  assert(pocSecond && pocSecond.routeId === 'R-second', 'PoC skips already captured details');
 
   var dirtyFailStore = Core.createCaptureStore();
   Core.recordTourFailure(dirtyFailStore, { routeId: 'Rx', routeCode: 'DCX1' }, {
@@ -527,6 +540,8 @@ function run() {
   var runnerSrc = readFileSync(join(__dirname, '..', 'cortex-13-capture-runner.js'), 'utf8');
   var coreSrc = readFileSync(join(__dirname, '..', 'cortex-13-priority-core.js'), 'utf8');
   var bgSrc = readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'background.js'), 'utf8');
+  var bridgeSrc = readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'bridge.js'), 'utf8');
+  var manifest = JSON.parse(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'manifest.json'), 'utf8'));
   var glueSrc = readFileSync(join(__dirname, '..', 'cortex-13-priority.js'), 'utf8');
   function assertNoDirectFetch(text, name) {
     assert(!/fetch\s*\(\s*['"`][^'"`]*\/operations\/execution\/api\//.test(text), name + ' no Cortex API fetch URL');
@@ -542,11 +557,24 @@ function run() {
   assertNoDirectFetch(coreSrc, 'core');
   assertNoDirectFetch(glueSrc, 'glue');
   assertNoDirectFetch(bgSrc, 'extension background');
+  assertNoDirectFetch(bridgeSrc, 'extension bridge');
   assert(runnerSrc.indexOf('origFetch.apply') >= 0, 'runner wraps SPA fetch only');
   assert(runnerSrc.indexOf('findRouteCardByRouteId') >= 0, 'runner still finds .route-{routeId} card');
-  assert(runnerSrc.indexOf('findInnerClickTarget') >= 0, 'runner clicks inner route title/span');
+  assert(runnerSrc.indexOf('findInnerClickTarget') >= 0, 'runner uses inner route title/span for coordinates');
+  assert(runnerSrc.indexOf('scrollIntoView') >= 0 && runnerSrc.indexOf('viewportClickPoint') >= 0, 'runner scrolls then posts CSS-pixel coordinates');
+  assert(runnerSrc.indexOf('devicePixelRatio') < 0 && bgSrc.indexOf('devicePixelRatio') < 0, 'no DPR correction');
+  assert(runnerSrc.indexOf('synthesizeUserClick') < 0 && runnerSrc.indexOf('dispatchEvent') < 0, 'runner does not synthesize DOM events');
+  assert(runnerSrc.indexOf('function step(') < 0 && runnerSrc.indexOf('beginTour') < 0, 'Phase 1 does not auto-tour all 11:00 Routes');
+  assert(runnerSrc.indexOf('beginPoc') >= 0 && runnerSrc.indexOf('firstUncapturedTourRoute') >= 0, 'Phase 1 clicks one uncaptured summaries Route');
+  assert(runnerSrc.indexOf('2899328-44') < 0 && runnerSrc.indexOf('DCX44') < 0, 'runner does not hardcode DCX44/routeId');
+  assert(bgSrc.indexOf('2899328-44') < 0 && bridgeSrc.indexOf('DCX44') < 0, 'CDP path does not hardcode a Route');
   assert(runnerSrc.indexOf('pointerover') < 0 && runnerSrc.indexOf('mouseover') < 0, 'runner does not add hover events');
-  assert(runnerSrc.indexOf('typeof window') >= 0 && runnerSrc.indexOf('bubbles: true') >= 0, 'runner bubbles with window view');
+  assert(Array.isArray(manifest.permissions) && manifest.permissions.indexOf('debugger') >= 0, 'manifest has debugger permission');
+  assert(manifest.content_scripts.some(function (cs) { return cs.world === 'ISOLATED' && (cs.js || []).indexOf('bridge.js') >= 0; }), 'isolated bridge content script');
+  assert(bgSrc.indexOf('chrome.debugger.attach') >= 0 && bgSrc.indexOf('chrome.debugger.detach') >= 0, 'background attach/detach');
+  assert(bgSrc.indexOf('Input.dispatchMouseEvent') >= 0, 'background uses CDP mouse input');
+  assert(bgSrc.indexOf("type: 'mousePressed'") >= 0 && bgSrc.indexOf("type: 'mouseReleased'") >= 0, 'left click press/release only');
+  assert(bgSrc.indexOf('safeDetach') >= 0, 'debugger session is detached after click');
   assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');

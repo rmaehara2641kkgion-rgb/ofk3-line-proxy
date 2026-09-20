@@ -144,7 +144,7 @@
     box = document.createElement('div');
     box.id = PANEL_ID;
     box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:280px;');
-    box.innerHTML = '<b>OFK3 Cortex取得</b>' +
+    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">CDP 1 Route</span>' +
       '<div>summaries: <span id="ofk3-cortex-sum">未捕捉</span></div>' +
       '<div>11時Route: <span id="ofk3-cortex-eleven">0</span></div>' +
       '<div>details: <span id="ofk3-cortex-det">0 / 0</span></div>' +
@@ -300,30 +300,6 @@
     };
   }
 
-  function synthesizeUserClick(el) {
-    if (!el) return;
-    var view = typeof window !== 'undefined' ? window : global;
-    var opts = { bubbles: true, cancelable: true, view: view, buttons: 1 };
-    try { el.scrollIntoView({ block: 'center' }); } catch (e1) {}
-    try {
-      var rect = el.getBoundingClientRect && el.getBoundingClientRect();
-      if (rect && rect.width > 0 && rect.height > 0) {
-        opts.clientX = Math.floor(rect.left + rect.width / 2);
-        opts.clientY = Math.floor(rect.top + rect.height / 2);
-        opts.screenX = opts.clientX;
-        opts.screenY = opts.clientY;
-      }
-    } catch (e2) {}
-    var types = Core.ROUTE_CARD_CLICK_EVENTS || ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-    for (var i = 0; i < types.length; i++) {
-      var type = types[i];
-      try {
-        var Ctor = (type.indexOf('pointer') === 0 && typeof PointerEvent === 'function') ? PointerEvent : MouseEvent;
-        el.dispatchEvent(new Ctor(type, opts));
-      } catch (e3) {}
-    }
-  }
-
   function largestScroller() {
     var best = document.scrollingElement || document.documentElement;
     var bestSize = 0;
@@ -389,42 +365,83 @@
     return null;
   }
 
+  function requestCdpClick(point, cb) {
+    var finished = false;
+    var timer = 0;
+    function finish(result) {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('message', onMsg);
+      if (timer) clearTimeout(timer);
+      cb(result || { ok: false, error: 'DEBUGGER', message: 'CDP失敗' });
+    }
+    function onMsg(ev) {
+      if (ev.source !== window) return;
+      var data = ev.data;
+      if (!data || data.source !== 'OFK3_CORTEX' || data.type !== 'cdp-click-result') return;
+      finish(data);
+    }
+    window.addEventListener('message', onMsg);
+    window.postMessage({
+      source: 'OFK3_CORTEX',
+      type: 'cdp-click',
+      x: point.x,
+      y: point.y
+    }, location.origin);
+    timer = setTimeout(function () {
+      finish({ ok: false, error: 'DEBUGGER_TIMEOUT', message: 'CDP応答なし。DevToolsを閉じて再実行してください' });
+    }, 8000);
+  }
+
   function clickRoute(route, done) {
     var card = findRouteElement(route);
-    if (card) {
+    if (!card) {
+      setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
+      paint();
+      done(false);
+      return;
+    }
+    try {
+      card.scrollIntoView({ block: 'center', inline: 'center' });
+    } catch (e1) {}
+    function afterLayout() {
       var target = findInnerClickTarget(card, route) || card;
+      var rect = null;
+      try { rect = target.getBoundingClientRect(); } catch (e2) {}
+      var point = Core.viewportClickPoint(rect);
+      if (!point) {
+        try { rect = card.getBoundingClientRect(); } catch (e3) {}
+        point = Core.viewportClickPoint(rect);
+      }
       setClickDebug(describeClickTarget(target));
-      setClickDebug({ waitState: 'click', timeoutReason: '-' });
+      if (!point) {
+        setClickDebug({ waitState: 'dom-not-found', timeoutReason: '座標なし' });
+        paint();
+        done(false);
+        return;
+      }
+      setClickDebug({ waitState: 'cdp-click', timeoutReason: '-' });
       paint();
-      synthesizeUserClick(target);
-      done(true);
-      return;
-    }
-    var back = findBackButton();
-    if (back) {
-      setClickDebug({ waitState: 'back', tagName: back.tagName || '-', role: (back.getAttribute && back.getAttribute('role')) || '-', hasHref: 'なし' });
-      paint();
-      synthesizeUserClick(back);
-      waitTimer = setTimeout(function () {
-        var card2 = findRouteElement(route);
-        if (card2) {
-          var target2 = findInnerClickTarget(card2, route) || card2;
-          setClickDebug(describeClickTarget(target2));
-          setClickDebug({ waitState: 'click', timeoutReason: '-' });
+      requestCdpClick(point, function (res) {
+        if (res && res.ok) {
+          setClickDebug({ waitState: 'waiting-details', timeoutReason: '-' });
           paint();
-          synthesizeUserClick(target2);
           done(true);
-        } else {
-          setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
-          paint();
-          done(false);
+          return;
         }
-      }, 600);
-      return;
+        setClickDebug({
+          waitState: 'cdp-error',
+          timeoutReason: (res && res.message) || 'DevToolsを閉じて再実行してください'
+        });
+        paint();
+        done(false, res);
+      });
     }
-    setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
-    paint();
-    done(false);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () { requestAnimationFrame(afterLayout); });
+    } else {
+      waitTimer = setTimeout(afterLayout, 50);
+    }
   }
 
   function clearTimers() {
@@ -439,16 +456,13 @@
     paint();
   }
 
-  function finishTour() {
+  function finishPoc() {
     if (tour.status !== 'stopped') tour.status = 'done';
-    tour.currentRouteCode = '';
-    tour.currentRouteId = '';
     clearTimers();
     paint();
-    saveBundle({ quiet: false });
   }
 
-  function waitForDetails(route) {
+  function waitForOneRoute(route) {
     var started = Date.now();
     setClickDebug({ waitState: 'waiting-details', timeoutReason: '-' });
     paint();
@@ -456,9 +470,8 @@
       if (tour.status !== 'running') return;
       if (route.routeId && store.detailsByRouteId[route.routeId]) {
         setClickDebug({ waitState: 'captured', timeoutReason: '-' });
-        paint();
-        tour.index += 1;
-        stepTimer = setTimeout(step, 400);
+        finishPoc();
+        saveBundle({ quiet: false });
         return;
       }
       if (Date.now() - started >= tour.timeoutMs) {
@@ -467,8 +480,7 @@
           timeoutReason: 'route-details XHRなし'
         });
         Core.applyTourTimeout(store, tour);
-        paint();
-        stepTimer = setTimeout(step, 400);
+        finishPoc();
         return;
       }
       waitTimer = setTimeout(poll, 200);
@@ -476,46 +488,40 @@
     poll();
   }
 
-  function step() {
-    if (tour.status !== 'running') return;
-    var route = Core.nextTourRoute(store, tour);
-    paint();
-    if (!route) {
-      finishTour();
-      return;
-    }
-    clickRoute(route, function (ok) {
-      if (tour.status !== 'running') return;
-      if (!ok) {
-        setClickDebug({ waitState: 'dom-not-found', timeoutReason: '-' });
-        Core.recordTourFailure(store, route, {
-          error: Core.ERROR.DOM_NOT_FOUND,
-          message: '一覧に Route のクリック対象リンク/行が見つかりませんでした'
-        });
-        tour.index += 1;
-        paint();
-        stepTimer = setTimeout(step, 400);
-        return;
-      }
-      waitForDetails(route);
-    });
-  }
-
-  function beginTour() {
+  function beginPoc() {
     localDate = currentLocalDate();
     Core.armTour(store, tour);
     paint();
-    if (tour.status !== 'running') {
-      if (!store.summaries) {
-        Core.recordTourFailure(store, {}, {
-          error: Core.ERROR.MISSING_SUMMARIES,
-          message: 'route-summaries が捕捉できません。Route一覧を開いた状態で再実行してください'
-        });
-      }
-      finishTour();
+    if (!store.summaries) {
+      Core.recordTourFailure(store, {}, {
+        error: Core.ERROR.MISSING_SUMMARIES,
+        message: 'route-summaries が捕捉できません。Route一覧を開いた状態で再実行してください'
+      });
+      finishPoc();
       return;
     }
-    step();
+    var route = Core.firstUncapturedTourRoute(store, tour);
+    if (!route) {
+      finishPoc();
+      return;
+    }
+    tour.status = 'running';
+    tour.currentRouteId = route.routeId;
+    tour.currentRouteCode = route.routeCode || '';
+    Core.markRouteVisited(tour, route.routeId);
+    paint();
+    clickRoute(route, function (ok, cdpRes) {
+      if (tour.status !== 'running') return;
+      if (!ok) {
+        Core.recordTourFailure(store, route, {
+          error: (cdpRes && cdpRes.error) || Core.ERROR.DOM_NOT_FOUND,
+          message: (cdpRes && cdpRes.message) || 'RouteカードのCDPクリックに失敗しました'
+        });
+        finishPoc();
+        return;
+      }
+      waitForOneRoute(route);
+    });
   }
 
   function start() {
@@ -523,7 +529,7 @@
     if (tour.status === 'running') return;
     clearTimers();
     if (store.summaries) {
-      beginTour();
+      beginPoc();
       return;
     }
     var waited = 0;
@@ -533,11 +539,11 @@
       if (store.summaries) {
         clearInterval(summariesWaitTimer);
         summariesWaitTimer = 0;
-        beginTour();
+        beginPoc();
       } else if (waited >= 10000) {
         clearInterval(summariesWaitTimer);
         summariesWaitTimer = 0;
-        beginTour();
+        beginPoc();
       }
     }, 250);
   }

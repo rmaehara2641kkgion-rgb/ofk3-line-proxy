@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "OFK3 Cortex Capture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Capture Cortex SPA route JSON locally. Does not read cookies or send data.",
   "action": {
     "default_title": "OFK3取得"
   },
-  "permissions": ["scripting", "activeTab"],
+  "permissions": ["scripting", "activeTab", "debugger"],
   "host_permissions": [
     "https://logistics.amazon.co.jp/*",
     "https://logistics.amazon.com/*"
@@ -23,6 +23,15 @@
       "js": ["cortex-13-priority-core.js", "cortex-13-capture-runner.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://logistics.amazon.co.jp/*",
+        "https://logistics.amazon.com/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
     }
   ]
 }

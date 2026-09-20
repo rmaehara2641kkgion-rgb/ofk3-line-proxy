@@ -763,6 +763,21 @@
     return null;
   }
 
+  function firstUncapturedTourRoute(store, tour) {
+    store = store || createCaptureStore();
+    tour = tour || createTourState();
+    var routes = tour.routes || [];
+    for (var i = 0; i < routes.length; i++) {
+      var r = routes[i];
+      var id = r && r.routeId;
+      if (!id) continue;
+      if (store.detailsByRouteId[id]) continue;
+      tour.index = i;
+      return r;
+    }
+    return null;
+  }
+
   function applyTourTimeout(store, tour) {
     store = store || createCaptureStore();
     tour = tour || createTourState();
@@ -802,6 +817,16 @@
   }
 
   var ROUTE_CARD_CLICK_EVENTS = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+
+  function viewportClickPoint(rect) {
+    if (!rect) return null;
+    var left = Number(rect.left);
+    var top = Number(rect.top);
+    var w = Number(rect.width);
+    var h = Number(rect.height);
+    if (!isFinite(left) || !isFinite(top) || !(w > 0) || !(h > 0)) return null;
+    return { x: left + (w / 2), y: top + (h / 2) };
+  }
 
   function pickRouteCardClickTarget(nodes, route) {
     nodes = nodes || [];
@@ -1055,11 +1080,13 @@
     markRouteVisited: markRouteVisited,
     isRouteVisited: isRouteVisited,
     nextTourRoute: nextTourRoute,
+    firstUncapturedTourRoute: firstUncapturedTourRoute,
     applyTourTimeout: applyTourTimeout,
     cssEscapeIdent: cssEscapeIdent,
     routeCardSelector: routeCardSelector,
     classListHasRouteCard: classListHasRouteCard,
     ROUTE_CARD_CLICK_EVENTS: ROUTE_CARD_CLICK_EVENTS,
+    viewportClickPoint: viewportClickPoint,
     pickRouteCardClickTarget: pickRouteCardClickTarget,
     textHasRouteCode: textHasRouteCode,
     isPreferredRouteHref: isPreferredRouteHref,
