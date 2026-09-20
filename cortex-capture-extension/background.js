@@ -105,7 +105,7 @@ function dispatchLeftClick(target, x, y, done) {
 }
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-  if (!msg || msg.type !== 'ofk3-cdp-click') return;
+  if (!msg || (msg.type !== 'ofk3-cdp-click' && msg.type !== 'ofk3-cdp-wheel')) return;
   var tabId = sender && sender.tab && sender.tab.id;
   var x = Number(msg.x);
   var y = Number(msg.y);
@@ -118,6 +118,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return;
   }
   var target = { tabId: tabId };
+  var isWheel = msg.type === 'ofk3-cdp-wheel';
   chrome.debugger.attach(target, '1.3', function () {
     if (chrome.runtime.lastError) {
       sendResponse(cdpResult({
@@ -131,6 +132,25 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       return;
     }
     try {
+      if (isWheel) {
+        chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mouseWheel',
+          x: x,
+          y: y,
+          deltaX: Number(msg.deltaX) || 0,
+          deltaY: Number(msg.deltaY) || 0
+        }, function () {
+          var err = chrome.runtime.lastError;
+          safeDetach(target, function () {
+            sendResponse(err ? {
+              ok: false,
+              error: 'DEBUGGER_WHEEL',
+              message: 'CDP wheel失敗: ' + err.message
+            } : { ok: true, error: '', message: '' });
+          });
+        });
+        return;
+      }
       dispatchLeftClick(target, x, y, function (result) {
         safeDetach(target, function () {
           sendResponse(result);
