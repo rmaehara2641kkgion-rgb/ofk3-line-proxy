@@ -241,25 +241,57 @@
     return card;
   }
 
+  function visibleRouteCards() {
+    var out = [];
+    var nodes = document.querySelectorAll('[class*="route-"]');
+    for (var i = 0; i < nodes.length; i++) {
+      if (inPanel(nodes[i])) continue;
+      if (/(?:^|\\s)route-[^\\s]+/.test(String(nodes[i].className || ''))) out.push(nodes[i]);
+    }
+    return out;
+  }
+
   function candidateScrollers() {
     var out = [];
     var seen = [];
-    function add(el) {
+    function add(el, force) {
       if (!el || inPanel(el)) return;
       if (seen.indexOf(el) >= 0) return;
-      if ((el.scrollHeight || 0) - (el.clientHeight || 0) < 40) return;
+      var delta = (el.scrollHeight || 0) - (el.clientHeight || 0);
+      if (!force && delta < 40) return;
       seen.push(el);
       out.push(el);
     }
-    add(document.scrollingElement || document.documentElement);
+
+    var cards = visibleRouteCards();
+    for (var c = 0; c < cards.length; c++) {
+      var cur = cards[c].parentElement;
+      for (var depth = 0; cur && depth < 12; depth += 1, cur = cur.parentElement) {
+        var overflow = '';
+        try { overflow = global.getComputedStyle(cur).overflowY; } catch (e1) {}
+        var delta = (cur.scrollHeight || 0) - (cur.clientHeight || 0);
+        if (delta >= 20 || overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') {
+          add(cur, true);
+        }
+      }
+    }
+
+    add(document.scrollingElement || document.documentElement, false);
     var nodes = document.querySelectorAll('div, section, main, tbody, [role="rowgroup"], [role="grid"], [role="table"]');
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
-      var overflow = '';
-      try { overflow = global.getComputedStyle(el).overflowY; } catch (e1) {}
-      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') add(el);
+      var overflowY = '';
+      try { overflowY = global.getComputedStyle(el).overflowY; } catch (e2) {}
+      if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') add(el, false);
     }
+
     out.sort(function (a, b) {
+      function routeDescendants(el) {
+        try { return el.querySelectorAll('[class*="route-"]').length; } catch (e3) { return 0; }
+      }
+      var ar = routeDescendants(a);
+      var br = routeDescendants(b);
+      if (ar !== br) return br - ar;
       var aDelta = (a.scrollHeight || 0) - (a.clientHeight || 0);
       var bDelta = (b.scrollHeight || 0) - (b.clientHeight || 0);
       return bDelta - aDelta;
