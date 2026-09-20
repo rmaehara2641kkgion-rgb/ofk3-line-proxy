@@ -134,7 +134,23 @@ function persistTenkoSyncStoreToDisk() {
   }
 }
 
-// 静的ファイル配信（index.html, logo.pngなど）
+// 静的ファイル配信。index.htmlだけはCortex 13:00 UIタグをレスポンス時に注入する。
+// Renderが inject-tenko-audit.js を経由せず render-webhook-server.js を直接起動しても有効。
+app.get(['/', '/index.html'], function(req, res, next) {
+  try {
+    var indexFile = path.join(__dirname, 'index.html');
+    var html = fs.readFileSync(indexFile, 'utf8');
+    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260920-2';
+    if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
+      var bodyPos = html.lastIndexOf('</body>');
+      if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, bodyPos) + '  <script src="' + scriptSrc + '"></script>\n' + html.slice(bodyPos);
+    }
+    res.type('html').send(html);
+  } catch (e) {
+    next(e);
+  }
+});
 app.use(express.static(path.join(__dirname)));
 
 // 簡易ログ（Render Dashboard → Logs で確認）
@@ -331,6 +347,78 @@ app.get('/proxy', async (req, res) => {
       message: err.response && err.response.data ? err.response.data : err.message
     });
   }
+});
+
+// Cortex 13:00優先データ受信（拡張 → OFK3本体）
+// 日付ごとに最新1件を保持。Render再起動で消える一時運用ストア。
+var cortexPriorityStore = {};
+function cortexPriorityStopKey(p) {
+  return String((p && p.routeCode) || '') + '#' + String((p && p.stop) == null ? '' : p.stop);
+}
+function nullableFiniteNumber(value) {
+  if (value == null || value === '') return null;
+  var n = Number(value);
+  return isFinite(n) ? n : null;
+}
+function sanitizeCortexPriorityPackage(p) {
+  p = p || {};
+  return {
+    routeCode: String(p.routeCode || ''),
+    routeId: String(p.routeId || ''),
+    stop: p.stop == null ? null : Number(p.stop),
+    driverName: String(p.driverName || ''),
+    trackingId: String(p.trackingId || ''),
+    plannedEndTime: p.plannedEndTime == null ? null : Number(p.plannedEndTime),
+    plannedEndClock: String(p.plannedEndClock || ''),
+    windowLabel: String(p.windowLabel || ''),
+    address: String(p.address || ''),
+    latitude: nullableFiniteNumber(p.latitude),
+    longitude: nullableFiniteNumber(p.longitude)
+  };
+}
+function summarizeCortexPriority(packages) {
+  var stopKeys = {};
+  packages.forEach(function (p) { stopKeys[cortexPriorityStopKey(p)] = true; });
+  return { stopCount: Object.keys(stopKeys).length, packageCount: packages.length };
+}
+app.post('/cortex-priority/import', function(req, res) {
+  var body = req.body || {};
+  var localDate = String(body.localDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+    return res.status(400).json({ status: 'error', message: 'localDate required (YYYY-MM-DD)' });
+  }
+  if (!Array.isArray(body.packages)) {
+    return res.status(400).json({ status: 'error', message: 'packages array required' });
+  }
+  var packages = body.packages.map(sanitizeCortexPriorityPackage).filter(function (p) {
+    return p.routeCode && p.stop != null && isFinite(p.stop);
+  });
+  var counts = summarizeCortexPriority(packages);
+  cortexPriorityStore[localDate] = {
+    localDate: localDate,
+    source: String(body.source || 'cortex-capture-extension'),
+    receivedAt: new Date().toISOString(),
+    packages: packages,
+    stopCount: counts.stopCount,
+    packageCount: counts.packageCount
+  };
+  log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount + ' Packages');
+  res.json({ status: 'ok', localDate: localDate, stopCount: counts.stopCount, packageCount: counts.packageCount });
+});
+app.get('/cortex-priority', function(req, res) {
+  var localDate = String(req.query.localDate || getTodayJst());
+  var latestParam = String(req.query.latest || '');
+  var entry = cortexPriorityStore[localDate];
+  if (!entry && latestParam === '1') {
+    entry = Object.keys(cortexPriorityStore).map(function (k) { return cortexPriorityStore[k]; }).sort(function (a, b) {
+      return String(b.receivedAt || '').localeCompare(String(a.receivedAt || ''));
+    })[0] || null;
+  }
+  if (!entry) {
+    log('cortex-priority GET miss: requestedDate=' + localDate + ' latest=' + latestParam);
+    return res.status(404).json({ status: 'empty', localDate: localDate, packages: [], stopCount: 0, packageCount: 0 });
+  }
+  res.json(Object.assign({ status: 'ok' }, entry));
 });
 
 // 住所→緯度経度取得
