@@ -628,19 +628,24 @@
 
     var visible = visibleTargetRoute();
     if (!visible) {
+      if (!tour.wheelDirection) tour.wheelDirection = 'up';
       tour.wheelAttempts = (tour.wheelAttempts || 0) + 1;
-      if (tour.wheelAttempts > 30) {
+      if (tour.wheelDirection === 'up' && tour.wheelAttempts > 12) {
+        tour.wheelDirection = 'down';
+        tour.wheelAttempts = 1;
+      } else if (tour.wheelDirection === 'down' && tour.wheelAttempts > 30) {
         sessionBusy = false;
         tour.status = 'done';
         pocRun = Core.createPocRun(remaining);
         finishPoc({
           error: Core.ERROR.DOM_NOT_FOUND,
-          message: '可視Route探索停止: CDP wheel 30回後も未取得11時便が残っています'
+          message: '可視Route探索停止: 上方向12回＋下方向30回のCDP wheel後も未取得11時便が残っています'
         });
         return;
       }
       var point = routeViewportPoint();
-      requestCdpWheel(point, 520, function (res) {
+      var deltaY = tour.wheelDirection === 'up' ? -720 : 520;
+      requestCdpWheel(point, deltaY, function (res) {
         if (stopRequested || !sessionBusy) return;
         if (!res || !res.ok) {
           sessionBusy = false;
@@ -737,6 +742,7 @@
     tour.status = 'idle';
     tour.visitedRouteIds = {};
     tour.wheelAttempts = 0;
+    tour.wheelDirection = 'up';
     if (!store.summaries) {
       pocRun = Core.createPocRun({});
       finishPoc({
