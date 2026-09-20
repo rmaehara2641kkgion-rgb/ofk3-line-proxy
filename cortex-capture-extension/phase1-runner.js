@@ -295,28 +295,51 @@
     return null;
   }
 
-  function findRouteElement(route) {
+  function findRouteElementAsync(route, runId, done) {
     route = route || {};
     var el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
-    if (el) return el;
+    if (el) {
+      done(el, null);
+      return;
+    }
     var scroller = largestScroller();
-    if (!scroller) return null;
-    var maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    if (!scroller) {
+      done(null, {
+        error: Core.ERROR.DOM_NOT_FOUND,
+        message: 'Route DOM未発見（scroll領域なし）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+      });
+      return;
+    }
     var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.65));
     var y = 0;
     var guard = 0;
-    while (guard < 80) {
+    var maxGuard = 80;
+
+    function scan() {
+      if (!Core.pocRunIsCurrent(pocRun, runId)) return;
+      el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+      if (el) {
+        waitTimer = 0;
+        done(el, null);
+        return;
+      }
+      var maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      if (guard >= maxGuard || (guard > 0 && y > maxScroll)) {
+        waitTimer = 0;
+        done(null, {
+          error: Core.ERROR.DOM_NOT_FOUND,
+          message: 'Route DOM未発見（非同期scan ' + guard + '回）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+        });
+        return;
+      }
       scroller.scrollTop = Math.min(y, maxScroll);
       try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
-      el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
-      if (el) return el;
-      if (y >= maxScroll) break;
-      y += stepPx;
       guard += 1;
+      y += stepPx;
+      waitTimer = setTimeout(scan, 90);
     }
-    return null;
+    scan();
   }
-
   function requestCdpClick(point, cb) {
     var finished = false;
     var timer = 0;
@@ -371,53 +394,59 @@
   }
 
   function clickRoute(route, runId, done) {
-    var card = findRouteElement(route);
-    if (!card) {
-      if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'no';
-      paint();
-      done(false, {
-        ok: false,
-        error: Core.ERROR.DOM_NOT_FOUND,
-        message: 'Route DOM未発見: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
-      });
-      return;
-    }
-    if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'yes';
-    try {
-      card.scrollIntoView({ block: 'center', inline: 'center' });
-    } catch (e1) {}
-    function afterLayout() {
+    findRouteElementAsync(route, runId, function (card, findError) {
       if (!Core.pocRunIsCurrent(pocRun, runId)) return;
-      var target = findInnerClickTarget(card, route) || card;
-      var rect = null;
-      try { rect = target.getBoundingClientRect(); } catch (e2) {}
-      var point = Core.viewportClickPoint(rect);
-      if (!point) {
-        try { rect = card.getBoundingClientRect(); } catch (e3) {}
-        point = Core.viewportClickPoint(rect);
-      }
-      if (!point) {
-        if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'no';
+      if (!card) {
+        if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'no';
         paint();
-        done(false);
+        done(false, findError || {
+          ok: false,
+          error: Core.ERROR.DOM_NOT_FOUND,
+          message: 'Route DOM未発見: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+        });
         return;
       }
-      if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'yes';
-      paint();
-      setPanelClickable(false);
-      requestCdpClick(point, function (res) {
-        setPanelClickable(true);
+      if (pocRun && pocRun.diagnostics) pocRun.diagnostics.domFound = 'yes';
+      try {
+        card.scrollIntoView({ block: 'center', inline: 'center' });
+      } catch (e1) {}
+      function afterLayout() {
         if (!Core.pocRunIsCurrent(pocRun, runId)) return;
-        applyCdpStages(res);
+        var target = findInnerClickTarget(card, route) || card;
+        var rect = null;
+        try { rect = target.getBoundingClientRect(); } catch (e2) {}
+        var point = Core.viewportClickPoint(rect);
+        if (!point) {
+          try { rect = card.getBoundingClientRect(); } catch (e3) {}
+          point = Core.viewportClickPoint(rect);
+        }
+        if (!point) {
+          if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'no';
+          paint();
+          done(false, {
+            ok: false,
+            error: 'CLICK_COORD',
+            message: 'Route座標取得失敗: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+          });
+          return;
+        }
+        if (pocRun && pocRun.diagnostics) pocRun.diagnostics.coords = 'yes';
         paint();
-        done(!!(res && res.ok), res);
-      });
-    }
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(function () { requestAnimationFrame(afterLayout); });
-    } else {
-      waitTimer = setTimeout(afterLayout, 50);
-    }
+        setPanelClickable(false);
+        requestCdpClick(point, function (res) {
+          setPanelClickable(true);
+          if (!Core.pocRunIsCurrent(pocRun, runId)) return;
+          applyCdpStages(res);
+          paint();
+          done(!!(res && res.ok), res);
+        });
+      }
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () { requestAnimationFrame(afterLayout); });
+      } else {
+        waitTimer = setTimeout(afterLayout, 50);
+      }
+    });
   }
 
   function clearTimers() {
