@@ -801,6 +801,25 @@
     return false;
   }
 
+  var ROUTE_CARD_CLICK_EVENTS = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+
+  function pickRouteCardClickTarget(nodes, route) {
+    nodes = nodes || [];
+    route = route || {};
+    var code = String(route.routeCode || '');
+    var pIdx = -1;
+    var spanIdx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i] || {};
+      var tag = String(n.tag || '').toLowerCase();
+      if (code && tag === 'p' && String(n.title || '') === code) pIdx = i;
+      if (code && tag === 'span' && String(n.text || '').trim() === code && spanIdx < 0) spanIdx = i;
+    }
+    if (spanIdx >= 0) return spanIdx;
+    if (pIdx >= 0) return pIdx;
+    return -1;
+  }
+
   function escapeRegExp(s) {
     return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
@@ -1040,6 +1059,8 @@
     cssEscapeIdent: cssEscapeIdent,
     routeCardSelector: routeCardSelector,
     classListHasRouteCard: classListHasRouteCard,
+    ROUTE_CARD_CLICK_EVENTS: ROUTE_CARD_CLICK_EVENTS,
+    pickRouteCardClickTarget: pickRouteCardClickTarget,
     textHasRouteCode: textHasRouteCode,
     isPreferredRouteHref: isPreferredRouteHref,
     hrefMatchesRoute: hrefMatchesRoute,

@@ -468,6 +468,13 @@ function run() {
   assert(Core.routeCardSelector('2899328-44') === '.route-2899328-44', 'route card selector from routeId');
   assert(Core.classListHasRouteCard('css-1yz1a18 route-2899328-44 hover', '2899328-44'), 'exact route class token');
   assert(!Core.classListHasRouteCard('css-1yz1a18 route-2899328-440 hover', '2899328-44'), 'does not match longer route class');
+  var innerPick = Core.pickRouteCardClickTarget([
+    { tag: 'div', title: '', text: 'DCX44 extra' },
+    { tag: 'p', title: 'DCX44', text: 'DCX44' },
+    { tag: 'span', title: '', text: 'DCX44' }
+  ], { routeId: '2899328-44', routeCode: 'DCX44' });
+  assert(innerPick === 2, 'click target is titled route span, not the card div, got ' + innerPick);
+  assert(Core.ROUTE_CARD_CLICK_EVENTS.join(',') === 'pointerdown,mousedown,pointerup,mouseup,click', 'bubbling click sequence only');
 
   var dirtyFailStore = Core.createCaptureStore();
   Core.recordTourFailure(dirtyFailStore, { routeId: 'Rx', routeCode: 'DCX1' }, {
@@ -536,8 +543,10 @@ function run() {
   assertNoDirectFetch(glueSrc, 'glue');
   assertNoDirectFetch(bgSrc, 'extension background');
   assert(runnerSrc.indexOf('origFetch.apply') >= 0, 'runner wraps SPA fetch only');
-  assert(runnerSrc.indexOf('routeCardSelector') >= 0 && runnerSrc.indexOf('findRouteCardByRouteId') >= 0, 'runner selects .route-{routeId} card');
-  assert(runnerSrc.indexOf('querySelector') >= 0, 'runner queries route card class');
+  assert(runnerSrc.indexOf('findRouteCardByRouteId') >= 0, 'runner still finds .route-{routeId} card');
+  assert(runnerSrc.indexOf('findInnerClickTarget') >= 0, 'runner clicks inner route title/span');
+  assert(runnerSrc.indexOf('pointerover') < 0 && runnerSrc.indexOf('mouseover') < 0, 'runner does not add hover events');
+  assert(runnerSrc.indexOf('typeof window') >= 0 && runnerSrc.indexOf('bubbles: true') >= 0, 'runner bubbles with window view');
   assert(runnerSrc.indexOf('clone().json()') >= 0 && runnerSrc.indexOf('responseText') >= 0, 'runner reads SPA body only');
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');

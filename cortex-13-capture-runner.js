@@ -265,6 +265,29 @@
     return chain[idx].el;
   }
 
+  function collectCardClickNodes(card) {
+    var out = [];
+    if (!card || !card.querySelectorAll) return out;
+    var els = card.querySelectorAll('p, span');
+    for (var i = 0; i < els.length; i++) {
+      out.push({
+        el: els[i],
+        tag: (els[i].tagName || '').toLowerCase(),
+        title: (els[i].getAttribute && els[i].getAttribute('title')) || '',
+        text: String(els[i].textContent || '').replace(/\s+/g, ' ').trim()
+      });
+    }
+    return out;
+  }
+
+  function findInnerClickTarget(card, route) {
+    if (!card) return null;
+    var nodes = collectCardClickNodes(card);
+    var idx = Core.pickRouteCardClickTarget(nodes, route);
+    if (idx >= 0) return nodes[idx].el;
+    return card;
+  }
+
   function describeClickTarget(el) {
     if (!el) {
       return { tagName: '-', role: '-', hasHref: 'なし' };
@@ -278,10 +301,20 @@
   }
 
   function synthesizeUserClick(el) {
-    var opts = { bubbles: true, cancelable: true, composed: true, view: global, buttons: 1 };
+    if (!el) return;
+    var view = typeof window !== 'undefined' ? window : global;
+    var opts = { bubbles: true, cancelable: true, view: view, buttons: 1 };
     try { el.scrollIntoView({ block: 'center' }); } catch (e1) {}
-    try { el.focus(); } catch (e2) {}
-    var types = ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    try {
+      var rect = el.getBoundingClientRect && el.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        opts.clientX = Math.floor(rect.left + rect.width / 2);
+        opts.clientY = Math.floor(rect.top + rect.height / 2);
+        opts.screenX = opts.clientX;
+        opts.screenY = opts.clientY;
+      }
+    } catch (e2) {}
+    var types = Core.ROUTE_CARD_CLICK_EVENTS || ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
     for (var i = 0; i < types.length; i++) {
       var type = types[i];
       try {
@@ -357,12 +390,13 @@
   }
 
   function clickRoute(route, done) {
-    var el = findRouteElement(route);
-    if (el) {
-      setClickDebug(describeClickTarget(el));
+    var card = findRouteElement(route);
+    if (card) {
+      var target = findInnerClickTarget(card, route) || card;
+      setClickDebug(describeClickTarget(target));
       setClickDebug({ waitState: 'click', timeoutReason: '-' });
       paint();
-      synthesizeUserClick(el);
+      synthesizeUserClick(target);
       done(true);
       return;
     }
@@ -372,12 +406,13 @@
       paint();
       synthesizeUserClick(back);
       waitTimer = setTimeout(function () {
-        var el2 = findRouteElement(route);
-        if (el2) {
-          setClickDebug(describeClickTarget(el2));
+        var card2 = findRouteElement(route);
+        if (card2) {
+          var target2 = findInnerClickTarget(card2, route) || card2;
+          setClickDebug(describeClickTarget(target2));
           setClickDebug({ waitState: 'click', timeoutReason: '-' });
           paint();
-          synthesizeUserClick(el2);
+          synthesizeUserClick(target2);
           done(true);
         } else {
           setClickDebug({ tagName: '-', role: '-', hasHref: 'なし', waitState: 'dom-not-found', timeoutReason: '-' });
