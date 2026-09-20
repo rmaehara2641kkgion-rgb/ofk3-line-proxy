@@ -435,6 +435,71 @@
     }, 8000);
   }
 
+  function requestCdpWheel(point, deltaY, cb) {
+    var finished = false;
+    var timer = 0;
+    function finish(result) {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('message', onMsg);
+      if (timer) clearTimeout(timer);
+      cb(result || { ok: false, error: 'DEBUGGER_WHEEL', message: 'CDP wheel失敗' });
+    }
+    function onMsg(ev) {
+      if (ev.source !== window) return;
+      var data = ev.data;
+      if (!data || data.source !== 'OFK3_CORTEX' || data.type !== 'cdp-wheel-result') return;
+      finish(data);
+    }
+    window.addEventListener('message', onMsg);
+    window.postMessage({
+      source: 'OFK3_CORTEX',
+      type: 'cdp-wheel',
+      x: point.x,
+      y: point.y,
+      deltaX: 0,
+      deltaY: deltaY
+    }, location.origin);
+    timer = setTimeout(function () {
+      finish({ ok: false, error: 'DEBUGGER_WHEEL_TIMEOUT', message: 'CDP wheel応答なし' });
+    }, 8000);
+  }
+
+  function visibleTargetRoute() {
+    var routes = tour.routes || [];
+    var byId = {};
+    for (var i = 0; i < routes.length; i++) byId[String(routes[i].routeId)] = routes[i];
+    var cards = document.querySelectorAll('[class*="route-"]');
+    for (var j = 0; j < cards.length; j++) {
+      if (inPanel(cards[j])) continue;
+      var cls = String(cards[j].className || '');
+      var m = cls.match(/(?:^|\\s)route-([^\\s]+)/);
+      if (!m) continue;
+      var route = byId[String(m[1])];
+      if (!route) continue;
+      if (store.detailsByRouteId[route.routeId]) continue;
+      if (tour.visitedRouteIds && tour.visitedRouteIds[route.routeId]) continue;
+      var rect = null;
+      try { rect = cards[j].getBoundingClientRect(); } catch (e1) {}
+      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+      if (rect.bottom < 0 || rect.top > global.innerHeight || rect.right < 0 || rect.left > global.innerWidth) continue;
+      return { route: route, card: cards[j] };
+    }
+    return null;
+  }
+
+  function routeViewportPoint() {
+    var cards = visibleRouteCards();
+    for (var i = 0; i < cards.length; i++) {
+      var rect = null;
+      try { rect = cards[i].getBoundingClientRect(); } catch (e1) {}
+      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+      if (rect.bottom < 0 || rect.top > global.innerHeight) continue;
+      return { x: Math.max(1, Math.min(global.innerWidth - 1, rect.left + rect.width / 2)), y: Math.max(1, Math.min(global.innerHeight - 1, rect.top + rect.height / 2)) };
+    }
+    return { x: Math.max(1, Math.floor(global.innerWidth * 0.35)), y: Math.max(1, Math.floor(global.innerHeight * 0.55)) };
+  }
+
   function applyCdpStages(res) {
     if (!pocRun || !pocRun.diagnostics) return;
     pocRun.diagnostics.attach = (res && res.attach) || 'fail';
@@ -542,8 +607,8 @@
       paint();
       return;
     }
-    var route = Core.firstUncapturedTourRoute(store, tour);
-    if (!route) {
+    var remaining = Core.firstUncapturedTourRoute(store, tour);
+    if (!remaining) {
       sessionBusy = false;
       tour.status = 'done';
       if (pocRun && pocRun.diagnostics) {
@@ -553,6 +618,42 @@
       paint();
       return;
     }
+
+    var visible = visibleTargetRoute();
+    if (!visible) {
+      tour.wheelAttempts = (tour.wheelAttempts || 0) + 1;
+      if (tour.wheelAttempts > 30) {
+        sessionBusy = false;
+        tour.status = 'done';
+        pocRun = Core.createPocRun(remaining);
+        finishPoc({
+          error: Core.ERROR.DOM_NOT_FOUND,
+          message: '可視Route探索停止: CDP wheel 30回後も未取得11時便が残っています'
+        });
+        return;
+      }
+      var point = routeViewportPoint();
+      requestCdpWheel(point, 520, function (res) {
+        if (stopRequested || !sessionBusy) return;
+        if (!res || !res.ok) {
+          sessionBusy = false;
+          pocRun = Core.createPocRun(remaining);
+          finishPoc({
+            error: (res && res.error) || 'DEBUGGER_WHEEL',
+            message: (res && res.message) || 'CDP wheelに失敗しました'
+          });
+          return;
+        }
+        waitTimer = setTimeout(function () {
+          waitTimer = 0;
+          runNextRoute();
+        }, 220);
+      });
+      return;
+    }
+
+    tour.wheelAttempts = 0;
+    var route = visible.route;
     pocRun = Core.createPocRun(route);
     var runId = pocRun.id;
     tour.status = 'running';
@@ -567,7 +668,7 @@
         applyCdpStages(cdpRes);
         finishCurrentAndContinue({
           error: (cdpRes && cdpRes.error) || Core.ERROR.DOM_NOT_FOUND,
-          message: (cdpRes && cdpRes.message) || 'RouteカードのCDPクリックに失敗しました'
+          message: (cdpRes && cdpRes.message) || '可視RouteのCDPクリックに失敗しました'
         });
         return;
       }
@@ -628,6 +729,7 @@
     tour.index = 0;
     tour.status = 'idle';
     tour.visitedRouteIds = {};
+    tour.wheelAttempts = 0;
     if (!store.summaries) {
       pocRun = Core.createPocRun({});
       finishPoc({
