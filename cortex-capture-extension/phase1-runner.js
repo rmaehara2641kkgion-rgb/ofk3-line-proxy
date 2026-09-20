@@ -117,6 +117,24 @@
     return (pocRun && pocRun.diagnostics) || Core.createPocDiagnostics();
   }
 
+  function domRouteSnapshot() {
+    var found = [];
+    var seen = {};
+    var nodes = document.querySelectorAll('[class*="route-"], p[title]');
+    for (var i = 0; i < nodes.length && found.length < 24; i++) {
+      if (inPanel(nodes[i])) continue;
+      var cls = String(nodes[i].className || '');
+      var title = (nodes[i].getAttribute && nodes[i].getAttribute('title')) || '';
+      var m = cls.match(/route-([^\\s]+)/);
+      var value = m ? m[1] : (/^[A-Z]{2,}[A-Z0-9-]*\\d+$/.test(title) ? title : '');
+      if (value && !seen[value]) {
+        seen[value] = true;
+        found.push(value);
+      }
+    }
+    return found.length ? found.join(', ') : '0件';
+  }
+
   function paint() {
     var d = diag();
     var box = document.getElementById(PANEL_ID);
@@ -131,6 +149,7 @@
     setText('ofk3-poc-details', d.details || '-');
     setText('ofk3-poc-ended', d.runEnded || 'no');
     setText('ofk3-poc-error', d.message || d.error || '-');
+    setText('ofk3-poc-domroutes', domRouteSnapshot());
   }
 
   function setPanelClickable(on) {
@@ -164,7 +183,8 @@
       '<div>mouseReleased: <span id="ofk3-poc-up">-</span></div>' +
       '<div>Route詳細捕捉: <span id="ofk3-poc-details">-</span></div>' +
       '<div>run終了: <span id="ofk3-poc-ended">no</span></div>' +
-      '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>';
+      '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
+      '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
