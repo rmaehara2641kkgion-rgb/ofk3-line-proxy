@@ -267,6 +267,31 @@
     box.style.pointerEvents = on ? 'auto' : 'none';
   }
 
+  function extensionImport(payload) {
+    return new Promise(function (resolve, reject) {
+      var requestId = 'ofk3-import-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      var timer = setTimeout(function () {
+        global.removeEventListener('message', onMessage);
+        reject(new Error('OFK3送信がタイムアウトしました'));
+      }, 20000);
+      function onMessage(ev) {
+        if (ev.source !== global || !ev.data || ev.data.source !== 'OFK3_CORTEX') return;
+        if (ev.data.type !== 'ofk3-priority-import-result' || ev.data.requestId !== requestId) return;
+        clearTimeout(timer);
+        global.removeEventListener('message', onMessage);
+        if (ev.data.ok) resolve(ev.data.body || {});
+        else reject(new Error(ev.data.message || 'OFK3送信に失敗しました'));
+      }
+      global.addEventListener('message', onMessage);
+      global.postMessage({
+        source: 'OFK3_CORTEX',
+        type: 'ofk3-priority-import',
+        requestId: requestId,
+        payload: payload
+      }, location.origin);
+    });
+  }
+
   async function sendPriorityToOfk3() {
     var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
     var result = Core.ingestBundle(bundle);
@@ -275,20 +300,14 @@
       return;
     }
     try {
-      var res = await fetch('https://ofk3-line-proxy-1.onrender.com/cortex-priority/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          localDate: currentLocalDate(),
-          source: 'cortex-capture-extension',
-          stopCount: result.stopCount || 0,
-          packageCount: result.packageCount || 0,
-          packages: result.packages
-        })
+      var body = await extensionImport({
+        localDate: currentLocalDate(),
+        source: 'cortex-capture-extension',
+        stopCount: result.stopCount || 0,
+        packageCount: result.packageCount || 0,
+        packages: result.packages
       });
-      var body = await res.json();
-      if (!res.ok || !body || body.status !== 'ok') throw new Error((body && body.message) || ('HTTP ' + res.status));
-      alert('OFK3へ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages');
+      alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages');
     } catch (e) {
       alert('OFK3送信に失敗しました: ' + e.message);
     }
