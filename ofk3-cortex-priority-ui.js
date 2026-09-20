@@ -24,17 +24,12 @@
     var d=today(), status=document.getElementById('c13-status');
     if(status)status.textContent='読込中…';
     var reqUrl='/cortex-priority?localDate='+encodeURIComponent(d);
-    console.log('[Cortex13 UI]\norigin='+location.origin+'\ntoday='+d+'\nrequest='+reqUrl);
     try{
       var r=await fetch(reqUrl,{cache:'no-store'});
       var j=await r.json();
-      console.log('[Cortex13 UI] response httpStatus='+r.status+' jsonStatus='+(j&&j.status));
       if(!r.ok||j.status!=='ok'){
-        var fallbackUrl=reqUrl+'&latest=1';
-        console.log('[Cortex13 UI] fallbackRequest='+fallbackUrl);
-        r=await fetch(fallbackUrl,{cache:'no-store'});
+        r=await fetch(reqUrl+'&latest=1',{cache:'no-store'});
         j=await r.json();
-        console.log('[Cortex13 UI] fallback response httpStatus='+r.status+' jsonStatus='+(j&&j.status)+' localDate='+(j&&j.localDate)+' stopCount='+(j&&j.stopCount)+' packageCount='+(j&&j.packageCount));
       }
       if(!r.ok||j.status!=='ok')throw new Error(j.message||'Cortexデータなし');
       state.entry=j;state.stops=group(j.packages);render();renderInline();
@@ -139,12 +134,7 @@
     render();
   }
   function open(mode){ensure();state.mode=mode||'time';var r=document.getElementById(ID);r.style.display='block';render();load();}
-  document.addEventListener('click',function(ev){
-    var el=ev.target&&ev.target.closest&&ev.target.closest('button,a,[role="button"]');if(!el)return;var t=String(el.textContent||'').replace(/\s+/g,'');
-    if(t.indexOf('時間指定')>=0)setTimeout(function(){open('time');},50);
-    else if(t.indexOf('ダッシュボード')>=0)setTimeout(function(){open('dash');},50);
-  },true);
   window.OFK3Cortex13={open:open,load:load,exportCsv:exportCsv};
-  function boot(){ensure();syncTimeWindowTab();new MutationObserver(function(){syncTimeWindowTab();}).observe(document.body,{childList:true,subtree:true});}
+  function boot(){syncTimeWindowTab();new MutationObserver(function(){syncTimeWindowTab();}).observe(document.body,{childList:true,subtree:true});}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();

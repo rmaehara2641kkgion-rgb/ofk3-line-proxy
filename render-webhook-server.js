@@ -402,28 +402,12 @@ app.post('/cortex-priority/import', function(req, res) {
     stopCount: counts.stopCount,
     packageCount: counts.packageCount
   };
-  // 診断用ログ（原因切り分け専用。packages本体・住所・Tracking ID・cookie/token等は出さない）
-  log([
-    '[cortex-priority][POST]',
-    'pid=' + process.pid,
-    'localDate=' + localDate,
-    counts.stopCount + ' Stops / ' + counts.packageCount + ' Packages',
-    'storeKeys=' + (Object.keys(cortexPriorityStore).join(',') || '(empty)')
-  ].join('\n'));
+  log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount + ' Packages');
   res.json({ status: 'ok', localDate: localDate, stopCount: counts.stopCount, packageCount: counts.packageCount });
 });
 app.get('/cortex-priority', function(req, res) {
-  var pid = process.pid;
   var localDate = String(req.query.localDate || getTodayJst());
   var latestParam = String(req.query.latest || '');
-  // 診断用ログ（原因切り分け専用。packages本体・住所・Tracking ID・cookie/token等は出さない）
-  log([
-    '[cortex-priority][GET]',
-    'pid=' + pid,
-    'requestedDate=' + localDate,
-    'latest=' + latestParam,
-    'storeKeys=' + (Object.keys(cortexPriorityStore).join(',') || '(empty)')
-  ].join('\n'));
   var entry = cortexPriorityStore[localDate];
   if (!entry && latestParam === '1') {
     entry = Object.keys(cortexPriorityStore).map(function (k) { return cortexPriorityStore[k]; }).sort(function (a, b) {
@@ -431,22 +415,9 @@ app.get('/cortex-priority', function(req, res) {
     })[0] || null;
   }
   if (!entry) {
-    log([
-      '[cortex-priority][GET MISS]',
-      'pid=' + pid,
-      'requestedDate=' + localDate,
-      'latest=' + latestParam,
-      'storeKeys=' + (Object.keys(cortexPriorityStore).join(',') || '(empty)')
-    ].join('\n'));
+    log('cortex-priority GET miss: requestedDate=' + localDate + ' latest=' + latestParam);
     return res.status(404).json({ status: 'empty', localDate: localDate, packages: [], stopCount: 0, packageCount: 0 });
   }
-  log([
-    '[cortex-priority][GET HIT]',
-    'pid=' + pid,
-    'requestedDate=' + localDate,
-    'returnedDate=' + entry.localDate,
-    entry.stopCount + ' Stops / ' + entry.packageCount + ' Packages'
-  ].join('\n'));
   res.json(Object.assign({ status: 'ok' }, entry));
 });
 

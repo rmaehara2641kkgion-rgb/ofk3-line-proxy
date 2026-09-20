@@ -1,3 +1,20 @@
+// OFK3送信先。既定は本番。Preview検証時のみ chrome.storage.local に
+// { ofk3TargetBaseUrl: 'https://ofk3-cortex-preview.onrender.com' } を設定すると切り替わる
+// （拡張の再ビルド不要。DevTools等から chrome.storage.local.set で設定/解除する）。
+var OFK3_PRODUCTION_BASE_URL = 'https://ofk3-line-proxy-1.onrender.com';
+function resolveOfk3BaseUrl() {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get(['ofk3TargetBaseUrl'], function (data) {
+        var url = data && data.ofk3TargetBaseUrl;
+        resolve(url || OFK3_PRODUCTION_BASE_URL);
+      });
+    } catch (e) {
+      resolve(OFK3_PRODUCTION_BASE_URL);
+    }
+  });
+}
+
 chrome.action.onClicked.addListener(function (tab) {
   if (!tab || !tab.id) return;
   var url = tab.url || '';
@@ -107,10 +124,12 @@ function dispatchLeftClick(target, x, y, done) {
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg) return;
   if (msg.type === 'ofk3-priority-import') {
-    fetch('https://ofk3-cortex-preview.onrender.com/cortex-priority/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(msg.payload || {})
+    resolveOfk3BaseUrl().then(function (baseUrl) {
+      return fetch(baseUrl + '/cortex-priority/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg.payload || {})
+      });
     }).then(function (res) {
       return res.json().then(function (body) {
         if (!res.ok || !body || body.status !== 'ok') {
@@ -119,7 +138,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         sendResponse({ ok: true, body: body });
       });
     }).catch(function (e) {
-      sendResponse({ ok: false, message: e && e.message ? e.message : 'OFK3 Preview送信失敗' });
+      sendResponse({ ok: false, message: e && e.message ? e.message : 'OFK3送信失敗' });
     });
     return true;
   }
