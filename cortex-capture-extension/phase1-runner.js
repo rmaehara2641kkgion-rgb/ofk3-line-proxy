@@ -596,13 +596,25 @@
     paint();
   }
 
+  function firstPendingTourRoute() {
+    var routes = tour.routes || [];
+    for (var i = 0; i < routes.length; i++) {
+      var route = routes[i];
+      if (!route || !route.routeId) continue;
+      if (store.detailsByRouteId[route.routeId]) continue;
+      if (tour.visitedRouteIds && tour.visitedRouteIds[route.routeId]) continue;
+      return route;
+    }
+    return null;
+  }
+
   function runNextRoute() {
     if (stopRequested || !sessionBusy) {
       tour.status = 'stopped';
       paint();
       return;
     }
-    var remaining = Core.firstUncapturedTourRoute(store, tour);
+    var remaining = firstPendingTourRoute();
     if (!remaining) {
       sessionBusy = false;
       tour.status = 'done';
