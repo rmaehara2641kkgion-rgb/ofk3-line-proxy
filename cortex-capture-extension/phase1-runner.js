@@ -701,14 +701,6 @@
     pushWheelTrace('visible/after=' + (visible ? 'yes' : 'no'), null);
     paint();
     if (!visible) {
-      sessionBusy = false;
-      tour.status = 'done';
-      pocRun = Core.createPocRun(remaining);
-      finishPoc({
-        error: Core.ERROR.DOM_NOT_FOUND,
-        message: '診断停止: wheel送信前。Wheel履歴の start→runNext→visible でDOM消失地点を確認してください'
-      });
-      return;
 
       if (!tour.wheelDirection) tour.wheelDirection = 'up';
       tour.wheelAttempts = (tour.wheelAttempts || 0) + 1;
@@ -752,6 +744,8 @@
 
     tour.wheelAttempts = 0;
     var route = visible.route;
+    route._ofk3BeforeHref = String(global.location.href || '');
+    route._ofk3BeforeHistoryLength = global.history ? global.history.length : 0;
     pocRun = Core.createPocRun(route);
     var runId = pocRun.id;
     tour.status = 'running';
@@ -772,6 +766,57 @@
       }
       waitForCurrentRoute(route, runId);
     });
+  }
+
+  function restoreRouteListThenContinue(route, failureInfo) {
+    var beforeHref = String((route && route._ofk3BeforeHref) || '');
+    var beforeLen = Number((route && route._ofk3BeforeHistoryLength) || 0);
+    var nowHref = String(global.location.href || '');
+    var nowLen = global.history ? global.history.length : 0;
+    var hasRouteDom = document.querySelectorAll('[class*="route-"]').length > 0;
+
+    if (hasRouteDom) {
+      finishCurrentAndContinue(failureInfo);
+      return;
+    }
+
+    if (global.history && (nowHref !== beforeHref || nowLen > beforeLen)) {
+      pushWheelTrace('restore/back', null);
+      try { global.history.back(); } catch (e1) {}
+      var started = Date.now();
+      function waitList() {
+        var count = document.querySelectorAll('[class*="route-"]').length;
+        if (count > 0) {
+          pushWheelTrace('restore/ok', null);
+          paint();
+          finishCurrentAndContinue(failureInfo);
+          return;
+        }
+        if (Date.now() - started >= 4000) {
+          sessionBusy = false;
+          tour.status = 'done';
+          if (pocRun && pocRun.diagnostics) {
+            pocRun.diagnostics.error = 'ROUTE_LIST_RESTORE_TIMEOUT';
+            pocRun.diagnostics.message = 'route-details取得後、history.back()でRoute一覧へ戻れませんでした';
+          }
+          if (pocRun) Core.endPocRun(pocRun, store, { error: 'ROUTE_LIST_RESTORE_TIMEOUT' });
+          paint();
+          return;
+        }
+        waitTimer = setTimeout(waitList, 150);
+      }
+      waitTimer = setTimeout(waitList, 150);
+      return;
+    }
+
+    sessionBusy = false;
+    tour.status = 'done';
+    if (pocRun && pocRun.diagnostics) {
+      pocRun.diagnostics.error = 'ROUTE_LIST_NAV_UNKNOWN';
+      pocRun.diagnostics.message = 'Routeクリック後にDOMは消えましたがURL/history変化がなく、安全に一覧へ戻す方法を判定できません';
+    }
+    if (pocRun) Core.endPocRun(pocRun, store, { error: 'ROUTE_LIST_NAV_UNKNOWN' });
+    paint();
   }
 
   function finishCurrentAndContinue(failureInfo) {
@@ -805,7 +850,7 @@
       if (!Core.pocRunIsCurrent(pocRun, runId)) return;
       if (route.routeId && store.detailsByRouteId[route.routeId]) {
         pocRun.diagnostics.details = 'success';
-        finishCurrentAndContinue(null);
+        restoreRouteListThenContinue(route, null);
         return;
       }
       if (Date.now() - started >= tour.timeoutMs) {
