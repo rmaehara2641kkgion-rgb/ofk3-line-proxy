@@ -246,7 +246,7 @@
     var nodes = document.querySelectorAll('[class*="route-"]');
     for (var i = 0; i < nodes.length; i++) {
       if (inPanel(nodes[i])) continue;
-      if (/(?:^|\\s)route-[^\\s]+/.test(String(nodes[i].className || ''))) out.push(nodes[i]);
+      if (/(?:^|\s)route-[^\s]+/.test(String(nodes[i].className || ''))) out.push(nodes[i]);
     }
     return out;
   }
@@ -322,7 +322,7 @@
       var node = nodes[i];
       if (inPanel(node)) continue;
       var title = (node.getAttribute && node.getAttribute('title')) || '';
-      var text = String(node.textContent || '').replace(/\\s+/g, ' ').trim();
+      var text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
       if (title !== code && text !== code) continue;
       var cur = node;
       for (var depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
@@ -473,7 +473,7 @@
     for (var j = 0; j < cards.length; j++) {
       if (inPanel(cards[j])) continue;
       var cls = String(cards[j].className || '');
-      var m = cls.match(/(?:^|\\s)route-([^\\s]+)/);
+      var m = cls.match(/(?:^|\s)route-([^\s]+)/);
       if (!m) continue;
       var route = byId[String(m[1])];
       if (!route) continue;
