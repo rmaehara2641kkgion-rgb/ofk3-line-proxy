@@ -20,6 +20,7 @@
   var tour = Core.createTourState();
   var pocRun = null;
   var sessionBusy = false;
+  var stopRequested = false;
   var localDate = '';
   var waitTimer = 0;
   var summariesWaitTimer = 0;
@@ -468,20 +469,27 @@
   }
 
   function stopPoc() {
-    if (pocRun && !pocRun.ended) {
-      finishPoc({
-        error: Core.ERROR.NETWORK,
-        message: '手動停止'
-      });
-      return;
-    }
+    stopRequested = true;
     sessionBusy = false;
     clearTimers();
+    setPanelClickable(true);
     tour.status = 'stopped';
+    if (pocRun && !pocRun.ended) {
+      if (pocRun.diagnostics) {
+        pocRun.diagnostics.error = '';
+        pocRun.diagnostics.message = '手動停止';
+      }
+      Core.endPocRun(pocRun, store, null);
+    }
     paint();
   }
 
   function runNextRoute() {
+    if (stopRequested || !sessionBusy) {
+      tour.status = 'stopped';
+      paint();
+      return;
+    }
     var route = Core.firstUncapturedTourRoute(store, tour);
     if (!route) {
       sessionBusy = false;
@@ -531,7 +539,7 @@
     paint();
     waitTimer = setTimeout(function () {
       waitTimer = 0;
-      if (!sessionBusy) return;
+      if (stopRequested || !sessionBusy) return;
       runNextRoute();
     }, 350);
   }
@@ -583,6 +591,7 @@
     show();
     if (sessionBusy) return;
     if (pocRun && pocRun.active && !pocRun.ended) return;
+    stopRequested = false;
     sessionBusy = true;
     clearTimers();
     if (store.summaries) {
