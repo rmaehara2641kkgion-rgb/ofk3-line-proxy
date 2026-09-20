@@ -4,7 +4,7 @@
  */
 (function () {
   'use strict';
-  var ID='ofk3-cortex13-ui', state={entry:null,stops:[],mode:'time',map:null,markers:[]};
+  var ID='ofk3-cortex13-ui', INLINE_ID='ofk3-cortex13-inline', state={entry:null,stops:[],mode:'time',map:null,markers:[]};
 
   function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
   function today(){var p=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());return p;}
@@ -27,9 +27,9 @@
       var r=await fetch('/cortex-priority?localDate='+encodeURIComponent(d),{cache:'no-store'});
       var j=await r.json();
       if(!r.ok||j.status!=='ok')throw new Error(j.message||'本日のCortexデータなし');
-      state.entry=j;state.stops=group(j.packages);render();
+      state.entry=j;state.stops=group(j.packages);render();renderInline();
       if(state.mode==='dash') await renderMap();
-    }catch(e){state.entry=null;state.stops=[];render();var s=document.getElementById('c13-status');if(s)s.textContent=e.message;}
+    }catch(e){state.entry=null;state.stops=[];render();renderInline(e.message);var s=document.getElementById('c13-status');if(s)s.textContent=e.message;}
   }
   function csvCell(v){var s=String(v==null?'':v);return '"'+s.replace(/"/g,'""')+'"';}
   function exportCsv(){
@@ -88,6 +88,38 @@
     }
     root.querySelector('.c13-body').innerHTML=body;
   }
+  function findTimeWindowHeading(){
+    var all=document.querySelectorAll('h1,h2,h3,h4,strong,b,div,span');
+    for(var i=0;i<all.length;i++){var t=String(all[i].textContent||'').replace(/\s+/g,'');if(t==='時間指定抽出'||t.indexOf('時間指定抽出')===0)return all[i];}
+    return null;
+  }
+  function renderInline(error){
+    var h=findTimeWindowHeading();if(!h)return false;
+    var host=document.getElementById(INLINE_ID);
+    if(!host){
+      host=document.createElement('section');host.id=INLINE_ID;
+      host.style.cssText='margin:16px 0;padding:16px 20px;background:#fff;border:2px solid #2563eb;border-radius:14px;box-shadow:0 4px 14px rgba(37,99,235,.08)';
+      var anchor=h.closest('section')||h.parentElement; if(anchor&&anchor.parentNode)anchor.parentNode.insertBefore(host,anchor.nextSibling);else h.insertAdjacentElement('afterend',host);
+    }
+    var e=state.entry,n=e?e.stopCount:0,p=e?e.packageCount:0;
+    var html='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b style="font-size:18px">⚡ Cortex 13:00必達</b>';
+    if(e) html+='<span style="font-weight:700;color:#2563eb">'+n+' Stops / '+p+' Packages</span><span style="opacity:.65">'+esc(e.localDate)+' 受信済</span>';
+    else html+='<span style="color:#b45309">'+esc(error||'本日のCortexデータを確認中…')+'</span>';
+    html+='<button type="button" data-c13-inline="reload" style="margin-left:auto">更新</button><button type="button" data-c13-inline="csv">詳細CSV</button><button type="button" data-c13-inline="map">MAP表示</button></div>';
+    if(e){
+      html+='<div style="margin-top:12px;max-height:420px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th>No.</th><th>ルート</th><th>ドライバー</th><th>予定到着</th><th>個数</th><th>住所</th><th>Stop</th></tr></thead><tbody>';
+      state.stops.forEach(function(s,i){html+='<tr style="border-top:1px solid #e5e7eb"><td>'+(i+1)+'</td><td>'+esc(s.routeCode)+'</td><td>'+esc(s.driverName||'-')+'</td><td>'+esc(s.plannedEndClock||'-')+'</td><td style="text-align:center">'+s.trackingIds.length+'</td><td>'+esc(s.address||'-')+'</td><td style="text-align:center">'+esc(s.stop)+'</td></tr>';});
+      html+='</tbody></table></div>';
+    }
+    host.innerHTML=html;
+    host.onclick=function(ev){var a=ev.target&&ev.target.getAttribute('data-c13-inline');if(a==='reload')load();else if(a==='csv')exportCsv();else if(a==='map')open('dash');};
+    return true;
+  }
+  function syncTimeWindowTab(){
+    if(!findTimeWindowHeading())return;
+    renderInline();
+    if(!state.entry)load();
+  }
   function ensure(){
     if(document.getElementById(ID))return;
     var root=document.createElement('section');root.id=ID;root.style.cssText='position:fixed;right:14px;bottom:14px;z-index:99998;width:min(900px,calc(100vw - 28px));max-height:75vh;overflow:auto;background:#fff;color:#111;border:1px solid #aaa;border-radius:10px;padding:12px;box-shadow:0 4px 20px rgba(0,0,0,.25);display:none';
@@ -103,5 +135,6 @@
     else if(t.indexOf('ダッシュボード')>=0)setTimeout(function(){open('dash');},50);
   },true);
   window.OFK3Cortex13={open:open,load:load,exportCsv:exportCsv};
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ensure);else ensure();
+  function boot(){ensure();syncTimeWindowTab();new MutationObserver(function(){syncTimeWindowTab();}).observe(document.body,{childList:true,subtree:true});}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();
