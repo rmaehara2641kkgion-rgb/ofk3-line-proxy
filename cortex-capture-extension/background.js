@@ -105,7 +105,25 @@ function dispatchLeftClick(target, x, y, done) {
 }
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-  if (!msg || (msg.type !== 'ofk3-cdp-click' && msg.type !== 'ofk3-cdp-wheel')) return;
+  if (!msg) return;
+  if (msg.type === 'ofk3-priority-import') {
+    fetch('https://ofk3-cortex-preview.onrender.com/cortex-priority/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msg.payload || {})
+    }).then(function (res) {
+      return res.json().then(function (body) {
+        if (!res.ok || !body || body.status !== 'ok') {
+          throw new Error((body && body.message) || ('HTTP ' + res.status));
+        }
+        sendResponse({ ok: true, body: body });
+      });
+    }).catch(function (e) {
+      sendResponse({ ok: false, message: e && e.message ? e.message : 'OFK3 Preview送信失敗' });
+    });
+    return true;
+  }
+  if (msg.type !== 'ofk3-cdp-click' && msg.type !== 'ofk3-cdp-wheel') return;
   var tabId = sender && sender.tab && sender.tab.id;
   var x = Number(msg.x);
   var y = Number(msg.y);
