@@ -22,6 +22,8 @@
   var sessionBusy = false;
   var stopRequested = false;
   var wheelTrace = [];
+  var wheelTraceEarly = [];
+  var lastRoutePoint = null;
   var localDate = '';
   var waitTimer = 0;
   var summariesWaitTimer = 0;
@@ -151,7 +153,9 @@
   function pushWheelTrace(label, point) {
     var s = domRouteStats();
     var xy = point ? Math.round(point.x) + ',' + Math.round(point.y) : '-';
-    wheelTrace.push(label + ':DOM=' + s.count + '[' + s.sample + ']@' + xy);
+    var line = label + ':DOM=' + s.count + '[' + s.sample + ']@' + xy;
+    wheelTrace.push(line);
+    if (wheelTraceEarly.length < 12) wheelTraceEarly.push(line);
     if (wheelTrace.length > 60) wheelTrace.shift();
   }
 
@@ -170,7 +174,8 @@
     setText('ofk3-poc-ended', d.runEnded || 'no');
     setText('ofk3-poc-error', d.message || d.error || '-');
     setText('ofk3-poc-domroutes', domRouteSnapshot());
-    setText('ofk3-poc-wheeltrace', wheelTrace.length ? wheelTrace.slice(-16).join(' | ') : '-');
+    var traceView = wheelTraceEarly.concat(wheelTrace.slice(-12));
+    setText('ofk3-poc-wheeltrace', traceView.length ? traceView.join(' | ') : '-');
   }
 
   function setPanelClickable(on) {
@@ -538,7 +543,8 @@
       var x = Math.max(sr.left + 8, Math.min(sr.right - 8, sr.left + sr.width / 2));
       var y = Math.max(sr.top + 8, Math.min(sr.bottom - 8, sr.top + sr.height / 2));
       if (x > 0 && x < global.innerWidth && y > 0 && y < global.innerHeight) {
-        return { x: x, y: y };
+        lastRoutePoint = { x: x, y: y };
+        return lastRoutePoint;
       }
     }
 
@@ -548,8 +554,10 @@
       try { rect = cards[i].getBoundingClientRect(); } catch (e2) {}
       if (!rect || rect.width <= 0 || rect.height <= 0) continue;
       if (rect.bottom < 0 || rect.top > global.innerHeight || rect.right < 0 || rect.left > global.innerWidth) continue;
-      return { x: Math.max(1, Math.min(global.innerWidth - 1, rect.left + rect.width / 2)), y: Math.max(1, Math.min(global.innerHeight - 1, rect.top + rect.height / 2)) };
+      lastRoutePoint = { x: Math.max(1, Math.min(global.innerWidth - 1, rect.left + rect.width / 2)), y: Math.max(1, Math.min(global.innerHeight - 1, rect.top + rect.height / 2)) };
+      return lastRoutePoint;
     }
+    if (lastRoutePoint) return { x: lastRoutePoint.x, y: lastRoutePoint.y };
     return { x: Math.max(1, Math.floor(global.innerWidth * 0.22)), y: Math.max(1, Math.floor(global.innerHeight * 0.72)) };
   }
 
@@ -806,7 +814,10 @@
     tour.wheelAttempts = 0;
     tour.wheelDirection = 'up';
     wheelTrace = [];
-    pushWheelTrace('start', null);
+    wheelTraceEarly = [];
+    lastRoutePoint = null;
+    var initialPoint = routeViewportPoint();
+    pushWheelTrace('start', initialPoint);
     if (!store.summaries) {
       pocRun = Core.createPocRun({});
       finishPoc({
