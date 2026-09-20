@@ -127,6 +127,7 @@
     setText('ofk3-poc-up', d.mouseReleased || '-');
     setText('ofk3-poc-details', d.details || '-');
     setText('ofk3-poc-ended', d.runEnded || 'no');
+    setText('ofk3-poc-error', d.message || d.error || '-');
   }
 
   function setPanelClickable(on) {
@@ -159,7 +160,8 @@
       '<div>mousePressed: <span id="ofk3-poc-down">-</span></div>' +
       '<div>mouseReleased: <span id="ofk3-poc-up">-</span></div>' +
       '<div>Route詳細捕捉: <span id="ofk3-poc-details">-</span></div>' +
-      '<div>run終了: <span id="ofk3-poc-ended">no</span></div>';
+      '<div>run終了: <span id="ofk3-poc-ended">no</span></div>' +
+      '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
