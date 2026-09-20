@@ -140,7 +140,7 @@ app.get(['/', '/index.html'], function(req, res, next) {
   try {
     var indexFile = path.join(__dirname, 'index.html');
     var html = fs.readFileSync(indexFile, 'utf8');
-    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260920-2';
+    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260921-1';
     if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
       var bodyPos = html.lastIndexOf('</body>');
       if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
