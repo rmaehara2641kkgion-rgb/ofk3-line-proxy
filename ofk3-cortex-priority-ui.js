@@ -23,12 +23,18 @@
   async function load(){
     var d=today(), status=document.getElementById('c13-status');
     if(status)status.textContent='読込中…';
+    var reqUrl='/cortex-priority?localDate='+encodeURIComponent(d);
+    console.log('[Cortex13 UI]\norigin='+location.origin+'\ntoday='+d+'\nrequest='+reqUrl);
     try{
-      var r=await fetch('/cortex-priority?localDate='+encodeURIComponent(d),{cache:'no-store'});
+      var r=await fetch(reqUrl,{cache:'no-store'});
       var j=await r.json();
+      console.log('[Cortex13 UI] response httpStatus='+r.status+' jsonStatus='+(j&&j.status));
       if(!r.ok||j.status!=='ok'){
-        r=await fetch('/cortex-priority?localDate='+encodeURIComponent(d)+'&latest=1',{cache:'no-store'});
+        var fallbackUrl=reqUrl+'&latest=1';
+        console.log('[Cortex13 UI] fallbackRequest='+fallbackUrl);
+        r=await fetch(fallbackUrl,{cache:'no-store'});
         j=await r.json();
+        console.log('[Cortex13 UI] fallback response httpStatus='+r.status+' jsonStatus='+(j&&j.status)+' localDate='+(j&&j.localDate)+' stopCount='+(j&&j.stopCount)+' packageCount='+(j&&j.packageCount));
       }
       if(!r.ok||j.status!=='ok')throw new Error(j.message||'Cortexデータなし');
       state.entry=j;state.stops=group(j.packages);render();renderInline();
