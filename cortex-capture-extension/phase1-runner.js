@@ -267,6 +267,33 @@
     box.style.pointerEvents = on ? 'auto' : 'none';
   }
 
+  async function sendPriorityToOfk3() {
+    var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
+    var result = Core.ingestBundle(bundle);
+    if (!result || !result.ok || !result.packages || !result.packages.length) {
+      alert('13時優先データがありません。先に取得を完了してください。');
+      return;
+    }
+    try {
+      var res = await fetch('https://ofk3-line-proxy-1.onrender.com/cortex-priority/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          localDate: currentLocalDate(),
+          source: 'cortex-capture-extension',
+          stopCount: result.stopCount || 0,
+          packageCount: result.packageCount || 0,
+          packages: result.packages
+        })
+      });
+      var body = await res.json();
+      if (!res.ok || !body || body.status !== 'ok') throw new Error((body && body.message) || ('HTTP ' + res.status));
+      alert('OFK3へ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages');
+    } catch (e) {
+      alert('OFK3送信に失敗しました: ' + e.message);
+    }
+  }
+
   function ensurePanel() {
     if (!document.documentElement) return;
     var box = document.getElementById(PANEL_ID);
@@ -311,6 +338,7 @@
     }
     row.appendChild(mk('取得開始', function () { start(); }));
     row.appendChild(mk('JSON保存', function () { saveBundle(); }));
+    row.appendChild(mk('OFK3へ送信', function () { sendPriorityToOfk3(); }));
     row.appendChild(mk('13時結果保存', function () {
       var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
       var result = Core.ingestBundle(bundle);
