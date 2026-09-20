@@ -532,6 +532,11 @@
           </div>
         </div>
 
+        <div id="ofk3-cortex13-dash-card" class="card p-4 mb-4 mt-4">
+          <p class="text-sm font-medium">⚡ Cortex 13:00必達</p>
+          <p class="text-xs text-ink-lighter mt-1">読込中…</p>
+        </div>
+
         <!-- ヒーロー画像（データ未読込時表示） -->
         <div id="dashboard-hero" class="flex justify-center mt-6 mb-4">
           <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
@@ -2363,7 +2368,7 @@
           </div>
         </div>
 
-        <div class="card p-4 mb-4" id="cortex13-card" ondragover="event.preventDefault(); this.classList.add('ring-2','ring-blue-400')" ondragleave="this.classList.remove('ring-2','ring-blue-400')" ondrop="cortex13OnDrop(event)">
+        <div class="card p-4 mb-4 hidden" id="cortex13-card" ondragover="event.preventDefault(); this.classList.add('ring-2','ring-blue-400')" ondragleave="this.classList.remove('ring-2','ring-blue-400')" ondrop="cortex13OnDrop(event)">
           <div class="flex items-center justify-between mb-2">
             <div>
               <h3 class="text-sm font-bold">Cortex 13時優先</h3>
@@ -2434,6 +2439,11 @@
               <tbody id="cortex13-pkg-tbody"></tbody>
             </table>
           </div>
+        </div>
+
+        <div id="ofk3-cortex13-tw-panel" class="card p-4 mb-4">
+          <p class="text-sm font-bold">⚡ Cortex 13:00必達</p>
+          <p class="text-xs text-ink-lighter mt-1">読込中…</p>
         </div>
 
         <!-- サマリー -->
@@ -3723,6 +3733,9 @@ var driverDB = {
         if (AssignSupport.syncShiftFromGlobals) AssignSupport.syncShiftFromGlobals();
         if (AssignSupport.renderAll) AssignSupport.renderAll();
       }
+      if (window.OFK3Cortex13 && typeof window.OFK3Cortex13.onTab === 'function') {
+        try { window.OFK3Cortex13.onTab(tab); } catch (e) {}
+      }
     }
 
     // ===== File Upload - Assignment Data =====
@@ -4006,6 +4019,9 @@ var driverDB = {
 
       // 当日コースの未ジオコーディング住所を自動取得（日次上限100件）
       setTimeout(function() { autoGeocodeDashboardAddresses(); }, 1000);
+      if (window.OFK3Cortex13 && typeof window.OFK3Cortex13.renderCortexPriorityDashboard === 'function') {
+        try { window.OFK3Cortex13.renderCortexPriorityDashboard(); } catch (e) {}
+      }
     }
 
     function shortenService(service) {
@@ -21159,5 +21175,6 @@ var driverDB = {
   <script src="/rolling60h-ui.js?v=20260904-1"></script>
   <script src="/cortex-13-priority-core.js?v=20260918-5"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
+  <script src="/ofk3-cortex-priority-ui.js?v=20260921-1"></script>
 </body>
 </html>
