@@ -622,7 +622,9 @@
       var rect = null;
       try { rect = card.getBoundingClientRect(); } catch (e1) {}
       if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-      if (rect.bottom < 0 || rect.top > global.innerHeight || rect.right < 0 || rect.left > global.innerWidth) continue;
+      // The Cortex list keeps route cards mounted outside the viewport. Do not
+      // reject an existing target merely because it is currently off-screen:
+      // clickRoute() scrolls the exact card into view before deriving CDP coords.
       return { route: route, card: card };
     }
     return null;
