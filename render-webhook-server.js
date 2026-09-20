@@ -408,6 +408,11 @@ app.post('/cortex-priority/import', function(req, res) {
 app.get('/cortex-priority', function(req, res) {
   var localDate = String(req.query.localDate || getTodayJst());
   var entry = cortexPriorityStore[localDate];
+  if (!entry && String(req.query.latest || '') === '1') {
+    entry = Object.keys(cortexPriorityStore).map(function (k) { return cortexPriorityStore[k]; }).sort(function (a, b) {
+      return String(b.receivedAt || '').localeCompare(String(a.receivedAt || ''));
+    })[0] || null;
+  }
   if (!entry) return res.status(404).json({ status: 'empty', localDate: localDate, packages: [], stopCount: 0, packageCount: 0 });
   res.json(Object.assign({ status: 'ok' }, entry));
 });
