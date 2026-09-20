@@ -478,6 +478,7 @@
   }
 
   function finiteCoord(value) {
+    if (value == null || value === '') return null;
     var n = Number(value);
     return isFinite(n) ? n : null;
   }
