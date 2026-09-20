@@ -5,7 +5,26 @@
     if (ev.source !== window) return;
     if (ev.origin && ev.origin !== location.origin) return;
     var data = ev.data;
-    if (!data || data.source !== 'OFK3_CORTEX' || (data.type !== 'cdp-click' && data.type !== 'cdp-wheel')) return;
+    if (!data || data.source !== 'OFK3_CORTEX') return;
+    if (data.type === 'ofk3-priority-import') {
+      chrome.runtime.sendMessage({
+        type: 'ofk3-priority-import',
+        requestId: data.requestId,
+        payload: data.payload
+      }, function (res) {
+        var err = chrome.runtime.lastError;
+        window.postMessage({
+          source: 'OFK3_CORTEX',
+          type: 'ofk3-priority-import-result',
+          requestId: data.requestId,
+          ok: !!(res && res.ok),
+          body: (res && res.body) || null,
+          message: (res && res.message) || (err ? err.message : 'OFK3送信失敗')
+        }, location.origin);
+      });
+      return;
+    }
+    if (data.type !== 'cdp-click' && data.type !== 'cdp-wheel') return;
     var isWheel = data.type === 'cdp-wheel';
     chrome.runtime.sendMessage({
       type: isWheel ? 'ofk3-cdp-wheel' : 'ofk3-cdp-click',
