@@ -590,13 +590,18 @@ function run() {
   assert(runnerSrc.indexOf('getResponseHeader') < 0 && runnerSrc.indexOf('getAllResponseHeaders') < 0, 'runner does not read response headers');
   assert(coreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, '11:00 uses ELEVEN_HOUR');
   assert(runnerSrc.indexOf('tourRoutesFromSummaries') >= 0 || runnerSrc.indexOf('selectElevenOClockRoutes') >= 0 || runnerSrc.indexOf('armTour') >= 0, 'runner uses core 11:00 selection');
-  assert(runnerSrc.indexOf("phase: 'poc-1'") >= 0, 'runner marks Phase 1 API');
+  var phase2Src = readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  var phase2CoreSrc = readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'phase1-core.js'), 'utf8');
+  assertNoDirectFetch(phase2Src, 'phase2 runner');
+  assertNoDirectFetch(phase2CoreSrc, 'phase2 core');
+  assert(phase2Src.indexOf("phase: 'poc-2'") >= 0, 'live runner marks Phase 2 API');
+  assert(phase2Src.indexOf('runNextRoute') >= 0 && phase2Src.indexOf('visibleTargetRoute') >= 0, 'Phase 2 walks visible uncaptured 11:00 Routes sequentially');
   assert(bgSrc.indexOf('phase1-runner.js') >= 0 && bgSrc.indexOf('phase1-core.js') >= 0, 'toolbar injects unique Phase 1 files, not the already-injected content_scripts');
-  assert(bgSrc.indexOf("api.phase !== 'poc-1'") >= 0, 'toolbar does not call leftover full-tour start()');
-  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-priority-core.js'), 'utf8') === coreSrc, 'extension core matches');
-  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-capture-runner.js'), 'utf8') === runnerSrc, 'extension runner matches');
-  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'phase1-core.js'), 'utf8') === coreSrc, 'phase1-core matches');
-  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'phase1-runner.js'), 'utf8') === runnerSrc, 'phase1-runner matches');
+  assert(bgSrc.indexOf("api.phase !== 'poc-2'") >= 0, 'toolbar starts only the Phase 2 API');
+  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-priority-core.js'), 'utf8') === coreSrc, 'extension core copy matches');
+  assert(readFileSync(join(__dirname, '..', 'cortex-capture-extension', 'cortex-13-capture-runner.js'), 'utf8') === runnerSrc, 'extension runner copy matches');
+  assert(phase2CoreSrc.indexOf('parts.hour === ELEVEN_HOUR') >= 0, 'phase1-core keeps 11:00 extraction');
+  assert(phase2CoreSrc.indexOf('firstUncapturedTourRoute') >= 0, 'phase1-core exports firstUncapturedTourRoute');
 
   var ingestedAuth = Glue.ingestJsonText(JSON.stringify({ authError: 'UNAUTHORIZED', httpStatus: 401, details: [] }), { refresh: true });
   assert(ingestedAuth.error === Core.ERROR.UNAUTHORIZED, 'glue surfaces 401');
