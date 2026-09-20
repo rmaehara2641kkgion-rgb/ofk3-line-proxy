@@ -5,16 +5,19 @@
     if (ev.source !== window) return;
     if (ev.origin && ev.origin !== location.origin) return;
     var data = ev.data;
-    if (!data || data.source !== 'OFK3_CORTEX' || data.type !== 'cdp-click') return;
+    if (!data || data.source !== 'OFK3_CORTEX' || (data.type !== 'cdp-click' && data.type !== 'cdp-wheel')) return;
+    var isWheel = data.type === 'cdp-wheel';
     chrome.runtime.sendMessage({
-      type: 'ofk3-cdp-click',
+      type: isWheel ? 'ofk3-cdp-wheel' : 'ofk3-cdp-click',
       x: Number(data.x),
-      y: Number(data.y)
+      y: Number(data.y),
+      deltaX: isWheel ? Number(data.deltaX || 0) : 0,
+      deltaY: isWheel ? Number(data.deltaY || 0) : 0
     }, function (res) {
       var err = chrome.runtime.lastError;
       window.postMessage({
         source: 'OFK3_CORTEX',
-        type: 'cdp-click-result',
+        type: isWheel ? 'cdp-wheel-result' : 'cdp-click-result',
         ok: !!(res && res.ok),
         attach: (res && res.attach) || 'fail',
         mousePressed: (res && res.mousePressed) || 'fail',
