@@ -6,7 +6,8 @@ const path = require('path');
 const indexPath = path.join(__dirname, 'index.html');
 const tags = [
   '<script src="/tenko-transport-audit.js?v=20260812-1"></script>',
-  '<script src="/tenko-transport-audit-success.js?v=20260812-1"></script>'
+  '<script src="/tenko-transport-audit-success.js?v=20260812-1"></script>',
+  '<script src="/ofk3-cortex-priority-ui.js?v=20260920-1"></script>'
 ];
 
 try {
@@ -20,6 +21,9 @@ try {
   }
   if (html.indexOf('/tenko-transport-audit-success.js') < 0) {
     insert += '  ' + tags[1] + '\n';
+  }
+  if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
+    insert += '  ' + tags[2] + '\n';
   }
 
   if (insert) {
