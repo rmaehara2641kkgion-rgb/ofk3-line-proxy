@@ -171,6 +171,45 @@
     };
   }
 
+  function priorityRows() {
+    var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
+    var summary = Core.ingestBundle(bundle);
+    return (summary.packages || []).slice().sort(function (a, b) {
+      var rc = String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
+      if (rc) return rc;
+      return Number(a.stop || 0) - Number(b.stop || 0);
+    });
+  }
+
+  function paintPriorityTable() {
+    var host = document.getElementById('ofk3-priority-list');
+    if (!host) return;
+    var rows = priorityRows();
+    if (!rows.length) {
+      host.innerHTML = '<div style="opacity:.7">13時優先データはまだありません</div>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+      '<thead><tr><th style="text-align:left">Route</th><th>Stop</th><th style="text-align:left">Driver</th><th style="text-align:left">TID</th><th>予定</th></tr></thead><tbody>';
+    rows.forEach(function (p) {
+      var tid = String(p.trackingId || '');
+      var shortTid = tid.length > 12 ? tid.slice(-12) : tid;
+      html += '<tr style="border-top:1px solid #333">' +
+        '<td>' + escHtml(p.routeCode || '-') + '</td>' +
+        '<td style="text-align:center">' + escHtml(String(p.stop == null ? '-' : p.stop)) + '</td>' +
+        '<td>' + escHtml(p.driverName || '-') + '</td>' +
+        '<td title="' + escHtml(tid) + '">' + escHtml(shortTid || '-') + '</td>' +
+        '<td style="text-align:center">' + escHtml(p.plannedEndClock || '-') + '</td></tr>';
+    });
+    host.innerHTML = html + '</tbody></table>';
+  }
+
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (ch) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];
+    });
+  }
+
   function paint() {
     var d = diag();
     var box = document.getElementById(PANEL_ID);
@@ -188,6 +227,7 @@
     var ps = prioritySummary();
     setText('ofk3-poc-priority', ps.stops + ' Stops / ' + ps.packages + ' Packages');
     setText('ofk3-poc-progress', ps.routes + ' / ' + ps.selected + ' Routes（失敗 ' + ps.failures + '）');
+    paintPriorityTable();
     setText('ofk3-poc-domroutes', domRouteSnapshot());
     var traceView = wheelTraceEarly.concat(wheelTrace.slice(-12));
     setText('ofk3-poc-wheeltrace', traceView.length ? traceView.join(' | ') : '-');
@@ -213,7 +253,7 @@
     }
     box = document.createElement('div');
     box.id = PANEL_ID;
-    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:320px;max-height:70vh;overflow:auto;');
+    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;width:620px;max-width:calc(100vw - 24px);max-height:78vh;overflow:auto;');
     box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 2</span>' +
       '<div>対象Route: <span id="ofk3-poc-code">-</span></div>' +
       '<div>routeId: <span id="ofk3-poc-id">-</span></div>' +
@@ -226,9 +266,11 @@
       '<div>run終了: <span id="ofk3-poc-ended">no</span></div>' +
       '<div style="margin-top:6px;font-weight:bold">13:00優先: <span id="ofk3-poc-priority">0 Stops / 0 Packages</span></div>' +
       '<div>取得進捗: <span id="ofk3-poc-progress">0 / 0 Routes</span></div>' +
+      '<div style="margin-top:8px;max-height:280px;overflow:auto;background:#181818;padding:6px;border-radius:4px" id="ofk3-priority-list"></div>' +
+      '<details style="margin-top:8px"><summary style="cursor:pointer;opacity:.75">開発診断</summary>' +
       '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>' +
-      '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div>';
+      '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div></details>';
     var row = document.createElement('div');
     row.setAttribute('style', 'margin-top:8px;');
     function mk(label, fn) {
