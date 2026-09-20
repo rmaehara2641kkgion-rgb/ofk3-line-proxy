@@ -134,7 +134,23 @@ function persistTenkoSyncStoreToDisk() {
   }
 }
 
-// 静的ファイル配信（index.html, logo.pngなど）
+// 静的ファイル配信。index.htmlだけはCortex 13:00 UIタグをレスポンス時に注入する。
+// Renderが inject-tenko-audit.js を経由せず render-webhook-server.js を直接起動しても有効。
+app.get(['/', '/index.html'], function(req, res, next) {
+  try {
+    var indexFile = path.join(__dirname, 'index.html');
+    var html = fs.readFileSync(indexFile, 'utf8');
+    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260920-2';
+    if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
+      var bodyPos = html.lastIndexOf('</body>');
+      if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, bodyPos) + '  <script src="' + scriptSrc + '"></script>\n' + html.slice(bodyPos);
+    }
+    res.type('html').send(html);
+  } catch (e) {
+    next(e);
+  }
+});
 app.use(express.static(path.join(__dirname)));
 
 // 簡易ログ（Render Dashboard → Logs で確認）
@@ -339,10 +355,13 @@ var cortexPriorityStore = {};
 function cortexPriorityStopKey(p) {
   return String((p && p.routeCode) || '') + '#' + String((p && p.stop) == null ? '' : p.stop);
 }
+function nullableFiniteNumber(value) {
+  if (value == null || value === '') return null;
+  var n = Number(value);
+  return isFinite(n) ? n : null;
+}
 function sanitizeCortexPriorityPackage(p) {
   p = p || {};
-  var lat = Number(p.latitude);
-  var lng = Number(p.longitude);
   return {
     routeCode: String(p.routeCode || ''),
     routeId: String(p.routeId || ''),
@@ -353,8 +372,8 @@ function sanitizeCortexPriorityPackage(p) {
     plannedEndClock: String(p.plannedEndClock || ''),
     windowLabel: String(p.windowLabel || ''),
     address: String(p.address || ''),
-    latitude: isFinite(lat) ? lat : null,
-    longitude: isFinite(lng) ? lng : null
+    latitude: nullableFiniteNumber(p.latitude),
+    longitude: nullableFiniteNumber(p.longitude)
   };
 }
 function summarizeCortexPriority(packages) {
