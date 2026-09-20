@@ -26,7 +26,11 @@
     try{
       var r=await fetch('/cortex-priority?localDate='+encodeURIComponent(d),{cache:'no-store'});
       var j=await r.json();
-      if(!r.ok||j.status!=='ok')throw new Error(j.message||'本日のCortexデータなし');
+      if(!r.ok||j.status!=='ok'){
+        r=await fetch('/cortex-priority?localDate='+encodeURIComponent(d)+'&latest=1',{cache:'no-store'});
+        j=await r.json();
+      }
+      if(!r.ok||j.status!=='ok')throw new Error(j.message||'Cortexデータなし');
       state.entry=j;state.stops=group(j.packages);render();renderInline();
       if(state.mode==='dash') await renderMap();
     }catch(e){state.entry=null;state.stops=[];render();renderInline(e.message);var s=document.getElementById('c13-status');if(s)s.textContent=e.message;}
