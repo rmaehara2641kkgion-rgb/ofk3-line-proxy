@@ -2,18 +2,30 @@ chrome.action.onClicked.addListener(function (tab) {
   if (!tab || !tab.id) return;
   var url = tab.url || '';
   if (!/^https:\/\/logistics\.amazon\.(co\.jp|com)(\/|$)/.test(url)) return;
+  var target = { tabId: tab.id };
   chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: target,
     world: 'MAIN',
-    files: ['cortex-13-priority-core.js', 'cortex-13-capture-runner.js']
+    func: function () {
+      var api = window.__OFK3_CORTEX_CAPTURE__;
+      if (api && typeof api.stop === 'function') {
+        try { api.stop(); } catch (e1) {}
+      }
+    }
   }).then(function () {
     return chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: target,
+      world: 'MAIN',
+      files: ['phase1-core.js', 'phase1-runner.js']
+    });
+  }).then(function () {
+    return chrome.scripting.executeScript({
+      target: target,
       world: 'MAIN',
       func: function () {
-        if (window.__OFK3_CORTEX_CAPTURE__ && typeof window.__OFK3_CORTEX_CAPTURE__.start === 'function') {
-          window.__OFK3_CORTEX_CAPTURE__.start();
-        }
+        var api = window.__OFK3_CORTEX_CAPTURE__;
+        if (!api || api.phase !== 'poc-1' || typeof api.start !== 'function') return;
+        api.start();
       }
     });
   }).catch(function () {});

@@ -515,6 +515,7 @@
   });
 
   global.__OFK3_CORTEX_CAPTURE__ = {
+    phase: 'poc-1',
     show: show,
     start: start,
     stop: stopPoc,
