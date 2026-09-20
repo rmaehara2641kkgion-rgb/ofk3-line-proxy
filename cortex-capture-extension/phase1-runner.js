@@ -189,17 +189,45 @@
       host.innerHTML = '<div style="opacity:.7">13時優先データはまだありません</div>';
       return;
     }
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
-      '<thead><tr><th style="text-align:left">Route</th><th>Stop</th><th style="text-align:left">Driver</th><th style="text-align:left">TID</th><th>予定</th></tr></thead><tbody>';
+
+    var groups = {};
     rows.forEach(function (p) {
-      var tid = String(p.trackingId || '');
-      var shortTid = tid.length > 12 ? tid.slice(-12) : tid;
+      var key = String(p.routeCode || '') + '#' + String(p.stop == null ? '' : p.stop);
+      if (!groups[key]) groups[key] = {
+        routeCode: p.routeCode || '-',
+        stop: p.stop,
+        driverName: p.driverName || '-',
+        plannedEndClock: p.plannedEndClock || '-',
+        packages: []
+      };
+      groups[key].packages.push(p);
+    });
+
+    var stops = Object.keys(groups).map(function (k) { return groups[k]; });
+    stops.sort(function (a, b) {
+      var rc = String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
+      if (rc) return rc;
+      return Number(a.stop || 0) - Number(b.stop || 0);
+    });
+
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:11px">' +
+      '<thead><tr><th style="text-align:left">Route</th><th>Stop</th><th style="text-align:left">Driver</th><th>個数</th><th>予定</th></tr></thead><tbody>';
+    stops.forEach(function (s) {
+      var tids = s.packages.map(function (p) { return String(p.trackingId || '-'); });
+      var detail = tids.map(function (tid) { return '<div style="padding:2px 0;font-family:monospace">' + escHtml(tid) + '</div>'; }).join('');
       html += '<tr style="border-top:1px solid #333">' +
-        '<td>' + escHtml(p.routeCode || '-') + '</td>' +
-        '<td style="text-align:center">' + escHtml(String(p.stop == null ? '-' : p.stop)) + '</td>' +
-        '<td>' + escHtml(p.driverName || '-') + '</td>' +
-        '<td title="' + escHtml(tid) + '">' + escHtml(shortTid || '-') + '</td>' +
-        '<td style="text-align:center">' + escHtml(p.plannedEndClock || '-') + '</td></tr>';
+        '<td>' + escHtml(s.routeCode) + '</td>' +
+        '<td style="text-align:center">' + escHtml(String(s.stop == null ? '-' : s.stop)) + '</td>' +
+        '<td>' + escHtml(s.driverName) + '</td>' +
+        '<td style="text-align:center;font-weight:bold">' + s.packages.length + '</td>' +
+        '<td style="text-align:center">' + escHtml(s.plannedEndClock) + '</td></tr>';
+      if (s.packages.length > 1) {
+        html += '<tr><td colspan="5" style="padding:0 8px 5px 28px"><details><summary style="cursor:pointer;opacity:.8">TID ' +
+          s.packages.length + '件</summary>' + detail + '</details></td></tr>';
+      } else {
+        html += '<tr><td colspan="5" style="padding:0 8px 4px 28px;opacity:.65;font-family:monospace">' +
+          escHtml(tids[0]) + '</td></tr>';
+      }
     });
     host.innerHTML = html + '</tbody></table>';
   }
