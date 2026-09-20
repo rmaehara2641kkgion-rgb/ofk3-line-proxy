@@ -150,7 +150,7 @@
     }
     box = document.createElement('div');
     box.id = PANEL_ID;
-    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:280px;');
+    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;max-width:320px;max-height:70vh;overflow:auto;');
     box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 1</span>' +
       '<div>対象Route: <span id="ofk3-poc-code">-</span></div>' +
       '<div>routeId: <span id="ofk3-poc-id">-</span></div>' +
@@ -362,6 +362,10 @@
     pocRun.diagnostics.attach = (res && res.attach) || 'fail';
     pocRun.diagnostics.mousePressed = (res && res.mousePressed) || 'fail';
     pocRun.diagnostics.mouseReleased = (res && res.mouseReleased) || 'fail';
+    if (res && res.error) pocRun.diagnostics.error = String(res.error);
+    if (res && (res.message || res.error)) {
+      pocRun.diagnostics.message = String(res.message || res.error);
+    }
   }
 
   function clickRoute(route, runId, done) {
