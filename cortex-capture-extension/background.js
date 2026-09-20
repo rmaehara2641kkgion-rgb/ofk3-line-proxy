@@ -24,7 +24,7 @@ chrome.action.onClicked.addListener(function (tab) {
       world: 'MAIN',
       func: function () {
         var api = window.__OFK3_CORTEX_CAPTURE__;
-        if (!api || api.phase !== 'poc-1' || typeof api.start !== 'function') return;
+        if (!api || api.phase !== 'poc-2' || typeof api.start !== 'function') return;
         api.start();
       }
     });
