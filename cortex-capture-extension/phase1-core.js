@@ -304,7 +304,9 @@
           plannedStartTime: plannedStartMs,
           plannedEndTime: plannedEndMs,
           plannedEndClock: formatTokyoClock(plannedEndMs),
-          address: [addr.address1, addr.address2, addr.city].filter(Boolean).join(' ')
+          address: [addr.address1, addr.address2, addr.city, addr.state, addr.postalCode].filter(Boolean).join(' '),
+          latitude: Number(addr.latitude != null ? addr.latitude : (addr.lat != null ? addr.lat : (addr.geoLocation && addr.geoLocation.latitude))),
+          longitude: Number(addr.longitude != null ? addr.longitude : (addr.lng != null ? addr.lng : (addr.geoLocation && addr.geoLocation.longitude)))
         });
       });
     });
