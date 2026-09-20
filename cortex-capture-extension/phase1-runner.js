@@ -241,24 +241,30 @@
     return card;
   }
 
-  function largestScroller() {
-    var best = document.scrollingElement || document.documentElement;
-    var bestSize = 0;
-    var nodes = document.querySelectorAll('div, section, main, tbody, [role="rowgroup"]');
+  function candidateScrollers() {
+    var out = [];
+    var seen = [];
+    function add(el) {
+      if (!el || inPanel(el)) return;
+      if (seen.indexOf(el) >= 0) return;
+      if ((el.scrollHeight || 0) - (el.clientHeight || 0) < 40) return;
+      seen.push(el);
+      out.push(el);
+    }
+    add(document.scrollingElement || document.documentElement);
+    var nodes = document.querySelectorAll('div, section, main, tbody, [role="rowgroup"], [role="grid"], [role="table"]');
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
-      if (el.id === PANEL_ID) continue;
       var overflow = '';
-      try { overflow = global.getComputedStyle(el).overflowY; } catch (e) {}
-      if (el.scrollHeight - el.clientHeight < 80) continue;
-      if (overflow !== 'auto' && overflow !== 'scroll' && overflow !== 'overlay') continue;
-      var size = el.scrollHeight * el.clientWidth;
-      if (size > bestSize) {
-        bestSize = size;
-        best = el;
-      }
+      try { overflow = global.getComputedStyle(el).overflowY; } catch (e1) {}
+      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') add(el);
     }
-    return best;
+    out.sort(function (a, b) {
+      var aDelta = (a.scrollHeight || 0) - (a.clientHeight || 0);
+      var bDelta = (b.scrollHeight || 0) - (b.clientHeight || 0);
+      return bDelta - aDelta;
+    });
+    return out;
   }
 
   function findRouteCardByRouteId(routeId) {
@@ -303,44 +309,58 @@
       done(el, null);
       return;
     }
-    var scroller = largestScroller();
-    if (!scroller) {
+    var scrollers = candidateScrollers();
+    if (!scrollers.length) {
       done(null, {
         error: Core.ERROR.DOM_NOT_FOUND,
-        message: 'Route DOM未発見（scroll領域なし）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+        message: 'Route DOM未発見（scroll候補なし）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
       });
       return;
     }
-    var stepPx = Math.max(120, Math.floor((scroller.clientHeight || 300) * 0.65));
-    var y = 0;
-    var guard = 0;
-    var maxGuard = 80;
+    var scrollerIndex = 0;
+    var totalScans = 0;
 
-    function scan() {
+    function scanScroller() {
       if (!Core.pocRunIsCurrent(pocRun, runId)) return;
-      el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
-      if (el) {
-        waitTimer = 0;
-        done(el, null);
-        return;
-      }
-      var maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      if (guard >= maxGuard || (guard > 0 && y > maxScroll)) {
+      if (scrollerIndex >= scrollers.length) {
         waitTimer = 0;
         done(null, {
           error: Core.ERROR.DOM_NOT_FOUND,
-          message: 'Route DOM未発見（非同期scan ' + guard + '回）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
+          message: 'Route DOM未発見（scroll候補' + scrollers.length + '個 / scan ' + totalScans + '回）: routeId=' + String(route.routeId || '-') + ' / routeCode=' + String(route.routeCode || '-')
         });
         return;
       }
-      scroller.scrollTop = Math.min(y, maxScroll);
-      try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
-      guard += 1;
-      y += stepPx;
-      waitTimer = setTimeout(scan, 90);
+      var scroller = scrollers[scrollerIndex];
+      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.55));
+      var y = 0;
+      var localScans = 0;
+
+      function scan() {
+        if (!Core.pocRunIsCurrent(pocRun, runId)) return;
+        el = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+        if (el) {
+          waitTimer = 0;
+          done(el, null);
+          return;
+        }
+        var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
+        if (localScans >= 100 || (localScans > 0 && y > maxScroll)) {
+          scrollerIndex += 1;
+          waitTimer = setTimeout(scanScroller, 80);
+          return;
+        }
+        scroller.scrollTop = Math.min(y, maxScroll);
+        try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
+        localScans += 1;
+        totalScans += 1;
+        y += stepPx;
+        waitTimer = setTimeout(scan, 100);
+      }
+      scan();
     }
-    scan();
+    scanScroller();
   }
+
   function requestCdpClick(point, cb) {
     var finished = false;
     var timer = 0;
