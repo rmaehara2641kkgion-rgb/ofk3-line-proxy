@@ -4023,6 +4023,9 @@ var driverDB = {
       if (window.OFK3Cortex13 && typeof window.OFK3Cortex13.renderCortexPriorityDashboard === 'function') {
         try { window.OFK3Cortex13.renderCortexPriorityDashboard(); } catch (e) {}
       }
+      if (window.OFK3TimeWindowBoard && typeof window.OFK3TimeWindowBoard.onDashboardRender === 'function') {
+        try { window.OFK3TimeWindowBoard.onDashboardRender(); } catch (e) {}
+      }
     }
 
     function shortenService(service) {

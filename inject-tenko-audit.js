@@ -7,7 +7,8 @@ const indexPath = path.join(__dirname, 'index.html');
 const tags = [
   '<script src="/tenko-transport-audit.js?v=20260812-1"></script>',
   '<script src="/tenko-transport-audit-success.js?v=20260812-1"></script>',
-  '<script src="/ofk3-cortex-priority-ui.js?v=20260921-3"></script>'
+  '<script src="/ofk3-cortex-priority-ui.js?v=20260921-3"></script>',
+  '<script src="/ofk3-time-window-board.js?v=20260921-1"></script>'
 ];
 
 try {
@@ -24,6 +25,9 @@ try {
   }
   if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
     insert += '  ' + tags[2] + '\n';
+  }
+  if (html.indexOf('/ofk3-time-window-board.js') < 0) {
+    insert += '  ' + tags[3] + '\n';
   }
 
   if (insert) {
