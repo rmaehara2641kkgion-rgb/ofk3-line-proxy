@@ -1,0 +1,57 @@
+﻿日付,ステーション,プロバイダーショートコード,サービスタイプ,計画された時間,計画された合計距離,合計距離手当,計画された距離単位,AMZL遅延キャンセル,Provider late cancel,クイックカバー,承諾済み,完了したルート
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,255,255,キロメートル,該当なし,該当なし,該当なし,該当なし,9
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,4時間30分,18,18,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,6時間30分,25,25,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,8時間,21,21,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,83,83,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,8時間,40,40,キロメートル,該当なし,該当なし,該当なし,該当なし,2
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,372,372,キロメートル,該当なし,該当なし,該当なし,該当なし,16
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,87,87,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-13,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,298,298,キロメートル,該当なし,該当なし,該当なし,該当なし,16
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,8時間,17,17,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,8時間,56,56,キロメートル,該当なし,該当なし,該当なし,該当なし,2
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,466,466,キロメートル,該当なし,該当なし,該当なし,該当なし,18
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,411,411,キロメートル,該当なし,該当なし,該当なし,該当なし,18
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,86,86,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,172,172,キロメートル,該当なし,該当なし,該当なし,該当なし,9
+2026-09-14,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,90,90,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,6時間30分,21,21,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,4時間30分,18,18,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,6時間30分,19,19,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,177,177,キロメートル,該当なし,該当なし,該当なし,該当なし,9
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,88,88,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,8時間,20,20,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,8時間,46,46,キロメートル,該当なし,該当なし,該当なし,該当なし,2
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,398,398,キロメートル,該当なし,該当なし,該当なし,該当なし,16
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,345,345,キロメートル,該当なし,該当なし,該当なし,該当なし,16
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,99,99,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-15,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,4時間30分,17,17,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,8時間,20,20,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,457,457,キロメートル,該当なし,該当なし,該当なし,該当なし,17
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 2,8時間,19,19,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,328,328,キロメートル,該当なし,該当なし,該当なし,該当なし,17
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,92,92,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,194,194,キロメートル,該当なし,該当なし,該当なし,該当なし,10
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,4時間30分,32,32,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 3,6時間30分,18,18,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-16,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,93,93,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,90,90,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,401,401,キロメートル,該当なし,該当なし,該当なし,該当なし,17
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,94,94,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,203,203,キロメートル,該当なし,該当なし,該当なし,該当なし,11
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,4時間30分,15,15,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,DA Onboarding,3時間,0,0,キロメートル,該当なし,該当なし,該当なし,該当なし,5
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,8時間,27,27,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,357,357,キロメートル,該当なし,該当なし,該当なし,該当なし,17
+2026-09-17,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 1,6時間30分,25,25,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,346,346,キロメートル,該当なし,該当なし,該当なし,該当なし,18
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,84,84,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Nursery Route Level 2,8時間,27,27,キロメートル,該当なし,該当なし,該当なし,該当なし,1
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,88,88,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,410,410,キロメートル,該当なし,該当なし,該当なし,該当なし,18
+2026-09-18,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,165,165,キロメートル,該当なし,該当なし,該当なし,該当なし,11
+2026-09-19,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,8時間,217,217,キロメートル,該当なし,該当なし,該当なし,該当なし,12
+2026-09-19,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),2時間,94,94,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-19,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,4時間30分,430,430,キロメートル,該当なし,該当なし,該当なし,該当なし,18
+2026-09-19,Fukuoka (OFK3) - Amazon.com,GDS,Biker (Rear Cargo - Large),3時間,91,91,キロメートル,該当なし,該当なし,該当なし,該当なし,8
+2026-09-19,Fukuoka (OFK3) - Amazon.com,GDS,Standard Parcel,6時間30分,382,382,キロメートル,該当なし,該当なし,該当なし,該当なし,18

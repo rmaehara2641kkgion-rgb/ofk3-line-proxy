@@ -3737,6 +3737,9 @@ var driverDB = {
       if (window.OFK3Cortex13 && typeof window.OFK3Cortex13.onTab === 'function') {
         try { window.OFK3Cortex13.onTab(tab); } catch (e) {}
       }
+      if (window.OFK3GdsFleetAudit && typeof window.OFK3GdsFleetAudit.onTab === 'function') {
+        try { window.OFK3GdsFleetAudit.onTab(tab); } catch (e) {}
+      }
     }
 
     // ===== File Upload - Assignment Data =====
