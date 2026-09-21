@@ -339,6 +339,102 @@
     };
   }
 
+  function sequenceStopLocation(details, stop) {
+    var addresses = (details && Array.isArray(details.addresses)) ? details.addresses : [];
+    var tasks = (stop && stop.tasks) || [];
+    var task = null;
+    var i;
+    for (i = 0; i < tasks.length; i++) {
+      if (tasks[i] && tasks[i].taskType === 'DROP_OFF') {
+        task = tasks[i];
+        break;
+      }
+    }
+    if (!task && tasks[0]) task = tasks[0];
+    var ids = [];
+    function addId(v) {
+      if (v == null || v === '') return;
+      v = String(v);
+      if (ids.indexOf(v) < 0) ids.push(v);
+    }
+    addId(task && task.addressId);
+    addId(stop && stop.addressId);
+    addId(task && task.destinationAddressId);
+    addId(stop && stop.destinationAddressId);
+    var addr = null;
+    for (i = 0; i < addresses.length && !addr; i++) {
+      var a = addresses[i] || {};
+      var aid = a.addressId != null ? String(a.addressId) : '';
+      var id = a.id != null ? String(a.id) : '';
+      if ((aid && ids.indexOf(aid) >= 0) || (id && ids.indexOf(id) >= 0)) addr = a;
+    }
+    if (!addr && addresses.length === 1) addr = addresses[0] || {};
+    function coordOf(value) {
+      if (value == null || value === '') return null;
+      var n = Number(value);
+      return isFinite(n) ? n : null;
+    }
+    var lat = coordOf(addr && (addr.latitude != null ? addr.latitude :
+      (addr.lat != null ? addr.lat : (addr.geoLocation && addr.geoLocation.latitude))));
+    var lng = coordOf(addr && (addr.longitude != null ? addr.longitude :
+      (addr.lng != null ? addr.lng : (addr.geoLocation && addr.geoLocation.longitude))));
+    var text = '';
+    if (addr) {
+      text = addr.fullAddress || addr.address || [addr.address1, addr.address2, addr.address3, addr.city].filter(Boolean).join(' ');
+    }
+    return { address: text || '', latitude: lat, longitude: lng };
+  }
+
+  // Full Cortex visit order from already-captured route-details.
+  // Does not apply 13:00 filters. sequenceNumber is the canonical visit order.
+  function extractRouteSequence(details) {
+    if (!details || !details.rmsRouteDetails || !Array.isArray(details.rmsRouteDetails.stops)) {
+      return {
+        ok: false,
+        routeCode: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeCode : '',
+        routeId: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeId : '',
+        driverName: '',
+        stops: []
+      };
+    }
+    var rd = details.rmsRouteDetails;
+    var driverName = driverNameFromDetails(details);
+    var stops = [];
+    rd.stops.forEach(function (stop) {
+      if (!stop) return;
+      var tasks = Array.isArray(stop.tasks) ? stop.tasks : [];
+      var dropCount = 0;
+      var i;
+      for (i = 0; i < tasks.length; i++) {
+        if (tasks[i] && tasks[i].taskType === 'DROP_OFF') dropCount += 1;
+      }
+      var location = sequenceStopLocation(details, stop);
+      var plannedEndMs = epochToMs(stop.plannedEndTime);
+      var seq = stop.sequenceNumber == null || stop.sequenceNumber === '' ? null : Number(stop.sequenceNumber);
+      if (seq != null && !isFinite(seq)) seq = null;
+      stops.push({
+        routeCode: rd.routeCode || '',
+        routeId: rd.routeId || '',
+        driverName: driverName,
+        sequenceNumber: seq,
+        stop: seq,
+        plannedEndTime: plannedEndMs,
+        plannedEndClock: formatTokyoClock(plannedEndMs),
+        address: location.address,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        packageCount: dropCount
+      });
+    });
+    return {
+      ok: true,
+      routeCode: rd.routeCode || '',
+      routeId: rd.routeId || '',
+      driverName: driverName,
+      stops: stops
+    };
+  }
+
   function parseCsv(text) {
     var rows = [];
     var row = [];
@@ -523,11 +619,15 @@
   function summarizeResults(results, failures) {
     var routes = [];
     var packages = [];
+    var routeStops = [];
     (results || []).forEach(function (r) {
       if (!r || !r.ok) return;
       routes.push(r);
       (r.packages || []).forEach(function (p) {
         packages.push(Object.assign({ driverName: r.driverName }, p));
+      });
+      (r.routeStops || []).forEach(function (s) {
+        routeStops.push(Object.assign({ driverName: r.driverName }, s));
       });
     });
     packages.sort(function (a, b) {
@@ -541,6 +641,7 @@
     return {
       routes: routes,
       packages: packages,
+      routeStops: routeStops,
       routeCount: routes.length,
       stopCount: Object.keys(stopKeys).length,
       packageCount: packages.length,
@@ -1042,6 +1143,7 @@
       ok: false,
       routes: [],
       packages: [],
+      routeStops: [],
       failures: [],
       routeCount: 0,
       stopCount: 0,
@@ -1095,6 +1197,7 @@
         });
         return;
       }
+      extracted.routeStops = extractRouteSequence(d).stops || [];
       results.push(extracted);
     });
 
@@ -1192,6 +1295,7 @@
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     resolveStopAddress: resolveStopAddress,
     extractFromRouteDetails: extractFromRouteDetails,
+    extractRouteSequence: extractRouteSequence,
     extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
     ingestBundle: ingestBundle

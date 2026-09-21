@@ -1,20 +1,22 @@
 /**
- * Unified delivery MAP: one Leaflet instance, two marker layers.
- * Modes: priority (Cortex 13:00) and allTimeWindow (既存時間指定抽出).
+ * Unified delivery MAP: one Leaflet instance, three marker layers.
+ * Modes: routeSequence (Cortex visit order + 13:00 ring), priority, allTimeWindow.
+ * Sequence numbers come from OFK3RouteSequence (captured sequenceNumber). Do not invent order.
  * No body MutationObserver. No setInterval DOM polling. No boot-time map create.
  */
 (function (root) {
   'use strict';
 
-  var MODES = ['priority', 'allTimeWindow'];
+  var MODES = ['routeSequence', 'priority', 'allTimeWindow'];
   var OVERLAY_ID = 'ofk3-delivery-map-overlay';
   var CANVAS_ID = 'ofk3-dmap-canvas';
   var ROUTE_COLORS = ['#b91c1c', '#c2410c', '#166534', '#1d4ed8', '#6d28d9', '#0f766e', '#9d174d', '#334155', '#0369a1', '#a16207'];
 
   var runtime = {
-    mode: 'priority',
+    mode: 'routeSequence',
     map: null,
     tile: null,
+    sequenceLayer: null,
     priorityLayer: null,
     timeWindowLayer: null,
     selectedRoute: '',
@@ -30,11 +32,18 @@
 
   function defaultMode(source) {
     if (source === 'tw-extract' || source === 'allTimeWindow') return 'allTimeWindow';
-    return 'priority';
+    if (source === 'priority') return 'priority';
+    return 'routeSequence';
   }
 
   function normalizeMode(mode) {
-    return mode === 'allTimeWindow' ? 'allTimeWindow' : 'priority';
+    if (mode === 'allTimeWindow') return 'allTimeWindow';
+    if (mode === 'priority') return 'priority';
+    return 'routeSequence';
+  }
+
+  function sequenceApi() {
+    return root.OFK3RouteSequence || {};
   }
 
   function routeColor(routeCode, cache) {
@@ -109,6 +118,28 @@
     return [];
   }
 
+  function getRouteStops() {
+    try {
+      if (root.OFK3Cortex13 && typeof root.OFK3Cortex13.getRouteStops === 'function') {
+        return root.OFK3Cortex13.getRouteStops() || [];
+      }
+    } catch (e) {}
+    return [];
+  }
+
+  function getPriorityPackages() {
+    var entry = getPriorityEntry();
+    return (entry && Array.isArray(entry.packages)) ? entry.packages : [];
+  }
+
+  function getSequenceModel() {
+    var api = sequenceApi();
+    if (typeof api.buildRouteSequenceModel === 'function') {
+      return api.buildRouteSequenceModel(getRouteStops(), getPriorityPackages());
+    }
+    return { complete: false, pins: [], stopCount: 0, routeCount: 0 };
+  }
+
   function hasFiniteCoord(lat, lng) {
     var a = Number(lat), b = Number(lng);
     return Number.isFinite(a) && Number.isFinite(b) && !(a === 0 && b === 0);
@@ -133,6 +164,43 @@
       html: '<div style="opacity:' + opacity + ';background:' + color + ';color:#fff;min-width:28px;height:22px;padding:0 5px;border-radius:11px;border:2px solid ' + ring + ';display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.35);white-space:nowrap;">' + esc(label) + '</div>',
       iconSize: [36, 22],
       iconAnchor: [18, 11]
+    });
+  }
+
+  function sequenceIcon(color, seq, isPriority, faded) {
+    var label = seq == null ? '-' : String(seq);
+    var digits = label.length;
+    var minW = digits >= 3 ? 34 : (digits >= 2 ? 28 : 24);
+    var font = digits >= 3 ? '10px' : '11px';
+    var opacity = faded ? '0.28' : '1';
+    var border = isPriority ? '3px solid #b91c1c' : '2px solid #fff';
+    var glow = isPriority && !faded ? '0 0 0 2px #fecaca, 0 1px 3px rgba(0,0,0,.35)' : '0 1px 3px rgba(0,0,0,.35)';
+    var size = Math.max(minW + 8, 32);
+    return root.L.divIcon({
+      className: 'ofk3-dmap-pin ofk3-dmap-seq',
+      html: '<div style="opacity:' + opacity + ';background:' + color + ';color:#fff;min-width:' + minW + 'px;height:24px;padding:0 5px;border-radius:12px;border:' + border + ';display:flex;align-items:center;justify-content:center;font-size:' + font + ';font-weight:700;box-shadow:' + glow + ';white-space:nowrap;letter-spacing:0;">' + esc(label) + '</div>',
+      iconSize: [size, 24],
+      iconAnchor: [size / 2, 12]
+    });
+  }
+
+  function addSequenceMarkers(layer) {
+    var model = getSequenceModel();
+    var selected = runtime.selectedRoute;
+    (model.pins || []).forEach(function (pin) {
+      if (!hasFiniteCoord(pin.latitude, pin.longitude)) return;
+      var code = String(pin.routeCode || '-');
+      var color = routeColor(code, runtime.routeColorCache);
+      var faded = !!(selected && selected !== code);
+      var marker = root.L.marker([Number(pin.latitude), Number(pin.longitude)], {
+        icon: sequenceIcon(color, pin.sequenceNumber, pin.isPriority1300, faded),
+        zIndexOffset: pin.isPriority1300 ? 600 : 0
+      });
+      var popupHtml = typeof sequenceApi().sequencePopup === 'function'
+        ? sequenceApi().sequencePopup(pin)
+        : '';
+      if (popupHtml) marker.bindPopup(popupHtml);
+      marker.addTo(layer);
     });
   }
 
@@ -188,14 +256,21 @@
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap'
     }).addTo(runtime.map);
+    runtime.sequenceLayer = root.L.layerGroup();
     runtime.priorityLayer = root.L.layerGroup();
     runtime.timeWindowLayer = root.L.layerGroup();
     return runtime.map;
   }
 
+  function activeLayer() {
+    if (runtime.mode === 'allTimeWindow') return runtime.timeWindowLayer;
+    if (runtime.mode === 'priority') return runtime.priorityLayer;
+    return runtime.sequenceLayer;
+  }
+
   function fitVisible() {
     if (!runtime.map) return;
-    var layer = runtime.mode === 'priority' ? runtime.priorityLayer : runtime.timeWindowLayer;
+    var layer = activeLayer();
     if (!layer) return;
     var latlngs = [];
     layer.eachLayer(function (m) {
@@ -215,8 +290,18 @@
     var entry = getPriorityEntry();
     var pSum = summarizePriority(entry, getPriorityStops());
     var tSum = summarizeTimeWindow(getTimeWindowItems());
+    var seqModel = getSequenceModel();
+    var sBtn = document.getElementById('ofk3-dmap-btn-sequence');
     var pBtn = document.getElementById('ofk3-dmap-btn-priority');
     var aBtn = document.getElementById('ofk3-dmap-btn-all');
+    if (sBtn) {
+      sBtn.className = runtime.mode === 'routeSequence'
+        ? 'px-3 py-1.5 rounded-lg text-xs font-bold text-white'
+        : 'px-3 py-1.5 rounded-lg text-xs font-bold';
+      sBtn.style.background = runtime.mode === 'routeSequence' ? '#0f766e' : '#e5e7eb';
+      sBtn.style.color = runtime.mode === 'routeSequence' ? '#fff' : '#111';
+      sBtn.textContent = '🗺 巡回順' + (seqModel.complete ? ' ' + seqModel.stopCount : '');
+    }
     if (pBtn) {
       pBtn.className = runtime.mode === 'priority'
         ? 'px-3 py-1.5 rounded-lg text-xs font-bold text-white'
@@ -235,7 +320,11 @@
     }
     var status = document.getElementById('ofk3-dmap-status');
     if (status) {
-      if (runtime.mode === 'priority') {
+      if (runtime.mode === 'routeSequence') {
+        status.textContent = seqModel.complete
+          ? (seqModel.stopCount + ' Stops / ' + seqModel.routeCount + ' Routes（赤枠 = 13:00必達）')
+          : '全Stop巡回データなし（必達Stopのみ）。🔴 13:00必達へ切替できます';
+      } else if (runtime.mode === 'priority') {
         status.textContent = pSum.empty
           ? '13:00必達データがありません'
           : (pSum.stopCount + ' Stops / ' + pSum.packageCount + ' Packages / ' + pSum.routeCount + ' Routes');
@@ -245,11 +334,34 @@
           : (tSum.itemCount + ' 件 / ' + tSum.routeCount + ' Routes');
       }
     }
+    var info = document.getElementById('ofk3-dmap-route-info');
+    if (info) {
+      if (runtime.mode === 'routeSequence' && runtime.selectedRoute) {
+        var sumFn = sequenceApi().summarizeSelectedRoute;
+        var sel = typeof sumFn === 'function'
+          ? sumFn(seqModel.pins, getPriorityPackages(), runtime.selectedRoute)
+          : { routeCode: runtime.selectedRoute, driverName: '', allStopCount: 0, priorityStopCount: 0, priorityPackageCount: 0 };
+        info.style.display = 'block';
+        info.textContent = sel.routeCode
+          + '　Driver ' + (sel.driverName || '-')
+          + '　全Stop ' + sel.allStopCount
+          + '　13:00必達Stop ' + sel.priorityStopCount
+          + '　13:00必達Package ' + sel.priorityPackageCount;
+      } else {
+        info.style.display = 'none';
+        info.textContent = '';
+      }
+    }
     var legend = document.getElementById('ofk3-dmap-legend');
     if (legend) {
       var routes = [];
       var seen = {};
-      if (runtime.mode === 'priority') {
+      if (runtime.mode === 'routeSequence') {
+        (seqModel.pins || []).forEach(function (s) {
+          var c = String(s.routeCode || '-');
+          if (!seen[c]) { seen[c] = true; routes.push(c); }
+        });
+      } else if (runtime.mode === 'priority') {
         getPriorityStops().forEach(function (s) {
           var c = String(s.routeCode || '-');
           if (!seen[c]) { seen[c] = true; routes.push(c); }
@@ -270,16 +382,20 @@
 
   function rebuildLayers() {
     if (!runtime.map || !root.L) return;
+    if (runtime.sequenceLayer) runtime.sequenceLayer.clearLayers();
+    else runtime.sequenceLayer = root.L.layerGroup();
     if (runtime.priorityLayer) runtime.priorityLayer.clearLayers();
     else runtime.priorityLayer = root.L.layerGroup();
     if (runtime.timeWindowLayer) runtime.timeWindowLayer.clearLayers();
     else runtime.timeWindowLayer = root.L.layerGroup();
+    addSequenceMarkers(runtime.sequenceLayer);
     addPriorityMarkers(runtime.priorityLayer);
     addTimeWindowMarkers(runtime.timeWindowLayer, getTimeWindowItems());
+    if (runtime.map.hasLayer(runtime.sequenceLayer)) runtime.map.removeLayer(runtime.sequenceLayer);
     if (runtime.map.hasLayer(runtime.priorityLayer)) runtime.map.removeLayer(runtime.priorityLayer);
     if (runtime.map.hasLayer(runtime.timeWindowLayer)) runtime.map.removeLayer(runtime.timeWindowLayer);
-    if (runtime.mode === 'priority') runtime.priorityLayer.addTo(runtime.map);
-    else runtime.timeWindowLayer.addTo(runtime.map);
+    var layer = activeLayer();
+    if (layer) layer.addTo(runtime.map);
   }
 
   function setMode(mode) {
@@ -327,6 +443,9 @@
   async function geocodeMissing() {
     var pending = [];
     getPriorityStops().forEach(function (s) {
+      if (!hasFiniteCoord(s.latitude, s.longitude) && s.address) pending.push(s);
+    });
+    getRouteStops().forEach(function (s) {
       if (!hasFiniteCoord(s.latitude, s.longitude) && s.address) pending.push(s);
     });
     for (var i = 0; i < pending.length; i++) {
@@ -398,6 +517,7 @@
     summarizeTimeWindow: summarizeTimeWindow,
     priorityPopup: priorityPopup,
     timeWindowPopup: timeWindowPopup,
+    getSequenceModel: getSequenceModel,
     open: open,
     setMode: function (mode) { try { setMode(mode); } catch (e) {} },
     close: function () { try { closeOverlay(); } catch (e) {} }
