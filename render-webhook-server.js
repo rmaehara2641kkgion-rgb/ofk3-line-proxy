@@ -15,6 +15,9 @@ app.use(express.json({ limit: '10mb' }));
 
 // PDF一時保存用
 var pdfStore = {};
+// LINE送信用の一時MAP画像（/pdf-upload と同じメモリ公開パターン）
+var mapImageStore = {};
+var MAP_IMAGE_TTL_MS = 21600000; // 6時間（/route-data と同じ）
 
 // メンター通知済みドライバー管理（日次リセット）
 var mentorNotified = { date: '', drivers: [] };
@@ -532,7 +535,9 @@ app.get('/static-map', async (req, res) => {
     var markers = req.query.markers || '';
     var size = req.query.size || '600x400';
     var zoom = req.query.zoom || '';
+    var center = req.query.center || '';
     var mapUrl = 'https://maps.googleapis.com/maps/api/staticmap?size=' + size + '&maptype=roadmap&language=ja&key=' + GOOGLE_MAPS_API_KEY;
+    if (center) mapUrl += '&center=' + encodeURIComponent(center);
     if (zoom) mapUrl += '&zoom=' + zoom;
     // markers can be multiple
     if (Array.isArray(markers)) {
@@ -690,6 +695,54 @@ app.get('/pdf/:id', function(req, res) {
   }
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', 'inline; filename="' + encodeURIComponent(entry.filename) + '"');
+  res.send(entry.data);
+});
+
+function mapImagePublicOrigin(req) {
+  var host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  if (!host) host = 'ofk3-line-proxy-1.onrender.com';
+  var proto = String(req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
+  if (/onrender\.com$/i.test(host) || /ofk3-line-proxy/i.test(host)) proto = 'https';
+  return proto + '://' + host;
+}
+
+// Cortex個別MAP画像の一時公開（LINE image message 用）。/pdf-upload と同じメモリ保存。
+app.post('/map-image', function(req, res) {
+  var base64 = req.body && req.body.data;
+  if (!base64 || typeof base64 !== 'string') {
+    return res.status(400).json({ status: 'error', message: 'data (base64 png) required' });
+  }
+  if (base64.indexOf('data:') === 0) {
+    var comma = base64.indexOf(',');
+    base64 = comma >= 0 ? base64.slice(comma + 1) : '';
+  }
+  var buf;
+  try {
+    buf = Buffer.from(base64, 'base64');
+  } catch (e) {
+    return res.status(400).json({ status: 'error', message: 'invalid base64' });
+  }
+  if (!buf || buf.length < 32 || buf.length > 1500000) {
+    return res.status(400).json({ status: 'error', message: 'image size not allowed' });
+  }
+  if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4E || buf[3] !== 0x47) {
+    return res.status(400).json({ status: 'error', message: 'png required' });
+  }
+  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  mapImageStore[id] = { data: buf, created: Date.now() };
+  setTimeout(function() { delete mapImageStore[id]; }, MAP_IMAGE_TTL_MS);
+  var url = mapImagePublicOrigin(req) + '/map-image/' + id;
+  log('MAP image uploaded id:', id, 'bytes:', buf.length);
+  res.json({ status: 'ok', id: id, url: url, ttlMs: MAP_IMAGE_TTL_MS });
+});
+
+app.get('/map-image/:id', function(req, res) {
+  var entry = mapImageStore[req.params.id];
+  if (!entry) {
+    return res.status(404).send('MAP image not found or expired');
+  }
+  res.set('Content-Type', 'image/png');
+  res.set('Cache-Control', 'public, max-age=3600');
   res.send(entry.data);
 });
 

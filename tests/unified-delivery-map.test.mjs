@@ -61,6 +61,7 @@ assert(cortexSrc.indexOf('new MutationObserver') < 0, 'Cortex UI still has no Mu
 assert(cortexSrc.indexOf("OFK3DeliveryMap.open('routeSequence')") >= 0, 'dashboard MAP opens routeSequence');
 assert(html.indexOf('id="ofk3-dmap-btn-sequence"') >= 0, 'sequence mode button exists');
 assert(html.indexOf('id="ofk3-dmap-route-info"') >= 0, 'selected route info host exists');
+assert(mapSrc.indexOf('data-dmap="route-map"') >= 0, 'selected route can open individual MAP');
 assert(html.indexOf('/cortex-route-sequence.js') >= 0, 'sequence model script is loaded');
 assert(html.indexOf('OFK3DeliveryMap.open(\'allTimeWindow\')') >= 0, 'time-window MAP button opens allTimeWindow');
 assert(html.indexOf('id="ofk3-delivery-map-overlay"') >= 0, 'fixed overlay host exists');

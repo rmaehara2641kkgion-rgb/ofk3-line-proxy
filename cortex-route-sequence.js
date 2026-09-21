@@ -114,10 +114,367 @@
       + '</div>';
   }
 
+  function hasFiniteCoord(lat, lng) {
+    var a = Number(lat), b = Number(lng);
+    return isFinite(a) && isFinite(b) && !(a === 0 && b === 0);
+  }
+
+  function filterPinsByRoute(pins, routeCode) {
+    var code = String(routeCode || '');
+    return (pins || []).filter(function (p) { return String(p.routeCode) === code; });
+  }
+
+  function pinsStayOnRoute(pins, routeCode) {
+    var code = String(routeCode || '');
+    for (var i = 0; i < (pins || []).length; i++) {
+      if (String(pins[i].routeCode) !== code) return false;
+    }
+    return true;
+  }
+
+  function coordCoverage(pins) {
+    var total = (pins || []).length;
+    var plotted = 0;
+    (pins || []).forEach(function (p) {
+      if (hasFiniteCoord(p.latitude, p.longitude)) plotted += 1;
+    });
+    return { total: total, plotted: plotted, missing: total - plotted };
+  }
+
+  function coverageLabel(coverage) {
+    coverage = coverage || { total: 0, plotted: 0, missing: 0 };
+    if (!coverage.missing) return coverage.total + ' Stops表示';
+    return coverage.total + ' Stops中 ' + coverage.plotted + '件表示 / 座標未取得' + coverage.missing + '件';
+  }
+
+  function clampNum(n, lo, hi) {
+    return Math.min(hi, Math.max(lo, n));
+  }
+
+  function googleWorldSize(zoom) {
+    return 256 * Math.pow(2, Number(zoom));
+  }
+
+  function googleLngToX(lng, zoom) {
+    return ((Number(lng) + 180) / 360) * googleWorldSize(zoom);
+  }
+
+  function googleLatToY(lat, zoom) {
+    var s = Math.sin(clampNum(Number(lat), -85.05112878, 85.05112878) * Math.PI / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * googleWorldSize(zoom);
+  }
+
+  function googleXToLng(x, zoom) {
+    return x / googleWorldSize(zoom) * 360 - 180;
+  }
+
+  function googleYToLat(y, zoom) {
+    var n = Math.PI - 2 * Math.PI * y / googleWorldSize(zoom);
+    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  }
+
+  function googleStaticMapView(pins, width, height, opts) {
+    opts = opts || {};
+    width = Number(width) || 640;
+    height = Number(height) || 400;
+    var pad = opts.pad == null ? 40 : Number(opts.pad);
+    var plotted = (pins || []).filter(function (p) {
+      return hasFiniteCoord(p.latitude, p.longitude);
+    });
+    if (!plotted.length) return null;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    plotted.forEach(function (p) {
+      var x = googleLngToX(p.longitude, 0);
+      var y = googleLatToY(p.latitude, 0);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    });
+    var spanX = Math.max(maxX - minX, 1e-9);
+    var spanY = Math.max(maxY - minY, 1e-9);
+    var innerW = Math.max(width - pad * 2, 1);
+    var innerH = Math.max(height - pad * 2, 1);
+    var zoomX = Math.log(innerW / spanX) / Math.LN2;
+    var zoomY = Math.log(innerH / spanY) / Math.LN2;
+    var zoom = Math.floor(clampNum(Math.min(zoomX, zoomY), 1, 16));
+    var centerLng = googleXToLng((minX + maxX) / 2, 0);
+    var centerLat = googleYToLat((minY + maxY) / 2, 0);
+    function project(lat, lng) {
+      return {
+        x: width / 2 + googleLngToX(lng, zoom) - googleLngToX(centerLng, zoom),
+        y: height / 2 + googleLatToY(lat, zoom) - googleLatToY(centerLat, zoom)
+      };
+    }
+    return {
+      width: width,
+      height: height,
+      zoom: zoom,
+      pad: pad,
+      centerLat: centerLat,
+      centerLng: centerLng,
+      center: Number(centerLat).toFixed(6) + ',' + Number(centerLng).toFixed(6),
+      project: project
+    };
+  }
+
+  var NO_SEQUENCE_MESSAGE = 'Cortex巡回順データがありません。\nExtension v1.6.3以降でCortexを再取得してください。';
+
+  function buildSingleRouteView(model, routeCode, extras) {
+    extras = extras || {};
+    var code = String(routeCode || '');
+    if (!model || !model.complete) {
+      return {
+        ok: false,
+        reason: 'NO_SEQUENCE',
+        message: NO_SEQUENCE_MESSAGE,
+        routeCode: code,
+        pins: [],
+        plottedPins: [],
+        coverage: { total: 0, plotted: 0, missing: 0 },
+        stats: { routeCode: code, driverName: '', allStopCount: 0, priorityStopCount: 0, priorityPackageCount: 0, departure: extras.departure || '' }
+      };
+    }
+    var pins = filterPinsByRoute(model.pins, code);
+    if (!pins.length) {
+      return {
+        ok: false,
+        reason: 'ROUTE_EMPTY',
+        message: '選択RouteのCortex巡回Stopがありません。',
+        routeCode: code,
+        pins: [],
+        plottedPins: [],
+        coverage: { total: 0, plotted: 0, missing: 0 },
+        stats: { routeCode: code, driverName: extras.assignmentDriverName || '', allStopCount: 0, priorityStopCount: 0, priorityPackageCount: 0, departure: extras.departure || '' }
+      };
+    }
+    var coverage = coordCoverage(pins);
+    var stats = summarizeSelectedRoute(pins, extras.packages || [], code);
+    if (!stats.driverName && extras.assignmentDriverName) stats.driverName = extras.assignmentDriverName;
+    stats.departure = extras.departure || '';
+    return {
+      ok: true,
+      reason: '',
+      message: '',
+      routeCode: code,
+      pins: pins,
+      plottedPins: pins.filter(function (p) { return hasFiniteCoord(p.latitude, p.longitude); }),
+      coverage: coverage,
+      stats: stats,
+      incomplete: coverage.missing > 0,
+      singleRoute: pinsStayOnRoute(pins, code)
+    };
+  }
+
+  function lookupLineUser(name, mapping, japaneseNames, resolveDriverKey) {
+    if (!name) return null;
+    mapping = mapping || {};
+    japaneseNames = japaneseNames || {};
+    var key = typeof resolveDriverKey === 'function' ? (resolveDriverKey(name) || name) : name;
+    var userId = mapping[key] || mapping[name] || '';
+    if (!userId) {
+      var orig;
+      for (orig in japaneseNames) {
+        if (!Object.prototype.hasOwnProperty.call(japaneseNames, orig)) continue;
+        if ((japaneseNames[orig] === name || japaneseNames[orig] === key) && mapping[orig]) {
+          key = orig;
+          userId = mapping[orig];
+          break;
+        }
+      }
+    }
+    if (!userId) return null;
+    return {
+      driverKey: key,
+      userId: userId,
+      displayName: japaneseNames[key] || name
+    };
+  }
+
+  function resolveLineSendTarget(opts) {
+    opts = opts || {};
+    var assignment = String(opts.assignmentDriverName || '').trim();
+    var cortex = String(opts.cortexDriverName || '').trim();
+    var fromAssign = lookupLineUser(assignment, opts.lineMapping, opts.driverJapaneseNames, opts.resolveDriverKey);
+    var fromCortex = lookupLineUser(cortex, opts.lineMapping, opts.driverJapaneseNames, opts.resolveDriverKey);
+    if (fromAssign) {
+      return {
+        ok: true,
+        source: 'assignment',
+        conflict: !!(fromCortex && fromCortex.userId !== fromAssign.userId),
+        driverKey: fromAssign.driverKey,
+        userId: fromAssign.userId,
+        displayName: fromAssign.displayName
+      };
+    }
+    if (fromCortex) {
+      return {
+        ok: true,
+        source: 'cortex',
+        conflict: false,
+        driverKey: fromCortex.driverKey,
+        userId: fromCortex.userId,
+        displayName: fromCortex.displayName
+      };
+    }
+    var shown = assignment || cortex || '';
+    return {
+      ok: false,
+      source: '',
+      reason: 'UNRESOLVED_DRIVER',
+      message: (shown || 'Driver') + ' のLINE IDが未登録です。自動送信しません。',
+      displayName: shown,
+      driverKey: '',
+      userId: ''
+    };
+  }
+
+  function isPublicHttpsImageUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    var u = url.trim();
+    if (!u || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0) return false;
+    if (/\s/.test(u)) return false;
+    return /^https:\/\/[a-z0-9][a-z0-9.-]*(:\d+)?\/\S+$/i.test(u);
+  }
+
+  function lineImagePins(view) {
+    if (!view || !view.ok || !view.singleRoute) return [];
+    var code = String(view.routeCode || '');
+    return (view.plottedPins || view.pins || []).filter(function (p) {
+      return p && String(p.routeCode || '') === code && hasFiniteCoord(p.latitude, p.longitude);
+    });
+  }
+
+  function buildLineText(view, target) {
+    var s = (view && view.stats) || {};
+    var cov = (view && view.coverage) || { total: 0, plotted: 0, missing: 0 };
+    var msg = '🚚 OFK3 配送情報（Cortex巡回順）\n\n';
+    msg += '■ 担当: ' + ((target && target.displayName) || s.driverName || '-') + '\n';
+    msg += '■ ルート: ' + ((view && view.routeCode) || '-') + '\n';
+    msg += '■ 全Stop: ' + (s.allStopCount || 0) + '\n';
+    msg += '■ 13:00必達: ' + (s.priorityStopCount || 0) + ' Stops / ' + (s.priorityPackageCount || 0) + ' Packages\n';
+    if (s.departure) msg += '■ 出発: ' + s.departure + '\n';
+    if (cov.missing) msg += '\n⚠ 座標未取得 ' + cov.missing + '件（' + cov.plotted + '/' + cov.total + '件表示）\n';
+    msg += '\n番号はCortex巡回順です。';
+    return msg;
+  }
+
+  function buildLineMessages(text, imageUrl) {
+    if (!isPublicHttpsImageUrl(imageUrl)) return [];
+    return [
+      { type: 'text', text: String(text || '') },
+      { type: 'image', originalContentUrl: imageUrl, previewImageUrl: imageUrl }
+    ];
+  }
+
+  function buildLinePreview(view, target, extras) {
+    extras = extras || {};
+    if (!view || !view.ok || !view.singleRoute) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        message: (view && view.message) || NO_SEQUENCE_MESSAGE
+      };
+    }
+    if (!target || !target.ok || !target.userId) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        message: (target && target.message) || '送信先Driverが未解決です。自動送信しません。'
+      };
+    }
+    var imagePins = lineImagePins(view);
+    if (!imagePins.length) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        routeCode: view.routeCode,
+        message: '座標付きStopが無くMAP画像を生成できないため送信しません。'
+      };
+    }
+    if (!pinsStayOnRoute(imagePins, view.routeCode)) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        routeCode: view.routeCode,
+        message: '他RouteのStopが混在しているため送信しません。'
+      };
+    }
+    var msg = buildLineText(view, target);
+    var imageUrl = String(extras.imageUrl || '');
+    if (!isPublicHttpsImageUrl(imageUrl)) {
+      return {
+        ok: false,
+        canSend: false,
+        routeCode: view.routeCode,
+        userId: target.userId,
+        driverKey: target.driverKey,
+        displayName: target.displayName,
+        text: msg,
+        imageUrl: '',
+        messages: [],
+        pinCount: view.pins.length,
+        plottedCount: imagePins.length,
+        missingCount: (view.coverage && view.coverage.missing) || 0,
+        message: extras.imageUrl
+          ? 'MAP画像URLがHTTPS公開ではないため送信しません。'
+          : 'MAP画像の公開に失敗したため送信しません。テキストのみでは送信しません。'
+      };
+    }
+    var messages = buildLineMessages(msg, imageUrl);
+    var hasImage = messages.some(function (m) { return m && m.type === 'image' && m.originalContentUrl; });
+    if (!hasImage || messages.length < 2) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        message: 'MAP画像messageを組み立てられないため送信しません。'
+      };
+    }
+    return {
+      ok: true,
+      canSend: true,
+      routeCode: view.routeCode,
+      userId: target.userId,
+      driverKey: target.driverKey,
+      displayName: target.displayName,
+      text: msg,
+      imageUrl: imageUrl,
+      messages: messages,
+      pinCount: view.pins.length,
+      plottedCount: imagePins.length,
+      missingCount: (view.coverage && view.coverage.missing) || 0
+    };
+  }
+
   var api = {
     buildRouteSequenceModel: buildRouteSequenceModel,
     summarizeSelectedRoute: summarizeSelectedRoute,
-    sequencePopup: sequencePopup
+    sequencePopup: sequencePopup,
+    hasFiniteCoord: hasFiniteCoord,
+    filterPinsByRoute: filterPinsByRoute,
+    pinsStayOnRoute: pinsStayOnRoute,
+    coordCoverage: coordCoverage,
+    coverageLabel: coverageLabel,
+    buildSingleRouteView: buildSingleRouteView,
+    resolveLineSendTarget: resolveLineSendTarget,
+    isPublicHttpsImageUrl: isPublicHttpsImageUrl,
+    lineImagePins: lineImagePins,
+    buildLineMessages: buildLineMessages,
+    buildLinePreview: buildLinePreview,
+    googleLngToX: googleLngToX,
+    googleLatToY: googleLatToY,
+    googleStaticMapView: googleStaticMapView,
+    NO_SEQUENCE_MESSAGE: NO_SEQUENCE_MESSAGE
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
