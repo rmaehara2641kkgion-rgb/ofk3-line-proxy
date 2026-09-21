@@ -215,13 +215,14 @@
     /* === Print Styles === */
     @media print {
       body { background: white !important; color: #2D2D2D !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      #app > header, #app > main > nav, #upload-section, .btn-primary, .btn-secondary, #line-modal, #settings-modal { display: none !important; }
+      #app > header, #app > main > nav, #upload-section, .btn-primary, .btn-secondary, #line-modal, #settings-modal, #ofk3-delivery-map-overlay { display: none !important; }
       #panel-dashboard { display: block !important; }
       #dashboard-content { display: block !important; }
       .card { background: white !important; border: 1px solid #ddd !important; box-shadow: none !important; backdrop-filter: none !important; }
       #print-header { display: block !important; }
       #stat-bar-print { display: none; }
       .no-print { display: none !important; }
+      #tw-bulletin-modal .no-print { display: none !important; }
       th, td, .text-ink, .text-ink-light { color: #2D2D2D !important; }
     }
     #print-header { display: none; }
@@ -569,6 +570,12 @@
             <div class="px-4 py-3 border-b border-border flex items-center justify-between">
               <h2 class="text-sm font-medium">ルート別配送予測</h2>
               <div class="flex items-center gap-2">
+                <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="openTwBulletinBoard()">
+                  <span class="inline-flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    時間指定 詳細・印刷
+                  </span>
+                </button>
                 <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="openPrintPreview()">
                   <span class="inline-flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
@@ -2999,6 +3006,27 @@
         </div>
         <div id="print-content">
           <!-- Will be populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <div id="tw-bulletin-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/30 no-print" onclick="closeTwBulletinBoard()"></div>
+      <div class="relative bg-white rounded-lg p-6 max-w-5xl w-full mx-4 shadow-xl fade-in max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4 no-print">
+          <h3 id="tw-bulletin-title" class="text-base font-bold">時間指定 詳細・掲示用印刷</h3>
+          <div class="flex items-center gap-2">
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="closeTwBulletinBoard()">閉じる</button>
+            <button class="btn-primary text-xs px-3 py-1.5 rounded" onclick="printTwBulletinBoard()">
+              <span class="inline-flex items-center gap-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                印刷する（A4横）
+              </span>
+            </button>
+          </div>
+        </div>
+        <div id="tw-bulletin-content">
+          <!-- Populated by OFK3TwBulletin -->
         </div>
       </div>
     </div>
@@ -9322,6 +9350,59 @@ var driverDB = {
         </html>
       `);
       printWindow.document.close();
+    }
+
+    // ===== 時間指定 掲示用印刷（ステーション掲示）=====
+    // let スコープのデータを明示渡し。例外でも本体起動を止めない。
+    function openTwBulletinBoard() {
+      try {
+        if (!window.OFK3TwBulletin || typeof window.OFK3TwBulletin.open !== 'function') {
+          alert('時間指定掲示モジュールが読み込まれていません');
+          return;
+        }
+        window.OFK3TwBulletin.open({
+          assignmentData: assignmentData,
+          cycleDetailData: cycleDetailData,
+          twExtractedData: (typeof twExtractedData !== 'undefined' && Array.isArray(twExtractedData) && twExtractedData.length)
+            ? twExtractedData
+            : [],
+          extractAreaName: extractAreaName,
+          localDate: (typeof getTodayJst === 'function' ? getTodayJst() : '')
+        });
+      } catch (e) {
+        console.error('openTwBulletinBoard failed:', e);
+        try { alert('時間指定掲示一覧の表示に失敗しました（本体は継続動作します）'); } catch (e2) {}
+      }
+    }
+
+    function closeTwBulletinBoard() {
+      try {
+        if (window.OFK3TwBulletin && typeof window.OFK3TwBulletin.close === 'function') {
+          window.OFK3TwBulletin.close();
+          return;
+        }
+      } catch (e) {}
+      var modal = document.getElementById('tw-bulletin-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    function printTwBulletinBoard() {
+      try {
+        if (window.OFK3TwBulletin && typeof window.OFK3TwBulletin.print === 'function') {
+          window.OFK3TwBulletin.print({
+            assignmentData: assignmentData,
+            cycleDetailData: cycleDetailData,
+            twExtractedData: (typeof twExtractedData !== 'undefined' && Array.isArray(twExtractedData) && twExtractedData.length)
+              ? twExtractedData
+              : [],
+            extractAreaName: extractAreaName,
+            localDate: (typeof getTodayJst === 'function' ? getTodayJst() : '')
+          });
+        }
+      } catch (e) {
+        console.error('printTwBulletinBoard failed:', e);
+        try { alert('印刷に失敗しました（本体は継続動作します）'); } catch (e2) {}
+      }
     }
 
     // ===== 点呼LINE自動通知 =====
@@ -21610,5 +21691,6 @@ var driverDB = {
   </div>
   <script src="/cortex-route-sequence.js?v=20260921-7"></script>
   <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
+  <script src="/ofk3-tw-bulletin-print.js?v=20260921-1"></script>
 </body>
 </html>
