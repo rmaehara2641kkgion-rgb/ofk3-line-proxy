@@ -30,7 +30,7 @@ assert(src.indexOf('document.write') >= 0, 'print uses the existing popup-window
 assert(src.indexOf('window.print()') >= 0, 'print window calls window.print()');
 assert(src.indexOf("localDate || '') !== todayIso()") >= 0, 'Cortex data is only trusted when localDate matches today (stale data not silently reused)');
 assert(src.indexOf('未取得') >= 0, 'has a distinct "not fetched" label, not conflated with 0-count');
-assert(src.indexOf('ALL_DAY_SPAN_MIN') >= 0, 'reuses the existing "all-day window excluded" convention from twExtract()');
+assert(src.indexOf('ALL_DAY_SPAN_MIN') < 0, 'must not import twExtract()\'s unsubstantiated "all-day window excluded" (>=720min) rule: no evidence found that a wide window is a "no time window" system default rather than a genuine commitment');
 assert(src.indexOf('.address') < 0, 'never reads the .address field (no address/PII rendered on the posted board)');
 assert(src.indexOf('esc(g.stop)') >= 0 && src.indexOf('esc(it.trackingId)') < 0, 'trackingId is used only for internal Cortex matching, never rendered');
 
@@ -102,8 +102,8 @@ function makeContext(extra) {
         { trackingId: 'DA0000000001', address: 'addrA', timeWindow: '9:00-13:00', stop: '1' },
         { trackingId: 'DA0000000002', address: 'addrA2', timeWindow: '9:00-13:00', stop: '1' }, // same Stop + same window -> 1 row, count 2
         { trackingId: 'DA0000000003', address: 'addrB', timeWindow: '14:00-16:00', stop: '5' },
-        { trackingId: 'DA0000000004', address: 'addrC', timeWindow: '', stop: '7' }, // no time window -> excluded
-        { trackingId: 'DA0000000005', address: 'addrD', timeWindow: '08:00-20:00', stop: '9' } // all-day -> excluded
+        { trackingId: 'DA0000000004', address: 'addrC', timeWindow: '', stop: '7' }, // no time window -> excluded (empty string only)
+        { trackingId: 'DA0000000005', address: 'addrD', timeWindow: '08:00-20:00', stop: '9' } // wide window -> included (no unsubstantiated all-day exclusion)
       ],
       DCX41: [
         { trackingId: 'DA0000000010', address: 'addrE', timeWindow: '18:00-20:00', stop: '2' }
@@ -124,11 +124,13 @@ function makeContext(extra) {
 
   var dcx36 = board.routeList.filter(function (r) { return r.routeCode === 'DCX36'; })[0];
   assert(dcx36, 'DCX36 present');
-  assert(dcx36.stopCount === 2, 'DCX36 stopCount counts distinct stops (1 and 5), not packages; got ' + dcx36.stopCount);
-  assert(dcx36.packageCount === 3, 'DCX36 packageCount counts all qualifying DA rows (2+1=3), not stops; got ' + dcx36.packageCount);
-  assert(dcx36.groups.length === 2, 'DCX36 has 2 groups (Stop1@9-13, Stop5@14-16); got ' + dcx36.groups.length);
+  assert(dcx36.stopCount === 3, 'DCX36 stopCount counts distinct stops (1, 5 and 9 - wide window included), not packages; got ' + dcx36.stopCount);
+  assert(dcx36.packageCount === 4, 'DCX36 packageCount counts all qualifying DA rows (2+1+1=4), not stops; got ' + dcx36.packageCount);
+  assert(dcx36.groups.length === 3, 'DCX36 has 3 groups (Stop1@9-13, Stop5@14-16, Stop9@08:00-20:00); got ' + dcx36.groups.length);
   var stop1Group = dcx36.groups.filter(function (g) { return g.stop === '1'; })[0];
   assert(stop1Group && stop1Group.count === 2, 'same Stop + same time window collapses into one row with count=2 (no meaningless duplicate rows)');
+  var stop9Group = dcx36.groups.filter(function (g) { return g.stop === '9'; })[0];
+  assert(stop9Group && stop9Group.count === 1 && stop9Group.label === '08:00〜20:00', 'a wide (>=12h) window is NOT excluded: no evidence it is a "no time window" system default rather than a genuine commitment');
   assert(dcx36.area === '別府 / 城西団地', 'area comes from routeAreas[routeCode] as-is, no new address parsing');
   assert(dcx36.cortexStopCount === null, 'Cortex not fetched -> cortexStopCount is null, never coerced to 0');
 

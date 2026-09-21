@@ -18,8 +18,17 @@
  *   データ行例: ['1','DA0000000001','5','9:00','9:00-13:00','アドレスA',...]
  *   → cycleDetailData[routeCode] = [{ trackingId, address, timeWindow, stop }]
  *   → timeWindow は "H:MM-H:MM"（秒付き・全角/半角ダッシュ違いあり得る）。
- *     時間指定なし荷物は timeWindow === ''（index.html: row[4] ? ... : ''）。
+ *     時間指定なし荷物は timeWindow === ''（index.html: row[4] ? ... : ''）であり、
+ *     この空文字判別だけで「時間指定の有無」を確実に判別できる。
  *   この判別は既存の twParseTimeWindow() と同じ正規表現を用いる（新規判定を作らない）。
+ *
+ *   注: twExtract()には「parsed.endMin-parsed.startMin>=720分は全日指定として除外」という
+ *   ルールがあるが、この閾値の根拠（実データ上の意味）はコード・ドキュメント・commit履歴の
+ *   いずれにも見当たらず、「時間指定なしのシステムデフォルト値」であるという証拠は確認できな
+ *   かった（実データヘッダーの検証例・demo-data.jsのtwSlotsはいずれも12時間未満の窓のみで、
+ *   広域窓の実例自体が存在しない）。本モジュールはtwExtract()の業務フィルタを流用しない方針
+ *   のため、この閾値は採用せず、有効にparseできたtimeWindowは（空文字でない限り）すべて
+ *   掲示対象とする。
  *
  * データソース:
  *  - assignmentData（let, index.htmlのアサインデータ）… routeCode/driverName
@@ -40,7 +49,6 @@
   var OVERLAY_ID = 'ofk3-tw-board-overlay';
   var CONTENT_ID = 'ofk3-tw-board-content';
   var ANCHOR_ID = 'ofk3-cortex13-dash-card';
-  var ALL_DAY_SPAN_MIN = 720; // 既存twExtract()と同じ「全日指定は対象外」閾値(12h)
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
@@ -167,8 +175,7 @@
       var packageCount = 0;
       items.forEach(function (it) {
         var parsed = parseWindow(it && it.timeWindow);
-        if (!parsed) return; // 時間指定なし荷物（timeWindow===''含む）は対象外
-        if (parsed.endMin - parsed.startMin >= ALL_DAY_SPAN_MIN) return; // 全日指定は対象外（既存twExtract()と同基準）
+        if (!parsed) return; // 時間指定なし荷物（timeWindow===''含む）は対象外。この判別のみで十分（下記参照）。
 
         var stopRaw = it && it.stop != null ? String(it.stop).trim() : '';
         var key = stopRaw + '#' + parsed.start + '-' + parsed.end;
