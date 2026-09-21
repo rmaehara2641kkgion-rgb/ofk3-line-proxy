@@ -258,11 +258,52 @@
     };
   }
 
-  function buildLinePreview(view, target) {
+  function isPublicHttpsImageUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    var u = url.trim();
+    if (!u || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0) return false;
+    if (/\s/.test(u)) return false;
+    return /^https:\/\/[a-z0-9][a-z0-9.-]*(:\d+)?\/\S+$/i.test(u);
+  }
+
+  function lineImagePins(view) {
+    if (!view || !view.ok || !view.singleRoute) return [];
+    var code = String(view.routeCode || '');
+    return (view.plottedPins || view.pins || []).filter(function (p) {
+      return p && String(p.routeCode || '') === code && hasFiniteCoord(p.latitude, p.longitude);
+    });
+  }
+
+  function buildLineText(view, target) {
+    var s = (view && view.stats) || {};
+    var cov = (view && view.coverage) || { total: 0, plotted: 0, missing: 0 };
+    var msg = '🚚 OFK3 配送情報（Cortex巡回順）\n\n';
+    msg += '■ 担当: ' + ((target && target.displayName) || s.driverName || '-') + '\n';
+    msg += '■ ルート: ' + ((view && view.routeCode) || '-') + '\n';
+    msg += '■ 全Stop: ' + (s.allStopCount || 0) + '\n';
+    msg += '■ 13:00必達: ' + (s.priorityStopCount || 0) + ' Stops / ' + (s.priorityPackageCount || 0) + ' Packages\n';
+    if (s.departure) msg += '■ 出発: ' + s.departure + '\n';
+    if (cov.missing) msg += '\n⚠ 座標未取得 ' + cov.missing + '件（' + cov.plotted + '/' + cov.total + '件表示）\n';
+    msg += '\n番号はCortex巡回順です。';
+    return msg;
+  }
+
+  function buildLineMessages(text, imageUrl) {
+    if (!isPublicHttpsImageUrl(imageUrl)) return [];
+    return [
+      { type: 'text', text: String(text || '') },
+      { type: 'image', originalContentUrl: imageUrl, previewImageUrl: imageUrl }
+    ];
+  }
+
+  function buildLinePreview(view, target, extras) {
+    extras = extras || {};
     if (!view || !view.ok || !view.singleRoute) {
       return {
         ok: false,
         canSend: false,
+        messages: [],
+        imageUrl: '',
         message: (view && view.message) || NO_SEQUENCE_MESSAGE
       };
     }
@@ -270,19 +311,64 @@
       return {
         ok: false,
         canSend: false,
+        messages: [],
+        imageUrl: '',
         message: (target && target.message) || '送信先Driverが未解決です。自動送信しません。'
       };
     }
-    var s = view.stats || {};
-    var cov = view.coverage || { total: 0, plotted: 0, missing: 0 };
-    var msg = '🚚 OFK3 配送情報（Cortex巡回順）\n\n';
-    msg += '■ 担当: ' + (target.displayName || s.driverName || '-') + '\n';
-    msg += '■ ルート: ' + view.routeCode + '\n';
-    msg += '■ 全Stop: ' + (s.allStopCount || 0) + '\n';
-    msg += '■ 13:00必達: ' + (s.priorityStopCount || 0) + ' Stops / ' + (s.priorityPackageCount || 0) + ' Packages\n';
-    if (s.departure) msg += '■ 出発: ' + s.departure + '\n';
-    if (cov.missing) msg += '\n⚠ 座標未取得 ' + cov.missing + '件（' + cov.plotted + '/' + cov.total + '件表示）\n';
-    msg += '\n番号はCortex巡回順です。';
+    var imagePins = lineImagePins(view);
+    if (!imagePins.length) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        routeCode: view.routeCode,
+        message: '座標付きStopが無くMAP画像を生成できないため送信しません。'
+      };
+    }
+    if (!pinsStayOnRoute(imagePins, view.routeCode)) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        routeCode: view.routeCode,
+        message: '他RouteのStopが混在しているため送信しません。'
+      };
+    }
+    var msg = buildLineText(view, target);
+    var imageUrl = String(extras.imageUrl || '');
+    if (!isPublicHttpsImageUrl(imageUrl)) {
+      return {
+        ok: false,
+        canSend: false,
+        routeCode: view.routeCode,
+        userId: target.userId,
+        driverKey: target.driverKey,
+        displayName: target.displayName,
+        text: msg,
+        imageUrl: '',
+        messages: [],
+        pinCount: view.pins.length,
+        plottedCount: imagePins.length,
+        missingCount: (view.coverage && view.coverage.missing) || 0,
+        message: extras.imageUrl
+          ? 'MAP画像URLがHTTPS公開ではないため送信しません。'
+          : 'MAP画像の公開に失敗したため送信しません。テキストのみでは送信しません。'
+      };
+    }
+    var messages = buildLineMessages(msg, imageUrl);
+    var hasImage = messages.some(function (m) { return m && m.type === 'image' && m.originalContentUrl; });
+    if (!hasImage || messages.length < 2) {
+      return {
+        ok: false,
+        canSend: false,
+        messages: [],
+        imageUrl: '',
+        message: 'MAP画像messageを組み立てられないため送信しません。'
+      };
+    }
     return {
       ok: true,
       canSend: true,
@@ -291,9 +377,11 @@
       driverKey: target.driverKey,
       displayName: target.displayName,
       text: msg,
+      imageUrl: imageUrl,
+      messages: messages,
       pinCount: view.pins.length,
-      plottedCount: cov.plotted,
-      missingCount: cov.missing
+      plottedCount: imagePins.length,
+      missingCount: (view.coverage && view.coverage.missing) || 0
     };
   }
 
@@ -308,6 +396,9 @@
     coverageLabel: coverageLabel,
     buildSingleRouteView: buildSingleRouteView,
     resolveLineSendTarget: resolveLineSendTarget,
+    isPublicHttpsImageUrl: isPublicHttpsImageUrl,
+    lineImagePins: lineImagePins,
+    buildLineMessages: buildLineMessages,
     buildLinePreview: buildLinePreview,
     NO_SEQUENCE_MESSAGE: NO_SEQUENCE_MESSAGE
   };

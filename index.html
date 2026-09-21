@@ -13185,6 +13185,148 @@ var driverDB = {
       }, 200);
     }
 
+    function cortexMercatorY(lat) {
+      var rad = Number(lat) * Math.PI / 180;
+      return Math.log(Math.tan(Math.PI / 4 + rad / 2));
+    }
+
+    function cortexFitLinePins(pins, width, height, pad) {
+      var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+      pins.forEach(function (p) {
+        var lat = Number(p.latitude), lng = Number(p.longitude);
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lng < minLng) minLng = lng;
+        if (lng > maxLng) maxLng = lng;
+      });
+      if (minLat === maxLat) { minLat -= 0.012; maxLat += 0.012; }
+      if (minLng === maxLng) { minLng -= 0.012; maxLng += 0.012; }
+      var minY = cortexMercatorY(minLat);
+      var maxY = cortexMercatorY(maxLat);
+      var spanLat = maxLat - minLat;
+      var spanLng = maxLng - minLng;
+      var span = Math.max(spanLat, spanLng);
+      var zoom = 12;
+      if (span < 0.01) zoom = 15;
+      else if (span < 0.03) zoom = 14;
+      else if (span < 0.08) zoom = 13;
+      else if (span < 0.2) zoom = 12;
+      else if (span < 0.5) zoom = 11;
+      else zoom = 10;
+      return {
+        center: ((minLat + maxLat) / 2).toFixed(6) + ',' + ((minLng + maxLng) / 2).toFixed(6),
+        zoom: zoom,
+        project: function (lat, lng) {
+          var x = pad + (Number(lng) - minLng) / (maxLng - minLng) * (width - pad * 2);
+          var y = pad + (maxY - cortexMercatorY(lat)) / (maxY - minY) * (height - pad * 2);
+          return { x: x, y: y };
+        }
+      };
+    }
+
+    function loadCortexStaticMapBackground(fit, width, height) {
+      return new Promise(function (resolve) {
+        var img = new Image();
+        var done = false;
+        function finish(val) {
+          if (done) return;
+          done = true;
+          resolve(val || null);
+        }
+        img.onload = function () { finish(img); };
+        img.onerror = function () { finish(null); };
+        img.src = '/static-map?size=' + width + 'x' + height
+          + '&center=' + encodeURIComponent(fit.center)
+          + '&zoom=' + encodeURIComponent(String(fit.zoom));
+        setTimeout(function () { finish(null); }, 4000);
+      });
+    }
+
+    function drawCortexLineMapPins(ctx, pins, color, fit) {
+      function drawOne(pin, priority) {
+        var pt = fit.project(pin.latitude, pin.longitude);
+        var label = pin.sequenceNumber == null ? '-' : String(pin.sequenceNumber);
+        var digits = label.length;
+        var w = digits >= 3 ? 34 : (digits >= 2 ? 28 : 24);
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, w / 2 + (priority ? 3 : 1), 0, Math.PI * 2);
+        ctx.fillStyle = priority ? '#fecaca' : 'rgba(255,255,255,0.9)';
+        ctx.fill();
+        if (priority) {
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#b91c1c';
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, w / 2 - 1, 0, Math.PI * 2);
+        ctx.fillStyle = color || '#0f766e';
+        ctx.fill();
+        ctx.lineWidth = priority ? 3 : 2;
+        ctx.strokeStyle = priority ? '#b91c1c' : '#ffffff';
+        ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold ' + (digits >= 3 ? '10px' : '12px') + ' sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, pt.x, pt.y + 0.5);
+      }
+      pins.forEach(function (p) { if (!p.isPriority1300) drawOne(p, false); });
+      pins.forEach(function (p) { if (p.isPriority1300) drawOne(p, true); });
+    }
+
+    async function renderCortexLineMapPng(view) {
+      var Seq = window.OFK3RouteSequence;
+      var pins = Seq.lineImagePins(view);
+      if (!pins.length) throw new Error('座標付きStopがありません');
+      var width = 640;
+      var height = 400;
+      var canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#dbe4ee';
+      ctx.fillRect(0, 0, width, height);
+      var fit = cortexFitLinePins(pins, width, height, 36);
+      try {
+        var bg = await loadCortexStaticMapBackground(fit, width, height);
+        if (bg && bg.width > 10 && bg.height > 10) {
+          ctx.drawImage(bg, 0, 0, width, height);
+        }
+      } catch (e) {}
+      var colorCache = {};
+      var color = (window.OFK3DeliveryMap && typeof OFK3DeliveryMap.routeColor === 'function')
+        ? OFK3DeliveryMap.routeColor(view.routeCode, colorCache)
+        : '#0f766e';
+      drawCortexLineMapPins(ctx, pins, color, fit);
+      ctx.fillStyle = 'rgba(15,23,42,0.78)';
+      ctx.fillRect(0, 0, width, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      var title = view.routeCode + '  Cortex巡回順  ' + pins.length + ' Stops';
+      if (view.stats && view.stats.priorityStopCount) title += '  赤枠=13:00必達';
+      ctx.fillText(title, 10, 14);
+      var dataUrl = canvas.toDataURL('image/png');
+      if (!dataUrl || dataUrl.indexOf('data:image/png') !== 0) throw new Error('PNG生成に失敗しました');
+      return dataUrl;
+    }
+
+    async function publishCortexLineMapImage(dataUrl) {
+      var base64 = String(dataUrl || '').split(',')[1] || '';
+      if (!base64) throw new Error('MAP画像が空です');
+      var res = await fetch('/map-image', {
+        method: 'POST',
+        headers: getProxyHeaders(),
+        body: JSON.stringify({ data: base64, mime: 'image/png' })
+      });
+      var json = await res.json().catch(function () { return {}; });
+      if (!res.ok || !json || json.status !== 'ok' || !json.url) {
+        throw new Error((json && json.message) || 'MAP画像の公開に失敗しました');
+      }
+      return json.url;
+    }
+
     async function sendCortexRouteMapToLine() {
       var view = buildCortexRouteView(currentMapRouteCode);
       if (cortexRouteView && cortexRouteView.ok && cortexRouteView.routeCode === currentMapRouteCode) {
@@ -13212,28 +13354,47 @@ var driverDB = {
         driverJapaneseNames: driverJapaneseNames,
         resolveDriverKey: resolveDriverKey
       });
-      var preview = Seq.buildLinePreview(view, target);
-      if (!preview.canSend) {
-        alert(preview.message || '送信できません');
+      if (!target || !target.ok || !target.userId) {
+        alert((target && target.message) || '送信先Driverが未解決です。自動送信しません。');
+        return;
+      }
+      if (!Seq.lineImagePins(view).length) {
+        alert('座標付きStopが無くMAP画像を生成できないため送信しません。');
+        return;
+      }
+      var blockedWithoutImage = Seq.buildLinePreview(view, target);
+      if (blockedWithoutImage && blockedWithoutImage.canSend) {
+        alert('内部エラー: 画像なしでは送信できません');
         return;
       }
       var confirmMsg = 'Route: ' + view.routeCode
-        + '\nDriver: ' + preview.displayName
+        + '\nDriver: ' + (target.displayName || view.stats.driverName || '-')
         + '\nStops: ' + view.stats.allStopCount
         + '\n13:00必達: ' + view.stats.priorityStopCount + ' Stops / ' + view.stats.priorityPackageCount + ' Packages';
       if (view.coverage.missing) confirmMsg += '\n座標未取得: ' + view.coverage.missing + '件';
-      confirmMsg += '\n\nこの1 RouteだけをLINE送信しますか？';
+      confirmMsg += '\n\nこの1 RouteのMAP画像をLINE送信しますか？';
       if (!confirm(confirmMsg)) return;
       var proxyUrl = lineSettings.gasProxyUrl;
       if (!proxyUrl) { alert('GASプロキシURLが設定されていません'); return; }
-      var mapContainer = document.getElementById('delivery-map');
+      var imageUrl = '';
       try {
-        if (window.html2canvas && mapContainer) {
-          var canvas = await html2canvas(mapContainer, { useCORS: true, allowTaint: true, scale: 2 });
-          await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/png'); });
-        }
+        var png = await renderCortexLineMapPng(view);
+        imageUrl = await publishCortexLineMapImage(png);
       } catch (e) {
-        console.log('Map capture failed:', e);
+        alert('MAP画像の生成/公開に失敗したため送信しません。\n' + (e.message || e));
+        return;
+      }
+      var preview = Seq.buildLinePreview(view, target, { imageUrl: imageUrl });
+      var imageMsg = preview.messages && preview.messages.filter(function (m) {
+        return m && m.type === 'image' && m.originalContentUrl;
+      })[0];
+      if (!preview.canSend || !imageMsg || !Seq.isPublicHttpsImageUrl(imageMsg.originalContentUrl)) {
+        alert((preview.message || 'MAP画像URLが無いため送信しません。テキストのみでは送りません。'));
+        return;
+      }
+      if (preview.routeCode !== view.routeCode) {
+        alert('他Routeの送信を防止したため中止しました。');
+        return;
       }
       try {
         var response = await fetch(proxyUrl, {
@@ -13242,11 +13403,11 @@ var driverDB = {
           redirect: 'follow',
           credentials: 'omit',
           headers: getProxyHeaders(),
-          body: JSON.stringify({ to: preview.userId, messages: [{ type: 'text', text: preview.text }] })
+          body: JSON.stringify({ to: preview.userId, messages: preview.messages })
         });
         var data = await response.json().catch(function () { return {}; });
         if (response.ok) {
-          alert(preview.displayName + ' さんにLINE送信しました！');
+          alert(preview.displayName + ' さんにLINE送信しました！（MAP画像付き）');
         } else {
           alert('送信エラー: ' + JSON.stringify(data));
         }
@@ -21456,7 +21617,7 @@ var driverDB = {
     <div id="ofk3-dmap-legend" class="flex flex-wrap gap-1 mb-2"></div>
     <div id="ofk3-dmap-canvas" style="height:min(430px,55vh);border:1px solid #d1d5db;border-radius:8px;"></div>
   </div>
-  <script src="/cortex-route-sequence.js?v=20260921-4"></script>
-  <script src="/ofk3-delivery-map.js?v=20260921-4"></script>
+  <script src="/cortex-route-sequence.js?v=20260921-5"></script>
+  <script src="/ofk3-delivery-map.js?v=20260921-5"></script>
 </body>
 </html>

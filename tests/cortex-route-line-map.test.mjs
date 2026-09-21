@@ -68,13 +68,44 @@ assert(dcx36.ok && dcx36.pins.length === 2, 'DCX36 individual view is 2 stops');
 assert(dcx36.pins.every(function (p) { return p.routeCode === 'DCX36'; }), 'DCX36 view excludes DCX_TEST');
 assert(Seq.pinsStayOnRoute(dcx36.pins, 'DCX36'), 'LINE payload cannot include other routes');
 
-var preview36 = Seq.buildLinePreview(dcx36, {
+var previewNoImage = Seq.buildLinePreview(dcx36, {
   ok: true, userId: 'U36', displayName: '宮原 義', driverKey: 'Miyahara'
 });
-assert(preview36.canSend === true, 'resolved driver can build LINE preview');
+assert(previewNoImage.canSend === false, 'text-only LINE payload is not treated as success');
+assert(!previewNoImage.messages || previewNoImage.messages.length === 0, 'text-only payload has no LINE messages');
+assert(previewNoImage.text.indexOf('DCX36') >= 0 && previewNoImage.text.indexOf('DCX_TEST') < 0, 'LINE text does not mention other routes');
+assert(previewNoImage.text.indexOf('Cortex巡回順') >= 0, 'LINE text names Cortex visit order');
+
+var dataUrlBlocked = Seq.buildLinePreview(dcx36, {
+  ok: true, userId: 'U36', displayName: '宮原 義', driverKey: 'Miyahara'
+}, { imageUrl: 'data:image/png;base64,AAAA' });
+assert(dataUrlBlocked.canSend === false, 'data URL is not sent to LINE Messaging API');
+
+var httpBlocked = Seq.buildLinePreview(dcx36, {
+  ok: true, userId: 'U36', displayName: '宮原 義', driverKey: 'Miyahara'
+}, { imageUrl: 'http://127.0.0.1:3016/map-image/abc' });
+assert(httpBlocked.canSend === false, 'non-HTTPS image URL is rejected');
+
+var preview36 = Seq.buildLinePreview(dcx36, {
+  ok: true, userId: 'U36', displayName: '宮原 義', driverKey: 'Miyahara'
+}, { imageUrl: 'https://ofk3-line-proxy-1.onrender.com/map-image/dcx36test' });
+assert(preview36.canSend === true, 'resolved driver + HTTPS map image can send');
 assert(preview36.routeCode === 'DCX36', 'LINE preview is the selected route only');
-assert(preview36.text.indexOf('DCX36') >= 0 && preview36.text.indexOf('DCX_TEST') < 0, 'LINE text does not mention other routes');
-assert(preview36.text.indexOf('Cortex巡回順') >= 0, 'LINE text names Cortex visit order');
+assert(preview36.imageUrl && preview36.imageUrl.indexOf('https://') === 0, 'image URL is not empty');
+assert(Array.isArray(preview36.messages) && preview36.messages.length === 2, 'LINE payload is text + image');
+assert(preview36.messages[0].type === 'text' && preview36.messages[1].type === 'image', 'message types are text then image');
+assert(preview36.messages[1].originalContentUrl === preview36.imageUrl, 'image message has originalContentUrl');
+assert(preview36.messages[1].previewImageUrl === preview36.imageUrl, 'image message has previewImageUrl');
+assert(preview36.messages.every(function (m) {
+  return !m.text || (m.text.indexOf('DCX36') >= 0 && m.text.indexOf('DCX_TEST') < 0);
+}), 'LINE payload stays on DCX36');
+assert(Seq.lineImagePins(dcx36).every(function (p) { return p.routeCode === 'DCX36'; }), 'LINE image pins stay on selected route');
+assert(Seq.lineImagePins(single).every(function (p) { return p.routeCode === 'DCX_TEST'; }), 'DCX_TEST image pins exclude DCX36');
+
+var failPublish = Seq.buildLinePreview(dcx36, {
+  ok: true, userId: 'U36', displayName: '宮原 義'
+}, { imageUrl: '' });
+assert(failPublish.canSend === false, 'image publish failure aborts LINE send');
 
 var noSeq = Seq.buildSingleRouteView({ complete: false, pins: [] }, 'DCX36', {});
 assert(noSeq.ok === false && noSeq.reason === 'NO_SEQUENCE', 'missing routeStops refuses individual MAP');
@@ -125,5 +156,18 @@ assert(html.indexOf('function twRenderMapAsync') >= 0, 'twRenderMapAsync remains
 assert(html.indexOf('id="splash-screen"') >= 0, 'splash remains');
 assert(html.indexOf('function isExact1300Clock') < 0, 'index.html does not duplicate 13:00 judgment');
 assert(seqSrc.indexOf('buildSingleRouteView') >= 0, 'single-route view lives on the sequence model');
+assert(Seq.isPublicHttpsImageUrl('https://ofk3-line-proxy-1.onrender.com/map-image/abc') === true, 'https map-image URL is accepted');
+assert(Seq.isPublicHttpsImageUrl('data:image/png;base64,xx') === false, 'data URL is not a LINE image URL');
+assert(html.indexOf('function publishCortexLineMapImage') >= 0, 'Cortex LINE send publishes MAP image');
+assert(html.indexOf("fetch('/map-image'") >= 0, 'Cortex LINE send uses existing Render upload pattern');
+assert(html.indexOf('originalContentUrl: imageUrl') >= 0 || html.indexOf('preview.messages') >= 0, 'Cortex LINE send uses image message payload');
+assert(html.indexOf("messages: preview.messages") >= 0, 'Cortex LINE send posts preview.messages including image');
+assert(html.indexOf("messages: [{ type: 'text', text: preview.text }]") < 0, 'Cortex LINE send no longer posts text-only');
+assert(html.indexOf("imageUrl = ''; // 画像URLは後で実装") >= 0, 'existing cycle MAP LINE send is unchanged');
+assert(html.indexOf('function twRenderMapAsync') >= 0, 'twRenderMapAsync remains');
+var serverSrc = readFileSync(join(root, 'render-webhook-server.js'), 'utf8');
+assert(serverSrc.indexOf("app.post('/map-image'") >= 0 && serverSrc.indexOf("app.get('/map-image/:id'") >= 0, 'Render map-image upload/download exists');
+assert(serverSrc.indexOf("app.post('/pdf-upload'") >= 0, 'existing pdf-upload path remains');
+assert(serverSrc.indexOf("app.get('/static-map'") >= 0, 'existing static-map path remains');
 
 console.log('ok cortex-route-line-map');
