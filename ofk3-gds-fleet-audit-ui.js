@@ -1,7 +1,11 @@
 /**
- * OFK3 GDS台数自動照合 Phase 1 — UI（既存「台数照合」タブの拡張）.
+ * OFK3 GDS台数自動照合 Phase 1.1 — UI（既存「台数照合」タブの拡張）.
  * 判定ロジックは gds-fleet-audit-core.js（DOM非依存）に委譲し、本ファイルは
  * ファイル読込・DOM描画のみを担当する。
+ *
+ * Phase 1.1: 「Pair」（4.5B+6.5Bの合成監査単位・内部整合性チェック）表示を廃止し、
+ * 6.5B / 4.5B を完全に独立した行として表示するように変更（gds-fleet-audit-core.js
+ * 側の監査単位変更に追従。UI側のロジック変更はカテゴリキー・ラベルの更新のみ）。
  *
  * 安全設計:
  *  - #panel-fleet 配下に新規rootを追加するだけ。既存の直下要素（正常台数マスタ・
@@ -121,18 +125,17 @@
   }
 
   function categoryLabel(key) {
-    return ({ bike2h: 'Bike 2h', bike3h: 'Bike 3h', pair: 'Pair', eightB: '8B' })[key] || key;
+    return ({ bike2h: 'Bike 2h', bike3h: 'Bike 3h', block6_5: '6.5B', block4_5: '4.5B', eightB: '8B' })[key] || key;
   }
 
   function statusBadge(status) {
     if (status === 'ok') return '<span style="color:#059669;font-weight:700;">✅</span>';
-    if (status === 'alert' || status === 'inconsistent') return '<span style="color:#dc2626;font-weight:700;">🚨</span>';
+    if (status === 'alert') return '<span style="color:#dc2626;font-weight:700;">🚨</span>';
     return '<span style="color:#b45309;font-weight:700;">⚪判定不可</span>';
   }
 
   function diffText(cat) {
     if (cat.status === 'unknown') return '—';
-    if (cat.status === 'inconsistent') return '—';
     if (cat.diff === 0) return '0';
     return (cat.diff > 0 ? '+' : '') + cat.diff;
   }
@@ -164,7 +167,7 @@
     if (!cmp || !cmp.days.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
     el.classList.remove('hidden');
     var html = '';
-    var keys = ['bike2h', 'bike3h', 'pair', 'eightB'];
+    var keys = ['block6_5', 'block4_5', 'eightB', 'bike2h', 'bike3h'];
     cmp.days.forEach(function (day) {
       var borderClass = day.dayStatus === 'alert' ? 'border-red-400 bg-red-50' : (day.dayStatus === 'unknown' ? 'border-amber-300 bg-amber-50' : 'border-emerald-400 bg-emerald-50');
       var headBadge = day.dayStatus === 'alert' ? '<span class="text-red-600 font-bold">🚨 GDS差異あり / 要確認</span>'
@@ -182,7 +185,7 @@
         + '</tr></thead><tbody>';
       keys.forEach(function (k) {
         var cat = day.categories[k];
-        var rowBg = (cat.status === 'alert' || cat.status === 'inconsistent') ? ' bg-yellow-50' : '';
+        var rowBg = cat.status === 'alert' ? ' bg-yellow-50' : '';
         html += '<tr class="border-b border-border' + rowBg + '">'
           + '<td class="px-3 py-1.5 text-xs font-medium">' + esc(categoryLabel(k)) + '</td>'
           + '<td class="px-3 py-1.5 text-center text-xs">' + esc(valText(cat.cortex)) + '</td>'
@@ -190,11 +193,6 @@
           + '<td class="px-3 py-1.5 text-center text-xs">' + esc(diffText(cat)) + '</td>'
           + '<td class="px-3 py-1.5 text-center text-xs">' + statusBadge(cat.status) + '</td>'
           + '</tr>';
-        if (k === 'pair' && cat.status === 'inconsistent') {
-          html += '<tr class="border-b border-border bg-yellow-50"><td colspan="5" class="px-3 py-1.5 text-xs" style="color:#b45309;">'
-            + '⚠️ Cortex Pair内部不整合（4.5B=' + esc(valText(cat.cortex45)) + ' / 6.5B=' + esc(valText(cat.cortex65)) + '）。判定不可として扱います。'
-            + '</td></tr>';
-        }
       });
       html += '</tbody></table></div>';
     });
