@@ -1,15 +1,30 @@
 /**
- * OFK3 GDS台数自動照合 Phase 1 — 判定・集計処理コア（DOM非依存の純粋関数のみ）
+ * OFK3 GDS台数自動照合 Phase 1.1 — 判定・集計処理コア（DOM非依存の純粋関数のみ）
  *
  * 目的: Cortex GDS Weekly Report CSV（正データ）と Amazon dsp1.0_inputfile_gds
  * XLSM（InputFileに登録済みの台数）を突き合わせ、日別に Bike 2h / Bike 3h /
- * Pair(4.5B+6.5B) / 8B の差異を検出する。
+ * 6.5B / 4.5B / 8B の差異を検出する。
  *
  * 重要原則:
  *  - Cortex当日実績を正とする。固定の「正常台数」をハードコードしない
  *    （本ファイルには 8/12, 18 等の期待値は一切登場しない。実際に出現した
  *    サービスタイプ名・列名のみを構造的な識別子として使用する）。
  *  - データが取得できない場合は 0 と混同せず null（判定不可）を返す。
+ *
+ * Phase 1.1での変更点（監査単位の修正。新機能追加ではない）:
+ *  - 「Pair」（4.5B+6.5Bを1つの監査単位とみなし、両者が一致することを前提に
+ *    合算・内部整合性チェックを行う仕組み）を廃止した。同一DAが
+ *    Cycle1→帰着→Cycle3と連続稼働することが多く6.5B≒4.5Bになりやすいが、
+ *    これは運用上の相関であって監査上の同一性ではない（例: Cycle1後に1名が
+ *    離脱すればCycle3だけ台数が減る、という正当な実績が起こり得る）。
+ *    6.5Bと4.5Bは今後 `block6_5` / `block4_5` として完全に独立集計・独立判定し、
+ *    平均化・片側採用・「両者が一致しなければ判定不可」という内部整合性チェックは
+ *    一切行わない。値が異なること自体は異常ではない。
+ *  - Bikeについて、InputFile側はCycle別の内訳（`bikeByCycle`）を保持するように
+ *    変更した。ただし実データ調査の結果、Cortex GDS Weekly Report CSVには
+ *    Cycleを識別できる列が存在しない（後述）ため、Cortex側と突き合わせる実際の
+ *    監査は引き続き Bike 2h / Bike 3h の集計値単位で行う。Cycle別の突き合わせを
+ *    データに基づかず実装することはしていない。
  *
  * 列構造は実データで検証済み（推測ではない）:
  *
@@ -35,11 +50,25 @@
  *      Bike3h=Block3, Bike2h=Block2 のみ値が入っており、他Blockは空欄。
  *    - Cycle列: "CYCLE_1"/"CYCLE_2"/"CYCLE_3" 等。Bikeは2h/3hそれぞれ
  *      CYCLE_1行とCYCLE_2行に分かれて登録されている
- *      （例: Block=2の行がCycle=CYCLE_1とCYCLE_2の2行存在し、合算が2h実車台数）。
- *      B/S列の値でも同じ区分ができるため、本コアはBlock数値でカテゴリ分けし、
- *      同一Blockの複数Cycle行は自動的に合算される。
+ *      （例: Block=2の行がCycle=CYCLE_1とCYCLE_2の2行存在する）。
+ *      本コアはBlock数値でカテゴリ分けしつつ、Bike(Block=2/3)については
+ *      Cycle別の内訳（`bikeByCycle`）も失わずに保持する（Phase 1.1）。
  *    - 日付列: ヘッダー行のセルがExcelシリアル値（1900年系、40000〜60000程度）
  *      になっている列を動的に検出する（列位置を固定しない）。
+ *
+ * 3) Cortex側でBike Cycleを識別できるかの調査結果（Phase 1.1、実データ確認済み）:
+ *    提供された GDS_Weekly_Report-2026-09-13.csv の全13列
+ *    （日付/ステーション/プロバイダーショートコード/サービスタイプ/計画された時間/
+ *    計画された合計距離/合計距離手当/計画された距離単位/AMZL遅延キャンセル/
+ *    Provider late cancel/クイックカバー/承諾済み/完了したルート）を確認したが、
+ *    Cycle・Wave・Sort Zone・Start Time・Delivery Window等、Cycleを一意に
+ *    識別できる列は存在しない。この週次レポートは「日付×サービスタイプ×
+ *    計画時間」単位で既に集計済みの行（完了ルート数のみ）であり、個々のルート
+ *    ・Cycle情報はそもそも保持されていない。したがって、Cortex側でBikeを
+ *    Cycle単位に分解することは実データ上不可能であり、推測での按分
+ *    （例: 2h合計8をCycle1=4/Cycle2=4と勝手に割ること）は行っていない。
+ *    Bikeの監査は現在のCortexデータで安全に検証可能な最大粒度である
+ *    「Bike 2h（Cycle合算）」「Bike 3h（Cycle合算）」までとする。
  */
 (function (global) {
   'use strict';
@@ -116,12 +145,12 @@
   }
 
   // サービスタイプ→カテゴリ分類。
-  //  parcel: 8B/Pairの合算対象（"Standard Parcel" 完全一致 or "Nursery" を含む=全Level）
+  //  parcel: 8B/6.5B/4.5Bの合算対象（"Standard Parcel" 完全一致 or "Nursery" を含む=全Level）
   //  biker : Bikeの合算対象（"Biker (Rear Cargo - Large)" 完全一致。
   //          "DA Onboarding" 等の非デリバリー枠はBikeに含めない —
   //          InputFile側のBiker行のServiceTypeも "Biker (Rear Cargo - Large)" のみで
   //          あることを実データで確認済みのため、対称な定義とする）
-  //  other : 上記以外（8B/Pair/Bikeいずれの対象にもしない）
+  //  other : 上記以外（8B/6.5B/4.5B/Bikeいずれの対象にもしない）
   function classifyCortexServiceType(svc) {
     var s = String(svc == null ? '' : svc).trim();
     if (s === 'Standard Parcel') return 'parcel';
@@ -130,8 +159,12 @@
     return 'other';
   }
 
+  // block6_5/block4_5は完全に独立した監査単位（Phase 1.1）。「Pair」という
+  // 合成カテゴリは存在しない。bikeByCycle は Input側のみで埋まる
+  // （Cycle: "CYCLE_1"等 -> {bike2h, bike3h}）。Cortex側はCycleを識別できない
+  // ため常に空のまま。
   function emptyDateBucket() {
-    return { eightB: 0, pair45: 0, pair65: 0, bike2h: 0, bike3h: 0, otherServiceTypes: {} };
+    return { eightB: 0, block6_5: 0, block4_5: 0, bike2h: 0, bike3h: 0, bikeByCycle: {}, otherServiceTypes: {} };
   }
 
   /**
@@ -186,8 +219,8 @@
       var category = classifyCortexServiceType(svc);
       if (category === 'parcel') {
         if (hours === 8) bucket.eightB += count;
-        else if (hours === 4.5) bucket.pair45 += count;
-        else if (hours === 6.5) bucket.pair65 += count;
+        else if (hours === 4.5) bucket.block4_5 += count;
+        else if (hours === 6.5) bucket.block6_5 += count;
       } else if (category === 'biker') {
         if (hours === 2) bucket.bike2h += count;
         else if (hours === 3) bucket.bike3h += count;
@@ -297,17 +330,29 @@
 
       var category = null;
       if (blockVal === 8) category = 'eightB';
-      else if (blockVal === 4.5) category = 'pair45';
-      else if (blockVal === 6.5) category = 'pair65';
+      else if (blockVal === 4.5) category = 'block4_5';
+      else if (blockVal === 6.5) category = 'block6_5';
       else if (blockVal === 2) category = 'bike2h';
       else if (blockVal === 3) category = 'bike3h';
-      if (!category) continue; // 今回の4指標（Bike2h/3h, Pair, 8B）の対象外Blockは無視
+      if (!category) continue; // 今回の5指標（Bike2h/3h, 6.5B, 4.5B, 8B）の対象外Blockは無視
+
+      var isBike = category === 'bike2h' || category === 'bike3h';
+      var cycleLabel = colCycle != null ? String(row[colCycle] == null ? '' : row[colCycle]).trim() : '';
+      if (!cycleLabel) cycleLabel = '(cycle unknown)';
 
       dateCols.forEach(function (dc) {
         var cell = row[dc.col];
         var n = (cell === '' || cell == null) ? 0 : Number(cell);
         if (!isFinite(n)) n = 0;
-        byDate[dc.date][category] += n;
+        var bucket = byDate[dc.date];
+        bucket[category] += n;
+        // Bikeは合算値(bike2h/bike3h)に加え、Cycle別の内訳も失わずに保持する（Phase 1.1）。
+        // Cortex側がCycleを識別できないため監査には未使用だが、将来Cortex側で
+        // Cycle識別が可能になった場合にすぐ独立照合できるよう、データは保持する。
+        if (isBike) {
+          if (!bucket.bikeByCycle[cycleLabel]) bucket.bikeByCycle[cycleLabel] = { bike2h: 0, bike3h: 0 };
+          bucket.bikeByCycle[cycleLabel][category] += n;
+        }
       });
     }
 
@@ -325,13 +370,6 @@
     };
   }
 
-  // Pairの内部整合性チェック（4.5B算出値 === 6.5B算出値の時のみ確定値を返す）。
-  function resolvePair(v45, v65) {
-    if (v45 == null || v65 == null) return { value: null, consistent: null };
-    if (v45 === v65) return { value: v45, consistent: true };
-    return { value: null, consistent: false };
-  }
-
   function buildCategoryResult(cortexVal, inputVal) {
     if (cortexVal == null || inputVal == null) {
       return { status: 'unknown', cortex: cortexVal == null ? null : cortexVal, input: inputVal == null ? null : inputVal, diff: null };
@@ -340,26 +378,13 @@
     return { status: diff === 0 ? 'ok' : 'alert', cortex: cortexVal, input: inputVal, diff: diff };
   }
 
-  function buildPairResult(cortexBucket, inputBucket) {
-    var cortexPair = cortexBucket ? resolvePair(cortexBucket.pair45, cortexBucket.pair65) : { value: null, consistent: null };
-    var inputPair = inputBucket ? resolvePair(inputBucket.pair45, inputBucket.pair65) : { value: null, consistent: null };
-    var detail = {
-      cortex45: cortexBucket ? cortexBucket.pair45 : null,
-      cortex65: cortexBucket ? cortexBucket.pair65 : null,
-      cortexConsistent: cortexPair.consistent,
-      input45: inputBucket ? inputBucket.pair45 : null,
-      input65: inputBucket ? inputBucket.pair65 : null,
-      inputConsistent: inputPair.consistent
-    };
-    if (cortexPair.consistent === false || inputPair.consistent === false) {
-      return Object.assign({ status: 'inconsistent', cortex: cortexPair.value, input: inputPair.value, diff: null }, detail);
-    }
-    return Object.assign(buildCategoryResult(cortexPair.value, inputPair.value), detail);
-  }
-
   /**
    * Cortex実績とInputFile登録値を日別に比較する。
    * 監査対象日は「Weekly Reportに含まれる日付」（cortexResult.byDateのキー）。
+   * 6.5B/4.5B/8B/Bike2h/Bike3hはそれぞれ完全に独立した監査単位（Phase 1.1）。
+   * 「Pair」という合成カテゴリ・内部整合性チェックは存在しない。6.5Bと4.5Bの
+   * 値が異なること自体は異常ではなく、互いに相殺もしない
+   * （例: 6.5B diff=+1, 4.5B diff=-1 でも合計0とはみなさず、各々を独立判定する）。
    * @param {ReturnType<parseCortexWeeklyCsv>} cortexResult
    * @param {ReturnType<parseInputFileRows>} inputResult
    */
@@ -370,14 +395,15 @@
       var inputBucket = inputResult && inputResult.ok ? inputResult.byDate[date] : null;
 
       var categories = {
-        bike2h: buildCategoryResult(cortexBucket.bike2h, inputBucket ? inputBucket.bike2h : null),
-        bike3h: buildCategoryResult(cortexBucket.bike3h, inputBucket ? inputBucket.bike3h : null),
+        block6_5: buildCategoryResult(cortexBucket.block6_5, inputBucket ? inputBucket.block6_5 : null),
+        block4_5: buildCategoryResult(cortexBucket.block4_5, inputBucket ? inputBucket.block4_5 : null),
         eightB: buildCategoryResult(cortexBucket.eightB, inputBucket ? inputBucket.eightB : null),
-        pair: buildPairResult(cortexBucket, inputBucket)
+        bike2h: buildCategoryResult(cortexBucket.bike2h, inputBucket ? inputBucket.bike2h : null),
+        bike3h: buildCategoryResult(cortexBucket.bike3h, inputBucket ? inputBucket.bike3h : null)
       };
 
       var keys = Object.keys(categories);
-      var hasAlert = keys.some(function (k) { return categories[k].status === 'alert' || categories[k].status === 'inconsistent'; });
+      var hasAlert = keys.some(function (k) { return categories[k].status === 'alert'; });
       var hasUnknown = keys.some(function (k) { return categories[k].status === 'unknown'; });
       var dayStatus = hasAlert ? 'alert' : (hasUnknown ? 'unknown' : 'ok');
 
