@@ -155,6 +155,16 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (twBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, twBodyPos) + '  <script src="' + twBoardScriptSrc + '"></script>\n' + html.slice(twBodyPos);
     }
+    if (html.indexOf('/gds-fleet-audit-core.js') < 0) {
+      var gdsCoreBodyPos = html.lastIndexOf('</body>');
+      if (gdsCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, gdsCoreBodyPos) + '  <script src="/gds-fleet-audit-core.js?v=20260921-1"></script>\n' + html.slice(gdsCoreBodyPos);
+    }
+    if (html.indexOf('/ofk3-gds-fleet-audit-ui.js') < 0) {
+      var gdsUiBodyPos = html.lastIndexOf('</body>');
+      if (gdsUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, gdsUiBodyPos) + '  <script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>\n' + html.slice(gdsUiBodyPos);
+    }
     res.type('html').send(html);
   } catch (e) {
     next(e);
