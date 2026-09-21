@@ -170,4 +170,29 @@ assert(serverSrc.indexOf("app.post('/map-image'") >= 0 && serverSrc.indexOf("app
 assert(serverSrc.indexOf("app.post('/pdf-upload'") >= 0, 'existing pdf-upload path remains');
 assert(serverSrc.indexOf("app.get('/static-map'") >= 0, 'existing static-map path remains');
 
+var centerView = Seq.googleStaticMapView([
+  { latitude: 33.575, longitude: 130.335, routeCode: 'DCX36' }
+], 640, 400);
+assert(centerView && centerView.zoom >= 1, 'google static view has zoom');
+var cpt = centerView.project(33.575, 130.335);
+assert(Math.abs(cpt.x - 320) < 0.6 && Math.abs(cpt.y - 200) < 0.6, 'center coordinate maps to canvas center');
+var east = centerView.project(33.575, 130.335 + 0.01);
+assert(east.x > cpt.x && Math.abs(east.y - cpt.y) < 8, 'east is to the right on Google mercator');
+var north = centerView.project(33.575 + 0.01, 130.335);
+assert(north.y < cpt.y && Math.abs(north.x - cpt.x) < 8, 'north is upward on Google mercator');
+
+var twoView = Seq.googleStaticMapView([
+  { latitude: 33.57, longitude: 130.33, routeCode: 'DCX36' },
+  { latitude: 33.58, longitude: 130.34, routeCode: 'DCX36' }
+], 640, 400);
+var p1 = twoView.project(33.57, 130.33);
+var p2 = twoView.project(33.58, 130.34);
+assert(p1.x > 40 && p1.x < 600 && p1.y > 40 && p1.y < 360, 'south-west pin stays inside padded viewport');
+assert(p2.x > 40 && p2.x < 600 && p2.y > 40 && p2.y < 360, 'north-east pin stays inside padded viewport');
+assert(p2.x > p1.x && p2.y < p1.y, 'relative pin order matches geography');
+assert(html.indexOf('googleStaticMapView') >= 0, 'LINE canvas uses Google Static Maps projection');
+assert(html.indexOf('cortexFitLinePins') < 0, 'bbox-fit projection is no longer used for LINE images');
+assert(html.indexOf('blob.size < 8000') >= 0, 'tiny placeholder static-map images are rejected');
+assert(html.indexOf('size:tiny|color:0xCCCCCC|') >= 0, 'static-map background includes pin markers like existing LINE maps');
+
 console.log('ok cortex-route-line-map');

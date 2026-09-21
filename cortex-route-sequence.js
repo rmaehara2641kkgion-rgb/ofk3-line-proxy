@@ -147,6 +147,77 @@
     return coverage.total + ' Stops中 ' + coverage.plotted + '件表示 / 座標未取得' + coverage.missing + '件';
   }
 
+  function clampNum(n, lo, hi) {
+    return Math.min(hi, Math.max(lo, n));
+  }
+
+  function googleWorldSize(zoom) {
+    return 256 * Math.pow(2, Number(zoom));
+  }
+
+  function googleLngToX(lng, zoom) {
+    return ((Number(lng) + 180) / 360) * googleWorldSize(zoom);
+  }
+
+  function googleLatToY(lat, zoom) {
+    var s = Math.sin(clampNum(Number(lat), -85.05112878, 85.05112878) * Math.PI / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * googleWorldSize(zoom);
+  }
+
+  function googleXToLng(x, zoom) {
+    return x / googleWorldSize(zoom) * 360 - 180;
+  }
+
+  function googleYToLat(y, zoom) {
+    var n = Math.PI - 2 * Math.PI * y / googleWorldSize(zoom);
+    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  }
+
+  function googleStaticMapView(pins, width, height, opts) {
+    opts = opts || {};
+    width = Number(width) || 640;
+    height = Number(height) || 400;
+    var pad = opts.pad == null ? 40 : Number(opts.pad);
+    var plotted = (pins || []).filter(function (p) {
+      return hasFiniteCoord(p.latitude, p.longitude);
+    });
+    if (!plotted.length) return null;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    plotted.forEach(function (p) {
+      var x = googleLngToX(p.longitude, 0);
+      var y = googleLatToY(p.latitude, 0);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    });
+    var spanX = Math.max(maxX - minX, 1e-9);
+    var spanY = Math.max(maxY - minY, 1e-9);
+    var innerW = Math.max(width - pad * 2, 1);
+    var innerH = Math.max(height - pad * 2, 1);
+    var zoomX = Math.log(innerW / spanX) / Math.LN2;
+    var zoomY = Math.log(innerH / spanY) / Math.LN2;
+    var zoom = Math.floor(clampNum(Math.min(zoomX, zoomY), 1, 16));
+    var centerLng = googleXToLng((minX + maxX) / 2, 0);
+    var centerLat = googleYToLat((minY + maxY) / 2, 0);
+    function project(lat, lng) {
+      return {
+        x: width / 2 + googleLngToX(lng, zoom) - googleLngToX(centerLng, zoom),
+        y: height / 2 + googleLatToY(lat, zoom) - googleLatToY(centerLat, zoom)
+      };
+    }
+    return {
+      width: width,
+      height: height,
+      zoom: zoom,
+      pad: pad,
+      centerLat: centerLat,
+      centerLng: centerLng,
+      center: Number(centerLat).toFixed(6) + ',' + Number(centerLng).toFixed(6),
+      project: project
+    };
+  }
+
   var NO_SEQUENCE_MESSAGE = 'Cortex巡回順データがありません。\nExtension v1.6.3以降でCortexを再取得してください。';
 
   function buildSingleRouteView(model, routeCode, extras) {
@@ -400,6 +471,9 @@
     lineImagePins: lineImagePins,
     buildLineMessages: buildLineMessages,
     buildLinePreview: buildLinePreview,
+    googleLngToX: googleLngToX,
+    googleLatToY: googleLatToY,
+    googleStaticMapView: googleStaticMapView,
     NO_SEQUENCE_MESSAGE: NO_SEQUENCE_MESSAGE
   };
 

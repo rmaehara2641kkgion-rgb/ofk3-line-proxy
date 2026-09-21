@@ -13185,61 +13185,46 @@ var driverDB = {
       }, 200);
     }
 
-    function cortexMercatorY(lat) {
-      var rad = Number(lat) * Math.PI / 180;
-      return Math.log(Math.tan(Math.PI / 4 + rad / 2));
-    }
-
-    function cortexFitLinePins(pins, width, height, pad) {
-      var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
-      pins.forEach(function (p) {
-        var lat = Number(p.latitude), lng = Number(p.longitude);
-        if (lat < minLat) minLat = lat;
-        if (lat > maxLat) maxLat = lat;
-        if (lng < minLng) minLng = lng;
-        if (lng > maxLng) maxLng = lng;
+    function loadCortexStaticMapBackground(fit, width, height, pins) {
+      var qs = '/static-map?size=' + width + 'x' + height
+        + '&center=' + encodeURIComponent(fit.center)
+        + '&zoom=' + encodeURIComponent(String(fit.zoom));
+      // Production /static-map returns a tiny blank PNG when only center/zoom are set.
+      // Existing OFK3 LINE maps always send markers; include pin coords so Google returns roads.
+      var markerParts = [];
+      (pins || []).forEach(function (p) {
+        if (!window.OFK3RouteSequence.hasFiniteCoord(p.latitude, p.longitude)) return;
+        markerParts.push(Number(p.latitude).toFixed(6) + ',' + Number(p.longitude).toFixed(6));
       });
-      if (minLat === maxLat) { minLat -= 0.012; maxLat += 0.012; }
-      if (minLng === maxLng) { minLng -= 0.012; maxLng += 0.012; }
-      var minY = cortexMercatorY(minLat);
-      var maxY = cortexMercatorY(maxLat);
-      var spanLat = maxLat - minLat;
-      var spanLng = maxLng - minLng;
-      var span = Math.max(spanLat, spanLng);
-      var zoom = 12;
-      if (span < 0.01) zoom = 15;
-      else if (span < 0.03) zoom = 14;
-      else if (span < 0.08) zoom = 13;
-      else if (span < 0.2) zoom = 12;
-      else if (span < 0.5) zoom = 11;
-      else zoom = 10;
-      return {
-        center: ((minLat + maxLat) / 2).toFixed(6) + ',' + ((minLng + maxLng) / 2).toFixed(6),
-        zoom: zoom,
-        project: function (lat, lng) {
-          var x = pad + (Number(lng) - minLng) / (maxLng - minLng) * (width - pad * 2);
-          var y = pad + (maxY - cortexMercatorY(lat)) / (maxY - minY) * (height - pad * 2);
-          return { x: x, y: y };
-        }
-      };
-    }
-
-    function loadCortexStaticMapBackground(fit, width, height) {
-      return new Promise(function (resolve) {
-        var img = new Image();
-        var done = false;
-        function finish(val) {
-          if (done) return;
-          done = true;
-          resolve(val || null);
-        }
-        img.onload = function () { finish(img); };
-        img.onerror = function () { finish(null); };
-        img.src = '/static-map?size=' + width + 'x' + height
-          + '&center=' + encodeURIComponent(fit.center)
-          + '&zoom=' + encodeURIComponent(String(fit.zoom));
-        setTimeout(function () { finish(null); }, 4000);
-      });
+      if (markerParts.length) {
+        qs += '&markers=' + encodeURIComponent('size:tiny|color:0xCCCCCC|' + markerParts.join('|'));
+      }
+      return fetch(qs)
+        .then(function (res) {
+          if (!res.ok) return null;
+          return res.blob();
+        })
+        .then(function (blob) {
+          if (!blob || blob.size < 8000 || String(blob.type || '').indexOf('image') < 0) return null;
+          return new Promise(function (resolve) {
+            var img = new Image();
+            var url = URL.createObjectURL(blob);
+            var done = false;
+            function finish(val) {
+              if (done) return;
+              done = true;
+              try { URL.revokeObjectURL(url); } catch (e) {}
+              resolve(val || null);
+            }
+            img.onload = function () {
+              finish(img.width > 10 && img.height > 10 ? img : null);
+            };
+            img.onerror = function () { finish(null); };
+            img.src = url;
+            setTimeout(function () { finish(null); }, 4000);
+          });
+        })
+        .catch(function () { return null; });
     }
 
     function drawCortexLineMapPins(ctx, pins, color, fit) {
@@ -13286,13 +13271,17 @@ var driverDB = {
       var ctx = canvas.getContext('2d');
       ctx.fillStyle = '#dbe4ee';
       ctx.fillRect(0, 0, width, height);
-      var fit = cortexFitLinePins(pins, width, height, 36);
+      var fit = Seq.googleStaticMapView(pins, width, height);
+      if (!fit) throw new Error('MAP投影を作れません');
+      var drewBackground = false;
       try {
-        var bg = await loadCortexStaticMapBackground(fit, width, height);
+        var bg = await loadCortexStaticMapBackground(fit, width, height, pins);
         if (bg && bg.width > 10 && bg.height > 10) {
           ctx.drawImage(bg, 0, 0, width, height);
+          drewBackground = true;
         }
       } catch (e) {}
+      canvas.setAttribute('data-drew-background', drewBackground ? '1' : '0');
       var colorCache = {};
       var color = (window.OFK3DeliveryMap && typeof OFK3DeliveryMap.routeColor === 'function')
         ? OFK3DeliveryMap.routeColor(view.routeCode, colorCache)
@@ -13309,6 +13298,8 @@ var driverDB = {
       ctx.fillText(title, 10, 14);
       var dataUrl = canvas.toDataURL('image/png');
       if (!dataUrl || dataUrl.indexOf('data:image/png') !== 0) throw new Error('PNG生成に失敗しました');
+      renderCortexLineMapPng.lastBackground = drewBackground;
+      renderCortexLineMapPng.lastFit = fit;
       return dataUrl;
     }
 
@@ -21617,7 +21608,7 @@ var driverDB = {
     <div id="ofk3-dmap-legend" class="flex flex-wrap gap-1 mb-2"></div>
     <div id="ofk3-dmap-canvas" style="height:min(430px,55vh);border:1px solid #d1d5db;border-radius:8px;"></div>
   </div>
-  <script src="/cortex-route-sequence.js?v=20260921-5"></script>
-  <script src="/ofk3-delivery-map.js?v=20260921-5"></script>
+  <script src="/cortex-route-sequence.js?v=20260921-7"></script>
+  <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
 </body>
 </html>
