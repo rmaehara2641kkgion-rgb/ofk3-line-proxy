@@ -342,11 +342,12 @@
           ? sumFn(seqModel.pins, getPriorityPackages(), runtime.selectedRoute)
           : { routeCode: runtime.selectedRoute, driverName: '', allStopCount: 0, priorityStopCount: 0, priorityPackageCount: 0 };
         info.style.display = 'block';
-        info.textContent = sel.routeCode
-          + '　Driver ' + (sel.driverName || '-')
+        info.innerHTML = esc(sel.routeCode)
+          + '　Driver ' + esc(sel.driverName || '-')
           + '　全Stop ' + sel.allStopCount
           + '　13:00必達Stop ' + sel.priorityStopCount
-          + '　13:00必達Package ' + sel.priorityPackageCount;
+          + '　13:00必達Package ' + sel.priorityPackageCount
+          + ' <button type="button" data-dmap="route-map" class="px-2 py-1 rounded text-xs font-bold" style="background:#0f766e;color:#fff;margin-left:8px;">個別MAP</button>';
       } else {
         info.style.display = 'none';
         info.textContent = '';
@@ -406,6 +407,14 @@
     fitVisible();
   }
 
+  function openIndividualRouteMap() {
+    var code = runtime.selectedRoute;
+    if (!code) return;
+    if (typeof root.openCortexRouteDeliveryMap === 'function') {
+      root.openCortexRouteDeliveryMap(code);
+    }
+  }
+
   function closeOverlay() {
     var overlay = document.getElementById(OVERLAY_ID);
     if (overlay) overlay.style.display = 'none';
@@ -419,10 +428,15 @@
     overlay.addEventListener('click', function (ev) {
       var t = ev.target;
       if (!t || !t.getAttribute) return;
-      var close = t.getAttribute('data-dmap');
-      if (close === 'close') {
+      var dmap = t.getAttribute('data-dmap');
+      if (dmap === 'close') {
         ev.preventDefault();
         closeOverlay();
+        return;
+      }
+      if (dmap === 'route-map') {
+        ev.preventDefault();
+        try { openIndividualRouteMap(); } catch (e) {}
         return;
       }
       var mode = t.getAttribute('data-dmap-mode');
@@ -519,6 +533,12 @@
     timeWindowPopup: timeWindowPopup,
     getSequenceModel: getSequenceModel,
     open: open,
+    openRouteMap: function (routeCode) {
+      try {
+        runtime.selectedRoute = String(routeCode || '');
+        openIndividualRouteMap();
+      } catch (e) {}
+    },
     setMode: function (mode) { try { setMode(mode); } catch (e) {} },
     close: function () { try { closeOverlay(); } catch (e) {} }
   };
