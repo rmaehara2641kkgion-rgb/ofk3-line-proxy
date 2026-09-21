@@ -16,7 +16,8 @@
     "test:cortex-route-line-map": "node tests/cortex-route-line-map.test.mjs",
     "test:lat-core": "node tests/lat-core.test.mjs",
     "test:lat-export-api": "node tests/lat-export-api.test.mjs",
-    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13"
+    "test:time-window-board": "node tests/time-window-print-board.test.mjs",
+    "test:all": "npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13 && npm run test:time-window-board"
   },
   "engines": {
     "node": ">=18.0.0"

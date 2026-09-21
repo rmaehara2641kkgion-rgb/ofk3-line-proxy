@@ -149,6 +149,12 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, bodyPos) + '  <script src="' + scriptSrc + '"></script>\n' + html.slice(bodyPos);
     }
+    var twBoardScriptSrc = '/ofk3-time-window-board.js?v=20260921-1';
+    if (html.indexOf('/ofk3-time-window-board.js') < 0) {
+      var twBodyPos = html.lastIndexOf('</body>');
+      if (twBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, twBodyPos) + '  <script src="' + twBoardScriptSrc + '"></script>\n' + html.slice(twBodyPos);
+    }
     res.type('html').send(html);
   } catch (e) {
     next(e);
