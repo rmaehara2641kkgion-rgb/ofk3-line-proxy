@@ -30,7 +30,7 @@ assert(html.indexOf('id="ofk3-cortex13-tw-panel"') >= 0, 'time-window host exist
 assert(/id="cortex13-card"[^>]*class="[^"]*\bhidden\b|class="[^"]*\bhidden\b[^"]*" id="cortex13-card"/.test(html), 'legacy Cortex PoC card is hidden');
 assert(html.indexOf('OFK3Cortex13.onTab') >= 0, 'switchTab calls Cortex onTab hook');
 assert(html.indexOf('renderCortexPriorityDashboard') >= 0, 'renderDashboard refreshes Cortex card');
-assert(html.indexOf('/ofk3-cortex-priority-ui.js?v=20260921-1') >= 0, 'UI script is loaded from index.html');
+assert(html.indexOf('/ofk3-cortex-priority-ui.js?v=20260921-3') >= 0, 'UI script is loaded from index.html');
 assert(html.indexOf('id="splash-screen"') >= 0, 'splash markup unchanged');
 assert(html.indexOf('住所マスターJSON読込') >= 0, 'non-Cortex JSON loader remains');
 

@@ -20,6 +20,8 @@
   var tour = Core.createTourState();
   var pocRun = null;
   var sessionBusy = false;
+  var panelCollapsed = true;
+  var lastAutoCollapsedKey = '';
   var stopRequested = false;
   var wheelTrace = [];
   var wheelTraceEarly = [];
@@ -238,6 +240,39 @@
     });
   }
 
+  function setPanelCollapsed(collapsed) {
+    panelCollapsed = !!collapsed;
+    var box = document.getElementById(PANEL_ID);
+    var body = document.getElementById('ofk3-poc-body');
+    var toggle = document.getElementById('ofk3-poc-toggle');
+    if (!box) return;
+    if (body) body.style.display = panelCollapsed ? 'none' : 'block';
+    if (panelCollapsed) {
+      box.style.width = 'auto';
+      box.style.maxHeight = 'none';
+      box.style.overflow = 'visible';
+      box.style.padding = '8px';
+    } else {
+      box.style.width = '620px';
+      box.style.maxHeight = '78vh';
+      box.style.overflow = 'auto';
+      box.style.padding = '12px';
+    }
+    if (toggle) {
+      if (sessionBusy || (tour && tour.status === 'running')) toggle.textContent = 'Cortex 取得中…';
+      else toggle.textContent = 'Cortex';
+    }
+  }
+
+  function maybeAutoCollapse() {
+    if (sessionBusy) return;
+    if (!tour || tour.status !== 'done') return;
+    var key = String(tour.currentRouteId || '') + ':' + String(tour.progress || '') + ':done';
+    if (lastAutoCollapsedKey === key) return;
+    lastAutoCollapsedKey = key;
+    setPanelCollapsed(true);
+  }
+
   function paint() {
     var d = diag();
     var box = document.getElementById(PANEL_ID);
@@ -259,6 +294,12 @@
     setText('ofk3-poc-domroutes', domRouteSnapshot());
     var traceView = wheelTraceEarly.concat(wheelTrace.slice(-12));
     setText('ofk3-poc-wheeltrace', traceView.length ? traceView.join(' | ') : '-');
+    var toggle = document.getElementById('ofk3-poc-toggle');
+    if (toggle) {
+      if (sessionBusy || (tour && tour.status === 'running')) toggle.textContent = 'Cortex 取得中…';
+      else toggle.textContent = 'Cortex';
+    }
+    maybeAutoCollapse();
   }
 
   function setPanelClickable(on) {
@@ -295,7 +336,9 @@
   async function sendPriorityToOfk3() {
     var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
     var result = Core.ingestBundle(bundle);
-    if (!result || !result.ok || !result.packages || !result.packages.length) {
+    var packages = (result && result.packages) || [];
+    var routeStops = (result && result.routeStops) || [];
+    if (!result || !result.ok || (!packages.length && !routeStops.length)) {
       alert('13時優先データがありません。先に取得を完了してください。');
       return;
     }
@@ -305,7 +348,8 @@
         source: 'cortex-capture-extension',
         stopCount: result.stopCount || 0,
         packageCount: result.packageCount || 0,
-        packages: result.packages
+        packages: packages,
+        routeStops: routeStops
       });
       alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages');
     } catch (e) {
@@ -327,8 +371,10 @@
     }
     box = document.createElement('div');
     box.id = PANEL_ID;
-    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:12px;font:12px/1.5 sans-serif;border-radius:8px;width:620px;max-width:calc(100vw - 24px);max-height:78vh;overflow:auto;');
-    box.innerHTML = '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 2</span>' +
+    box.setAttribute('style', 'position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#111;color:#fff;padding:8px;font:12px/1.5 sans-serif;border-radius:8px;width:auto;max-width:calc(100vw - 24px);');
+    box.innerHTML = '<button type="button" id="ofk3-poc-toggle" style="background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;font:12px/1.2 sans-serif;cursor:pointer;">Cortex</button>' +
+      '<div id="ofk3-poc-body" style="display:none;margin-top:8px;">' +
+      '<b>OFK3 Cortex取得</b> <span style="opacity:.8">Phase 2</span>' +
       '<div>対象Route: <span id="ofk3-poc-code">-</span></div>' +
       '<div>routeId: <span id="ofk3-poc-id">-</span></div>' +
       '<div>DOM発見: <span id="ofk3-poc-dom">no</span></div>' +
@@ -344,9 +390,10 @@
       '<details style="margin-top:8px"><summary style="cursor:pointer;opacity:.75">開発診断</summary>' +
       '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>' +
-      '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div></details>';
-    var row = document.createElement('div');
-    row.setAttribute('style', 'margin-top:8px;');
+      '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div></details>' +
+      '<div id="ofk3-poc-actions" style="margin-top:8px;"></div>' +
+      '</div>';
+    var row = box.querySelector('#ofk3-poc-actions');
     function mk(label, fn) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -355,23 +402,33 @@
       b.onclick = fn;
       return b;
     }
-    row.appendChild(mk('取得開始', function () { start(); }));
-    row.appendChild(mk('JSON保存', function () { saveBundle(); }));
-    row.appendChild(mk('OFK3へ送信', function () { sendPriorityToOfk3(); }));
-    row.appendChild(mk('13時結果保存', function () {
-      var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
-      var result = Core.ingestBundle(bundle);
-      try {
-        var blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'cortex-13-priority_' + currentLocalDate() + '.json';
-        a.click();
-      } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
-    }));
-    row.appendChild(mk('停止', function () { stopPoc(); }));
-    box.appendChild(row);
+    if (row) {
+      row.appendChild(mk('取得開始', function () { start(); }));
+      row.appendChild(mk('JSON保存', function () { saveBundle(); }));
+      row.appendChild(mk('OFK3へ送信', function () { sendPriorityToOfk3(); }));
+      row.appendChild(mk('13時結果保存', function () {
+        var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
+        var result = Core.ingestBundle(bundle);
+        try {
+          var blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'cortex-13-priority_' + currentLocalDate() + '.json';
+          a.click();
+        } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
+      }));
+      row.appendChild(mk('停止', function () { stopPoc(); }));
+    }
     document.documentElement.appendChild(box);
+    var toggle = box.querySelector('#ofk3-poc-toggle');
+    if (toggle) {
+      toggle.onclick = function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setPanelCollapsed(!panelCollapsed);
+      };
+    }
+    setPanelCollapsed(true);
     paint();
     return box;
   }
@@ -1057,6 +1114,8 @@
 
   function start() {
     show();
+    lastAutoCollapsedKey = '';
+    setPanelCollapsed(false);
     if (sessionBusy) return;
     if (pocRun && pocRun.active && !pocRun.ended) return;
     stopRequested = false;

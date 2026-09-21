@@ -15,11 +15,12 @@ function assert(cond, msg) {
   if (!cond) throw new Error('FAIL: ' + msg);
 }
 
-assert(MapApi.modes.indexOf('priority') >= 0 && MapApi.modes.indexOf('allTimeWindow') >= 0, 'two modes exist');
-assert(MapApi.defaultMode('dashboard') === 'priority', 'dashboard MAP defaults to priority');
+assert(MapApi.modes.indexOf('routeSequence') >= 0 && MapApi.modes.indexOf('priority') >= 0 && MapApi.modes.indexOf('allTimeWindow') >= 0, 'three modes exist');
+assert(MapApi.defaultMode('dashboard') === 'routeSequence', 'dashboard MAP defaults to routeSequence');
 assert(MapApi.defaultMode('priority') === 'priority', 'explicit priority stays priority');
 assert(MapApi.defaultMode('tw-extract') === 'allTimeWindow', 'time-window tab defaults to allTimeWindow');
 assert(MapApi.defaultMode('allTimeWindow') === 'allTimeWindow', 'explicit allTimeWindow stays allTimeWindow');
+assert(MapApi.normalizeMode('routeSequence') === 'routeSequence', 'routeSequence normalizes to itself');
 
 var emptyP = MapApi.summarizePriority(null, []);
 assert(emptyP.empty === true, 'priority empty does not throw');
@@ -57,7 +58,10 @@ assert(mapSrc.indexOf('new MutationObserver') < 0, 'unified MAP has no MutationO
 assert(!/observe\s*\(\s*document\.body/.test(mapSrc), 'unified MAP does not observe body');
 assert(mapSrc.indexOf('setInterval(') < 0, 'unified MAP has no setInterval');
 assert(cortexSrc.indexOf('new MutationObserver') < 0, 'Cortex UI still has no MutationObserver');
-assert(cortexSrc.indexOf('OFK3DeliveryMap.open') >= 0, 'dashboard MAP delegates to unified MAP');
+assert(cortexSrc.indexOf("OFK3DeliveryMap.open('routeSequence')") >= 0, 'dashboard MAP opens routeSequence');
+assert(html.indexOf('id="ofk3-dmap-btn-sequence"') >= 0, 'sequence mode button exists');
+assert(html.indexOf('id="ofk3-dmap-route-info"') >= 0, 'selected route info host exists');
+assert(html.indexOf('/cortex-route-sequence.js') >= 0, 'sequence model script is loaded');
 assert(html.indexOf('OFK3DeliveryMap.open(\'allTimeWindow\')') >= 0, 'time-window MAP button opens allTimeWindow');
 assert(html.indexOf('id="ofk3-delivery-map-overlay"') >= 0, 'fixed overlay host exists');
 assert(html.indexOf('id="ofk3-dmap-canvas"') >= 0, 'single canvas host exists');

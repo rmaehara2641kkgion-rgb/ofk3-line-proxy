@@ -11,6 +11,7 @@
   var state = {
     entry: null,
     stops: [],
+    routeStops: [],
     error: null,
     fallback: false,
     fetched: false,
@@ -236,17 +237,20 @@
       if (!r.ok || j.status !== 'ok') {
         state.entry = null;
         state.stops = [];
+        state.routeStops = [];
         state.fallback = false;
         state.error = '本日のデータなし';
       } else {
         state.entry = j;
         state.stops = group(j.packages);
+        state.routeStops = Array.isArray(j.routeStops) ? j.routeStops : [];
         state.fallback = usedFallback && String(j.localDate || '') !== d;
         state.error = null;
       }
     } catch (e) {
       state.entry = null;
       state.stops = [];
+      state.routeStops = [];
       state.fallback = false;
       state.error = '本日のデータなし';
     }
@@ -380,7 +384,7 @@
   function openMap() {
     try {
       if (window.OFK3DeliveryMap && typeof window.OFK3DeliveryMap.open === 'function') {
-        window.OFK3DeliveryMap.open('priority');
+        window.OFK3DeliveryMap.open('routeSequence');
         return;
       }
       if (!state.entry) {
@@ -418,6 +422,7 @@
     renderDashboardCard: renderCortexPriorityDashboard,
     renderTimeWindowPanel: renderTimeWindowPanel,
     getStops: function () { return state.stops || []; },
+    getRouteStops: function () { return state.routeStops || []; },
     getEntry: function () { return state.entry; },
     ensureStopCoords: geocodeStop
   };

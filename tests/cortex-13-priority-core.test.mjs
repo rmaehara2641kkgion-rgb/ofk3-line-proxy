@@ -613,6 +613,58 @@ function run() {
   var auth403File = Core.ingestBundle(JSON.parse(readFileSync(join(__dirname, 'fixtures', 'cortex-13-priority', 'auth-403.json'), 'utf8')));
   assert(auth403File.error === Core.ERROR.FORBIDDEN, 'auth-403.json fixture');
 
+  // Phase 2A: sequenceNumber is Cortex visit order; 13:00 extract still filters packages.
+  var win13 = Date.parse('2026-09-18T13:00:00+09:00') / 1000;
+  var win15 = Date.parse('2026-09-18T15:00:00+09:00') / 1000;
+  var winStart = Date.parse('2026-09-18T08:00:00+09:00') / 1000;
+  function seqStop(seq, planned, windowEnd, addrId) {
+    return {
+      sequenceNumber: seq,
+      addressId: addrId,
+      plannedStartTime: planned - 120000,
+      plannedEndTime: planned,
+      tasks: [task({
+        addressId: addrId,
+        windowStartTime: winStart,
+        windowEndTime: windowEnd,
+        domainMap: { scannableId: 'DA' + seq }
+      })]
+    };
+  }
+  var dcxDetails = {
+    rmsRouteDetails: {
+      routeId: 'RTEST',
+      routeCode: 'DCX_TEST',
+      localDate: [2026, 9, 18],
+      plannedDepartureTime: 1789697520000,
+      stops: [
+        seqStop(1, Date.parse('2026-09-18T11:10:00+09:00'), win15, 'A1'),
+        seqStop(2, Date.parse('2026-09-18T11:40:00+09:00'), win13, 'A2'),
+        seqStop(3, Date.parse('2026-09-18T12:10:00+09:00'), win15, 'A3'),
+        seqStop(4, Date.parse('2026-09-18T12:40:00+09:00'), win13, 'A4'),
+        seqStop(5, Date.parse('2026-09-18T13:20:00+09:00'), win15, 'A5')
+      ]
+    },
+    transporters: [{ firstName: 'Taro', lastName: 'Yamada' }],
+    addresses: [
+      { addressId: 'A1', address1: '福岡1', city: '福岡市', latitude: 33.58, longitude: 130.40 },
+      { addressId: 'A2', address1: '福岡2', city: '福岡市', latitude: 33.59, longitude: 130.41 },
+      { addressId: 'A3', address1: '福岡3', city: '福岡市', latitude: 33.60, longitude: 130.42 },
+      { addressId: 'A4', address1: '福岡4', city: '福岡市', latitude: 33.61, longitude: 130.43 },
+      { addressId: 'A5', address1: '福岡5', city: '福岡市', latitude: 33.62, longitude: 130.44 }
+    ]
+  };
+  var pri = Core.extractFromRouteDetails(dcxDetails);
+  assert(pri.packageCount === 2 && pri.stopCount === 2, 'DCX_TEST 13:00 still 2 packages / 2 stops');
+  assert(pri.packages.map(function (p) { return p.stop; }).join(',') === '2,4', '13:00 extract still stop 2 and 4');
+  var seq = Core.extractRouteSequence(dcxDetails);
+  assert(seq.ok && seq.stops.length === 5, 'extractRouteSequence keeps all 5 Cortex stops');
+  assert(seq.stops.map(function (s) { return s.sequenceNumber; }).join(',') === '1,2,3,4,5', 'sequenceNumber is visit order 1-5');
+  assert(seq.stops[1].latitude === 33.59 && seq.stops[1].address.indexOf('福岡2') >= 0, 'sequence keeps address/coords');
+  var ingested = Core.ingestBundle({ details: [dcxDetails] });
+  assert(ingested.ok && ingested.packageCount === 2 && ingested.stopCount === 2, 'ingest 13:00 counts unchanged');
+  assert(ingested.routeStops && ingested.routeStops.length === 5, 'ingest stores full routeStops');
+
   console.log('cortex-13-priority-core.test.mjs OK');
 }
 
