@@ -1,46 +1,28 @@
 /**
- * OFK3 本日の時間指定 詳細・掲示用印刷ボード.
- * 本日のダッシュボード → 時間指定 詳細 → 掲示用一覧(A4横印刷) を提供する。
+ * OFK3 本日の時間指定（13:00まで）掲示用印刷ボード.
+ * 本日のダッシュボード → 時間指定 詳細・印刷 → Routeカード掲示（A4横）を提供する。
  * 独立描画のみ。body監視・setIntervalなし。既存ダッシュボードDOMは書き換えない
  * （固定IDのボタン/オーバーレイを追加するだけ）。テンプレートリテラルは使用しない
  * （プロジェクト規約: Edge IEモード互換のため文字列連結のみ）。
  *
  * 対象データの定義（重要）:
- *  twExtract()（📦時間指定タブ）は「13:00まで・11時台出発・別部隊引渡し」という
- *  既存業務固有のフィルタを持つ別機能であり、本モジュールはこれを呼ばない・使わない。
+ *  📦時間指定タブの抽出機能は「午前指定・11時台出発・別部隊引渡し」など
+ *  既存業務固有のフィルタを持つ別機能であり、本モジュールはそれを呼ばない・使わない。
+ *  抽出タブの結果配列も読まない。
  *  本モジュールは assignmentData + cycleDetailData[routeCode] を直接集計し、
- *  当日の全Routeが持つ時間指定荷物（時間帯を問わない）を対象にする。
+ *  「有効な timeWindow かつ parsed.endMin <= 780（13:00）」の Tracking 行のみを対象にする。
+ *  広域時間窓を「全日」として機械除外するルールは採用しない（根拠不明のため）。
+ *  Cortex 必達判定は使わない・表示しない（別概念）。
  *
- * cycleDetailData の実データ構造（tests/manual-assign-board-core.test.mjs の
- * sequencedRoute_* 実データヘッダーで確認済み。位置は index.html handleCycleDataUpload
- * と同一。推測ではなく実データヘッダーに基づく）:
- *   ヘッダー行: ['Stop','Tracking ID','Time (min)','Arrival','Time Window','Address',...]
- *   データ行例: ['1','DA0000000001','5','9:00','9:00-13:00','アドレスA',...]
- *   → cycleDetailData[routeCode] = [{ trackingId, address, timeWindow, stop }]
- *   → timeWindow は "H:MM-H:MM"（秒付き・全角/半角ダッシュ違いあり得る）。
- *     時間指定なし荷物は timeWindow === ''（index.html: row[4] ? ... : ''）であり、
- *     この空文字判別だけで「時間指定の有無」を確実に判別できる。
- *   この判別は既存の twParseTimeWindow() と同じ正規表現を用いる（新規判定を作らない）。
- *
- *   注: twExtract()には「parsed.endMin-parsed.startMin>=720分は全日指定として除外」という
- *   ルールがあるが、この閾値の根拠（実データ上の意味）はコード・ドキュメント・commit履歴の
- *   いずれにも見当たらず、「時間指定なしのシステムデフォルト値」であるという証拠は確認できな
- *   かった（実データヘッダーの検証例・demo-data.jsのtwSlotsはいずれも12時間未満の窓のみで、
- *   広域窓の実例自体が存在しない）。本モジュールはtwExtract()の業務フィルタを流用しない方針
- *   のため、この閾値は採用せず、有効にparseできたtimeWindowは（空文字でない限り）すべて
- *   掲示対象とする。
+ * cycleDetailData 構造（index.html handleCycleDataUpload と同一）:
+ *   各行は Tracking / 時間窓 / Stop 等のフィールドを持つ。
+ *   時間指定なしは timeWindow === '' → parse 不可で対象外。
+ *   1 Tracking 行 = 13:00まで 1個。Stop件数は表示しない（実データで Stop 列が空の場合あり）。
  *
  * データソース:
- *  - assignmentData（let, index.htmlのアサインデータ）… routeCode/driverName
- *  - cycleDetailData（let, index.html）… routeCode -> [{trackingId,address,timeWindow,stop}]
- *  - routeAreas（let, index.html）… routeCode -> area（既存値のみ使用。住所からの新規エリア判定はしない）
- *  - window.OFK3Cortex13.getStops()/getEntry()（存在すれば）… 既に13:00判定済みのStopのみ。
- *    ここでは判定ロジックを一切再実装せず、件数を数える・trackingId一致を見るだけ。
- *    本日分のCortexデータが無い場合は「未取得」として0件と区別する。
- * 上記let宣言グローバルはindex.htmlのインライン<script>のトップレベルで宣言されており、
- * 後から読み込む本ファイル（別<script src>）からも同一グローバルスコープを通じて
- * bare識別子で参照できる（両方ともmodule化されていない classic script のため）。
- * 未読込・例外時は空データへ安全にフォールバックする。
+ *  - assignmentData … routeCode / driverName / totalDeliveries / allDestinations / area
+ *  - cycleDetailData … 時間指定 Tracking 行
+ *  - routeAreas … route.area が空のときの既存エリア（住所からの新規解析はしない）
  */
 (function () {
   'use strict';
@@ -49,6 +31,8 @@
   var OVERLAY_ID = 'ofk3-tw-board-overlay';
   var CONTENT_ID = 'ofk3-tw-board-content';
   var ANCHOR_ID = 'ofk3-cortex13-dash-card';
+  // 13:00 = 13*60 分。終了時刻がこれ以下の時間指定のみ掲示対象。
+  var END_LIMIT_MIN = 780;
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
@@ -77,9 +61,8 @@
     }).format(new Date());
   }
 
-  // "9:00-13:00" 等 → {start:'09:00', end:'13:00', startMin, endMin}
-  // 既存 twParseTimeWindow（index.html）と同一の書式想定・同一の正規表現。
-  // 新しいtimeWindow判定は作らず、既存関数が利用可能ならそちらをそのまま呼ぶ。
+  // "9:00-13:00" 等 → {start, end, startMin, endMin}
+  // 既存 twParseTimeWindow（index.html）と同一の書式想定。利用可能ならそちらを呼ぶ。
   function localParseWindow(tw) {
     var s = String(tw || '');
     var m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*[-–〜～]\s*(\d{1,2}):(\d{2})(?::\d{2})?/);
@@ -106,7 +89,10 @@
     return localParseWindow(tw);
   }
 
-  // ===== グローバルデータの安全取得（let宣言はwindowに乗らないため、bare識別子をtry/catchで参照） =====
+  function isUntil1300(parsed) {
+    return !!(parsed && typeof parsed.endMin === 'number' && parsed.endMin <= END_LIMIT_MIN);
+  }
+
   function getAssignmentData() {
     try {
       if (typeof assignmentData !== 'undefined' && Array.isArray(assignmentData)) return assignmentData;
@@ -128,98 +114,40 @@
     return {};
   }
 
-  // Cortex 13:00必達の「取得状況」を判定する。ここでの目的は既存判定結果の集計のみ、
-  // 判定ロジック自体（windowEndTime/DROP_OFF/JST等）には一切触れない。
-  // 戻り値: { available: boolean, stopsByRoute: {routeCode:[stopEntry,...]}, trackingIdSet: Set }
-  function getCortexSnapshot() {
-    var out = { available: false, stopsByRoute: {}, trackingIdSet: {} };
-    try {
-      var api = window.OFK3Cortex13;
-      if (!api || typeof api.getEntry !== 'function' || typeof api.getStops !== 'function') return out;
-      var entry = api.getEntry();
-      if (!entry || String(entry.localDate || '') !== todayIso()) return out; // 本日分でなければ「未取得」扱い
-      out.available = true;
-      var stops = api.getStops() || [];
-      stops.forEach(function (s) {
-        var rc = String((s && s.routeCode) || '');
-        if (!rc) return;
-        if (!out.stopsByRoute[rc]) out.stopsByRoute[rc] = [];
-        out.stopsByRoute[rc].push(s);
-        (Array.isArray(s.trackingIds) ? s.trackingIds : []).forEach(function (tid) {
-          var t = String(tid || '').trim();
-          if (t) out.trackingIdSet[t] = true;
-        });
-      });
-    } catch (e) {}
-    return out;
+  function routeArea(route, areas, rc) {
+    if (route && route.area) return String(route.area);
+    if (Object.prototype.hasOwnProperty.call(areas, rc) && areas[rc]) return String(areas[rc]);
+    return '-';
   }
 
   function buildBoard() {
     var routes = getAssignmentData();
     var detail = getCycleDetailData();
     var areas = getRouteAreasMap();
-    var cortex = getCortexSnapshot();
+    var hasAssign = routes.length > 0;
+    var hasCycle = Object.keys(detail).length > 0;
 
     var routeList = [];
     routes.forEach(function (route) {
       var rc = String((route && route.routeCode) || '');
       if (!rc) return;
       var items = detail[rc] || [];
-      if (!items.length) return;
-
-      // 集計キー: (stop, timeWindowラベル) 単位 = 「同一Stop・同一時間指定」を1行に集約。
-      // Stop件数とPackage件数は別々に数える（混同しない）。
-      var groupMap = {};
-      var order = [];
-      var stopSet = {};
-      var packageCount = 0;
+      var untilCount = 0;
       items.forEach(function (it) {
         var parsed = parseWindow(it && it.timeWindow);
-        if (!parsed) return; // 時間指定なし荷物（timeWindow===''含む）は対象外。この判別のみで十分（下記参照）。
-
-        var stopRaw = it && it.stop != null ? String(it.stop).trim() : '';
-        var key = stopRaw + '#' + parsed.start + '-' + parsed.end;
-        if (!groupMap[key]) {
-          groupMap[key] = {
-            stop: stopRaw || '-',
-            label: parsed.start + '〜' + parsed.end,
-            startMin: parsed.startMin,
-            count: 0,
-            cortexHit: false
-          };
-          order.push(key);
-        }
-        groupMap[key].count += 1;
-        packageCount += 1;
-        if (stopRaw) stopSet[stopRaw] = true;
-
-        var tid = String((it && it.trackingId) || '').trim();
-        if (tid && cortex.trackingIdSet[tid]) groupMap[key].cortexHit = true;
+        if (!parsed) return;
+        if (!isUntil1300(parsed)) return;
+        untilCount += 1;
       });
-      if (!order.length) return;
-
-      var groups = order.map(function (k) { return groupMap[k]; });
-      groups.sort(function (a, b) {
-        if (a.startMin !== b.startMin) return a.startMin - b.startMin;
-        var an = parseInt(a.stop, 10), bn = parseInt(b.stop, 10);
-        if (isFinite(an) && isFinite(bn)) return an - bn;
-        return String(a.stop).localeCompare(String(b.stop), 'en', { numeric: true });
-      });
-
-      var area = Object.prototype.hasOwnProperty.call(areas, rc) && areas[rc] ? areas[rc] : '-';
-      var driverName = (route && route.driverName) || '';
-      var cortexStopCount = cortex.available
-        ? ((cortex.stopsByRoute[rc] || []).length)
-        : null; // null = 未取得（0件と区別する）
+      if (untilCount <= 0) return;
 
       routeList.push({
         routeCode: rc,
-        driverName: driverName,
-        area: area,
-        stopCount: Object.keys(stopSet).length,
-        packageCount: packageCount,
-        cortexStopCount: cortexStopCount,
-        groups: groups
+        driverName: (route && route.driverName) || '',
+        area: routeArea(route, areas, rc),
+        until1300Count: untilCount,
+        totalDeliveries: Number(route && route.totalDeliveries) || 0,
+        allDestinations: Number(route && route.allDestinations) || 0
       });
     });
 
@@ -227,64 +155,91 @@
       return a.routeCode.localeCompare(b.routeCode, 'en', { numeric: true });
     });
 
-    return { dateDisplay: todayDisplay(), routeList: routeList, cortexAvailable: cortex.available };
+    var emptyReason = '';
+    if (!hasAssign || !hasCycle) {
+      emptyReason = 'NEED_DATA';
+    } else if (!routeList.length) {
+      emptyReason = 'NO_TW';
+    }
+
+    return {
+      dateDisplay: todayDisplay(),
+      routeList: routeList,
+      hasAssign: hasAssign,
+      hasCycle: hasCycle,
+      emptyReason: emptyReason
+    };
   }
 
-  function cortexBadgeText(n) {
-    return n == null ? '未取得' : (n + ' Stop');
+  function buildPageHeaderHtml(board) {
+    var h = '';
+    h += '<div class="tw-board-page-header" style="text-align:center;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:14px;">';
+    h += '<div style="font-size:22px;font-weight:800;letter-spacing:0.02em;">OFK3</div>';
+    h += '<div style="font-size:20px;font-weight:800;margin-top:2px;">本日の時間指定</div>';
+    h += '<div style="font-size:18px;font-weight:800;color:#b91c1c;margin-top:2px;">13:00まで</div>';
+    h += '<div style="font-size:15px;margin-top:6px;">' + esc(board.dateDisplay) + '</div>';
+    h += '<div style="font-size:13px;font-weight:800;margin-top:6px;">積み込み前に必ず確認してください</div>';
+    h += '<div style="font-size:11px;color:#555;margin-top:6px;">※13:00までの時間指定があるRouteのみ掲載</div>';
+    h += '</div>';
+    return h;
+  }
+
+  function buildRouteCardHtml(r) {
+    var c = '';
+    c += '<div class="tw-board-card" style="break-inside:avoid;page-break-inside:avoid;-webkit-column-break-inside:avoid;border:2px solid #1e293b;border-radius:8px;padding:12px 14px;background:#fff;min-height:0;">';
+    c += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">';
+    c += '<div style="font-size:28px;font-weight:900;font-family:monospace;letter-spacing:0.02em;line-height:1.1;">' + esc(r.routeCode) + '</div>';
+    c += '<div style="font-size:14px;font-weight:700;text-align:right;line-height:1.2;">' + esc(r.driverName || '-') + '</div>';
+    c += '</div>';
+    c += '<div style="font-size:12px;color:#334155;margin-top:8px;line-height:1.35;">' + esc(r.area) + '</div>';
+    c += '<div style="margin-top:12px;text-align:center;border-top:1px solid #cbd5e1;padding-top:10px;">';
+    c += '<div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:0.04em;">13:00まで</div>';
+    c += '<div style="font-size:36px;font-weight:900;color:#b91c1c;line-height:1.05;margin-top:2px;">' + r.until1300Count + '<span style="font-size:18px;font-weight:800;margin-left:2px;">個</span></div>';
+    c += '</div>';
+    c += '<div style="margin-top:10px;text-align:center;font-size:12px;color:#475569;">全体 '
+      + r.totalDeliveries + '個 / ' + r.allDestinations + '件</div>';
+    c += '</div>';
+    return c;
   }
 
   function buildReportHtml(board) {
     var html = '';
-    html += '<div style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
-    html += '<div style="text-align:center;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:14px;">';
-    html += '<div style="font-size:24px;font-weight:800;letter-spacing:0.02em;">OFK3　本日の時間指定一覧</div>';
-    html += '<div style="font-size:16px;margin-top:4px;">' + esc(board.dateDisplay) + '</div>';
-    html += '<div style="font-size:13px;font-weight:800;color:#b91c1c;margin-top:6px;">積み込み前に必ず確認してください</div>';
-    html += '</div>';
-
-    if (!board.cortexAvailable) {
-      html += '<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;margin-bottom:12px;">';
-      html += '※ Cortex本日データ未取得のため「13:00必達」は未取得と表示しています（0件ではありません）。時間指定一覧自体は有効です。';
-      html += '</div>';
-    }
+    html += '<div class="tw-board-root" style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
 
     if (!board.routeList.length) {
-      html += '<div style="text-align:center;padding:60px 0;font-size:18px;color:#444;">本日の時間指定はありません</div>';
+      html += buildPageHeaderHtml(board);
+      if (board.emptyReason === 'NEED_DATA') {
+        html += '<div style="text-align:center;padding:48px 12px;font-size:15px;color:#444;">';
+        html += 'アサインExcelとサイクルExcelを読み込んでから再度開いてください。';
+        html += '<br><span style="font-size:12px;color:#666;">（未読込のため「0件」とは断定していません）</span>';
+        html += '</div>';
+      } else {
+        html += '<div style="text-align:center;padding:60px 0;font-size:18px;color:#444;">本日の時間指定（13:00まで）はありません</div>';
+      }
       html += '</div>';
       return html;
     }
 
-    board.routeList.forEach(function (r) {
-      html += '<div style="break-inside:avoid;page-break-inside:avoid;border:1px solid #999;border-radius:6px;margin-bottom:12px;overflow:hidden;">';
-      html += '<div style="background:#1d4ed8;color:#fff;padding:8px 12px;display:flex;flex-wrap:wrap;gap:4px 16px;align-items:baseline;justify-content:space-between;">';
-      html += '<div style="font-size:19px;font-weight:800;">' + esc(r.routeCode) + '　<span style="font-size:14px;font-weight:600;">' + esc(r.driverName || '-') + '</span></div>';
-      html += '<div style="font-size:13px;">エリア：' + esc(r.area) + '</div>';
-      html += '<div style="font-size:13px;font-weight:700;">時間指定：' + r.stopCount + ' Stop / ' + r.packageCount + ' Package'
-        + '　　<span style="' + (r.cortexStopCount ? 'color:#fde047;' : '') + '">13:00必達：' + esc(cortexBadgeText(r.cortexStopCount)) + '</span></div>';
-      html += '</div>';
-
-      html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
-      html += '<thead><tr style="background:#e5e7eb;">';
-      html += '<th style="border:1px solid #ccc;padding:4px 8px;text-align:left;width:30%;">時間帯</th>';
-      html += '<th style="border:1px solid #ccc;padding:4px 8px;text-align:center;width:20%;">Stop</th>';
-      html += '<th style="border:1px solid #ccc;padding:4px 8px;text-align:center;width:20%;">件数</th>';
-      html += '</tr></thead><tbody>';
-      r.groups.forEach(function (g) {
-        html += '<tr style="break-inside:avoid;page-break-inside:avoid;">';
-        html += '<td style="border:1px solid #ccc;padding:4px 8px;font-family:monospace;">' + esc(g.label)
-          + (g.cortexHit ? '　<span style="color:#b91c1c;font-weight:800;font-size:11px;">★13:00必達</span>' : '') + '</td>';
-        html += '<td style="border:1px solid #ccc;padding:4px 8px;text-align:center;font-family:monospace;">' + esc(g.stop) + '</td>';
-        html += '<td style="border:1px solid #ccc;padding:4px 8px;text-align:center;font-weight:600;">' + g.count + '</td>';
-        html += '</tr>';
+    var list = board.routeList;
+    var pageSize = 6;
+    var pi;
+    html += '<div class="tw-board-pages">';
+    for (pi = 0; pi < list.length; pi += pageSize) {
+      var pageRoutes = list.slice(pi, pi + pageSize);
+      html += '<div class="tw-board-page" style="margin-bottom:24px;padding:12px;border:2px dashed #cbd5e1;border-radius:8px;background:#f8fafc;">';
+      html += buildPageHeaderHtml(board);
+      html += '<div class="tw-board-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;">';
+      pageRoutes.forEach(function (r) {
+        html += buildRouteCardHtml(r);
       });
-      html += '</tbody></table>';
       html += '</div>';
-    });
+      html += '</div>';
+    }
+    html += '</div>';
 
-    html += '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #ccc;display:flex;justify-content:space-between;font-size:10px;color:#666;">';
-    html += '<span>※ 掲示用一覧のため、住所・氏名・電話番号・Tracking ID等の個人情報は表示していません（エリア名のみ）</span>';
-    html += '<span>出力: ' + esc(nowClockJst()) + '</span>';
+    html += '<div class="tw-board-footer" style="margin-top:10px;padding-top:6px;border-top:1px solid #ccc;display:flex;justify-content:space-between;font-size:10px;color:#666;">';
+    html += '<span>※ 住所・氏名・電話・Tracking ID は掲示しません。Stop件数は表示しません。</span>';
+    html += '<span>出力: ' + esc(nowClockJst()) + '　掲載 ' + board.routeList.length + ' Route</span>';
     html += '</div>';
 
     html += '</div>';
@@ -302,9 +257,9 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:sticky;top:0;background:#fff;border-bottom:1px solid #ddd;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;z-index:1;';
     bar.innerHTML = ''
-      + '<b style="font-size:14px;">時間指定 詳細・掲示用一覧</b>'
+      + '<b style="font-size:14px;">時間指定 詳細・掲示用一覧（13:00まで）</b>'
       + '<div style="display:flex;gap:8px;">'
-      + '<button type="button" data-tw-board="print" style="padding:6px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">🖶 印刷する</button>'
+      + '<button type="button" data-tw-board="print" style="padding:6px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">印刷する（A4横）</button>'
       + '<button type="button" data-tw-board="close" style="padding:6px 14px;background:#e5e7eb;color:#111;border:none;border-radius:6px;font-size:12px;cursor:pointer;">閉じる</button>'
       + '</div>';
     var content = document.createElement('div');
@@ -345,25 +300,33 @@
     }
   }
 
-  // 既存 openPrintPreview()/printTable() と同一の安全パターン
-  // （別ウィンドウ → document.write → @page A4 landscape → window.print()）を踏襲。
-  // メインページへの print CSS 追加は行わない。
+  // 既存 openPrintPreview()/printTable() と同一パターン（別ウィンドウ + document.write + A4 landscape）
   function printBoard() {
     try {
       var board = lastBoard || buildBoard();
       var reportHtml = buildReportHtml(board);
-      var printWindow = window.open('', '_blank', 'width=1000,height=700');
+      var printWindow = window.open('', '_blank', 'width=1100,height=800');
       if (!printWindow) {
         alert('ポップアップがブロックされました。ブラウザ設定をご確認ください。');
         return;
       }
       var doc = ''
         + '<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">'
-        + '<title>OFK3 本日の時間指定一覧</title>'
+        + '<title>OFK3 本日の時間指定（13:00まで）</title>'
         + '<style>'
         + '*{margin:0;padding:0;box-sizing:border-box;}'
-        + 'body{padding:14px;}'
-        + '@media print{body{padding:6mm;}@page{size:A4 landscape;margin:8mm;}}'
+        + 'body{padding:14px;font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;}'
+        + '.tw-board-page{margin-bottom:24px;padding:12px;border:2px dashed #cbd5e1;border-radius:8px;background:#f8fafc;}'
+        + '.tw-board-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;}'
+        + '.tw-board-card{break-inside:avoid;page-break-inside:avoid;-webkit-column-break-inside:avoid;}'
+        + '@media print{'
+        + 'body{padding:6mm;}'
+        + '@page{size:A4 landscape;margin:8mm;}'
+        + '.tw-board-page{break-after:page;page-break-after:always;margin-bottom:0;padding:0;border:none;border-radius:0;background:transparent;}'
+        + '.tw-board-page:last-child{break-after:auto;page-break-after:auto;}'
+        + '.tw-board-grid{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px;}'
+        + '.tw-board-card{break-inside:avoid;page-break-inside:avoid;}'
+        + '}'
         + '</style></head><body>'
         + reportHtml
         + '<script>window.onload=function(){window.print();};<\/script>'
@@ -381,8 +344,8 @@
     var anchor = document.getElementById(ANCHOR_ID);
     var html = ''
       + '<div id="' + BTN_WRAP_ID + '" class="card p-4 mb-4" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">'
-      + '<div><p class="text-sm font-medium">🖨 時間指定 詳細・印刷</p>'
-      + '<p class="text-xs text-ink-lighter mt-1">本日の時間指定をRoute別に集計し、A4横で掲示印刷できます。</p></div>'
+      + '<div><p class="text-sm font-medium">時間指定 詳細・印刷</p>'
+      + '<p class="text-xs text-ink-lighter mt-1">13:00までの時間指定をRouteカードで掲示印刷（A4横・最大6 Route/頁）</p></div>'
       + '<button type="button" data-tw-board-open="1" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">時間指定 詳細・印刷</button>'
       + '</div>';
     try {
@@ -411,8 +374,10 @@
     close: hideOverlay,
     print: printBoard,
     buildBoard: buildBoard,
-    // renderDashboard()末尾から既存のtry/catchパターンで呼ばれる。
-    // ボタンが無ければ再挿入するだけの冪等処理（DOM監視の代替として明示呼び出しのみで完結させる）。
+    buildReportHtml: buildReportHtml,
+    parseWindow: parseWindow,
+    isUntil1300: isUntil1300,
+    END_LIMIT_MIN: END_LIMIT_MIN,
     onDashboardRender: insertButton
   };
 

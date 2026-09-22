@@ -14,34 +14,42 @@ function assert(cond, msg) {
   if (!cond) throw new Error('FAIL: ' + msg);
 }
 
-// ===== Static safety assertions (mirrors tests/cortex-dashboard-card.test.mjs conventions) =====
+// ===== Static safety =====
 assert(src.indexOf('new MutationObserver') < 0, 'must not construct MutationObserver');
 assert(!/observe\s*\(\s*document\.body/.test(src), 'must not observe document.body');
 assert(src.indexOf('setInterval(') < 0, 'must not poll DOM with setInterval');
-assert(src.indexOf('`') < 0, 'no template literals (project rule: string concatenation only, Edge IE-mode compat)');
-assert(src.indexOf('function buildBoard') >= 0, 'independent buildBoard aggregator exists');
-assert(src.indexOf('function openBoard') >= 0, 'independent openBoard renderer exists');
-assert(src.indexOf("ANCHOR_ID = 'ofk3-cortex13-dash-card'") >= 0, 'anchors to existing fixed dashboard card id, not a new DOM scan');
-assert(src.indexOf('twExtractedData') < 0, 'must not read/reuse twExtract()\'s filtered output (different filter scope: 13:00/11am/handoff)');
-assert(src.indexOf('getStops') >= 0, 'reuses window.OFK3Cortex13.getStops() (already-judged data only)');
-assert(!/<=\s*780\b/.test(src) && !/780\s*>=/.test(src), 'must not hardcode a new 13:00(=780min) cutoff comparison; only reuses Cortex-provided results');
-assert(src.indexOf('A4 landscape') >= 0, 'print output declares A4 landscape');
-assert(src.indexOf('document.write') >= 0, 'print uses the existing popup-window + document.write pattern');
-assert(src.indexOf('window.print()') >= 0, 'print window calls window.print()');
-assert(src.indexOf("localDate || '') !== todayIso()") >= 0, 'Cortex data is only trusted when localDate matches today (stale data not silently reused)');
-assert(src.indexOf('未取得') >= 0, 'has a distinct "not fetched" label, not conflated with 0-count');
-assert(src.indexOf('ALL_DAY_SPAN_MIN') < 0, 'must not import twExtract()\'s unsubstantiated "all-day window excluded" (>=720min) rule: no evidence found that a wide window is a "no time window" system default rather than a genuine commitment');
-assert(src.indexOf('.address') < 0, 'never reads the .address field (no address/PII rendered on the posted board)');
-assert(src.indexOf('esc(g.stop)') >= 0 && src.indexOf('esc(it.trackingId)') < 0, 'trackingId is used only for internal Cortex matching, never rendered');
+assert(src.indexOf('`') < 0, 'no template literals');
+assert(src.indexOf('function buildBoard') >= 0, 'buildBoard exists');
+assert(src.indexOf('function openBoard') >= 0, 'openBoard exists');
+assert(src.indexOf("ANCHOR_ID = 'ofk3-cortex13-dash-card'") >= 0, 'anchors to fixed cortex card id');
+assert(!/\btwExtractedData\b/.test(src), 'must not reference twExtractedData');
+assert(!/\btwExtract\s*\(/.test(src), 'must not call twExtract()');
+assert(src.indexOf('ALL_DAY_SPAN_MIN') < 0, 'no ALL_DAY_SPAN_MIN');
+assert(src.indexOf('isAllDayWindow') < 0, 'no isAllDayWindow');
+assert(!/endMin\s*-\s*startMin\s*>=\s*720/.test(src) && !/>=\s*720/.test(src), 'must not exclude by span >=720');
+assert(src.indexOf('END_LIMIT_MIN = 780') >= 0, '13:00 cutoff = 780 minutes');
+assert(src.indexOf('parsed.endMin <= END_LIMIT_MIN') >= 0, 'filters by endMin <= 780');
+assert(src.indexOf('OFK3Cortex13') < 0, 'must not use Cortex for this board');
+assert(src.indexOf('getStops') < 0, 'must not read Cortex stops');
+assert(src.indexOf('.address') < 0, 'never reads .address (no PII)');
+assert(src.indexOf('esc(it.trackingId)') < 0, 'trackingId never escaped into HTML');
+assert(!/\.trackingId\b/.test(src), 'does not read trackingId fields');
+assert(src.indexOf('A4 landscape') >= 0, 'A4 landscape');
+assert(src.indexOf('repeat(3,') >= 0, '3-column grid');
+assert(src.indexOf('grid-template-rows:repeat(2,') >= 0, '2-row grid per page');
+assert(src.indexOf('tw-board-page') >= 0, 'paginated print pages');
+assert(src.indexOf('break-after:page') >= 0 && src.indexOf('page-break-after:always') >= 0, 'page break after each page');
+assert(src.indexOf('.tw-board-page:last-child') >= 0 && src.indexOf('page-break-after:auto') >= 0, 'last page no forced break');
+assert(src.indexOf('page-break-inside:avoid') >= 0, 'card page-break avoid');
+assert(src.indexOf('13:00までの時間指定があるRouteのみ掲載') >= 0, 'header note for filtered routes');
+assert(src.indexOf('totalDeliveries') >= 0 && src.indexOf('allDestinations') >= 0, 'uses assignment totals');
 
-assert(html.indexOf('OFK3TimeWindowBoard.onDashboardRender') >= 0, 'renderDashboard() refreshes the board button via the same try/catch pattern as Cortex');
-assert(serverSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'server injects the new script tag (same pattern as ofk3-cortex-priority-ui.js)');
-assert(injectSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'inject-tenko-audit.js (production entrypoint) also injects the new script tag');
-assert(serverSrc.indexOf("app.post('/cortex-priority/import'") >= 0, 'existing cortex-priority import API left untouched');
-assert(html.indexOf('function twExtract()') >= 0, 'existing twExtract() function body left in place (untouched)');
-assert(html.indexOf("id=\"tw-end-filter\"") >= 0, 'existing 時間指定タブ filter UI left in place (untouched)');
+assert(html.indexOf('OFK3TimeWindowBoard.onDashboardRender') >= 0, 'dashboard calls onDashboardRender');
+assert(serverSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'server injects script');
+assert(injectSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'inject-tenko-audit injects script');
+assert(html.indexOf('function twExtract()') >= 0, 'twExtract untouched');
+assert(html.indexOf("id=\"tw-end-filter\"") >= 0, 'tw filter UI untouched');
 
-// ===== Behavioral test: run the module in a simulated browser-like vm context =====
 function makeEl(id) {
   return {
     id: id || '',
@@ -53,10 +61,6 @@ function makeEl(id) {
     getAttribute: function () { return null; },
     classList: { add: function () {}, remove: function () {} }
   };
-}
-
-function todayIsoJst() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
 function makeContext(extra) {
@@ -77,6 +81,7 @@ function makeContext(extra) {
     Object: Object,
     Array: Array,
     JSON: JSON,
+    Number: Number,
     parseInt: parseInt,
     isFinite: isFinite,
     String: String,
@@ -89,129 +94,227 @@ function makeContext(extra) {
   return ctx;
 }
 
-// --- Scenario 1: no Cortex data available at all (module must still work; "未取得" not "0件") ---
+function loadApi(extra) {
+  var ctx = makeContext(extra);
+  vm.runInContext(src, ctx);
+  return { ctx: ctx, api: ctx.window.OFK3TimeWindowBoard };
+}
+
+// --- Window filter cases ---
 (function () {
-  var ctx = makeContext({
+  var api = loadApi({
+    assignmentData: [{ routeCode: 'DCX10', driverName: 'A', totalDeliveries: 50, allDestinations: 40, area: '城南区' }],
+    cycleDetailData: {
+      DCX10: [
+        { trackingId: 'T1', timeWindow: '05:00-13:00', stop: '' },
+        { trackingId: 'T2', timeWindow: '08:00-12:00', stop: '' },
+        { trackingId: 'T3', timeWindow: '09:00-13:00', stop: '' },
+        { trackingId: 'T4', timeWindow: '12:00-13:00', stop: '' },
+        { trackingId: 'T5', timeWindow: '08:00-22:00', stop: '' },
+        { trackingId: 'T6', timeWindow: '09:00-17:00', stop: '' },
+        { trackingId: 'T7', timeWindow: '12:30-20:30', stop: '' },
+        // 720分ちょうどだが終了は12:00 → endMin<=780 なので含む（720除外しない）
+        { trackingId: 'T8', timeWindow: '00:00-12:00', stop: '' }
+      ]
+    },
+    routeAreas: {}
+  }).api;
+
+  assert(api.isUntil1300(api.parseWindow('05:00-13:00')) === true, '05:00-13:00 included');
+  assert(api.isUntil1300(api.parseWindow('08:00-12:00')) === true, '08:00-12:00 included');
+  assert(api.isUntil1300(api.parseWindow('09:00-13:00')) === true, '09:00-13:00 included');
+  assert(api.isUntil1300(api.parseWindow('08:00-22:00')) === false, '08:00-22:00 excluded');
+  assert(api.isUntil1300(api.parseWindow('09:00-17:00')) === false, '09:00-17:00 excluded');
+  assert(api.isUntil1300(api.parseWindow('12:00-13:00')) === true, '12:00-13:00 included');
+  assert(api.isUntil1300(api.parseWindow('12:30-20:30')) === false, '12:30-20:30 excluded');
+
+  var board = api.buildBoard();
+  assert(board.routeList.length === 1, 'one route with matches');
+  assert(board.routeList[0].until1300Count === 5, '5 matching rows (T1-T4 + T8); got ' + board.routeList[0].until1300Count);
+  console.log('ok: window filter cases');
+})();
+
+// --- Aggregate + totals + hide zero routes + HTML ---
+(function () {
+  var api = loadApi({
     assignmentData: [
-      { routeCode: 'DCX36', driverName: '宮原 義' },
-      { routeCode: 'DCX41', driverName: '○○ ○○' },
-      { routeCode: 'DCX99', driverName: 'ノーウィンド' } // has cycle data but no qualifying time windows
+      { routeCode: 'DCX46', driverName: '互 中川', totalDeliveries: 54, allDestinations: 45, area: '城南区神松寺・片江・七隈' },
+      { routeCode: 'DCX41', driverName: '山田', totalDeliveries: 30, allDestinations: 28, area: '' },
+      { routeCode: 'DCX99', driverName: 'ゼロ', totalDeliveries: 10, allDestinations: 9, area: '西区' }
     ],
     cycleDetailData: {
-      DCX36: [
-        { trackingId: 'DA0000000001', address: 'addrA', timeWindow: '9:00-13:00', stop: '1' },
-        { trackingId: 'DA0000000002', address: 'addrA2', timeWindow: '9:00-13:00', stop: '1' }, // same Stop + same window -> 1 row, count 2
-        { trackingId: 'DA0000000003', address: 'addrB', timeWindow: '14:00-16:00', stop: '5' },
-        { trackingId: 'DA0000000004', address: 'addrC', timeWindow: '', stop: '7' }, // no time window -> excluded (empty string only)
-        { trackingId: 'DA0000000005', address: 'addrD', timeWindow: '08:00-20:00', stop: '9' } // wide window -> included (no unsubstantiated all-day exclusion)
+      DCX46: [
+        { trackingId: 'A', timeWindow: '09:00-13:00', stop: '' },
+        { trackingId: 'B', timeWindow: '09:00-13:00', stop: '' },
+        { trackingId: 'C', timeWindow: '08:00-12:00', stop: '' },
+        { trackingId: 'D', timeWindow: '14:00-16:00', stop: '' }
       ],
       DCX41: [
-        { trackingId: 'DA0000000010', address: 'addrE', timeWindow: '18:00-20:00', stop: '2' }
+        { trackingId: 'E', timeWindow: '18:00-20:00', stop: '' }
       ],
       DCX99: [
-        { trackingId: 'DA0000000099', address: 'addrX', timeWindow: '', stop: '1' }
+        { trackingId: 'F', timeWindow: '15:00-18:00', stop: '' },
+        { trackingId: 'G', timeWindow: '', stop: '' }
       ]
     },
-    routeAreas: { DCX36: '別府 / 城西団地', DCX41: '' }
-  });
-  vm.runInContext(src, ctx);
-  var api = ctx.window.OFK3TimeWindowBoard;
-  assert(api && typeof api.buildBoard === 'function', 'module exposes buildBoard via window.OFK3TimeWindowBoard');
+    routeAreas: { DCX41: '鳥飼' }
+  }).api;
 
   var board = api.buildBoard();
-  assert(board.cortexAvailable === false, 'no Cortex module present -> cortexAvailable false');
-  assert(board.routeList.length === 2, 'DCX99 excluded (no qualifying time-window items); got ' + board.routeList.length);
+  assert(board.routeList.length === 1, 'only DCX46 (until>0); DCX41/99 hidden; got ' + board.routeList.length);
+  var r = board.routeList[0];
+  assert(r.routeCode === 'DCX46', 'DCX46');
+  assert(r.until1300Count === 3, '3 packages until 13:00; got ' + r.until1300Count);
+  assert(r.totalDeliveries === 54 && r.allDestinations === 45, 'route totals from assignment');
+  assert(r.area === '城南区神松寺・片江・七隈', 'area from assignmentData.area');
+  assert(r.driverName === '互 中川', 'driver');
 
-  var dcx36 = board.routeList.filter(function (r) { return r.routeCode === 'DCX36'; })[0];
-  assert(dcx36, 'DCX36 present');
-  assert(dcx36.stopCount === 3, 'DCX36 stopCount counts distinct stops (1, 5 and 9 - wide window included), not packages; got ' + dcx36.stopCount);
-  assert(dcx36.packageCount === 4, 'DCX36 packageCount counts all qualifying DA rows (2+1+1=4), not stops; got ' + dcx36.packageCount);
-  assert(dcx36.groups.length === 3, 'DCX36 has 3 groups (Stop1@9-13, Stop5@14-16, Stop9@08:00-20:00); got ' + dcx36.groups.length);
-  var stop1Group = dcx36.groups.filter(function (g) { return g.stop === '1'; })[0];
-  assert(stop1Group && stop1Group.count === 2, 'same Stop + same time window collapses into one row with count=2 (no meaningless duplicate rows)');
-  var stop9Group = dcx36.groups.filter(function (g) { return g.stop === '9'; })[0];
-  assert(stop9Group && stop9Group.count === 1 && stop9Group.label === '08:00〜20:00', 'a wide (>=12h) window is NOT excluded: no evidence it is a "no time window" system default rather than a genuine commitment');
-  assert(dcx36.area === '別府 / 城西団地', 'area comes from routeAreas[routeCode] as-is, no new address parsing');
-  assert(dcx36.cortexStopCount === null, 'Cortex not fetched -> cortexStopCount is null, never coerced to 0');
-
-  var dcx41 = board.routeList.filter(function (r) { return r.routeCode === 'DCX41'; })[0];
-  assert(dcx41.area === '-', 'empty routeAreas value falls back to "-" (safe fallback, no address-based guess)');
-
-  var reportHtml = ctx.window.OFK3TimeWindowBoard.print && true; // print() opens window.open which is undefined in vm; just sanity that fn exists
-  assert(typeof api.print === 'function', 'print function exists');
-  console.log('ok: scenario 1 (no Cortex data) - Stop/Package counts correct, area fallback correct, cortexStopCount=null');
+  var htmlOut = api.buildReportHtml(board);
+  assert(htmlOut.indexOf('DCX46') >= 0, 'renders route');
+  assert(htmlOut.indexOf('13:00まで') >= 0, 'until label');
+  assert(htmlOut.indexOf('3') >= 0 && htmlOut.indexOf('個') >= 0, 'count units');
+  assert(htmlOut.indexOf('全体 54個 / 45件') >= 0, 'totals line');
+  assert(htmlOut.indexOf('※13:00までの時間指定があるRouteのみ掲載') >= 0, 'filter note');
+  assert(htmlOut.indexOf('積み込み前に必ず確認してください') >= 0, 'notice');
+  assert(htmlOut.indexOf('tw-board-card') >= 0 && htmlOut.indexOf('tw-board-grid') >= 0, 'card grid');
+  assert(htmlOut.indexOf('tw-board-page') >= 0, 'single route still in a page wrapper');
+  assert(htmlOut.indexOf('時間帯') < 0, 'no time-band table header');
+  assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex badge');
+  assert(htmlOut.indexOf('DA') < 0 || htmlOut.indexOf('Tracking') >= 0, 'no tracking ids in body (footer may say Tracking)');
+  assert(htmlOut.indexOf('addr') < 0, 'no addresses');
+  assert(!/\d+\s*Stop/.test(htmlOut), 'no Stop counts displayed');
+  console.log('ok: aggregate / hide zero / html cards');
 })();
 
-// --- Scenario 2: Cortex data available for today, including a route with genuinely zero matches ---
+// --- Area fallback from routeAreas when assignment.area empty ---
 (function () {
-  var today = todayIsoJst();
+  var api = loadApi({
+    assignmentData: [
+      { routeCode: 'DCX01', driverName: 'X', totalDeliveries: 1, allDestinations: 1, area: '' }
+    ],
+    cycleDetailData: {
+      DCX01: [{ trackingId: 'Z', timeWindow: '10:00-12:00', stop: '' }]
+    },
+    routeAreas: { DCX01: '早良区原' }
+  }).api;
+  var board = api.buildBoard();
+  assert(board.routeList[0].area === '早良区原', 'falls back to routeAreas');
+  console.log('ok: routeAreas fallback');
+})();
+
+// --- NEED_DATA vs NO_TW empty messages ---
+(function () {
+  var need = loadApi({
+    assignmentData: [],
+    cycleDetailData: {},
+    routeAreas: {}
+  }).api.buildBoard();
+  assert(need.emptyReason === 'NEED_DATA', 'missing data reason');
+  var needHtml = loadApi({ assignmentData: [], cycleDetailData: {}, routeAreas: {} }).api.buildReportHtml(need);
+  assert(needHtml.indexOf('読み込んで') >= 0, 'need-data message');
+  assert(needHtml.indexOf('0件') < 0 || needHtml.indexOf('断定') >= 0, 'does not assert zero count');
+
+  var none = loadApi({
+    assignmentData: [{ routeCode: 'DCX50', driverName: 'X', totalDeliveries: 5, allDestinations: 4 }],
+    cycleDetailData: { DCX50: [{ trackingId: '1', timeWindow: '14:00-16:00', stop: '' }] },
+    routeAreas: {}
+  }).api;
+  var board = none.buildBoard();
+  assert(board.emptyReason === 'NO_TW' && board.routeList.length === 0, 'no matching TW');
+  var htmlOut = none.buildReportHtml(board);
+  assert(htmlOut.indexOf('本日の時間指定（13:00まで）はありません') >= 0, 'empty TW message');
+  console.log('ok: empty states');
+})();
+
+// --- Cortex presence must not affect counts (module ignores Cortex) ---
+(function () {
   var ctx = makeContext({
     assignmentData: [
-      { routeCode: 'DCX36', driverName: '宮原 義' },
-      { routeCode: 'DCX41', driverName: '○○ ○○' }
+      { routeCode: 'DCX36', driverName: 'Y', totalDeliveries: 20, allDestinations: 18, area: '別府' }
     ],
     cycleDetailData: {
       DCX36: [
-        { trackingId: 'DA0000000001', address: 'addrA', timeWindow: '9:00-13:00', stop: '1' },
-        { trackingId: 'DA0000000003', address: 'addrB', timeWindow: '14:00-16:00', stop: '5' }
-      ],
-      DCX41: [
-        { trackingId: 'DA0000000010', address: 'addrE', timeWindow: '18:00-20:00', stop: '2' }
+        { trackingId: 'DA1', timeWindow: '09:00-13:00', stop: '1' },
+        { trackingId: 'DA2', timeWindow: '15:00-17:00', stop: '2' }
       ]
     },
-    routeAreas: { DCX36: '別府', DCX41: '鳥飼' }
-  });
-  ctx.window.OFK3Cortex13 = {
-    getEntry: function () { return { localDate: today }; },
-    getStops: function () {
-      return [
-        { routeCode: 'DCX36', stop: '1', trackingIds: ['DA0000000001'] }
-      ];
-    }
-  };
-  vm.runInContext(src, ctx);
-  var api = ctx.window.OFK3TimeWindowBoard;
-  var board = api.buildBoard();
-  assert(board.cortexAvailable === true, 'Cortex entry matches today -> cortexAvailable true');
-
-  var dcx36 = board.routeList.filter(function (r) { return r.routeCode === 'DCX36'; })[0];
-  assert(dcx36.cortexStopCount === 1, 'DCX36 has 1 Cortex-confirmed stop; got ' + dcx36.cortexStopCount);
-  var stop1Group = dcx36.groups.filter(function (g) { return g.stop === '1'; })[0];
-  assert(stop1Group.cortexHit === true, 'Stop1 row is flagged via existing Cortex trackingId match (no new 13:00 judgment)');
-  var stop5Group = dcx36.groups.filter(function (g) { return g.stop === '5'; })[0];
-  assert(stop5Group.cortexHit === false, 'Stop5 not in Cortex results -> not flagged');
-
-  var dcx41 = board.routeList.filter(function (r) { return r.routeCode === 'DCX41'; })[0];
-  assert(dcx41.cortexStopCount === 0, 'DCX41: Cortex fetched but genuinely 0 matches -> 0 (distinct from null/not-fetched)');
-
-  console.log('ok: scenario 2 (Cortex available) - per-route Stop counts and per-row trackingId match correct, fetched-0 != not-fetched');
-})();
-
-// --- Scenario 3: zero time-window data anywhere today -> "no data" state, not an error ---
-(function () {
-  var ctx = makeContext({
-    assignmentData: [{ routeCode: 'DCX50', driverName: 'X' }],
-    cycleDetailData: { DCX50: [{ trackingId: 'DA1', address: 'a', timeWindow: '', stop: '1' }] },
     routeAreas: {}
   });
+  ctx.window.OFK3Cortex13 = {
+    getEntry: function () { return { localDate: '2099-01-01', packages: [{}, {}, {}] }; },
+    getStops: function () { return [{ routeCode: 'DCX36' }, { routeCode: 'DCX36' }]; }
+  };
   vm.runInContext(src, ctx);
   var board = ctx.window.OFK3TimeWindowBoard.buildBoard();
-  assert(board.routeList.length === 0, 'no qualifying time windows anywhere -> empty routeList (rendered as "no data today", not an error)');
-  console.log('ok: scenario 3 (zero time-window data) - empty routeList, no throw');
+  assert(board.routeList[0].until1300Count === 1, 'Cortex ignored; only Excel TW count');
+  var htmlOut = ctx.window.OFK3TimeWindowBoard.buildReportHtml(board);
+  assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex UI');
+  console.log('ok: cortex ignored');
 })();
 
-// --- Scenario 4: boot() must not throw even with a minimal/partial DOM (app startup must never be blocked) ---
+// --- 7 routes → 2 pages (6 + 1), header on each page ---
+function splitBoardPages(htmlOut) {
+  var marker = 'class="tw-board-page"';
+  var parts = [];
+  var start = 0;
+  var idx = htmlOut.indexOf(marker);
+  while (idx >= 0) {
+    var next = htmlOut.indexOf(marker, idx + marker.length);
+    parts.push(htmlOut.slice(idx, next >= 0 ? next : htmlOut.length));
+    idx = next;
+  }
+  return parts;
+}
+
+function countCardsInChunk(chunk) {
+  var n = 0;
+  var pos = 0;
+  while (true) {
+    var i = chunk.indexOf('class="tw-board-card"', pos);
+    if (i < 0) break;
+    n += 1;
+    pos = i + 1;
+  }
+  return n;
+}
+
 (function () {
-  var ctx = makeContext({ assignmentData: [], cycleDetailData: {}, routeAreas: {} });
-  ctx.document.readyState = 'complete';
+  var assignmentData = [];
+  var cycleDetailData = {};
+  for (var i = 1; i <= 7; i += 1) {
+    var rc = 'DCX' + (i < 10 ? '0' + i : String(i));
+    assignmentData.push({
+      routeCode: rc,
+      driverName: 'D' + i,
+      totalDeliveries: 10 + i,
+      allDestinations: 8 + i,
+      area: 'エリア' + i
+    });
+    cycleDetailData[rc] = [{ trackingId: 'P' + i, timeWindow: '10:00-12:00', stop: '' }];
+  }
+  var api = loadApi({ assignmentData: assignmentData, cycleDetailData: cycleDetailData, routeAreas: {} }).api;
+  var board = api.buildBoard();
+  assert(board.routeList.length === 7, 'seven routes with TW');
+  var htmlOut = api.buildReportHtml(board);
+  var pages = splitBoardPages(htmlOut);
+  assert(pages.length === 2, 'tw-board-page count = 2; got ' + pages.length);
+  assert(countCardsInChunk(pages[0]) === 6, 'page 1 has 6 cards; got ' + countCardsInChunk(pages[0]));
+  assert(countCardsInChunk(pages[1]) === 1, 'page 2 has 1 card; got ' + countCardsInChunk(pages[1]));
+  assert(pages[0].indexOf('積み込み前に必ず確認してください') >= 0, 'page 1 header');
+  assert(pages[1].indexOf('積み込み前に必ず確認してください') >= 0, 'page 2 header');
+  console.log('ok: 7 routes paginated 6+1');
+})();
+
+// --- Boot safety ---
+(function () {
   var threw = null;
   try {
-    vm.runInContext(src, ctx);
+    loadApi({ assignmentData: [], cycleDetailData: {}, routeAreas: {} });
   } catch (e) {
     threw = e;
   }
-  assert(!threw, 'module must not throw during boot even with empty data: ' + (threw && threw.message));
-  console.log('ok: scenario 4 (boot safety) - module loads without throwing');
+  assert(!threw, 'boot must not throw: ' + (threw && threw.message));
+  console.log('ok: boot safety');
 })();
 
 console.log('ok time-window-print-board');
