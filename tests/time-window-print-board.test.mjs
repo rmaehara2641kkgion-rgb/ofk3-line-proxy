@@ -36,6 +36,10 @@ assert(src.indexOf('esc(it.trackingId)') < 0, 'trackingId never escaped into HTM
 assert(!/\.trackingId\b/.test(src), 'does not read trackingId fields');
 assert(src.indexOf('A4 landscape') >= 0, 'A4 landscape');
 assert(src.indexOf('repeat(3,') >= 0, '3-column grid');
+assert(src.indexOf('grid-template-rows:repeat(2,') >= 0, '2-row grid per page');
+assert(src.indexOf('tw-board-page') >= 0, 'paginated print pages');
+assert(src.indexOf('break-after:page') >= 0 && src.indexOf('page-break-after:always') >= 0, 'page break after each page');
+assert(src.indexOf('.tw-board-page:last-child') >= 0 && src.indexOf('page-break-after:auto') >= 0, 'last page no forced break');
 assert(src.indexOf('page-break-inside:avoid') >= 0, 'card page-break avoid');
 assert(src.indexOf('13:00までの時間指定があるRouteのみ掲載') >= 0, 'header note for filtered routes');
 assert(src.indexOf('totalDeliveries') >= 0 && src.indexOf('allDestinations') >= 0, 'uses assignment totals');
@@ -121,6 +125,8 @@ function loadApi(extra) {
   assert(api.isUntil1300(api.parseWindow('09:00-13:00')) === true, '09:00-13:00 included');
   assert(api.isUntil1300(api.parseWindow('08:00-22:00')) === false, '08:00-22:00 excluded');
   assert(api.isUntil1300(api.parseWindow('09:00-17:00')) === false, '09:00-17:00 excluded');
+  assert(api.isUntil1300(api.parseWindow('12:00-13:00')) === true, '12:00-13:00 included');
+  assert(api.isUntil1300(api.parseWindow('12:30-20:30')) === false, '12:30-20:30 excluded');
 
   var board = api.buildBoard();
   assert(board.routeList.length === 1, 'one route with matches');
@@ -171,6 +177,7 @@ function loadApi(extra) {
   assert(htmlOut.indexOf('※13:00までの時間指定があるRouteのみ掲載') >= 0, 'filter note');
   assert(htmlOut.indexOf('積み込み前に必ず確認してください') >= 0, 'notice');
   assert(htmlOut.indexOf('tw-board-card') >= 0 && htmlOut.indexOf('tw-board-grid') >= 0, 'card grid');
+  assert(htmlOut.indexOf('tw-board-page') >= 0, 'single route still in a page wrapper');
   assert(htmlOut.indexOf('時間帯') < 0, 'no time-band table header');
   assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex badge');
   assert(htmlOut.indexOf('DA') < 0 || htmlOut.indexOf('Tracking') >= 0, 'no tracking ids in body (footer may say Tracking)');
@@ -243,6 +250,59 @@ function loadApi(extra) {
   var htmlOut = ctx.window.OFK3TimeWindowBoard.buildReportHtml(board);
   assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex UI');
   console.log('ok: cortex ignored');
+})();
+
+// --- 7 routes → 2 pages (6 + 1), header on each page ---
+function splitBoardPages(htmlOut) {
+  var marker = 'class="tw-board-page"';
+  var parts = [];
+  var start = 0;
+  var idx = htmlOut.indexOf(marker);
+  while (idx >= 0) {
+    var next = htmlOut.indexOf(marker, idx + marker.length);
+    parts.push(htmlOut.slice(idx, next >= 0 ? next : htmlOut.length));
+    idx = next;
+  }
+  return parts;
+}
+
+function countCardsInChunk(chunk) {
+  var n = 0;
+  var pos = 0;
+  while (true) {
+    var i = chunk.indexOf('class="tw-board-card"', pos);
+    if (i < 0) break;
+    n += 1;
+    pos = i + 1;
+  }
+  return n;
+}
+
+(function () {
+  var assignmentData = [];
+  var cycleDetailData = {};
+  for (var i = 1; i <= 7; i += 1) {
+    var rc = 'DCX' + (i < 10 ? '0' + i : String(i));
+    assignmentData.push({
+      routeCode: rc,
+      driverName: 'D' + i,
+      totalDeliveries: 10 + i,
+      allDestinations: 8 + i,
+      area: 'エリア' + i
+    });
+    cycleDetailData[rc] = [{ trackingId: 'P' + i, timeWindow: '10:00-12:00', stop: '' }];
+  }
+  var api = loadApi({ assignmentData: assignmentData, cycleDetailData: cycleDetailData, routeAreas: {} }).api;
+  var board = api.buildBoard();
+  assert(board.routeList.length === 7, 'seven routes with TW');
+  var htmlOut = api.buildReportHtml(board);
+  var pages = splitBoardPages(htmlOut);
+  assert(pages.length === 2, 'tw-board-page count = 2; got ' + pages.length);
+  assert(countCardsInChunk(pages[0]) === 6, 'page 1 has 6 cards; got ' + countCardsInChunk(pages[0]));
+  assert(countCardsInChunk(pages[1]) === 1, 'page 2 has 1 card; got ' + countCardsInChunk(pages[1]));
+  assert(pages[0].indexOf('積み込み前に必ず確認してください') >= 0, 'page 1 header');
+  assert(pages[1].indexOf('積み込み前に必ず確認してください') >= 0, 'page 2 header');
+  console.log('ok: 7 routes paginated 6+1');
 })();
 
 // --- Boot safety ---

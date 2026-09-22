@@ -171,19 +171,43 @@
     };
   }
 
+  function buildPageHeaderHtml(board) {
+    var h = '';
+    h += '<div class="tw-board-page-header" style="text-align:center;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:14px;">';
+    h += '<div style="font-size:22px;font-weight:800;letter-spacing:0.02em;">OFK3</div>';
+    h += '<div style="font-size:20px;font-weight:800;margin-top:2px;">本日の時間指定</div>';
+    h += '<div style="font-size:18px;font-weight:800;color:#b91c1c;margin-top:2px;">13:00まで</div>';
+    h += '<div style="font-size:15px;margin-top:6px;">' + esc(board.dateDisplay) + '</div>';
+    h += '<div style="font-size:13px;font-weight:800;margin-top:6px;">積み込み前に必ず確認してください</div>';
+    h += '<div style="font-size:11px;color:#555;margin-top:6px;">※13:00までの時間指定があるRouteのみ掲載</div>';
+    h += '</div>';
+    return h;
+  }
+
+  function buildRouteCardHtml(r) {
+    var c = '';
+    c += '<div class="tw-board-card" style="break-inside:avoid;page-break-inside:avoid;-webkit-column-break-inside:avoid;border:2px solid #1e293b;border-radius:8px;padding:12px 14px;background:#fff;min-height:0;">';
+    c += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">';
+    c += '<div style="font-size:28px;font-weight:900;font-family:monospace;letter-spacing:0.02em;line-height:1.1;">' + esc(r.routeCode) + '</div>';
+    c += '<div style="font-size:14px;font-weight:700;text-align:right;line-height:1.2;">' + esc(r.driverName || '-') + '</div>';
+    c += '</div>';
+    c += '<div style="font-size:12px;color:#334155;margin-top:8px;line-height:1.35;">' + esc(r.area) + '</div>';
+    c += '<div style="margin-top:12px;text-align:center;border-top:1px solid #cbd5e1;padding-top:10px;">';
+    c += '<div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:0.04em;">13:00まで</div>';
+    c += '<div style="font-size:36px;font-weight:900;color:#b91c1c;line-height:1.05;margin-top:2px;">' + r.until1300Count + '<span style="font-size:18px;font-weight:800;margin-left:2px;">個</span></div>';
+    c += '</div>';
+    c += '<div style="margin-top:10px;text-align:center;font-size:12px;color:#475569;">全体 '
+      + r.totalDeliveries + '個 / ' + r.allDestinations + '件</div>';
+    c += '</div>';
+    return c;
+  }
+
   function buildReportHtml(board) {
     var html = '';
     html += '<div class="tw-board-root" style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
-    html += '<div style="text-align:center;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:14px;">';
-    html += '<div style="font-size:22px;font-weight:800;letter-spacing:0.02em;">OFK3</div>';
-    html += '<div style="font-size:20px;font-weight:800;margin-top:2px;">本日の時間指定</div>';
-    html += '<div style="font-size:18px;font-weight:800;color:#b91c1c;margin-top:2px;">13:00まで</div>';
-    html += '<div style="font-size:15px;margin-top:6px;">' + esc(board.dateDisplay) + '</div>';
-    html += '<div style="font-size:13px;font-weight:800;margin-top:6px;">積み込み前に必ず確認してください</div>';
-    html += '<div style="font-size:11px;color:#555;margin-top:6px;">※13:00までの時間指定があるRouteのみ掲載</div>';
-    html += '</div>';
 
     if (!board.routeList.length) {
+      html += buildPageHeaderHtml(board);
       if (board.emptyReason === 'NEED_DATA') {
         html += '<div style="text-align:center;padding:48px 12px;font-size:15px;color:#444;">';
         html += 'アサインExcelとサイクルExcelを読み込んでから再度開いてください。';
@@ -196,25 +220,24 @@
       return html;
     }
 
-    html += '<div class="tw-board-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;">';
-    board.routeList.forEach(function (r) {
-      html += '<div class="tw-board-card" style="break-inside:avoid;page-break-inside:avoid;-webkit-column-break-inside:avoid;border:2px solid #1e293b;border-radius:8px;padding:12px 14px;background:#fff;min-height:160px;">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">';
-      html += '<div style="font-size:28px;font-weight:900;font-family:monospace;letter-spacing:0.02em;line-height:1.1;">' + esc(r.routeCode) + '</div>';
-      html += '<div style="font-size:14px;font-weight:700;text-align:right;line-height:1.2;">' + esc(r.driverName || '-') + '</div>';
+    var list = board.routeList;
+    var pageSize = 6;
+    var pi;
+    html += '<div class="tw-board-pages">';
+    for (pi = 0; pi < list.length; pi += pageSize) {
+      var pageRoutes = list.slice(pi, pi + pageSize);
+      html += '<div class="tw-board-page" style="margin-bottom:24px;padding:12px;border:2px dashed #cbd5e1;border-radius:8px;background:#f8fafc;">';
+      html += buildPageHeaderHtml(board);
+      html += '<div class="tw-board-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;">';
+      pageRoutes.forEach(function (r) {
+        html += buildRouteCardHtml(r);
+      });
       html += '</div>';
-      html += '<div style="font-size:12px;color:#334155;margin-top:8px;line-height:1.35;">' + esc(r.area) + '</div>';
-      html += '<div style="margin-top:12px;text-align:center;border-top:1px solid #cbd5e1;padding-top:10px;">';
-      html += '<div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:0.04em;">13:00まで</div>';
-      html += '<div style="font-size:36px;font-weight:900;color:#b91c1c;line-height:1.05;margin-top:2px;">' + r.until1300Count + '<span style="font-size:18px;font-weight:800;margin-left:2px;">個</span></div>';
       html += '</div>';
-      html += '<div style="margin-top:10px;text-align:center;font-size:12px;color:#475569;">全体 '
-        + r.totalDeliveries + '個 / ' + r.allDestinations + '件</div>';
-      html += '</div>';
-    });
+    }
     html += '</div>';
 
-    html += '<div style="margin-top:10px;padding-top:6px;border-top:1px solid #ccc;display:flex;justify-content:space-between;font-size:10px;color:#666;">';
+    html += '<div class="tw-board-footer" style="margin-top:10px;padding-top:6px;border-top:1px solid #ccc;display:flex;justify-content:space-between;font-size:10px;color:#666;">';
     html += '<span>※ 住所・氏名・電話・Tracking ID は掲示しません。Stop件数は表示しません。</span>';
     html += '<span>出力: ' + esc(nowClockJst()) + '　掲載 ' + board.routeList.length + ' Route</span>';
     html += '</div>';
@@ -293,12 +316,15 @@
         + '<style>'
         + '*{margin:0;padding:0;box-sizing:border-box;}'
         + 'body{padding:14px;font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;}'
-        + '.tw-board-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}'
+        + '.tw-board-page{margin-bottom:24px;padding:12px;border:2px dashed #cbd5e1;border-radius:8px;background:#f8fafc;}'
+        + '.tw-board-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;}'
         + '.tw-board-card{break-inside:avoid;page-break-inside:avoid;-webkit-column-break-inside:avoid;}'
         + '@media print{'
         + 'body{padding:6mm;}'
         + '@page{size:A4 landscape;margin:8mm;}'
-        + '.tw-board-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}'
+        + '.tw-board-page{break-after:page;page-break-after:always;margin-bottom:0;padding:0;border:none;border-radius:0;background:transparent;}'
+        + '.tw-board-page:last-child{break-after:auto;page-break-after:auto;}'
+        + '.tw-board-grid{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px;}'
         + '.tw-board-card{break-inside:avoid;page-break-inside:avoid;}'
         + '}'
         + '</style></head><body>'
