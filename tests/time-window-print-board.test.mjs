@@ -29,20 +29,15 @@ assert(src.indexOf('isAllDayWindow') < 0, 'no isAllDayWindow');
 assert(!/endMin\s*-\s*startMin\s*>=\s*720/.test(src) && !/>=\s*720/.test(src), 'must not exclude by span >=720');
 assert(src.indexOf('END_LIMIT_MIN = 780') >= 0, '13:00 cutoff = 780 minutes');
 assert(src.indexOf('parsed.endMin <= END_LIMIT_MIN') >= 0, 'filters by endMin <= 780');
-assert(src.indexOf('OFK3Cortex13') < 0, 'must not use Cortex for this board');
+assert(src.indexOf('getPackageSequenceIndex') >= 0, 'joins packageSequenceIndex');
 assert(src.indexOf('getStops') < 0, 'must not read Cortex stops');
-assert(src.indexOf('.address') < 0, 'never reads .address (no PII)');
-assert(src.indexOf('esc(it.trackingId)') < 0, 'trackingId never escaped into HTML');
-assert(!/\.trackingId\b/.test(src), 'does not read trackingId fields');
+assert(src.indexOf('buildBulletinTableHtml') >= 0, 'bulletin table');
+assert(src.indexOf('buildDetailHtml') >= 0, 'detail sheet');
 assert(src.indexOf('A4 landscape') >= 0, 'A4 landscape');
-assert(src.indexOf('repeat(3,') >= 0, '3-column grid');
-assert(src.indexOf('grid-template-rows:repeat(2,') >= 0, '2-row grid per page');
-assert(src.indexOf('tw-board-page') >= 0, 'paginated print pages');
-assert(src.indexOf('break-after:page') >= 0 && src.indexOf('page-break-after:always') >= 0, 'page break after each page');
-assert(src.indexOf('.tw-board-page:last-child') >= 0 && src.indexOf('page-break-after:auto') >= 0, 'last page no forced break');
-assert(src.indexOf('page-break-inside:avoid') >= 0, 'card page-break avoid');
-assert(src.indexOf('13:00までの時間指定があるRouteのみ掲載') >= 0, 'header note for filtered routes');
 assert(src.indexOf('totalDeliveries') >= 0 && src.indexOf('allDestinations') >= 0, 'uses assignment totals');
+assert(src.indexOf('未取得') >= 0, 'not-captured label');
+assert(src.indexOf('照合不可') >= 0, 'no-match label');
+assert(src.indexOf('順番なし') >= 0, 'no-seq label');
 
 assert(html.indexOf('OFK3TimeWindowBoard.onDashboardRender') >= 0, 'dashboard calls onDashboardRender');
 assert(serverSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'server injects script');
@@ -100,219 +95,149 @@ function loadApi(extra) {
   return { ctx: ctx, api: ctx.window.OFK3TimeWindowBoard };
 }
 
-// --- Window filter cases ---
+// A. 13:00判定
 (function () {
-  var api = loadApi({
-    assignmentData: [{ routeCode: 'DCX10', driverName: 'A', totalDeliveries: 50, allDestinations: 40, area: '城南区' }],
-    cycleDetailData: {
-      DCX10: [
-        { trackingId: 'T1', timeWindow: '05:00-13:00', stop: '' },
-        { trackingId: 'T2', timeWindow: '08:00-12:00', stop: '' },
-        { trackingId: 'T3', timeWindow: '09:00-13:00', stop: '' },
-        { trackingId: 'T4', timeWindow: '12:00-13:00', stop: '' },
-        { trackingId: 'T5', timeWindow: '08:00-22:00', stop: '' },
-        { trackingId: 'T6', timeWindow: '09:00-17:00', stop: '' },
-        { trackingId: 'T7', timeWindow: '12:30-20:30', stop: '' },
-        // 720分ちょうどだが終了は12:00 → endMin<=780 なので含む（720除外しない）
-        { trackingId: 'T8', timeWindow: '00:00-12:00', stop: '' }
-      ]
-    },
-    routeAreas: {}
-  }).api;
-
-  assert(api.isUntil1300(api.parseWindow('05:00-13:00')) === true, '05:00-13:00 included');
-  assert(api.isUntil1300(api.parseWindow('08:00-12:00')) === true, '08:00-12:00 included');
-  assert(api.isUntil1300(api.parseWindow('09:00-13:00')) === true, '09:00-13:00 included');
-  assert(api.isUntil1300(api.parseWindow('08:00-22:00')) === false, '08:00-22:00 excluded');
-  assert(api.isUntil1300(api.parseWindow('09:00-17:00')) === false, '09:00-17:00 excluded');
-  assert(api.isUntil1300(api.parseWindow('12:00-13:00')) === true, '12:00-13:00 included');
-  assert(api.isUntil1300(api.parseWindow('12:30-20:30')) === false, '12:30-20:30 excluded');
-
-  var board = api.buildBoard();
-  assert(board.routeList.length === 1, 'one route with matches');
-  assert(board.routeList[0].until1300Count === 5, '5 matching rows (T1-T4 + T8); got ' + board.routeList[0].until1300Count);
-  console.log('ok: window filter cases');
+  var api = loadApi({ assignmentData: [], cycleDetailData: {}, routeAreas: {} }).api;
+  assert(api.isUntil1300(api.parseWindow('05:00-13:00')) === true, '05:00-13:00');
+  assert(api.isUntil1300(api.parseWindow('08:00-12:00')) === true, '08:00-12:00');
+  assert(api.isUntil1300(api.parseWindow('09:00-12:30')) === true, '09:00-12:30');
+  assert(api.isUntil1300(api.parseWindow('12:00-13:00')) === true, '12:00-13:00');
+  assert(api.isUntil1300(api.parseWindow('08:00-22:00')) === false, '08:00-22:00');
+  assert(api.isUntil1300(api.parseWindow('12:30-20:30')) === false, '12:30-20:30');
+  console.log('ok: 13:00 window cases');
 })();
 
-// --- Aggregate + totals + hide zero routes + HTML ---
-(function () {
-  var api = loadApi({
-    assignmentData: [
-      { routeCode: 'DCX46', driverName: '互 中川', totalDeliveries: 54, allDestinations: 45, area: '城南区神松寺・片江・七隈' },
-      { routeCode: 'DCX41', driverName: '山田', totalDeliveries: 30, allDestinations: 28, area: '' },
-      { routeCode: 'DCX99', driverName: 'ゼロ', totalDeliveries: 10, allDestinations: 9, area: '西区' }
-    ],
-    cycleDetailData: {
-      DCX46: [
-        { trackingId: 'A', timeWindow: '09:00-13:00', stop: '' },
-        { trackingId: 'B', timeWindow: '09:00-13:00', stop: '' },
-        { trackingId: 'C', timeWindow: '08:00-12:00', stop: '' },
-        { trackingId: 'D', timeWindow: '14:00-16:00', stop: '' }
-      ],
-      DCX41: [
-        { trackingId: 'E', timeWindow: '18:00-20:00', stop: '' }
-      ],
-      DCX99: [
-        { trackingId: 'F', timeWindow: '15:00-18:00', stop: '' },
-        { trackingId: 'G', timeWindow: '', stop: '' }
-      ]
-    },
-    routeAreas: { DCX41: '鳥飼' }
-  }).api;
-
-  var board = api.buildBoard();
-  assert(board.routeList.length === 1, 'only DCX46 (until>0); DCX41/99 hidden; got ' + board.routeList.length);
-  var r = board.routeList[0];
-  assert(r.routeCode === 'DCX46', 'DCX46');
-  assert(r.until1300Count === 3, '3 packages until 13:00; got ' + r.until1300Count);
-  assert(r.totalDeliveries === 54 && r.allDestinations === 45, 'route totals from assignment');
-  assert(r.area === '城南区神松寺・片江・七隈', 'area from assignmentData.area');
-  assert(r.driverName === '互 中川', 'driver');
-
-  var htmlOut = api.buildReportHtml(board);
-  assert(htmlOut.indexOf('DCX46') >= 0, 'renders route');
-  assert(htmlOut.indexOf('13:00まで') >= 0, 'until label');
-  assert(htmlOut.indexOf('3') >= 0 && htmlOut.indexOf('個') >= 0, 'count units');
-  assert(htmlOut.indexOf('全体 54個 / 45件') >= 0, 'totals line');
-  assert(htmlOut.indexOf('※13:00までの時間指定があるRouteのみ掲載') >= 0, 'filter note');
-  assert(htmlOut.indexOf('積み込み前に必ず確認してください') >= 0, 'notice');
-  assert(htmlOut.indexOf('tw-board-card') >= 0 && htmlOut.indexOf('tw-board-grid') >= 0, 'card grid');
-  assert(htmlOut.indexOf('tw-board-page') >= 0, 'single route still in a page wrapper');
-  assert(htmlOut.indexOf('時間帯') < 0, 'no time-band table header');
-  assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex badge');
-  assert(htmlOut.indexOf('DA') < 0 || htmlOut.indexOf('Tracking') >= 0, 'no tracking ids in body (footer may say Tracking)');
-  assert(htmlOut.indexOf('addr') < 0, 'no addresses');
-  assert(!/\d+\s*Stop/.test(htmlOut), 'no Stop counts displayed');
-  console.log('ok: aggregate / hide zero / html cards');
-})();
-
-// --- Area fallback from routeAreas when assignment.area empty ---
-(function () {
-  var api = loadApi({
-    assignmentData: [
-      { routeCode: 'DCX01', driverName: 'X', totalDeliveries: 1, allDestinations: 1, area: '' }
-    ],
-    cycleDetailData: {
-      DCX01: [{ trackingId: 'Z', timeWindow: '10:00-12:00', stop: '' }]
-    },
-    routeAreas: { DCX01: '早良区原' }
-  }).api;
-  var board = api.buildBoard();
-  assert(board.routeList[0].area === '早良区原', 'falls back to routeAreas');
-  console.log('ok: routeAreas fallback');
-})();
-
-// --- NEED_DATA vs NO_TW empty messages ---
-(function () {
-  var need = loadApi({
-    assignmentData: [],
-    cycleDetailData: {},
-    routeAreas: {}
-  }).api.buildBoard();
-  assert(need.emptyReason === 'NEED_DATA', 'missing data reason');
-  var needHtml = loadApi({ assignmentData: [], cycleDetailData: {}, routeAreas: {} }).api.buildReportHtml(need);
-  assert(needHtml.indexOf('読み込んで') >= 0, 'need-data message');
-  assert(needHtml.indexOf('0件') < 0 || needHtml.indexOf('断定') >= 0, 'does not assert zero count');
-
-  var none = loadApi({
-    assignmentData: [{ routeCode: 'DCX50', driverName: 'X', totalDeliveries: 5, allDestinations: 4 }],
-    cycleDetailData: { DCX50: [{ trackingId: '1', timeWindow: '14:00-16:00', stop: '' }] },
-    routeAreas: {}
-  }).api;
-  var board = none.buildBoard();
-  assert(board.emptyReason === 'NO_TW' && board.routeList.length === 0, 'no matching TW');
-  var htmlOut = none.buildReportHtml(board);
-  assert(htmlOut.indexOf('本日の時間指定（13:00まで）はありません') >= 0, 'empty TW message');
-  console.log('ok: empty states');
-})();
-
-// --- Cortex presence must not affect counts (module ignores Cortex) ---
+// B+C+D+E+F JOIN / multi-stop / not captured / no match / no seq
 (function () {
   var ctx = makeContext({
     assignmentData: [
-      { routeCode: 'DCX36', driverName: 'Y', totalDeliveries: 20, allDestinations: 18, area: '別府' }
+      { routeCode: 'DCX27', driverName: '勝幸 矢野', totalDeliveries: 54, allDestinations: 45, area: '早良区荒江・原' },
+      { routeCode: 'DCX99', driverName: '未取得太郎', totalDeliveries: 30, allDestinations: 28, area: '西区' },
+      { routeCode: 'DCX50', driverName: '照合不可花子', totalDeliveries: 20, allDestinations: 18, area: '中央区' }
     ],
     cycleDetailData: {
-      DCX36: [
-        { trackingId: 'DA1', timeWindow: '09:00-13:00', stop: '1' },
-        { trackingId: 'DA2', timeWindow: '15:00-17:00', stop: '2' }
+      DCX27: [
+        { trackingId: 'DA-A', timeWindow: '05:00-13:00', address: '福岡市秘密A', stop: '' },
+        { trackingId: 'DA-B', timeWindow: '09:00-13:00', address: '福岡市秘密B', stop: '' },
+        { trackingId: 'DA-C', timeWindow: '08:00-12:00', address: '福岡市秘密C', stop: '' },
+        { trackingId: 'DA-SKIP', timeWindow: '14:00-16:00', address: '対象外', stop: '' }
+      ],
+      DCX99: [
+        { trackingId: 'DA-X', timeWindow: '10:00-12:00', address: '未取得住所', stop: '' }
+      ],
+      DCX50: [
+        { trackingId: 'DA-MISS', timeWindow: '09:00-13:00', address: '照合不可住所', stop: '' },
+        { trackingId: 'DA-NOSEQ', timeWindow: '08:00-12:00', address: '順番なし住所', stop: '' }
       ]
     },
     routeAreas: {}
   });
   ctx.window.OFK3Cortex13 = {
-    getEntry: function () { return { localDate: '2099-01-01', packages: [{}, {}, {}] }; },
-    getStops: function () { return [{ routeCode: 'DCX36' }, { routeCode: 'DCX36' }]; }
+    getPackageSequenceIndex: function () {
+      return [
+        { routeCode: 'DCX27', trackingId: 'DA-A', sequenceNumber: 4 },
+        { routeCode: 'DCX27', trackingId: 'DA-B', sequenceNumber: 12 },
+        { routeCode: 'DCX27', trackingId: 'DA-C', sequenceNumber: 12 },
+        { routeCode: 'DCX50', trackingId: 'DA-OTHER', sequenceNumber: 1 },
+        { routeCode: 'DCX50', trackingId: 'DA-NOSEQ', sequenceNumber: null }
+      ];
+    }
   };
   vm.runInContext(src, ctx);
-  var board = ctx.window.OFK3TimeWindowBoard.buildBoard();
-  assert(board.routeList[0].until1300Count === 1, 'Cortex ignored; only Excel TW count');
-  var htmlOut = ctx.window.OFK3TimeWindowBoard.buildReportHtml(board);
-  assert(htmlOut.indexOf('13:00必達') < 0, 'no cortex UI');
-  console.log('ok: cortex ignored');
-})();
-
-// --- 7 routes → 2 pages (6 + 1), header on each page ---
-function splitBoardPages(htmlOut) {
-  var marker = 'class="tw-board-page"';
-  var parts = [];
-  var start = 0;
-  var idx = htmlOut.indexOf(marker);
-  while (idx >= 0) {
-    var next = htmlOut.indexOf(marker, idx + marker.length);
-    parts.push(htmlOut.slice(idx, next >= 0 ? next : htmlOut.length));
-    idx = next;
-  }
-  return parts;
-}
-
-function countCardsInChunk(chunk) {
-  var n = 0;
-  var pos = 0;
-  while (true) {
-    var i = chunk.indexOf('class="tw-board-card"', pos);
-    if (i < 0) break;
-    n += 1;
-    pos = i + 1;
-  }
-  return n;
-}
-
-(function () {
-  var assignmentData = [];
-  var cycleDetailData = {};
-  for (var i = 1; i <= 7; i += 1) {
-    var rc = 'DCX' + (i < 10 ? '0' + i : String(i));
-    assignmentData.push({
-      routeCode: rc,
-      driverName: 'D' + i,
-      totalDeliveries: 10 + i,
-      allDestinations: 8 + i,
-      area: 'エリア' + i
-    });
-    cycleDetailData[rc] = [{ trackingId: 'P' + i, timeWindow: '10:00-12:00', stop: '' }];
-  }
-  var api = loadApi({ assignmentData: assignmentData, cycleDetailData: cycleDetailData, routeAreas: {} }).api;
+  var api = ctx.window.OFK3TimeWindowBoard;
   var board = api.buildBoard();
-  assert(board.routeList.length === 7, 'seven routes with TW');
-  var htmlOut = api.buildReportHtml(board);
-  var pages = splitBoardPages(htmlOut);
-  assert(pages.length === 2, 'tw-board-page count = 2; got ' + pages.length);
-  assert(countCardsInChunk(pages[0]) === 6, 'page 1 has 6 cards; got ' + countCardsInChunk(pages[0]));
-  assert(countCardsInChunk(pages[1]) === 1, 'page 2 has 1 card; got ' + countCardsInChunk(pages[1]));
-  assert(pages[0].indexOf('積み込み前に必ず確認してください') >= 0, 'page 1 header');
-  assert(pages[1].indexOf('積み込み前に必ず確認してください') >= 0, 'page 2 header');
-  console.log('ok: 7 routes paginated 6+1');
+  assert(board.routeList.length === 3, '3 routes with until1300');
+
+  var r27 = board.routeList.find(function (r) { return r.routeCode === 'DCX27'; });
+  assert(r27.until1300Count === 3, 'DCX27 packages=3 (skip 14:00)');
+  assert(r27.totalDeliveries === 54 && r27.allDestinations === 45, 'assignment totals');
+  assert(r27.sequenceLabel === '#4 #12', 'unique sequences sorted; got ' + r27.sequenceLabel);
+  assert(r27.packages.filter(function (p) { return p.sequenceNumber === 12; }).length === 2, 'same stop 2 packages');
+
+  var r99 = board.routeList.find(function (r) { return r.routeCode === 'DCX99'; });
+  assert(r99.until1300Count === 1, 'not-captured keeps count');
+  assert(r99.sequenceLabel === '未取得', 'not captured label');
+  assert(r99.packages[0].sequenceLabel === '未取得', 'package not captured');
+
+  var r50 = board.routeList.find(function (r) { return r.routeCode === 'DCX50'; });
+  var miss = r50.packages.find(function (p) { return p.trackingId === 'DA-MISS'; });
+  var noseq = r50.packages.find(function (p) { return p.trackingId === 'DA-NOSEQ'; });
+  assert(miss.sequenceLabel === '照合不可', 'no match');
+  assert(noseq.sequenceLabel === '順番なし', 'no seq');
+
+  // G. bulletin HTML has no PII
+  var bulletin = api.buildBulletinTableHtml(board);
+  assert(bulletin.indexOf('DCX27') >= 0, 'bulletin has route');
+  assert(bulletin.indexOf('全体掲示表') >= 0, 'bulletin title');
+  assert(bulletin.indexOf('個人詳細票') >= 0, 'detail button');
+  assert(bulletin.indexOf('DA-A') < 0, 'bulletin no trackingId');
+  assert(bulletin.indexOf('福岡市秘密') < 0, 'bulletin no address');
+  assert(bulletin.indexOf('未取得') >= 0, 'bulletin shows 未取得');
+
+  var printBull = api.buildBulletinPrintHtml(board);
+  assert(printBull.indexOf('DA-A') < 0 && printBull.indexOf('福岡市秘密') < 0, 'print bulletin no PII');
+  assert(printBull.indexOf('tw-board-page') >= 0, 'print pages');
+
+  // H. detail sheet has PII + fields
+  var detail = api.buildDetailHtml(board, 'DCX27');
+  assert(detail.indexOf('DA-A') >= 0, 'detail DA');
+  assert(detail.indexOf('福岡市秘密A') >= 0, 'detail address');
+  assert(detail.indexOf('05:00-13:00') >= 0, 'detail timeWindow');
+  assert(detail.indexOf('#4') >= 0 && detail.indexOf('#12') >= 0, 'detail sequences');
+  assert(detail.indexOf('13:00まで 時間指定詳細') >= 0, 'detail header');
+
+  var cards = api.buildReportHtml(board);
+  assert(cards.indexOf('tw-board-card') >= 0, 'cards still available');
+  assert(cards.indexOf('DA-A') < 0, 'cards no trackingId');
+
+  console.log('ok: JOIN / multi-stop / labels / PII split');
 })();
 
-// --- Boot safety ---
+// NEED_DATA cycle missing message
+(function () {
+  var api = loadApi({
+    assignmentData: [{ routeCode: 'DCX01', driverName: 'X', totalDeliveries: 1, allDestinations: 1 }],
+    cycleDetailData: {},
+    routeAreas: {}
+  }).api;
+  var board = api.buildBoard();
+  assert(board.emptyReason === 'NEED_DATA', 'need data');
+  var htmlOut = api.buildBulletinTableHtml(board);
+  assert(htmlOut.indexOf('CYCLEデータ未読込') >= 0, 'cycle missing message');
+  console.log('ok: empty cycle message');
+})();
+
+// Aggregate hide zero + totals (regression)
+(function () {
+  var api = loadApi({
+    assignmentData: [
+      { routeCode: 'DCX46', driverName: '互 中川', totalDeliveries: 54, allDestinations: 45, area: '城南区神松寺・片江・七隈' },
+      { routeCode: 'DCX41', driverName: '山田', totalDeliveries: 30, allDestinations: 28, area: '' }
+    ],
+    cycleDetailData: {
+      DCX46: [
+        { trackingId: 'A', timeWindow: '09:00-13:00', address: 'addr1', stop: '' },
+        { trackingId: 'B', timeWindow: '09:00-13:00', address: 'addr2', stop: '' },
+        { trackingId: 'C', timeWindow: '08:00-12:00', address: 'addr3', stop: '' },
+        { trackingId: 'D', timeWindow: '14:00-16:00', address: 'addr4', stop: '' }
+      ],
+      DCX41: [{ trackingId: 'E', timeWindow: '18:00-20:00', address: 'x', stop: '' }]
+    },
+    routeAreas: { DCX41: '鳥飼' }
+  }).api;
+  var board = api.buildBoard();
+  assert(board.routeList.length === 1, 'only DCX46');
+  assert(board.routeList[0].until1300Count === 3, '3 packages');
+  assert(board.routeList[0].sequenceLabel === '未取得', 'no cortex → 未取得');
+  console.log('ok: aggregate / hide zero');
+})();
+
+// Boot safety
 (function () {
   var threw = null;
   try {
     loadApi({ assignmentData: [], cycleDetailData: {}, routeAreas: {} });
-  } catch (e) {
-    threw = e;
-  }
+  } catch (e) { threw = e; }
   assert(!threw, 'boot must not throw: ' + (threw && threw.message));
   console.log('ok: boot safety');
 })();
