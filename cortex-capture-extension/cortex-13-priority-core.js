@@ -433,6 +433,90 @@
     };
   }
 
+  // Full DROP_OFF package → sequenceNumber index (no 13:00 / time-window filter).
+  // Separate from extractFromRouteDetails packages (Cortex 13:00 priority only).
+  function emptyPackageSequenceDiagnostics() {
+    return {
+      skippedMissingTrackingId: 0,
+      skippedMissingSequence: 0,
+      skippedEmptyTasks: 0,
+      duplicateTrackingIdConflicts: [],
+      indexCount: 0,
+      byRoute: {}
+    };
+  }
+
+  function extractPackageSequenceIndex(details) {
+    var diagnostics = emptyPackageSequenceDiagnostics();
+    if (!details || !details.rmsRouteDetails || !Array.isArray(details.rmsRouteDetails.stops)) {
+      return {
+        ok: false,
+        routeCode: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeCode : '',
+        routeId: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeId : '',
+        index: [],
+        diagnostics: diagnostics
+      };
+    }
+    var rd = details.rmsRouteDetails;
+    var routeCode = String(rd.routeCode || '');
+    var index = [];
+    var seenSeqByTracking = {};
+
+    rd.stops.forEach(function (stop) {
+      if (!stop) return;
+      var seq = stop.sequenceNumber == null || stop.sequenceNumber === '' ? null : Number(stop.sequenceNumber);
+      if (seq != null && !isFinite(seq)) seq = null;
+      var tasks = Array.isArray(stop.tasks) ? stop.tasks : [];
+      if (!tasks.length) {
+        diagnostics.skippedEmptyTasks += 1;
+        return;
+      }
+      tasks.forEach(function (task) {
+        if (!task || task.taskType !== 'DROP_OFF') return;
+        if (seq == null) {
+          diagnostics.skippedMissingSequence += 1;
+          return;
+        }
+        var tid = trackingIdOf(task);
+        if (!tid) {
+          diagnostics.skippedMissingTrackingId += 1;
+          return;
+        }
+        if (!seenSeqByTracking[tid]) seenSeqByTracking[tid] = [];
+        var prev = seenSeqByTracking[tid];
+        var alreadyHasSame = false;
+        var i;
+        for (i = 0; i < prev.length; i++) {
+          if (prev[i] === seq) alreadyHasSame = true;
+        }
+        if (!alreadyHasSame && prev.length > 0) {
+          diagnostics.duplicateTrackingIdConflicts.push({
+            routeCode: routeCode,
+            trackingId: tid,
+            sequenceNumbers: prev.concat([seq])
+          });
+        }
+        if (!alreadyHasSame) prev.push(seq);
+        // Keep every DROP_OFF row; never silent-overwrite a different sequence.
+        index.push({
+          routeCode: routeCode,
+          trackingId: tid,
+          sequenceNumber: seq
+        });
+      });
+    });
+
+    diagnostics.indexCount = index.length;
+    if (routeCode) diagnostics.byRoute[routeCode] = index.length;
+    return {
+      ok: true,
+      routeCode: routeCode,
+      routeId: rd.routeId || '',
+      index: index,
+      diagnostics: diagnostics
+    };
+  }
+
   function parseCsv(text) {
     var rows = [];
     var row = [];
@@ -575,6 +659,8 @@
     var routes = [];
     var packages = [];
     var routeStops = [];
+    var packageSequenceIndex = [];
+    var packageSequenceDiagnostics = emptyPackageSequenceDiagnostics();
     (results || []).forEach(function (r) {
       if (!r || !r.ok) return;
       routes.push(r);
@@ -584,7 +670,23 @@
       (r.routeStops || []).forEach(function (s) {
         routeStops.push(Object.assign({ driverName: r.driverName }, s));
       });
+      (r.packageSequenceIndex || []).forEach(function (row) {
+        packageSequenceIndex.push(row);
+      });
+      var d = r.packageSequenceDiagnostics;
+      if (d) {
+        packageSequenceDiagnostics.skippedMissingTrackingId += d.skippedMissingTrackingId || 0;
+        packageSequenceDiagnostics.skippedMissingSequence += d.skippedMissingSequence || 0;
+        packageSequenceDiagnostics.skippedEmptyTasks += d.skippedEmptyTasks || 0;
+        (d.duplicateTrackingIdConflicts || []).forEach(function (c) {
+          packageSequenceDiagnostics.duplicateTrackingIdConflicts.push(c);
+        });
+        Object.keys(d.byRoute || {}).forEach(function (rc) {
+          packageSequenceDiagnostics.byRoute[rc] = (packageSequenceDiagnostics.byRoute[rc] || 0) + (d.byRoute[rc] || 0);
+        });
+      }
     });
+    packageSequenceDiagnostics.indexCount = packageSequenceIndex.length;
     packages.sort(function (a, b) {
       if (a.routeCode !== b.routeCode) {
         return String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
@@ -597,6 +699,9 @@
       routes: routes,
       packages: packages,
       routeStops: routeStops,
+      packageSequenceIndex: packageSequenceIndex,
+      packageSequenceDiagnostics: packageSequenceDiagnostics,
+      packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length,
       routeCount: routes.length,
       stopCount: Object.keys(stopKeys).length,
       packageCount: packages.length,
@@ -1099,6 +1204,9 @@
       routes: [],
       packages: [],
       routeStops: [],
+      packageSequenceIndex: [],
+      packageSequenceDiagnostics: emptyPackageSequenceDiagnostics(),
+      packageSequenceRouteCount: 0,
       failures: [],
       routeCount: 0,
       stopCount: 0,
@@ -1153,6 +1261,9 @@
         return;
       }
       extracted.routeStops = extractRouteSequence(d).stops || [];
+      var pkgIndex = extractPackageSequenceIndex(d);
+      extracted.packageSequenceIndex = pkgIndex.index || [];
+      extracted.packageSequenceDiagnostics = pkgIndex.diagnostics || emptyPackageSequenceDiagnostics();
       results.push(extracted);
     });
 
@@ -1250,6 +1361,7 @@
     selectElevenOClockRoutes: selectElevenOClockRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
     extractRouteSequence: extractRouteSequence,
+    extractPackageSequenceIndex: extractPackageSequenceIndex,
     extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
     ingestBundle: ingestBundle

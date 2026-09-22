@@ -12,6 +12,8 @@
     entry: null,
     stops: [],
     routeStops: [],
+    packageSequenceIndex: [],
+    packageSequenceDiagnostics: null,
     error: null,
     fallback: false,
     fetched: false,
@@ -238,12 +240,16 @@
         state.entry = null;
         state.stops = [];
         state.routeStops = [];
+        state.packageSequenceIndex = [];
+        state.packageSequenceDiagnostics = null;
         state.fallback = false;
         state.error = '本日のデータなし';
       } else {
         state.entry = j;
         state.stops = group(j.packages);
         state.routeStops = Array.isArray(j.routeStops) ? j.routeStops : [];
+        state.packageSequenceIndex = Array.isArray(j.packageSequenceIndex) ? j.packageSequenceIndex : [];
+        state.packageSequenceDiagnostics = j.packageSequenceDiagnostics || null;
         state.fallback = usedFallback && String(j.localDate || '') !== d;
         state.error = null;
       }
@@ -251,6 +257,8 @@
       state.entry = null;
       state.stops = [];
       state.routeStops = [];
+      state.packageSequenceIndex = [];
+      state.packageSequenceDiagnostics = null;
       state.fallback = false;
       state.error = '本日のデータなし';
     }
@@ -423,6 +431,8 @@
     renderTimeWindowPanel: renderTimeWindowPanel,
     getStops: function () { return state.stops || []; },
     getRouteStops: function () { return state.routeStops || []; },
+    getPackageSequenceIndex: function () { return state.packageSequenceIndex || []; },
+    getPackageSequenceDiagnostics: function () { return state.packageSequenceDiagnostics; },
     getEntry: function () { return state.entry; },
     ensureStopCoords: geocodeStop
   };
