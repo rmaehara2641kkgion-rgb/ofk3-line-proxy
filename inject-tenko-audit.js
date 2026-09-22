@@ -8,7 +8,7 @@ const tags = [
   '<script src="/tenko-transport-audit.js?v=20260812-1"></script>',
   '<script src="/tenko-transport-audit-success.js?v=20260812-1"></script>',
   '<script src="/ofk3-cortex-priority-ui.js?v=20260921-3"></script>',
-  '<script src="/ofk3-time-window-board.js?v=20260922-1300"></script>',
+  '<script src="/ofk3-time-window-board.js?v=20260923-bulletin"></script>',
   '<script src="/gds-fleet-audit-core.js?v=20260921-1"></script>',
   '<script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>'
 ];
