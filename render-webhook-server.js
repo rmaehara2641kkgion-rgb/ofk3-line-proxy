@@ -416,6 +416,49 @@ function sanitizeCortexRouteStop(s) {
     packageCount: pkgCount
   };
 }
+function sanitizeCortexPackageSequenceIndexRow(row) {
+  row = row || {};
+  var seq = row.sequenceNumber == null || row.sequenceNumber === '' ? null : Number(row.sequenceNumber);
+  if (seq != null && !isFinite(seq)) seq = null;
+  var trackingId = String(row.trackingId || '').trim();
+  var routeCode = String(row.routeCode || '').trim();
+  if (!routeCode || !trackingId || seq == null) return null;
+  return {
+    routeCode: routeCode,
+    trackingId: trackingId,
+    sequenceNumber: seq
+  };
+}
+function sanitizeCortexPackageSequenceDiagnostics(d) {
+  d = d || {};
+  var byRoute = {};
+  if (d.byRoute && typeof d.byRoute === 'object') {
+    Object.keys(d.byRoute).forEach(function (rc) {
+      var n = Number(d.byRoute[rc]);
+      if (rc && isFinite(n)) byRoute[String(rc)] = n;
+    });
+  }
+  var conflicts = Array.isArray(d.duplicateTrackingIdConflicts)
+    ? d.duplicateTrackingIdConflicts.map(function (c) {
+      c = c || {};
+      return {
+        routeCode: String(c.routeCode || ''),
+        trackingId: String(c.trackingId || ''),
+        sequenceNumbers: Array.isArray(c.sequenceNumbers)
+          ? c.sequenceNumbers.map(function (n) { return Number(n); }).filter(function (n) { return isFinite(n); })
+          : []
+      };
+    }).filter(function (c) { return c.routeCode && c.trackingId; })
+    : [];
+  return {
+    skippedMissingTrackingId: Number(d.skippedMissingTrackingId) || 0,
+    skippedMissingSequence: Number(d.skippedMissingSequence) || 0,
+    skippedEmptyTasks: Number(d.skippedEmptyTasks) || 0,
+    duplicateTrackingIdConflicts: conflicts,
+    indexCount: Number(d.indexCount) || 0,
+    byRoute: byRoute
+  };
+}
 function summarizeCortexPriority(packages) {
   var stopKeys = {};
   packages.forEach(function (p) { stopKeys[cortexPriorityStopKey(p)] = true; });
@@ -436,6 +479,17 @@ app.post('/cortex-priority/import', function(req, res) {
   var routeStops = Array.isArray(body.routeStops)
     ? body.routeStops.map(sanitizeCortexRouteStop).filter(function (s) { return !!s.routeCode; })
     : [];
+  var packageSequenceIndex = Array.isArray(body.packageSequenceIndex)
+    ? body.packageSequenceIndex.map(sanitizeCortexPackageSequenceIndexRow).filter(function (r) { return !!r; })
+    : [];
+  var packageSequenceDiagnostics = sanitizeCortexPackageSequenceDiagnostics(body.packageSequenceDiagnostics);
+  packageSequenceDiagnostics.indexCount = packageSequenceIndex.length;
+  if (!Object.keys(packageSequenceDiagnostics.byRoute).length && packageSequenceIndex.length) {
+    packageSequenceIndex.forEach(function (row) {
+      packageSequenceDiagnostics.byRoute[row.routeCode] =
+        (packageSequenceDiagnostics.byRoute[row.routeCode] || 0) + 1;
+    });
+  }
   var counts = summarizeCortexPriority(packages);
   cortexPriorityStore[localDate] = {
     localDate: localDate,
@@ -443,11 +497,22 @@ app.post('/cortex-priority/import', function(req, res) {
     receivedAt: new Date().toISOString(),
     packages: packages,
     routeStops: routeStops,
+    packageSequenceIndex: packageSequenceIndex,
+    packageSequenceDiagnostics: packageSequenceDiagnostics,
+    packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length,
     stopCount: counts.stopCount,
     packageCount: counts.packageCount
   };
-  log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount + ' Packages / sequence ' + routeStops.length);
-  res.json({ status: 'ok', localDate: localDate, stopCount: counts.stopCount, packageCount: counts.packageCount });
+  log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount +
+    ' Packages / sequence ' + routeStops.length + ' / pkgIndex ' + packageSequenceIndex.length);
+  res.json({
+    status: 'ok',
+    localDate: localDate,
+    stopCount: counts.stopCount,
+    packageCount: counts.packageCount,
+    packageSequenceIndexCount: packageSequenceIndex.length,
+    packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length
+  });
 });
 app.get('/cortex-priority', function(req, res) {
   var localDate = String(req.query.localDate || getTodayJst());
@@ -460,9 +525,28 @@ app.get('/cortex-priority', function(req, res) {
   }
   if (!entry) {
     log('cortex-priority GET miss: requestedDate=' + localDate + ' latest=' + latestParam);
-    return res.status(404).json({ status: 'empty', localDate: localDate, packages: [], routeStops: [], stopCount: 0, packageCount: 0 });
+    return res.status(404).json({
+      status: 'empty',
+      localDate: localDate,
+      packages: [],
+      routeStops: [],
+      packageSequenceIndex: [],
+      packageSequenceDiagnostics: sanitizeCortexPackageSequenceDiagnostics(null),
+      packageSequenceRouteCount: 0,
+      stopCount: 0,
+      packageCount: 0
+    });
   }
-  res.json(Object.assign({ status: 'ok' }, entry));
+  var out = Object.assign({ status: 'ok' }, entry);
+  if (!Array.isArray(out.packageSequenceIndex)) out.packageSequenceIndex = [];
+  if (!out.packageSequenceDiagnostics) {
+    out.packageSequenceDiagnostics = sanitizeCortexPackageSequenceDiagnostics(null);
+    out.packageSequenceDiagnostics.indexCount = out.packageSequenceIndex.length;
+  }
+  if (out.packageSequenceRouteCount == null) {
+    out.packageSequenceRouteCount = Object.keys((out.packageSequenceDiagnostics && out.packageSequenceDiagnostics.byRoute) || {}).length;
+  }
+  res.json(out);
 });
 
 // 住所→緯度経度取得

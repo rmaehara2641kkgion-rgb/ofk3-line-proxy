@@ -108,7 +108,10 @@ assert(seqSrc.indexOf('new MutationObserver') < 0, 'sequence model has no Mutati
 assert(mapSrc.indexOf('sequenceLayer') >= 0, 'MAP has sequence layer');
 assert(mapSrc.indexOf('isPriority1300') >= 0, 'MAP uses 13:00 ring flag');
 assert(runnerSrc.indexOf('routeStops: routeStops') >= 0, 'extension sends routeStops');
+assert(runnerSrc.indexOf('packageSequenceIndex: packageSequenceIndex') >= 0, 'extension sends packageSequenceIndex');
 assert(serverSrc.indexOf('function sanitizeCortexRouteStop') >= 0, 'server stores routeStops');
+assert(serverSrc.indexOf('sanitizeCortexPackageSequenceIndexRow') >= 0, 'server stores packageSequenceIndex');
+assert(coreSrc.indexOf('function extractPackageSequenceIndex') >= 0, 'core extracts packageSequenceIndex');
 assert(coreSrc.indexOf('function isExact1300Clock') >= 0 && coreSrc.indexOf('function isOnOrBeforeCutoff') >= 0, '13:00 judgment functions remain');
 assert(/taskType !== 'DROP_OFF'/.test(coreSrc), 'DROP_OFF filter remains');
 

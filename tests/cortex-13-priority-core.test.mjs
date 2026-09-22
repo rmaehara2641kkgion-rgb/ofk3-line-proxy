@@ -664,6 +664,8 @@ function run() {
   var ingested = Core.ingestBundle({ details: [dcxDetails] });
   assert(ingested.ok && ingested.packageCount === 2 && ingested.stopCount === 2, 'ingest 13:00 counts unchanged');
   assert(ingested.routeStops && ingested.routeStops.length === 5, 'ingest stores full routeStops');
+  assert(ingested.packageSequenceIndex && ingested.packageSequenceIndex.length === 5, 'ingest stores full packageSequenceIndex');
+  assert(typeof Core.extractPackageSequenceIndex === 'function', 'extractPackageSequenceIndex exported');
 
   console.log('cortex-13-priority-core.test.mjs OK');
 }

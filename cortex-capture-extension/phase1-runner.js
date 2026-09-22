@@ -338,6 +338,7 @@
     var result = Core.ingestBundle(bundle);
     var packages = (result && result.packages) || [];
     var routeStops = (result && result.routeStops) || [];
+    var packageSequenceIndex = (result && result.packageSequenceIndex) || [];
     if (!result || !result.ok || (!packages.length && !routeStops.length)) {
       alert('13時優先データがありません。先に取得を完了してください。');
       return;
@@ -349,9 +350,15 @@
         stopCount: result.stopCount || 0,
         packageCount: result.packageCount || 0,
         packages: packages,
-        routeStops: routeStops
+        routeStops: routeStops,
+        packageSequenceIndex: packageSequenceIndex,
+        packageSequenceDiagnostics: result.packageSequenceDiagnostics || null,
+        packageSequenceRouteCount: result.packageSequenceRouteCount || 0
       });
-      alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages');
+      var idxCount = Array.isArray(body.packageSequenceIndex)
+        ? body.packageSequenceIndex.length
+        : (body.packageSequenceIndexCount != null ? body.packageSequenceIndexCount : packageSequenceIndex.length);
+      alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages / index ' + idxCount);
     } catch (e) {
       alert('OFK3送信に失敗しました: ' + e.message);
     }
