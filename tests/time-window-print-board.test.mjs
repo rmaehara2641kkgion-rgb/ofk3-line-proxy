@@ -44,7 +44,10 @@ assert(cortexUiSrc.indexOf('getPackages:') >= 0, 'OFK3Cortex13.getPackages expor
 assert(html.indexOf('OFK3TimeWindowBoard.onDashboardRender') >= 0, 'dashboard calls onDashboardRender');
 assert(serverSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'server injects script');
 assert(injectSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'inject-tenko-audit injects script');
-assert(serverSrc.indexOf('?v=20260923-priority') >= 0, 'cache bust priority');
+assert(serverSrc.indexOf('?v=20260923-print') >= 0, 'cache bust print layout');
+assert(injectSrc.indexOf('?v=20260923-print') >= 0, 'inject cache bust print layout');
+assert(src.indexOf('BULLETIN_ROWS_PER_PAGE') < 0, 'no artificial bulletin row pagination');
+assert(src.indexOf('buildBulletinPrintHeaderHtml') >= 0, 'compact print header');
 assert(html.indexOf('function twExtract()') >= 0, 'twExtract untouched');
 assert(html.indexOf("id=\"tw-end-filter\"") >= 0, 'tw filter UI untouched');
 
@@ -268,6 +271,61 @@ function loadApi(extra) {
   } catch (e) { threw = e; }
   assert(!threw, 'boot must not throw: ' + (threw && threw.message));
   console.log('ok: boot safety');
+})();
+
+// Print layout: continuous table, single title, no forced page-break chunks
+(function () {
+  var assignmentData = [];
+  var cycleDetailData = {};
+  var i;
+  for (i = 1; i <= 22; i++) {
+    var code = 'DCX' + (40 + i);
+    assignmentData.push({
+      routeCode: code,
+      driverName: 'Driver' + i,
+      totalDeliveries: 50 + i,
+      allDestinations: 40 + i,
+      area: '西区'
+    });
+    cycleDetailData[code] = [
+      { trackingId: 'T' + i + 'a', timeWindow: '05:00-13:00', address: 'addr-secret-' + i },
+      { trackingId: 'T' + i + 'b', timeWindow: '08:00-12:00', address: 'addr-secret-b-' + i }
+    ];
+  }
+  var api = loadApi({
+    assignmentData: assignmentData,
+    cycleDetailData: cycleDetailData,
+    routeAreas: {}
+  }).api;
+  var board = api.buildBoard();
+  assert(board.routeList.length === 22, '22 routes for print sample');
+  var printHtml = api.buildBulletinPrintHtml(board);
+  assert(printHtml.indexOf('tw-bulletin-print') >= 0, 'print root class');
+  assert(printHtml.indexOf('tw-board-print-header') >= 0, 'compact print header present');
+  assert((printHtml.match(/tw-board-print-header/g) || []).length === 1, 'title block once only');
+  assert(printHtml.indexOf('tw-board-page') < 0, 'no artificial print pages');
+  assert((printHtml.match(/<table class="tw-bulletin-table">/g) || []).length === 1, 'single continuous table');
+  assert((printHtml.match(/<tbody>/g) || []).length === 1, 'single tbody');
+  assert((printHtml.match(/<\/tr>/g) || []).length >= 23, 'thead + 22 data rows');
+  assert(printHtml.indexOf('addr-secret') < 0, 'print bulletin no address PII');
+  assert(printHtml.indexOf('T1a') < 0, 'print bulletin no tracking PII');
+  board.routeList.forEach(function (r) {
+    assert(printHtml.indexOf(r.routeCode) >= 0, 'route present: ' + r.routeCode);
+    assert(printHtml.indexOf(r.sequenceLabel) >= 0, 'sequence present for ' + r.routeCode);
+  });
+
+  // printBulletin CSS must not force page-break after artificial pages
+  var cssSrc = src.slice(src.indexOf('function printBulletin'), src.indexOf('function printCards'));
+  assert(cssSrc.indexOf('break-after:page') < 0, 'bulletin print CSS no forced page break');
+  assert(cssSrc.indexOf('page-break-after:always') < 0, 'bulletin print CSS no always page-break');
+  assert(cssSrc.indexOf('A4 landscape') >= 0, 'A4 landscape kept');
+  assert(cssSrc.indexOf('thead{display:table-header-group;}') >= 0, 'thead repeats across pages');
+  assert(cssSrc.indexOf('break-inside:avoid') >= 0, 'rows avoid split');
+
+  // cards path still uses page chunks (untouched)
+  assert(src.indexOf("buildPageHeaderHtml(board, 'カード掲示')") >= 0, 'card print header kept');
+  assert(src.indexOf('printCards') >= 0 && src.indexOf('break-after:page') >= 0, 'card print page-break kept');
+  console.log('ok: print continuous table / single header / no forced break');
 })();
 
 console.log('ok time-window-print-board');
