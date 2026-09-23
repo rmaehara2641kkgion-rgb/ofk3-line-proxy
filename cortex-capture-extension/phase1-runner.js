@@ -1178,7 +1178,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.2';
+  var BAG_BUILD = 'Bag v3.2-diag';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1601,9 +1601,118 @@
     });
   }
 
+  // ---- Stop click diagnostics (evidence only; the click decision is unchanged) ----
+  var BAG_STOP_CLICK_DIAG_MAX = 40;
+
+  function diagChain(el, depth) {
+    var out = [];
+    for (var cur = el, d = 0; cur && d < depth; d += 1, cur = cur.parentElement) {
+      if (cur === document.documentElement) break;
+      out.push(diagEl(cur));
+    }
+    return out;
+  }
+
+  function diagRect(r) {
+    if (!r) return null;
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+
+  function markerSvgOf(el) {
+    var svg = el && el.closest ? el.closest('svg') : null;
+    return svg && Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class')) ? svg : null;
+  }
+
+  // How the element returned by elementFromPoint relates to the click target.
+  function hitRelation(hit, el, container) {
+    if (!hit) return 'none';
+    if (inPanel(hit)) return 'ofk3-panel';
+    if (hit === el || el.contains(hit)) return 'target';
+    var svg = markerSvgOf(el);
+    if (svg && (hit === svg || svg.contains(hit))) return 'same-stop-marker';
+    if (container && (hit === container || container.contains(hit))) return 'same-stop-block';
+    if (hit !== document.body && hit !== document.documentElement && hit.contains(el)) return 'ancestor-of-target';
+    var other = markerSvgOf(hit);
+    if (other) return 'other-stop-marker:' + String(other.textContent || '').trim().slice(0, 6);
+    var dlg = hit.closest && hit.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]');
+    if (dlg) return 'dialog';
+    return 'other';
+  }
+
+  function recordClickTarget(diag, cur, rect) {
+    var svg = markerSvgOf(cur.el);
+    diag.target = {
+      el: diagEl(cur.el),
+      stopMarkerSvg: svg ? diagEl(svg) : null,
+      rect: diagRect(rect),
+      svgRect: svg ? diagRect(svg.getBoundingClientRect()) : null,
+      container: diagEl(cur.container),
+      ancestors: diagChain(svg || cur.el, 12)
+    };
+  }
+
+  function recordHitTest(diag, cur, pts) {
+    diag.points = pts.map(function (p) {
+      var hit = null;
+      try { hit = document.elementFromPoint(p.x, p.y); } catch (e1) {}
+      var rel = hitRelation(hit, cur.el, cur.container);
+      return {
+        x: Math.round(p.x), y: Math.round(p.y), hit: diagEl(hit), relation: rel,
+        allowed: hitAllowed(hit, cur.el, cur.container), hitAncestors: rel === 'target' ? [] : diagChain(hit, 5)
+      };
+    });
+    var stack = [];
+    try { stack = document.elementsFromPoint(pts[0].x, pts[0].y) || []; } catch (e2) {}
+    diag.centerStack = stack.slice(0, 8).map(function (h) { return diagEl(h) + ' => ' + hitRelation(h, cur.el, cur.container); });
+  }
+
+  // Page state around a Stop click (short texts only).
+  function stopClickState(das) {
+    var labels = collectStopLabelElements(null);
+    return {
+      atMs: Date.now(),
+      url: hrefNow(),
+      targetDaVisible: Object.keys(collectExactDaElements(das)).length,
+      packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
+      stopLabels: labels.length,
+      svgStopMarkers: (labels.kinds || []).filter(function (k) { return k === Core.STOP_MARKER_KIND; }).length,
+      elementCount: document.querySelectorAll('*').length,
+      dialogs: visibleDialogs().length,
+      headings: (function () {
+        var out = [];
+        var nodes = document.querySelectorAll('h1, h2, h3, h4, [role="heading"]');
+        for (var i = 0; i < nodes.length && out.length < 6; i++) {
+          if (!inPanel(nodes[i]) && elementVisible(nodes[i])) out.push(diagText(nodes[i], 30));
+        }
+        return out;
+      })()
+    };
+  }
+
+  // The same Stop number as plain text (the other candidate seen in the 2026-09-24 diagnostics):
+  // where it lives, to tell a Stop-list row from a map/chart marker. Recorded, never clicked.
+  function plainNumberContext(seq) {
+    var want = String(seq);
+    var hits = collectTextElements(null, function (full) {
+      return String(full).replace(/\s+/g, ' ').trim() === want;
+    }).filter(function (el) { return !markerSvgOf(el); });
+    return hits.slice(0, 3).map(function (el) {
+      var r = null;
+      try { r = el.getBoundingClientRect(); } catch (e1) {}
+      return { el: diagEl(el), rect: diagRect(r), ancestors: diagChain(el, 10) };
+    });
+  }
+
+  function pushStopClickDiag(entry) {
+    if (!bagRun) return;
+    bagRun.stopClickDiagnostics = bagRun.stopClickDiagnostics || [];
+    if (bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX) bagRun.stopClickDiagnostics.push(entry);
+  }
+
   // scrollIntoView -> rAF x2 -> rect -> elementFromPoint check -> requestCdpClick.
   // resolve() re-finds the element after layout (virtualized lists re-render on scroll).
-  function safeCdpClick(resolve, runId, done) {
+  // diag (optional): filled with the hit-test evidence; never changes the decision.
+  function safeCdpClick(resolve, runId, done, diag) {
     var first = resolve();
     if (!first || !first.el) { done({ ok: false, detail: 'element lost' }); return; }
     try { first.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
@@ -1614,8 +1723,10 @@
       var rect = null;
       try { rect = cur.el.getBoundingClientRect(); } catch (e2) {}
       var pts = candidatePoints(rect);
+      if (diag) recordClickTarget(diag, cur, rect);
       if (!pts.length) { done({ ok: false, detail: 'no coords' }); return; }
       setPanelClickable(false);
+      if (diag) recordHitTest(diag, cur, pts);
       var point = null;
       var lastHit = null;
       for (var i = 0; i < pts.length && !point; i++) {
@@ -1845,6 +1956,10 @@
           var label = found.label;
           ctx.stopBlock = stopBlockOf(label);
           onState('Stop #' + stop.stop + '展開中');
+          var clickDiag = {
+            routeCode: ctx.route && ctx.route.routeCode, stop: stop.stop,
+            targetDas: das.length, before: stopClickState(das), plainNumber: plainNumberContext(stop.stop)
+          };
           safeCdpClick(function () {
             if (label.isConnected) return { el: label, container: ctx.stopBlock };
             var again = findStopLabels(stop.stop);
@@ -1854,13 +1969,24 @@
             return { el: label, container: ctx.stopBlock };
           }, runId, function (res) {
             if (!res.ok) {
+              clickDiag.result = res.covered ? 'covered' : 'click_failed';
+              clickDiag.detail = res.detail;
+              pushStopClickDiag(clickDiag);
               cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, blocked: !!res.covered, code: 'stop_click_failed' });
               return;
             }
+            clickDiag.afterClick = stopClickState(das);
             waitBag(function () {
               var present = collectExactDaElements(das);
               return !Core.stopNeedsExpand(pending, present);
             }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
+              clickDiag.result = opened ? 'expanded' : 'target_da_not_shown';
+              clickDiag.afterWait = stopClickState(das);
+              if (!opened) {
+                var scroller = bagMainScroller();
+                clickDiag.afterWait.outline = scroller ? diagOutline(scroller, 40) : [];
+              }
+              pushStopClickDiag(clickDiag);
               if (opened) { cb({ ok: true, clicked: true }); return; }
               // Stop click did not render the targets; undo any navigation it caused.
               historyBackTo(ctx.stopHref, runId, function (back) {
@@ -1874,7 +2000,7 @@
                 });
               });
             });
-          });
+          }, clickDiag);
         });
       },
 
@@ -2048,6 +2174,7 @@
       routeResults: bagRun.routeResults || [],
       log: bagRun.log || [],
       routeDiagnostics: bagRun.routeDiagnostics || [],
+      stopClickDiagnostics: bagRun.stopClickDiagnostics || [],
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText

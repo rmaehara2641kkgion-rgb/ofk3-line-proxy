@@ -708,10 +708,27 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
   assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.2'") >= 0, 'v3.2 build label');
-  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.6', 'v3.2 manifest 1.6.6');
+  assert(/BAG_BUILD = 'Bag v3\.2/.test(bag), 'v3.2 build label');
   console.log('ok: v3.2 runner marker wiring');
+})();
+
+// v3.2-diag: Stop click evidence (hit-test relation, marker ancestry, state after click); decision unchanged
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  ["'same-stop-marker'", "'other-stop-marker:'", "'same-stop-block'", "'dialog'", 'centerStack', 'hitAncestors', 'svgRect',
+    'plainNumberContext(stop.stop)', 'clickDiag.afterClick = stopClickState(das)', 'clickDiag.afterWait = stopClickState(das)',
+    "'target_da_not_shown'", 'stopClickDiagnostics: bagRun.stopClickDiagnostics'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'diag has ' + k);
+  });
+  // the hit-test decision itself is unchanged
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'hit-test decision unchanged');
+  assert(/function hitAllowed\(hit, el, container\) \{\n    if \(!hit \|\| inPanel\(hit\)\) return false;\n    if \(hit === el \|\| el\.contains\(hit\)\) return true;\n    if \(container && \(hit === container \|\| container\.contains\(hit\)\)\) return true;/.test(bag),
+    'hitAllowed unchanged');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.2-diag'") >= 0, 'diag build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.6.1', 'manifest 1.6.6.1');
+  console.log('ok: v3.2-diag Stop click diagnostics');
 })();
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
