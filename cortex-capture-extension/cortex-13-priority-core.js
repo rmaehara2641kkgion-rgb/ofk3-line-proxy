@@ -661,6 +661,8 @@
     var routeStops = [];
     var packageSequenceIndex = [];
     var packageSequenceDiagnostics = emptyPackageSequenceDiagnostics();
+    var packageAssistIndex = [];
+    var packageAssistDiagnostics = emptyPackageAssistDiagnostics();
     (results || []).forEach(function (r) {
       if (!r || !r.ok) return;
       routes.push(r);
@@ -672,6 +674,9 @@
       });
       (r.packageSequenceIndex || []).forEach(function (row) {
         packageSequenceIndex.push(row);
+      });
+      (r.packageAssistIndex || []).forEach(function (row) {
+        packageAssistIndex.push(row);
       });
       var d = r.packageSequenceDiagnostics;
       if (d) {
@@ -685,8 +690,24 @@
           packageSequenceDiagnostics.byRoute[rc] = (packageSequenceDiagnostics.byRoute[rc] || 0) + (d.byRoute[rc] || 0);
         });
       }
+      var ad = r.packageAssistDiagnostics;
+      if (ad) {
+        packageAssistDiagnostics.trDetailsCaptured = Math.max(
+          packageAssistDiagnostics.trDetailsCaptured || 0,
+          ad.trDetailsCaptured || 0
+        );
+        packageAssistDiagnostics.trDetailsMissing += ad.trDetailsMissing || 0;
+        packageAssistDiagnostics.assistMatched += ad.assistMatched || 0;
+        packageAssistDiagnostics.assistUnmatched += ad.assistUnmatched || 0;
+        packageAssistDiagnostics.skippedMissingTrackingId += ad.skippedMissingTrackingId || 0;
+        packageAssistDiagnostics.skippedMissingReferenceId += ad.skippedMissingReferenceId || 0;
+        Object.keys(ad.byRoute || {}).forEach(function (rc) {
+          packageAssistDiagnostics.byRoute[rc] = (packageAssistDiagnostics.byRoute[rc] || 0) + (ad.byRoute[rc] || 0);
+        });
+      }
     });
     packageSequenceDiagnostics.indexCount = packageSequenceIndex.length;
+    packageAssistDiagnostics.indexCount = packageAssistIndex.length;
     packages.sort(function (a, b) {
       if (a.routeCode !== b.routeCode) {
         return String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
@@ -702,6 +723,8 @@
       packageSequenceIndex: packageSequenceIndex,
       packageSequenceDiagnostics: packageSequenceDiagnostics,
       packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length,
+      packageAssistIndex: packageAssistIndex,
+      packageAssistDiagnostics: packageAssistDiagnostics,
       routeCount: routes.length,
       stopCount: Object.keys(stopKeys).length,
       packageCount: packages.length,
@@ -749,14 +772,170 @@
     return lines.join('\n');
   }
 
+  // Bag / Driver Aid enrichment (optional). Exact JOIN only: referenceId === trId.
+  // Color codes confirmed from Cortex frontend _I map. JP labels only where confirmed.
+  var BAG_COLOR_BY_CODE = {
+    BLK: { color: 'Black', ja: '黒' },
+    RED: { color: 'Red', ja: '赤' },
+    NVY: { color: 'Navy', ja: 'Navy' },
+    YLO: { color: 'Yellow', ja: '黄色' },
+    GRY: { color: 'Gray', ja: 'Gray' },
+    WHT: { color: 'White', ja: 'White' },
+    BRO: { color: 'Brown', ja: 'Brown' },
+    ORG: { color: 'Orange', ja: 'Orange' },
+    PRP: { color: 'Purple', ja: '紫' },
+    GRN: { color: 'Green', ja: 'Green' },
+    PNK: { color: 'Pink', ja: 'Pink' }
+  };
+
+  function emptyPackageAssistDiagnostics() {
+    return {
+      trDetailsCaptured: 0,
+      trDetailsMissing: 0,
+      assistMatched: 0,
+      assistUnmatched: 0,
+      skippedMissingTrackingId: 0,
+      skippedMissingReferenceId: 0,
+      indexCount: 0,
+      byRoute: {}
+    };
+  }
+
+  function parseBagName(bagName) {
+    var raw = bagName == null ? '' : String(bagName).trim();
+    var out = {
+      bagName: raw || null,
+      bagColorCode: null,
+      bagColor: null,
+      bagNumber: null,
+      bagDisplay: null
+    };
+    if (!raw) return out;
+    // Cortex frontend c5e("bag", bagName): split("-"), last segment color code,
+    // bag number = previous segment (or prefix before "_" in last segment).
+    var parts = raw.split('-');
+    if (parts.length <= 2) return out;
+    var last = parts[parts.length - 1] || '';
+    var bagNumber = parts[parts.length - 2] || '';
+    if (last.indexOf('_') >= 0) bagNumber = last.split('_')[0] || bagNumber;
+    if (!last || last.length < 3) return out;
+    var code = last.slice(-3).toUpperCase();
+    if (!/^[A-Z]{3}$/.test(code)) return out;
+    out.bagNumber = bagNumber ? String(bagNumber) : null;
+    var mapped = BAG_COLOR_BY_CODE[code];
+    if (!mapped) return out; // unknown code: keep raw + bagNumber, do not invent color
+    out.bagColorCode = code;
+    out.bagColor = mapped.color;
+    out.bagDisplay = (mapped.ja || mapped.color) + (out.bagNumber ? (' ' + out.bagNumber) : '');
+    return out;
+  }
+
+  function parseTrDetailsBody(body) {
+    var map = {};
+    var list = body && Array.isArray(body.trDetails) ? body.trDetails : [];
+    list.forEach(function (row) {
+      if (!row) return;
+      var trId = String(row.trId || '').trim();
+      if (!trId) return;
+      var bagName = row.bagName == null || row.bagName === '' ? null : String(row.bagName);
+      var bagScannableId = row.bagScannableId == null || row.bagScannableId === ''
+        ? null
+        : String(row.bagScannableId);
+      map[trId] = {
+        trId: trId,
+        bagName: bagName,
+        bagScannableId: bagScannableId
+      };
+    });
+    return map;
+  }
+
+  function mergeTrDetailsMaps(into, from) {
+    into = into || {};
+    from = from || {};
+    Object.keys(from).forEach(function (trId) {
+      if (!trId || !from[trId]) return;
+      into[trId] = from[trId];
+    });
+    return into;
+  }
+
+  function extractPackageAssistIndex(details, trDetailsByTrId) {
+    var diagnostics = emptyPackageAssistDiagnostics();
+    trDetailsByTrId = trDetailsByTrId || {};
+    diagnostics.trDetailsCaptured = Object.keys(trDetailsByTrId).length;
+    if (!details || !details.rmsRouteDetails || !Array.isArray(details.rmsRouteDetails.stops)) {
+      return {
+        ok: false,
+        routeCode: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeCode : '',
+        routeId: details && details.rmsRouteDetails ? details.rmsRouteDetails.routeId : '',
+        index: [],
+        diagnostics: diagnostics
+      };
+    }
+    var rd = details.rmsRouteDetails;
+    var routeCode = String(rd.routeCode || '');
+    var index = [];
+    rd.stops.forEach(function (stop) {
+      if (!stop) return;
+      var tasks = Array.isArray(stop.tasks) ? stop.tasks : [];
+      tasks.forEach(function (task) {
+        if (!task || task.taskType !== 'DROP_OFF') return;
+        var tid = trackingIdOf(task);
+        if (!tid) {
+          diagnostics.skippedMissingTrackingId += 1;
+          return;
+        }
+        var referenceId = String(task.referenceId || '').trim();
+        if (!referenceId) {
+          diagnostics.skippedMissingReferenceId += 1;
+        }
+        var driverAid = task.driverAssistText == null || task.driverAssistText === ''
+          ? null
+          : String(task.driverAssistText);
+        var tr = referenceId ? trDetailsByTrId[referenceId] : null;
+        var bagName = tr && tr.bagName ? String(tr.bagName) : null;
+        var bagScannableId = tr && tr.bagScannableId ? String(tr.bagScannableId) : null;
+        var parsed = parseBagName(bagName);
+        if (referenceId && tr) diagnostics.assistMatched += 1;
+        else if (referenceId) {
+          diagnostics.assistUnmatched += 1;
+          diagnostics.trDetailsMissing += 1;
+        }
+        index.push({
+          routeCode: routeCode,
+          trackingId: tid,
+          referenceId: referenceId || null,
+          driverAid: driverAid,
+          bagName: bagName,
+          bagScannableId: bagScannableId,
+          bagColorCode: parsed.bagColorCode,
+          bagColor: parsed.bagColor,
+          bagNumber: parsed.bagNumber,
+          bagDisplay: parsed.bagDisplay
+        });
+      });
+    });
+    diagnostics.indexCount = index.length;
+    if (routeCode) diagnostics.byRoute[routeCode] = index.length;
+    return {
+      ok: true,
+      routeCode: routeCode,
+      routeId: rd.routeId || '',
+      index: index,
+      diagnostics: diagnostics
+    };
+  }
+
   function createCaptureStore() {
-    return { summaries: null, detailsByRouteId: {}, failures: [] };
+    return { summaries: null, detailsByRouteId: {}, trDetailsByTrId: {}, failures: [] };
   }
 
   function isCortexApiCaptureUrl(url) {
     var s = String(url || '');
     return /\/operations\/execution\/api\/route-summaries(?:[/?#]|$)/.test(s) ||
-      /\/operations\/execution\/api\/route-details\//.test(s);
+      /\/operations\/execution\/api\/route-details\//.test(s) ||
+      /\/operations\/execution\/api\/tasks\/trDetails(?:[/?#]|$)/.test(s);
   }
 
   function routeIdFromDetailsUrl(url) {
@@ -807,6 +986,13 @@
       }
       return store;
     }
+    if (/\/tasks\/trDetails(?:[/?#]|$)/.test(url)) {
+      if (!store.trDetailsByTrId) store.trDetailsByTrId = {};
+      if (status >= 200 && status < 300 && body && Array.isArray(body.trDetails)) {
+        mergeTrDetailsMaps(store.trDetailsByTrId, parseTrDetailsBody(body));
+      }
+      return store;
+    }
     var routeId = routeIdFromDetailsUrl(url);
     if (!routeId && body && body.rmsRouteDetails && body.rmsRouteDetails.routeId) {
       routeId = String(body.rmsRouteDetails.routeId);
@@ -838,6 +1024,10 @@
     Object.keys(store.detailsByRouteId).forEach(function (id) {
       details.push(store.detailsByRouteId[id]);
     });
+    var trDetails = [];
+    Object.keys(store.trDetailsByTrId || {}).forEach(function (trId) {
+      trDetails.push(store.trDetailsByTrId[trId]);
+    });
     var summaries = store.summaries || null;
     var total = summaries && Array.isArray(summaries.rmsRouteSummaries)
       ? summaries.rmsRouteSummaries.length
@@ -848,6 +1038,7 @@
       captureMode: 'spa-intercept',
       summaries: summaries,
       details: details,
+      trDetails: trDetails,
       failures: (store.failures || []).slice(),
       totalRouteCount: total,
       selectedRouteCount: eleven.ok ? eleven.routes.length : details.length
@@ -1207,6 +1398,8 @@
       packageSequenceIndex: [],
       packageSequenceDiagnostics: emptyPackageSequenceDiagnostics(),
       packageSequenceRouteCount: 0,
+      packageAssistIndex: [],
+      packageAssistDiagnostics: emptyPackageAssistDiagnostics(),
       failures: [],
       routeCount: 0,
       stopCount: 0,
@@ -1248,6 +1441,14 @@
       });
     }
 
+    var trDetailsByTrId = {};
+    if (bundle.trDetailsByTrId && typeof bundle.trDetailsByTrId === 'object') {
+      mergeTrDetailsMaps(trDetailsByTrId, bundle.trDetailsByTrId);
+    }
+    if (Array.isArray(bundle.trDetails)) {
+      mergeTrDetailsMaps(trDetailsByTrId, parseTrDetailsBody({ trDetails: bundle.trDetails }));
+    }
+
     detailsList.forEach(function (d, idx) {
       var extracted = extractFromRouteDetails(d);
       if (!extracted.ok) {
@@ -1264,6 +1465,9 @@
       var pkgIndex = extractPackageSequenceIndex(d);
       extracted.packageSequenceIndex = pkgIndex.index || [];
       extracted.packageSequenceDiagnostics = pkgIndex.diagnostics || emptyPackageSequenceDiagnostics();
+      var assist = extractPackageAssistIndex(d, trDetailsByTrId);
+      extracted.packageAssistIndex = assist.index || [];
+      extracted.packageAssistDiagnostics = assist.diagnostics || emptyPackageAssistDiagnostics();
       results.push(extracted);
     });
 
@@ -1362,6 +1566,10 @@
     extractFromRouteDetails: extractFromRouteDetails,
     extractRouteSequence: extractRouteSequence,
     extractPackageSequenceIndex: extractPackageSequenceIndex,
+    parseBagName: parseBagName,
+    parseTrDetailsBody: parseTrDetailsBody,
+    extractPackageAssistIndex: extractPackageAssistIndex,
+    emptyPackageAssistDiagnostics: emptyPackageAssistDiagnostics,
     extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
     ingestBundle: ingestBundle

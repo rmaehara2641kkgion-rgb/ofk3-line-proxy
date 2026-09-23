@@ -1,7 +1,10 @@
 /**
  * OFK3 本日の時間指定（13:00まで）掲示ボード.
  * A: 全体掲示表（Driver/Route/Area/配達数/目的地/13:00まで/対象巡回順）
- * B: Route別 個人詳細票（巡回順・DA番号・時間指定・住所）
+ * B: Route別 個人詳細票（巡回順・DA番号・Driver Aid・バッグ・時間指定・住所）
+ *    Driver Aid = packageAssistIndex.driverAid（route-details driverAssistText）
+ *    バッグ = packageAssistIndex.bagDisplay（trDetails optional; なければ "-"）
+ * 全体掲示表には DA / Driver Aid / バッグ / 住所を出さない。
  * 既存カード印刷も維持（副次表示）。
  *
  * 独立描画のみ。body監視・setIntervalなし。テンプレートリテラル不使用。
@@ -117,6 +120,37 @@
     return [];
   }
 
+  // Optional package assist (Driver Aid from route-details; bag from native trDetails).
+  function getPackageAssistIndex() {
+    try {
+      if (typeof window !== 'undefined' && window.OFK3Cortex13 &&
+          typeof window.OFK3Cortex13.getPackageAssistIndex === 'function') {
+        var list = window.OFK3Cortex13.getPackageAssistIndex();
+        return Array.isArray(list) ? list : [];
+      }
+    } catch (e) {}
+    return [];
+  }
+
+  function buildAssistMap(indexList) {
+    var byKey = {};
+    (indexList || []).forEach(function (row) {
+      if (!row) return;
+      var rc = String(row.routeCode || '');
+      var tid = String(row.trackingId || '').trim();
+      if (!rc || !tid) return;
+      byKey[joinKey(rc, tid)] = {
+        driverAid: row.driverAid == null || row.driverAid === '' ? null : String(row.driverAid),
+        bagDisplay: row.bagDisplay == null || row.bagDisplay === '' ? null : String(row.bagDisplay)
+      };
+    });
+    return byKey;
+  }
+
+  function assistCell(value) {
+    return value == null || value === '' ? '-' : String(value);
+  }
+
   // Existing Cortex 13:00 priority packages (exact 13:00 windowEnd + plannedEnd <= 13:00).
   function getPriorityPackages() {
     try {
@@ -212,6 +246,7 @@
     var detail = getCycleDetailData();
     var areas = getRouteAreasMap();
     var seqMaps = buildSequenceMaps(getPackageSequenceIndex());
+    var assistByKey = buildAssistMap(getPackageAssistIndex());
     var priorityKeys = buildPriorityKeySet(getPriorityPackages());
     var hasAssign = routes.length > 0;
     var hasCycle = Object.keys(detail).length > 0;
@@ -236,6 +271,7 @@
           if (!isUntil1300(parsed)) return;
         }
         var resolved = resolvePackageSequence(rc, tid, seqMaps);
+        var assist = assistByKey[joinKey(rc, tid)] || null;
         var windowLabel = '';
         if (parsed) windowLabel = parsed.start + '-' + parsed.end;
         packages.push({
@@ -245,7 +281,9 @@
           sequenceStatus: resolved.status,
           sequenceNumber: resolved.sequenceNumber,
           sequenceLabel: resolved.label,
-          windowLabel: windowLabel
+          windowLabel: windowLabel,
+          driverAid: assist ? assist.driverAid : null,
+          bagDisplay: assist ? assist.bagDisplay : null
         });
       });
       if (!packages.length) return;
@@ -493,6 +531,8 @@
     html += '<thead><tr style="background:#f1f5f9;border-bottom:2px solid #111;">';
     html += '<th style="text-align:left;padding:8px 6px;width:72px;">巡回順</th>';
     html += '<th style="text-align:left;padding:8px 6px;">DA番号</th>';
+    html += '<th style="text-align:left;padding:8px 6px;width:88px;">Driver Aid</th>';
+    html += '<th style="text-align:left;padding:8px 6px;width:100px;">バッグ</th>';
     html += '<th style="text-align:left;padding:8px 6px;width:110px;">時間指定</th>';
     html += '<th style="text-align:left;padding:8px 6px;">住所</th>';
     html += '</tr></thead><tbody>';
@@ -501,6 +541,8 @@
       html += '<tr style="border-bottom:1px solid #e2e8f0;' + bg + 'page-break-inside:avoid;break-inside:avoid;">';
       html += '<td style="padding:7px 6px;font-family:monospace;font-weight:700;">' + esc(p.sequenceLabel) + '</td>';
       html += '<td style="padding:7px 6px;font-family:monospace;font-size:12px;">' + esc(p.trackingId) + '</td>';
+      html += '<td style="padding:7px 6px;font-family:monospace;font-weight:700;">' + esc(assistCell(p.driverAid)) + '</td>';
+      html += '<td style="padding:7px 6px;">' + esc(assistCell(p.bagDisplay)) + '</td>';
       html += '<td style="padding:7px 6px;">' + esc(p.timeWindow || p.windowLabel) + '</td>';
       html += '<td style="padding:7px 6px;font-size:12px;">' + esc(p.address || '-') + '</td>';
       html += '</tr>';
@@ -754,7 +796,10 @@
     buildDetailHtml: buildDetailHtml,
     resolvePackageSequence: resolvePackageSequence,
     buildSequenceMaps: buildSequenceMaps,
+    buildAssistMap: buildAssistMap,
+    assistCell: assistCell,
     getPriorityPackages: getPriorityPackages,
+    getPackageAssistIndex: getPackageAssistIndex,
     parseWindow: parseWindow,
     isUntil1300: isUntil1300,
     END_LIMIT_MIN: END_LIMIT_MIN,

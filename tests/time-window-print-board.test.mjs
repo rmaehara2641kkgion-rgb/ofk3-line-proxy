@@ -44,8 +44,12 @@ assert(cortexUiSrc.indexOf('getPackages:') >= 0, 'OFK3Cortex13.getPackages expor
 assert(html.indexOf('OFK3TimeWindowBoard.onDashboardRender') >= 0, 'dashboard calls onDashboardRender');
 assert(serverSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'server injects script');
 assert(injectSrc.indexOf('/ofk3-time-window-board.js') >= 0, 'inject-tenko-audit injects script');
-assert(serverSrc.indexOf('?v=20260923-print') >= 0, 'cache bust print layout');
-assert(injectSrc.indexOf('?v=20260923-print') >= 0, 'inject cache bust print layout');
+assert(serverSrc.indexOf('?v=20260923-driveraid') >= 0, 'cache bust driver aid');
+assert(injectSrc.indexOf('?v=20260923-driveraid') >= 0, 'inject cache bust driver aid');
+assert(src.indexOf('Driver Aid') >= 0, 'detail sheet has Driver Aid column');
+assert(src.indexOf('getPackageAssistIndex') >= 0, 'reads packageAssistIndex');
+assert(src.indexOf('bagInnerNumber') < 0, 'no bagInnerNumber naming');
+assert(cortexUiSrc.indexOf('getPackageAssistIndex') >= 0, 'OFK3Cortex13.getPackageAssistIndex exported');
 assert(src.indexOf('BULLETIN_ROWS_PER_PAGE') < 0, 'no artificial bulletin row pagination');
 assert(src.indexOf('buildBulletinPrintHeaderHtml') >= 0, 'compact print header');
 assert(html.indexOf('function twExtract()') >= 0, 'twExtract untouched');
@@ -326,6 +330,110 @@ function loadApi(extra) {
   assert(src.indexOf("buildPageHeaderHtml(board, 'カード掲示')") >= 0, 'card print header kept');
   assert(src.indexOf('printCards') >= 0 && src.indexOf('break-after:page') >= 0, 'card print page-break kept');
   console.log('ok: print continuous table / single header / no forced break');
+})();
+
+// F–I: personal detail sheet Driver Aid / bag from packageAssistIndex
+(function () {
+  var ctx = makeContext({
+    assignmentData: [
+      { routeCode: 'DCX40', driverName: 'Aid太郎', totalDeliveries: 40, allDestinations: 30, area: '西区' }
+    ],
+    cycleDetailData: {
+      DCX40: [
+        { trackingId: 'DA0012408732', timeWindow: '05:00-13:00', address: '福岡市Aid' },
+        { trackingId: 'DA0012405022', timeWindow: '05:00-13:00', address: '福岡市Bag' },
+        { trackingId: 'DA-NOASSIST', timeWindow: '05:00-13:00', address: '福岡市なし' }
+      ]
+    },
+    routeAreas: {}
+  });
+  ctx.window.OFK3Cortex13 = {
+    getPackageSequenceIndex: function () {
+      return [
+        { routeCode: 'DCX40', trackingId: 'DA0012408732', sequenceNumber: 16 },
+        { routeCode: 'DCX40', trackingId: 'DA0012405022', sequenceNumber: 17 },
+        { routeCode: 'DCX40', trackingId: 'DA-NOASSIST', sequenceNumber: 18 }
+      ];
+    },
+    getPackages: function () {
+      return [
+        { routeCode: 'DCX40', trackingId: 'DA0012408732' },
+        { routeCode: 'DCX40', trackingId: 'DA0012405022' },
+        { routeCode: 'DCX40', trackingId: 'DA-NOASSIST' }
+      ];
+    },
+    getPackageAssistIndex: function () {
+      return [
+        {
+          routeCode: 'DCX40',
+          trackingId: 'DA0012408732',
+          referenceId: 'tr-aid',
+          driverAid: '649',
+          bagDisplay: null
+        },
+        {
+          routeCode: 'DCX40',
+          trackingId: 'DA0012405022',
+          referenceId: 'tr-bag',
+          driverAid: '652',
+          bagDisplay: '黄色 1956'
+        }
+      ];
+    }
+  };
+  vm.runInContext(src, ctx);
+  var api = ctx.window.OFK3TimeWindowBoard;
+  var board = api.buildBoard();
+  assert(board.routeList.length === 1 && board.routeList[0].until1300Count === 3, 'priority count unchanged with assist');
+  var pkgs = board.routeList[0].packages;
+  var aidOnly = pkgs.find(function (p) { return p.trackingId === 'DA0012408732'; });
+  var withBag = pkgs.find(function (p) { return p.trackingId === 'DA0012405022'; });
+  var none = pkgs.find(function (p) { return p.trackingId === 'DA-NOASSIST'; });
+  assert(aidOnly && aidOnly.driverAid === '649' && aidOnly.bagDisplay == null, 'F: driverAid joined');
+  assert(withBag && withBag.driverAid === '652' && withBag.bagDisplay === '黄色 1956', 'H: bag joined');
+  assert(none && none.driverAid == null && none.bagDisplay == null, 'missing assist → null fields');
+
+  var detail = api.buildDetailHtml(board, 'DCX40');
+  assert(detail.indexOf('Driver Aid') >= 0 && detail.indexOf('バッグ') >= 0, 'detail columns present');
+  assert(detail.indexOf('649') >= 0, 'F: Driver Aid shown');
+  assert(detail.indexOf('黄色 1956') >= 0, 'H: bag display shown');
+  // G: bag missing → "-" (not N/A)
+  assert(detail.indexOf('N/A') < 0, 'G: no N/A label');
+  assert(detail.indexOf('>−<') >= 0 || detail.indexOf('>-</') >= 0 || detail.indexOf('>-</td>') >= 0 ||
+    /DA-NOASSIST[\s\S]{0,200}>-</.test(detail) || detail.indexOf('-</td>') >= 0,
+    'G: dash for missing bag/aid');
+
+  var bulletin = api.buildBulletinTableHtml(board);
+  assert(bulletin.indexOf('649') < 0 && bulletin.indexOf('黄色') < 0 && bulletin.indexOf('DA001240') < 0,
+    'bulletin has no DA/Driver Aid/bag');
+  assert(bulletin.indexOf('Driver Aid') < 0 && bulletin.indexOf('バッグ') < 0, 'bulletin no assist headers');
+
+  // I: old payload — no getPackageAssistIndex
+  var ctx2 = makeContext({
+    assignmentData: [
+      { routeCode: 'DCX40', driverName: '旧', totalDeliveries: 10, allDestinations: 8, area: '西区' }
+    ],
+    cycleDetailData: {
+      DCX40: [{ trackingId: 'DA-OLD', timeWindow: '05:00-13:00', address: '旧住所' }]
+    },
+    routeAreas: {}
+  });
+  ctx2.window.OFK3Cortex13 = {
+    getPackageSequenceIndex: function () {
+      return [{ routeCode: 'DCX40', trackingId: 'DA-OLD', sequenceNumber: 1 }];
+    },
+    getPackages: function () {
+      return [{ routeCode: 'DCX40', trackingId: 'DA-OLD' }];
+    }
+  };
+  vm.runInContext(src, ctx2);
+  var api2 = ctx2.window.OFK3TimeWindowBoard;
+  var board2 = api2.buildBoard();
+  assert(board2.routeList[0].packages[0].driverAid == null, 'I: no assist → null driverAid');
+  var detail2 = api2.buildDetailHtml(board2, 'DCX40');
+  assert(detail2.indexOf('DA-OLD') >= 0 && detail2.indexOf('旧住所') >= 0, 'I: detail still renders');
+  assert(detail2.indexOf('Driver Aid') >= 0, 'I: columns present');
+  console.log('ok: detail Driver Aid / bag / old payload');
 })();
 
 console.log('ok time-window-print-board');

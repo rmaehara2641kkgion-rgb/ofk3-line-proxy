@@ -149,7 +149,7 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, bodyPos) + '  <script src="' + scriptSrc + '"></script>\n' + html.slice(bodyPos);
     }
-    var twBoardScriptSrc = '/ofk3-time-window-board.js?v=20260923-print';
+    var twBoardScriptSrc = '/ofk3-time-window-board.js?v=20260923-driveraid';
     if (html.indexOf('/ofk3-time-window-board.js') < 0) {
       var twBodyPos = html.lastIndexOf('</body>');
       if (twBodyPos < 0) return next(new Error('index.html body closing tag not found'));
@@ -459,6 +459,52 @@ function sanitizeCortexPackageSequenceDiagnostics(d) {
     byRoute: byRoute
   };
 }
+function sanitizeCortexPackageAssistIndexRow(row) {
+  row = row || {};
+  var trackingId = String(row.trackingId || '').trim();
+  var routeCode = String(row.routeCode || '').trim();
+  if (!routeCode || !trackingId) return null;
+  var referenceId = row.referenceId == null || row.referenceId === '' ? null : String(row.referenceId);
+  var driverAid = row.driverAid == null || row.driverAid === '' ? null : String(row.driverAid);
+  var bagName = row.bagName == null || row.bagName === '' ? null : String(row.bagName);
+  var bagScannableId = row.bagScannableId == null || row.bagScannableId === '' ? null : String(row.bagScannableId);
+  var bagColorCode = row.bagColorCode == null || row.bagColorCode === '' ? null : String(row.bagColorCode);
+  var bagColor = row.bagColor == null || row.bagColor === '' ? null : String(row.bagColor);
+  var bagNumber = row.bagNumber == null || row.bagNumber === '' ? null : String(row.bagNumber);
+  var bagDisplay = row.bagDisplay == null || row.bagDisplay === '' ? null : String(row.bagDisplay);
+  return {
+    routeCode: routeCode,
+    trackingId: trackingId,
+    referenceId: referenceId,
+    driverAid: driverAid,
+    bagName: bagName,
+    bagScannableId: bagScannableId,
+    bagColorCode: bagColorCode,
+    bagColor: bagColor,
+    bagNumber: bagNumber,
+    bagDisplay: bagDisplay
+  };
+}
+function sanitizeCortexPackageAssistDiagnostics(d) {
+  d = d || {};
+  var byRoute = {};
+  if (d.byRoute && typeof d.byRoute === 'object') {
+    Object.keys(d.byRoute).forEach(function (rc) {
+      var n = Number(d.byRoute[rc]);
+      if (rc && isFinite(n)) byRoute[String(rc)] = n;
+    });
+  }
+  return {
+    trDetailsCaptured: Number(d.trDetailsCaptured) || 0,
+    trDetailsMissing: Number(d.trDetailsMissing) || 0,
+    assistMatched: Number(d.assistMatched) || 0,
+    assistUnmatched: Number(d.assistUnmatched) || 0,
+    skippedMissingTrackingId: Number(d.skippedMissingTrackingId) || 0,
+    skippedMissingReferenceId: Number(d.skippedMissingReferenceId) || 0,
+    indexCount: Number(d.indexCount) || 0,
+    byRoute: byRoute
+  };
+}
 function summarizeCortexPriority(packages) {
   var stopKeys = {};
   packages.forEach(function (p) { stopKeys[cortexPriorityStopKey(p)] = true; });
@@ -490,6 +536,17 @@ app.post('/cortex-priority/import', function(req, res) {
         (packageSequenceDiagnostics.byRoute[row.routeCode] || 0) + 1;
     });
   }
+  var packageAssistIndex = Array.isArray(body.packageAssistIndex)
+    ? body.packageAssistIndex.map(sanitizeCortexPackageAssistIndexRow).filter(function (r) { return !!r; })
+    : [];
+  var packageAssistDiagnostics = sanitizeCortexPackageAssistDiagnostics(body.packageAssistDiagnostics);
+  packageAssistDiagnostics.indexCount = packageAssistIndex.length;
+  if (!Object.keys(packageAssistDiagnostics.byRoute).length && packageAssistIndex.length) {
+    packageAssistIndex.forEach(function (row) {
+      packageAssistDiagnostics.byRoute[row.routeCode] =
+        (packageAssistDiagnostics.byRoute[row.routeCode] || 0) + 1;
+    });
+  }
   var counts = summarizeCortexPriority(packages);
   cortexPriorityStore[localDate] = {
     localDate: localDate,
@@ -500,18 +557,22 @@ app.post('/cortex-priority/import', function(req, res) {
     packageSequenceIndex: packageSequenceIndex,
     packageSequenceDiagnostics: packageSequenceDiagnostics,
     packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length,
+    packageAssistIndex: packageAssistIndex,
+    packageAssistDiagnostics: packageAssistDiagnostics,
     stopCount: counts.stopCount,
     packageCount: counts.packageCount
   };
   log('cortex-priority import ' + localDate + ': ' + counts.stopCount + ' Stops / ' + counts.packageCount +
-    ' Packages / sequence ' + routeStops.length + ' / pkgIndex ' + packageSequenceIndex.length);
+    ' Packages / sequence ' + routeStops.length + ' / pkgIndex ' + packageSequenceIndex.length +
+    ' / assist ' + packageAssistIndex.length);
   res.json({
     status: 'ok',
     localDate: localDate,
     stopCount: counts.stopCount,
     packageCount: counts.packageCount,
     packageSequenceIndexCount: packageSequenceIndex.length,
-    packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length
+    packageSequenceRouteCount: Object.keys(packageSequenceDiagnostics.byRoute).length,
+    packageAssistIndexCount: packageAssistIndex.length
   });
 });
 app.get('/cortex-priority', function(req, res) {
@@ -533,6 +594,8 @@ app.get('/cortex-priority', function(req, res) {
       packageSequenceIndex: [],
       packageSequenceDiagnostics: sanitizeCortexPackageSequenceDiagnostics(null),
       packageSequenceRouteCount: 0,
+      packageAssistIndex: [],
+      packageAssistDiagnostics: sanitizeCortexPackageAssistDiagnostics(null),
       stopCount: 0,
       packageCount: 0
     });
@@ -545,6 +608,11 @@ app.get('/cortex-priority', function(req, res) {
   }
   if (out.packageSequenceRouteCount == null) {
     out.packageSequenceRouteCount = Object.keys((out.packageSequenceDiagnostics && out.packageSequenceDiagnostics.byRoute) || {}).length;
+  }
+  if (!Array.isArray(out.packageAssistIndex)) out.packageAssistIndex = [];
+  if (!out.packageAssistDiagnostics) {
+    out.packageAssistDiagnostics = sanitizeCortexPackageAssistDiagnostics(null);
+    out.packageAssistDiagnostics.indexCount = out.packageAssistIndex.length;
   }
   res.json(out);
 });
