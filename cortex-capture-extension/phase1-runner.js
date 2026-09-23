@@ -1178,7 +1178,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.1';
+  var BAG_BUILD = 'Bag v3.2';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1300,21 +1300,47 @@
   // Stop label = innermost element (text-node parent or up to 2 ancestors, short text only)
   // whose whole text is an exact label. Ancestors cover labels split over child elements,
   // e.g. <span>Stop</span><span>16</span> or <span>#</span><span>16</span>.
+  // Real Cortex Stop marker: text inside <svg class="stop-K"> whose whole text is only digits.
+  // Returns the element holding the digits (SVG <text>/<tspan>) or null.
+  function stopMarkerLabelOf(node) {
+    var own = node.parentElement;
+    if (!own || !own.closest) return null;
+    var svg = own.closest('svg');
+    if (!svg || inPanel(svg)) return null;
+    if (!Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))) return null;
+    if (Core.parseStopMarkerText(svg.textContent) == null) return null;
+    if (Core.parseStopMarkerText(own.textContent) == null) return null;
+    return own;
+  }
+
+  // Returns labels with a parallel .kinds array ('text' | Core.STOP_MARKER_KIND).
   function collectStopLabelElements(root) {
     var els = [];
+    els.kinds = [];
     var base = root || document.body || document.documentElement;
     if (!base) return els;
     var walker = document.createTreeWalker(base, 4 /* NodeFilter.SHOW_TEXT */, null);
     var node;
     while ((node = walker.nextNode())) {
       if (!String(node.nodeValue || '').trim()) continue;
+      var marker = stopMarkerLabelOf(node);
+      if (marker) {
+        if ((!root || root.contains(marker)) && els.indexOf(marker) < 0) {
+          els.push(marker);
+          els.kinds.push(Core.STOP_MARKER_KIND);
+        }
+        continue;
+      }
       var el = node.parentElement;
       for (var d = 0; el && d < 3; d += 1, el = el.parentElement) {
         if (inPanel(el) || (root && !root.contains(el))) break;
         var t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
         if (t.length > 20) break;
         if (Core.parseStopLabel(t) != null) {
-          if (els.indexOf(el) < 0) els.push(el);
+          if (els.indexOf(el) < 0) {
+            els.push(el);
+            els.kinds.push('text');
+          }
           break;
         }
       }
@@ -1323,7 +1349,8 @@
   }
 
   function stopLabelsFor(els, seq) {
-    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
+    var kinds = els.kinds || [];
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i, kind: kinds[i] }; });
     return Core.matchStopLabelEntries(entries, seq).map(function (i) { return els[i]; });
   }
 
@@ -1425,7 +1452,11 @@
       iframes: document.querySelectorAll('iframe').length,
       shadowHosts: shadowHosts,
       elementCount: all.length,
-      stopLabelCandidates: { count: labels.length, samples: labels.slice(0, 10).map(diagEl) },
+      stopLabelCandidates: {
+        count: labels.length,
+        svgStopMarkers: (labels.kinds || []).filter(function (k) { return k === Core.STOP_MARKER_KIND; }).length,
+        samples: labels.slice(0, 10).map(function (el) { return diagEl(el) + ' < ' + diagEl(el.parentElement); })
+      },
       stopWordTexts: stopWords.slice(0, 10).map(diagEl),
       targetStopProbes: probes,
       packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,

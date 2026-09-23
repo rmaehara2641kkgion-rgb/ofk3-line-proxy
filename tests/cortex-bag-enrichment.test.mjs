@@ -663,6 +663,57 @@ v31Suite('phase1-core');
   console.log('ok: v3.1 runner Stop detection + diagnostics');
 })();
 
+// ---------------- v3.2: real Cortex Stop markers <svg class="stop-K"><text>N</text></svg> ----------------
+function v32Suite(C, label) {
+  const K = C.STOP_MARKER_KIND;
+  // 1. text labels unchanged
+  assert(C.parseStopLabel('#16') === 16 && C.parseStopLabel('Stop 16') === 16 && C.parseStopLabel('ストップ 16') === 16,
+    label + ' v3.2-1: text labels');
+  // 2. split label (joined text of the ancestor) unchanged
+  assert(C.parseStopLabel('Stop16') === 16 && C.parseStopLabel('# 16') === 16, label + ' v3.2-2: split label text');
+  // 3. svg stop marker: class token stop-<digits>, visible digits = Stop number (class suffix ignored)
+  assert(C.isStopMarkerSvgClass('stop-2') && C.isStopMarkerSvgClass('marker stop-15 active'), label + ' v3.2-3: marker class');
+  assert(!C.isStopMarkerSvgClass('stop-icon') && !C.isStopMarkerSvgClass('nonstop-2') && !C.isStopMarkerSvgClass('stop-2a') &&
+    !C.isStopMarkerSvgClass('stops-2') && !C.isStopMarkerSvgClass(''), label + ' v3.2-3: no loose class');
+  assert(C.parseStopMarkerText('3') === 3 && C.parseStopMarkerText(' 16 ') === 16, label + ' v3.2-3: marker digits');
+  assert(C.parseStopMarkerText('3a') === null && C.parseStopMarkerText('#3') === null && C.parseStopMarkerText('') === null,
+    label + ' v3.2-3: marker digits only');
+  // diagnostics 2026-09-24: stop-2 shows 3, stop-3 shows 4, stop-5 shows 6
+  const markers = [{ text: '3', key: 's2', kind: K }, { text: '4', key: 's3', kind: K }, { text: '6', key: 's5', kind: K }];
+  assert(C.matchStopLabelEntries(markers, 3).join() === 's2' && C.matchStopLabelEntries(markers, 4).join() === 's3' &&
+    C.matchStopLabelEntries(markers, 6).join() === 's5', label + ' v3.2-3: visible number, not class suffix');
+  assert(C.matchStopLabelEntries(markers, 2).length === 0 && C.matchStopLabelEntries(markers, 5).length === 0,
+    label + ' v3.2-3: class suffix never used');
+  // 4. plain numbers (span/p/div, Driver Aid, counts, Route numbers) are not Stop labels
+  const plain = [{ text: '3', key: 'span3' }, { text: '565', key: 'aid' }, { text: '28', key: 'route' }, { text: '12', key: 'count' }];
+  assert(C.matchStopLabelEntries(plain, 3).length === 0 && C.matchStopLabelEntries(plain, 565).length === 0 &&
+    C.matchStopLabelEntries(plain, 28).length === 0, label + ' v3.2-4: plain numbers ignored');
+  assert(C.matchStopLabelEntries(plain.concat(markers), 3).join() === 's2', label + ' v3.2-4: only the svg marker for 3');
+  // 5. exact number: 1 vs 11
+  const oneEleven = [{ text: '1', key: 'm1', kind: K }, { text: '11', key: 'm11', kind: K }, { text: '#11', key: 't11' }];
+  assert(C.matchStopLabelEntries(oneEleven, 1).join() === 'm1', label + ' v3.2-5: 1 != 11');
+  // priority: a text label wins over an svg marker for the same number
+  assert(C.matchStopLabelEntries(oneEleven, 11).join() === 't11', label + ' v3.2: text label has priority');
+  // two markers with the same number stay ambiguous (no guess)
+  assert(C.matchStopLabelEntries([{ text: '7', key: 'a', kind: K }, { text: '7', key: 'b', kind: K }], 7).length === 2,
+    label + ' v3.2: duplicate markers reported, not picked');
+  console.log('ok: v3.2 svg Stop markers (' + label + ')');
+}
+v32Suite(RootCore, 'root core');
+v32Suite(PhaseCore, 'phase1-core');
+
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
+    'v3.2 marker requires an enclosing svg with a stop-K class token');
+  assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.2'") >= 0, 'v3.2 build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.6', 'v3.2 manifest 1.6.6');
+  console.log('ok: v3.2 runner marker wiring');
+})();
+
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');

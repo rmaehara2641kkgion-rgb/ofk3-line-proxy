@@ -1152,16 +1152,40 @@
     return null;
   }
 
-  // entries: [{ text, key }] -> keys whose text is exactly a label for sequenceNumber.
+  // Real Cortex Route detail (diagnostics 2026-09-24): Stop markers are
+  // <svg class="stop-K"><text>N</text></svg>. K is an index (stop-2 shows 3), so only the
+  // visible text N is the Stop number. Plain span/p/div numbers are never Stop labels.
+  var STOP_MARKER_KIND = 'svg-stop-marker';
+
+  function isStopMarkerSvgClass(className) {
+    return String(className == null ? '' : className).split(/\s+/).some(function (c) {
+      return /^stop-\d+$/.test(c);
+    });
+  }
+
+  function parseStopMarkerText(text) {
+    var t = String(text == null ? '' : text).replace(/\s+/g, '').trim();
+    return /^\d{1,4}$/.test(t) ? parseInt(t, 10) : null;
+  }
+
+  function stopNumberOfEntry(e) {
+    if (!e) return null;
+    return e.kind === STOP_MARKER_KIND ? parseStopMarkerText(e.text) : parseStopLabel(e.text);
+  }
+
+  // entries: [{ text, key, kind? }] -> keys that are exactly a label for sequenceNumber.
+  // Text labels ("#16", "Stop 16") win; svg Stop markers are used only when no text label matches.
   function matchStopLabelEntries(entries, sequenceNumber) {
     var want = Number(sequenceNumber);
-    var out = [];
-    if (!isFinite(want)) return out;
+    var textKeys = [];
+    var markerKeys = [];
+    if (!isFinite(want)) return textKeys;
     (entries || []).forEach(function (e) {
-      if (!e) return;
-      if (parseStopLabel(e.text) === want && out.indexOf(e.key) < 0) out.push(e.key);
+      if (!e || stopNumberOfEntry(e) !== want) return;
+      var bucket = e.kind === STOP_MARKER_KIND ? markerKeys : textKeys;
+      if (bucket.indexOf(e.key) < 0) bucket.push(e.key);
     });
-    return out;
+    return textKeys.length ? textKeys : markerKeys;
   }
 
   // Package-number-like token (e.g. DA0012405022); used only to bound a package card.
@@ -2202,6 +2226,9 @@
     restoreNormalCapture: restoreNormalCapture,
     parseStopLabel: parseStopLabel,
     matchStopLabelEntries: matchStopLabelEntries,
+    STOP_MARKER_KIND: STOP_MARKER_KIND,
+    isStopMarkerSvgClass: isStopMarkerSvgClass,
+    parseStopMarkerText: parseStopMarkerText,
     isPackageNumberText: isPackageNumberText,
     groupBagTargetsByStop: groupBagTargetsByStop,
     stopNeedsExpand: stopNeedsExpand,
