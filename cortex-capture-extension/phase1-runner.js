@@ -405,6 +405,7 @@
       '<div style="margin-top:4px;word-break:break-word">診断: <span id="ofk3-poc-error">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word">DOM Route: <span id="ofk3-poc-domroutes">-</span></div>' +
       '<div style="margin-top:4px;word-break:break-word;max-height:130px;overflow:auto">Wheel履歴: <span id="ofk3-poc-wheeltrace">-</span></div></details>' +
+      '<div style="margin-top:6px;word-break:break-word">Bag: <span id="ofk3-bag-status">未実行</span></div>' +
       '<div id="ofk3-poc-actions" style="margin-top:8px;"></div>' +
       '</div>';
     var row = box.querySelector('#ofk3-poc-actions');
@@ -431,7 +432,11 @@
           a.click();
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
-      row.appendChild(mk('停止', function () { stopPoc(); }));
+      row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('停止', function () {
+        if (bagActive()) stopBagPhase();
+        else stopPoc();
+      }));
     }
     document.documentElement.appendChild(box);
     var toggle = box.querySelector('#ofk3-poc-toggle');
@@ -1132,6 +1137,7 @@
     setPanelCollapsed(false);
     if (sessionBusy) return;
     if (pocRun && pocRun.active && !pocRun.ended) return;
+    if (bagActive()) return;
     stopRequested = false;
     sessionBusy = true;
     clearTimers();
@@ -1155,6 +1161,440 @@
     }, 250);
   }
 
+  // ---- Bag enrichment phase ----
+  // Separate from the Route tour above: started only by the「Bag取得」button after the
+  // normal capture is complete. Clicks the 13:00 package number (native Cortex UI) so
+  // Cortex itself POSTs /tasks/trDetails; the existing fetch/XHR hook stores the Response.
+  // Normal results are frozen before and restored after; nothing is added to store.failures.
+  var BAG_PACKAGE_TIMEOUT_MS = 4500;
+  var BAG_ROUTE_BUDGET_MS = 90000;
+  var BAG_HISTORY_TIMEOUT_MS = 4000;
+  var BAG_SCROLL_MAX_STEPS = 100;
+  var BAG_MAX_SCROLLERS = 3;
+  var bagRun = null;
+  var bagTimer = 0;
+  var bagSnapshot = null;
+
+  function bagActive() {
+    return !!(bagRun && !bagRun.ended);
+  }
+
+  function bagIsCurrent(runId) {
+    return !!(bagRun && bagRun.id === runId && !bagRun.ended && !bagRun.stopRequested);
+  }
+
+  function bagLater(fn, ms) {
+    bagTimer = setTimeout(function () {
+      bagTimer = 0;
+      fn();
+    }, ms);
+  }
+
+  function setBagStatus(text) {
+    setText('ofk3-bag-status', text);
+  }
+
+  function afterBagLayout(fn) {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () { requestAnimationFrame(fn); });
+    } else {
+      bagLater(fn, 50);
+    }
+  }
+
+  // Exact textContent.trim() === scannableId, innermost element per text node, panel excluded.
+  function collectExactDaElements(scannableIds) {
+    var entries = [];
+    var els = [];
+    var root = document.body || document.documentElement;
+    if (!root || !scannableIds.length) return {};
+    var want = {};
+    scannableIds.forEach(function (id) { want[id] = true; });
+    var walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var value = String(node.nodeValue || '').trim();
+      if (!value || !want[value]) continue;
+      var el = node.parentElement;
+      if (!el || inPanel(el)) continue;
+      if (els.indexOf(el) >= 0) continue;
+      els.push(el);
+      entries.push({ text: el.textContent, key: els.length - 1 });
+    }
+    var byText = Core.indexExactDomTextMatches(entries, scannableIds);
+    var out = {};
+    Object.keys(byText).forEach(function (text) {
+      out[text] = byText[text].map(function (idx) { return els[idx]; });
+    });
+    return out;
+  }
+
+  function bagScrollers(els) {
+    var out = [];
+    function add(el) {
+      if (!el || inPanel(el) || out.indexOf(el) >= 0) return;
+      if ((el.scrollHeight || 0) - (el.clientHeight || 0) < 40) return;
+      out.push(el);
+    }
+    (els || []).forEach(function (el) {
+      for (var cur = el && el.parentElement, depth = 0; cur && depth < 16; depth += 1, cur = cur.parentElement) {
+        var overflowY = '';
+        try { overflowY = global.getComputedStyle(cur).overflowY; } catch (e1) {}
+        if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') add(cur);
+      }
+    });
+    var nodes = document.querySelectorAll('div, section, main, ul, tbody, [role="list"], [role="grid"], [role="table"]');
+    var generic = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var overflow = '';
+      try { overflow = global.getComputedStyle(nodes[i]).overflowY; } catch (e2) {}
+      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') generic.push(nodes[i]);
+    }
+    generic.sort(function (a, b) {
+      return ((b.scrollHeight || 0) - (b.clientHeight || 0)) - ((a.scrollHeight || 0) - (a.clientHeight || 0));
+    });
+    generic.forEach(add);
+    add(document.scrollingElement || document.documentElement);
+    return out.slice(0, BAG_MAX_SCROLLERS);
+  }
+
+  function hitTestAllows(el, point) {
+    var hit = null;
+    try { hit = document.elementFromPoint(point.x, point.y); } catch (e1) {}
+    if (!hit || inPanel(hit)) return false;
+    if (hit === el || el.contains(hit)) return true;
+    return hit !== document.body && hit !== document.documentElement && hit.contains(el);
+  }
+
+  function waitBag(check, timeoutMs, runId, done) {
+    var started = Date.now();
+    function poll() {
+      if (!bagIsCurrent(runId)) return;
+      if (check()) { done(true); return; }
+      if (Date.now() - started >= timeoutMs) { done(false); return; }
+      bagLater(poll, 150);
+    }
+    poll();
+  }
+
+  // Package detail close: only history is restored (Cortex close UI is not confirmed).
+  // If the click changed the URL and history.back() cannot restore it, the Route is aborted.
+  function restoreRouteView(ctx, runId, done) {
+    if (String(global.location.href || '') === ctx.routeHref) { done(true); return; }
+    try { global.history.back(); } catch (e1) { done(false); return; }
+    waitBag(function () {
+      return String(global.location.href || '') === ctx.routeHref;
+    }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+  }
+
+  function clickBagPackage(target, el, ctx, runId, done) {
+    Core.markBagAttempted(bagRun, target.referenceId);
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
+    afterBagLayout(function () {
+      if (!bagIsCurrent(runId)) return;
+      // Virtualized lists may re-render on scroll: re-resolve by exact DA after layout.
+      var fresh = collectExactDaElements([target.scannableId])[target.scannableId] || [];
+      if (Core.domMatchStatus(fresh) !== 'unique') {
+        Core.recordBagResult(bagRun, target.referenceId,
+          fresh.length ? Core.BAG_STATUS.DOM_AMBIGUOUS : Core.BAG_STATUS.DOM_NOT_FOUND, 'after scroll');
+        done();
+        return;
+      }
+      el = fresh[0];
+      var rect = null;
+      try { rect = el.getBoundingClientRect(); } catch (e2) {}
+      var point = Core.viewportClickPoint(rect);
+      if (!point) {
+        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'no coords');
+        done();
+        return;
+      }
+      setPanelClickable(false);
+      if (!hitTestAllows(el, point)) {
+        setPanelClickable(true);
+        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'covered');
+        ctx.abort = 'Package番号が他要素に覆われています（detailの閉じ方不明）';
+        done();
+        return;
+      }
+      bagRun.clicks += 1;
+      requestCdpClick(point, function (res) {
+        setPanelClickable(true);
+        if (!bagIsCurrent(runId)) return;
+        if (!res || !res.ok) {
+          Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED,
+            (res && (res.message || res.error)) || 'CDP');
+          done();
+          return;
+        }
+        waitBag(function () {
+          return Core.hasTrDetails(store.trDetailsByTrId, target.referenceId);
+        }, BAG_PACKAGE_TIMEOUT_MS, runId, function (got) {
+          Core.recordBagResult(bagRun, target.referenceId,
+            got ? Core.capturedBagStatus(store.trDetailsByTrId, target.referenceId) : Core.BAG_STATUS.TIMEOUT,
+            got ? '' : 'trDetails not observed');
+          restoreRouteView(ctx, runId, function (ok) {
+            if (!ok) ctx.abort = 'Package detail後にRoute詳細へ戻れませんでした';
+            bagLater(done, 300);
+          });
+        });
+      });
+    });
+  }
+
+  // One top-to-bottom sweep per scroller; at each position click the first pending
+  // target whose DA is exactly and uniquely present, then re-check without scrolling.
+  function sweepBagTargets(targets, ctx, runId, done) {
+    var scrollers = null;
+    var scrollerIndex = 0;
+    var steps = 0;
+
+    function pending() {
+      return Core.pendingBagTargets(bagRun, targets, store.trDetailsByTrId);
+    }
+
+    function finish() {
+      pending().forEach(function (t) {
+        if (ctx.abort || Date.now() > ctx.deadline) return; // stay not_attempted
+        Core.recordBagResult(bagRun, t.referenceId, Core.BAG_STATUS.DOM_NOT_FOUND, '');
+      });
+      done();
+    }
+
+    function check() {
+      if (!bagIsCurrent(runId)) return;
+      paint();
+      var list = pending();
+      if (!list.length || ctx.abort) { finish(); return; }
+      if (Date.now() > ctx.deadline) {
+        ctx.abort = 'Route上限時間を超過';
+        finish();
+        return;
+      }
+      var found = collectExactDaElements(list.map(function (t) { return t.scannableId; }));
+      for (var i = 0; i < list.length; i++) {
+        var matches = found[list[i].scannableId] || [];
+        var status = Core.domMatchStatus(matches);
+        if (status === 'ambiguous') {
+          Core.recordBagResult(bagRun, list[i].referenceId, Core.BAG_STATUS.DOM_AMBIGUOUS, matches.length + ' matches');
+          bagLater(check, 0);
+          return;
+        }
+        if (status === 'unique') {
+          clickBagPackage(list[i], matches[0], ctx, runId, check);
+          return;
+        }
+      }
+      if (!scrollers) {
+        scrollers = bagScrollers([]);
+        scrollerIndex = 0;
+        steps = 0;
+        if (scrollers[0]) scrollers[0].scrollTop = 0;
+      }
+      var scroller = scrollers[scrollerIndex];
+      if (!scroller) { finish(); return; }
+      var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
+      if (steps >= BAG_SCROLL_MAX_STEPS || (steps > 0 && scroller.scrollTop >= maxScroll)) {
+        scrollerIndex += 1;
+        steps = 0;
+        if (scrollers[scrollerIndex]) scrollers[scrollerIndex].scrollTop = 0;
+        bagLater(check, 120);
+        return;
+      }
+      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.55));
+      scroller.scrollTop = Math.min((steps === 0 ? 0 : scroller.scrollTop + stepPx), maxScroll);
+      try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
+      steps += 1;
+      bagLater(check, 150);
+    }
+    check();
+  }
+
+  function anyRouteCardShown() {
+    var cards = visibleRouteCards();
+    for (var i = 0; i < cards.length; i++) {
+      var rect = null;
+      try { rect = cards[i].getBoundingClientRect(); } catch (e1) {}
+      if (rect && rect.width > 0 && rect.height > 0) return true;
+    }
+    return false;
+  }
+
+  function routeListShown(ctx) {
+    return String(global.location.href || '') === ctx.listHref && anyRouteCardShown();
+  }
+
+  function bagReturnToList(ctx, runId, done) {
+    if (routeListShown(ctx)) { done(true); return; }
+    if (String(global.location.href || '') === ctx.listHref) { done(false); return; }
+    try { global.history.back(); } catch (e1) { done(false); return; }
+    waitBag(function () { return routeListShown(ctx); }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+  }
+
+  // Same search order as the tour: exact card, then CDP wheel up 12 / down 30.
+  function findBagRouteCard(route, runId, done) {
+    var direction = 'up';
+    var attempts = 0;
+    function look() {
+      if (!bagIsCurrent(runId)) return;
+      var card = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+      if (card) { done(card); return; }
+      attempts += 1;
+      if (direction === 'up' && attempts > 12) { direction = 'down'; attempts = 1; }
+      else if (direction === 'down' && attempts > 30) { done(null); return; }
+      requestCdpWheel(routeViewportPoint(), direction === 'up' ? -720 : 520, function (res) {
+        if (!bagIsCurrent(runId)) return;
+        if (!res || !res.ok) { done(null); return; }
+        bagLater(look, 220);
+      });
+    }
+    look();
+  }
+
+  function openBagRoute(group, ctx, runId, done) {
+    var route = { routeId: group.routeId, routeCode: group.routeCode };
+    findBagRouteCard(route, runId, function (card) {
+      if (!card) { done(false, 'Route DOM未発見'); return; }
+      clickBagRouteCard(route, card, ctx, runId, done);
+    });
+  }
+
+  function clickBagRouteCard(route, card, ctx, runId, done) {
+    var beforeDetails = store.detailsByRouteId[route.routeId] || null;
+    try { card.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
+    afterBagLayout(function () {
+      if (!bagIsCurrent(runId)) return;
+      var target = findInnerClickTarget(card, route) || card;
+      var rect = null;
+      try { rect = target.getBoundingClientRect(); } catch (e2) {}
+      var point = Core.viewportClickPoint(rect);
+      if (!point) { done(false, 'Route座標取得失敗'); return; }
+      setPanelClickable(false);
+      if (!hitTestAllows(target, point)) {
+        setPanelClickable(true);
+        done(false, 'Route一覧が他要素に覆われています', true);
+        return;
+      }
+      requestCdpClick(point, function (res) {
+        setPanelClickable(true);
+        if (!bagIsCurrent(runId)) return;
+        if (!res || !res.ok) { done(false, (res && res.message) || 'Route CDP click失敗'); return; }
+        waitBag(function () {
+          var fresh = store.detailsByRouteId[route.routeId];
+          if (fresh && fresh !== beforeDetails) return true;
+          return String(global.location.href || '') !== ctx.listHref && visibleRouteCards().length === 0;
+        }, tour.timeoutMs || 15000, runId, function (ok) {
+          if (!ok) { done(false, 'Route詳細が開きませんでした'); return; }
+          bagLater(function () {
+            ctx.routeHref = String(global.location.href || '');
+            done(true, '');
+          }, 800);
+        });
+      });
+    });
+  }
+
+  function runBagRoutes(groups, index, ctx, runId) {
+    if (!bagIsCurrent(runId)) return;
+    if (index >= groups.length) { finishBagPhase(''); return; }
+    var group = groups[index];
+    if (!Core.pendingBagTargets(bagRun, group.targets, store.trDetailsByTrId).length) {
+      runBagRoutes(groups, index + 1, ctx, runId);
+      return;
+    }
+    setBagStatus('Bag取得中… ' + group.routeCode + '（' + (index + 1) + '/' + groups.length + ' Route）');
+    ctx.abort = '';
+    ctx.deadline = Date.now() + BAG_ROUTE_BUDGET_MS;
+    openBagRoute(group, ctx, runId, function (opened, message, fatal) {
+      if (!bagIsCurrent(runId)) return;
+      if (fatal) {
+        finishBagPhase(group.routeCode + ': ' + message);
+        return;
+      }
+      function next() {
+        bagReturnToList(ctx, runId, function (back) {
+          if (!back) {
+            finishBagPhase('Route一覧へ戻れませんでした（' + group.routeCode + '）');
+            return;
+          }
+          bagLater(function () { runBagRoutes(groups, index + 1, ctx, runId); }, 350);
+        });
+      }
+      if (!opened) {
+        bagRun.routeErrors.push(group.routeCode + ': ' + message);
+        next();
+        return;
+      }
+      sweepBagTargets(group.targets, ctx, runId, function () {
+        if (ctx.abort) bagRun.routeErrors.push(group.routeCode + ': ' + ctx.abort);
+        next();
+      });
+    });
+  }
+
+  function finishBagPhase(aborted) {
+    if (!bagRun || bagRun.ended) return;
+    if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    setPanelClickable(true);
+    bagRun.aborted = aborted || (bagRun.routeErrors.length ? bagRun.routeErrors.join(' / ') : '');
+    bagRun.ended = true;
+    Core.restoreNormalCapture(store, bagSnapshot);
+    bagSnapshot = null;
+    var summary = Core.summarizeBagRun(bagRun, store.trDetailsByTrId);
+    store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
+    bagRun.summary = summary;
+    setBagStatus(Core.formatBagSummary(summary));
+    paint();
+  }
+
+  function stopBagPhase() {
+    if (!bagActive()) return;
+    bagRun.stopRequested = true;
+    finishBagPhase('手動停止');
+  }
+
+  function startBagPhase() {
+    show();
+    setPanelCollapsed(false);
+    if (bagActive()) return;
+    if (sessionBusy || (tour && tour.status === 'running')) {
+      alert('通常取得の完了後に「Bag取得」を押してください。');
+      return;
+    }
+    var detailsList = Object.keys(store.detailsByRouteId || {}).map(function (id) {
+      return store.detailsByRouteId[id];
+    });
+    if (!detailsList.length) {
+      alert('先に「取得開始」で通常取得を完了してください。');
+      return;
+    }
+    var selection = Core.selectBagTargets(detailsList, store.trDetailsByTrId);
+    bagSnapshot = Core.snapshotNormalCapture(store);
+    bagRun = Core.createBagRun(selection.targets);
+    bagRun.selection = selection;
+    bagRun.routeErrors = [];
+    var runId = bagRun.id;
+    if (!selection.targets.length) {
+      finishBagPhase('');
+      return;
+    }
+    var ctx = {
+      listHref: String(global.location.href || ''),
+      routeHref: String(global.location.href || ''),
+      abort: '',
+      deadline: Date.now() + BAG_ROUTE_BUDGET_MS
+    };
+    if (anyRouteCardShown()) {
+      runBagRoutes(Core.groupBagTargetsByRoute(selection.targets), 0, ctx, runId);
+      return;
+    }
+    // Not on the Route list: work on the currently open page only (no navigation).
+    setBagStatus('Bag取得中…（表示中の画面）');
+    sweepBagTargets(selection.targets, ctx, runId, function () {
+      finishBagPhase(ctx.abort || '');
+    });
+  }
+
   function onReady(fn) {
     if (document.body || document.documentElement) fn();
     else document.addEventListener('DOMContentLoaded', fn);
@@ -1171,6 +1611,7 @@
     start: start,
     stop: stopPoc,
     save: saveBundle,
+    bag: startBagPhase,
     _store: store
   };
 })(typeof window !== 'undefined' ? window : global);

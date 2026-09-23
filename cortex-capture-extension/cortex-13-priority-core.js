@@ -841,26 +841,248 @@
       var bagScannableId = row.bagScannableId == null || row.bagScannableId === ''
         ? null
         : String(row.bagScannableId);
-      map[trId] = {
-        trId: trId,
-        bagName: bagName,
-        bagScannableId: bagScannableId
-      };
+      var row1 = {};
+      row1[trId] = { trId: trId, bagName: bagName, bagScannableId: bagScannableId };
+      mergeTrDetailsMaps(map, row1);
     });
     return map;
   }
 
+  // A later bagName:null (e.g. after delivery) never erases a bag captured earlier.
+  // null -> non-null upgrades normally.
   function mergeTrDetailsMaps(into, from) {
     into = into || {};
     from = from || {};
     Object.keys(from).forEach(function (trId) {
       if (!trId || !from[trId]) return;
-      into[trId] = from[trId];
+      var prev = Object.prototype.hasOwnProperty.call(into, trId) ? into[trId] : null;
+      var next = from[trId];
+      if (prev && prev.bagName && !next.bagName) {
+        into[trId] = Object.assign({}, prev, { nullSeenAfterCapture: true });
+        return;
+      }
+      into[trId] = next;
     });
     return into;
   }
 
-  function extractPackageAssistIndex(details, trDetailsByTrId) {
+  // ---- Bag enrichment phase (optional; runs only after the normal route tour) ----
+  // Native Cortex UI click -> Cortex's own POST /tasks/trDetails -> existing interceptor.
+  // Never builds an API request. Results never go into store.failures.
+  var BAG_STATUS = {
+    CAPTURED: 'captured',
+    CAPTURED_NULL: 'captured_null',
+    NOT_ATTEMPTED: 'not_attempted',
+    DOM_NOT_FOUND: 'dom_not_found',
+    DOM_AMBIGUOUS: 'dom_ambiguous',
+    CLICK_FAILED: 'click_failed',
+    TIMEOUT: 'timeout'
+  };
+
+  function hasTrDetails(trDetailsByTrId, referenceId) {
+    return !!(trDetailsByTrId && referenceId &&
+      Object.prototype.hasOwnProperty.call(trDetailsByTrId, referenceId));
+  }
+
+  // captured / captured_null once the trId Response is stored; null when not yet fetched.
+  function capturedBagStatus(trDetailsByTrId, referenceId) {
+    if (!hasTrDetails(trDetailsByTrId, referenceId)) return null;
+    var tr = trDetailsByTrId[referenceId];
+    return tr && tr.bagName ? BAG_STATUS.CAPTURED : BAG_STATUS.CAPTURED_NULL;
+  }
+
+  // Same 13:00 rule as extractFromRouteDetails.
+  function isPriorityDropOff(stop, task, localDate) {
+    if (!stop || !task || task.taskType !== 'DROP_OFF') return false;
+    var plannedEndMs = epochToMs(stop.plannedEndTime);
+    if (plannedEndMs == null) return false;
+    var windowEndMs = epochToMs(task.windowEndTime);
+    if (windowEndMs == null) return false;
+    if (!isExact1300Clock(windowEndMs)) return false;
+    if (!isSameLocalDate(windowEndMs, localDate)) return false;
+    return isOnOrBeforeCutoff(plannedEndMs);
+  }
+
+  function compareBagTargets(a, b) {
+    var rc = String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
+    if (rc) return rc;
+    return Number(a.stop || 0) - Number(b.stop || 0);
+  }
+
+  // 13:00 priority packages that still need a native trDetails click.
+  // DOM key is task.domainMap.scannableId only (no trackingIdOf fallback).
+  function selectBagTargets(detailsList, trDetailsByTrId) {
+    var out = {
+      targets: [],
+      priorityCount: 0,
+      skipped: { alreadyCaptured: 0, missingScannableId: 0, missingReferenceId: 0, duplicateReferenceId: 0 }
+    };
+    var seen = {};
+    (detailsList || []).forEach(function (details) {
+      var rd = details && details.rmsRouteDetails;
+      if (!rd || !Array.isArray(rd.stops)) return;
+      rd.stops.forEach(function (stop) {
+        if (!stop || !Array.isArray(stop.tasks)) return;
+        stop.tasks.forEach(function (task) {
+          if (!isPriorityDropOff(stop, task, rd.localDate)) return;
+          out.priorityCount += 1;
+          var referenceId = String(task.referenceId || '').trim();
+          var map = task.domainMap || {};
+          var scannableId = String(map.scannableId || '').trim();
+          if (!referenceId) { out.skipped.missingReferenceId += 1; return; }
+          if (hasTrDetails(trDetailsByTrId, referenceId)) { out.skipped.alreadyCaptured += 1; return; }
+          if (!scannableId) { out.skipped.missingScannableId += 1; return; }
+          if (seen[referenceId]) { out.skipped.duplicateReferenceId += 1; return; }
+          seen[referenceId] = true;
+          out.targets.push({
+            routeId: String(rd.routeId || ''),
+            routeCode: String(rd.routeCode || ''),
+            stop: stop.sequenceNumber,
+            scannableId: scannableId,
+            referenceId: referenceId
+          });
+        });
+      });
+    });
+    out.targets.sort(compareBagTargets);
+    return out;
+  }
+
+  function groupBagTargetsByRoute(targets) {
+    var groups = [];
+    var byId = {};
+    (targets || []).forEach(function (t) {
+      var key = t.routeId || t.routeCode;
+      if (!byId[key]) {
+        byId[key] = { routeId: t.routeId, routeCode: t.routeCode, targets: [] };
+        groups.push(byId[key]);
+      }
+      byId[key].targets.push(t);
+    });
+    return groups;
+  }
+
+  // entries: [{ text, key }]. Exact textContent.trim() === scannableId only.
+  function indexExactDomTextMatches(entries, wanted) {
+    var want = {};
+    (wanted || []).forEach(function (w) { if (w) want[String(w)] = true; });
+    var out = {};
+    (entries || []).forEach(function (e) {
+      if (!e) return;
+      var text = String(e.text == null ? '' : e.text).trim();
+      if (!text || !Object.prototype.hasOwnProperty.call(want, text)) return;
+      if (!out[text]) out[text] = [];
+      if (out[text].indexOf(e.key) < 0) out[text].push(e.key);
+    });
+    return out;
+  }
+
+  function domMatchStatus(matches) {
+    var n = Array.isArray(matches) ? matches.length : 0;
+    if (n === 0) return 'none';
+    if (n === 1) return 'unique';
+    return 'ambiguous';
+  }
+
+  function createBagRun(targets) {
+    return {
+      id: 'bag-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+      targets: (targets || []).slice(),
+      attempted: {},
+      results: {},
+      clicks: 0,
+      ended: false,
+      aborted: ''
+    };
+  }
+
+  function bagTargetAttempted(run, referenceId) {
+    return !!(run && run.attempted && Object.prototype.hasOwnProperty.call(run.attempted, referenceId));
+  }
+
+  function markBagAttempted(run, referenceId) {
+    if (run && referenceId) run.attempted[referenceId] = true;
+  }
+
+  function recordBagResult(run, referenceId, status, detail) {
+    if (!run || !referenceId) return;
+    markBagAttempted(run, referenceId);
+    run.results[referenceId] = { status: status, detail: detail || '' };
+  }
+
+  // Targets still worth one click: not captured yet and not attempted in this run.
+  function pendingBagTargets(run, targets, trDetailsByTrId) {
+    return (targets || []).filter(function (t) {
+      if (!t || !t.referenceId) return false;
+      if (hasTrDetails(trDetailsByTrId, t.referenceId)) return false;
+      return !bagTargetAttempted(run, t.referenceId);
+    });
+  }
+
+  function emptyBagCounts() {
+    var counts = {};
+    Object.keys(BAG_STATUS).forEach(function (k) { counts[BAG_STATUS[k]] = 0; });
+    return counts;
+  }
+
+  // Captured Response wins over attempt outcome (e.g. a timeout later satisfied
+  // by a multi-row Response). Untouched targets stay not_attempted.
+  function summarizeBagRun(run, trDetailsByTrId) {
+    var counts = emptyBagCounts();
+    var byReferenceId = {};
+    ((run && run.targets) || []).forEach(function (t) {
+      var status = capturedBagStatus(trDetailsByTrId, t.referenceId);
+      if (!status) {
+        var r = run.results[t.referenceId];
+        status = r && r.status ? r.status : BAG_STATUS.NOT_ATTEMPTED;
+      }
+      byReferenceId[t.referenceId] = status;
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return {
+      targetCount: ((run && run.targets) || []).length,
+      clicks: (run && run.clicks) || 0,
+      aborted: (run && run.aborted) || '',
+      counts: counts,
+      byReferenceId: byReferenceId
+    };
+  }
+
+  function formatBagSummary(summary) {
+    var c = (summary && summary.counts) || emptyBagCounts();
+    var text = 'Bag取得完了 対象 ' + ((summary && summary.targetCount) || 0) +
+      ' / captured ' + (c.captured || 0) +
+      ' / null ' + (c.captured_null || 0) +
+      ' / not found ' + (c.dom_not_found || 0) +
+      ' / ambiguous ' + (c.dom_ambiguous || 0) +
+      ' / click失敗 ' + (c.click_failed || 0) +
+      ' / timeout ' + (c.timeout || 0) +
+      ' / 未試行 ' + (c.not_attempted || 0) +
+      ' / click ' + ((summary && summary.clicks) || 0);
+    if (summary && summary.aborted) text += ' / 中断: ' + summary.aborted;
+    return text;
+  }
+
+  // Normal tour results are frozen before the Bag phase and restored after it,
+  // so Cortex re-fetches while re-opening Routes can neither change them nor add failures.
+  function snapshotNormalCapture(store) {
+    store = store || {};
+    return {
+      summaries: store.summaries || null,
+      detailsByRouteId: Object.assign({}, store.detailsByRouteId || {}),
+      failures: (store.failures || []).slice()
+    };
+  }
+
+  function restoreNormalCapture(store, snap) {
+    if (!store || !snap) return store;
+    store.summaries = snap.summaries;
+    store.detailsByRouteId = Object.assign({}, snap.detailsByRouteId);
+    store.failures = snap.failures.slice();
+    return store;
+  }
+
+  function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {
     var diagnostics = emptyPackageAssistDiagnostics();
     trDetailsByTrId = trDetailsByTrId || {};
     diagnostics.trDetailsCaptured = Object.keys(trDetailsByTrId).length;
@@ -893,7 +1115,7 @@
         var driverAid = task.driverAssistText == null || task.driverAssistText === ''
           ? null
           : String(task.driverAssistText);
-        var tr = referenceId ? trDetailsByTrId[referenceId] : null;
+        var tr = hasTrDetails(trDetailsByTrId, referenceId) ? trDetailsByTrId[referenceId] : null;
         var bagName = tr && tr.bagName ? String(tr.bagName) : null;
         var bagScannableId = tr && tr.bagScannableId ? String(tr.bagScannableId) : null;
         var parsed = parseBagName(bagName);
@@ -912,7 +1134,11 @@
           bagColorCode: parsed.bagColorCode,
           bagColor: parsed.bagColor,
           bagNumber: parsed.bagNumber,
-          bagDisplay: parsed.bagDisplay
+          bagDisplay: parsed.bagDisplay,
+          bagStatus: tr
+            ? capturedBagStatus(trDetailsByTrId, referenceId)
+            : ((bagStatusByReferenceId && referenceId && bagStatusByReferenceId[referenceId]) || BAG_STATUS.NOT_ATTEMPTED),
+          bagSource: tr ? 'trDetails' : null
         });
       });
     });
@@ -1039,6 +1265,7 @@
       summaries: summaries,
       details: details,
       trDetails: trDetails,
+      bagStatusByReferenceId: store.bagStatusByReferenceId ? Object.assign({}, store.bagStatusByReferenceId) : undefined,
       failures: (store.failures || []).slice(),
       totalRouteCount: total,
       selectedRouteCount: eleven.ok ? eleven.routes.length : details.length
@@ -1465,7 +1692,8 @@
       var pkgIndex = extractPackageSequenceIndex(d);
       extracted.packageSequenceIndex = pkgIndex.index || [];
       extracted.packageSequenceDiagnostics = pkgIndex.diagnostics || emptyPackageSequenceDiagnostics();
-      var assist = extractPackageAssistIndex(d, trDetailsByTrId);
+      var assist = extractPackageAssistIndex(d, trDetailsByTrId,
+        bundle.bagStatusByReferenceId && typeof bundle.bagStatusByReferenceId === 'object' ? bundle.bagStatusByReferenceId : null);
       extracted.packageAssistIndex = assist.index || [];
       extracted.packageAssistDiagnostics = assist.diagnostics || emptyPackageAssistDiagnostics();
       results.push(extracted);
@@ -1572,7 +1800,25 @@
     emptyPackageAssistDiagnostics: emptyPackageAssistDiagnostics,
     extractFromCortexCsv: extractFromCortexCsv,
     summarizeResults: summarizeResults,
-    ingestBundle: ingestBundle
+    ingestBundle: ingestBundle,
+    BAG_STATUS: BAG_STATUS,
+    mergeTrDetailsMaps: mergeTrDetailsMaps,
+    hasTrDetails: hasTrDetails,
+    capturedBagStatus: capturedBagStatus,
+    isPriorityDropOff: isPriorityDropOff,
+    selectBagTargets: selectBagTargets,
+    groupBagTargetsByRoute: groupBagTargetsByRoute,
+    indexExactDomTextMatches: indexExactDomTextMatches,
+    domMatchStatus: domMatchStatus,
+    createBagRun: createBagRun,
+    bagTargetAttempted: bagTargetAttempted,
+    markBagAttempted: markBagAttempted,
+    recordBagResult: recordBagResult,
+    pendingBagTargets: pendingBagTargets,
+    summarizeBagRun: summarizeBagRun,
+    formatBagSummary: formatBagSummary,
+    snapshotNormalCapture: snapshotNormalCapture,
+    restoreNormalCapture: restoreNormalCapture
   };
 
   if (typeof module !== 'undefined' && module.exports) {
