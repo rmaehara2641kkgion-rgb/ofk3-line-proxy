@@ -143,13 +143,13 @@ app.get(['/', '/index.html'], function(req, res, next) {
   try {
     var indexFile = path.join(__dirname, 'index.html');
     var html = fs.readFileSync(indexFile, 'utf8');
-    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260921-3';
+    var scriptSrc = '/ofk3-cortex-priority-ui.js?v=20260923-1';
     if (html.indexOf('/ofk3-cortex-priority-ui.js') < 0) {
       var bodyPos = html.lastIndexOf('</body>');
       if (bodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, bodyPos) + '  <script src="' + scriptSrc + '"></script>\n' + html.slice(bodyPos);
     }
-    var twBoardScriptSrc = '/ofk3-time-window-board.js?v=20260923-bulletin';
+    var twBoardScriptSrc = '/ofk3-time-window-board.js?v=20260923-priority';
     if (html.indexOf('/ofk3-time-window-board.js') < 0) {
       var twBodyPos = html.lastIndexOf('</body>');
       if (twBodyPos < 0) return next(new Error('index.html body closing tag not found'));
