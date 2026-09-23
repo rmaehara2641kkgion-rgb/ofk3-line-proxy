@@ -882,7 +882,8 @@
     STOP_EXPAND_FAILED: 'stop_expand_failed',
     PACKAGE_DOM_NOT_FOUND: 'package_dom_not_found',
     PACKAGE_CLICK_TARGET_NOT_FOUND: 'package_click_target_not_found',
-    ROUTE_ABORTED: 'route_aborted'
+    ROUTE_ABORTED: 'route_aborted',
+    UI_BLOCKED: 'ui_blocked'
   };
 
   function hasTrDetails(trDetailsByTrId, referenceId) {
@@ -1045,8 +1046,15 @@
       byReferenceId[t.referenceId] = status;
       counts[status] = (counts[status] || 0) + 1;
     });
+    var targetCount = ((run && run.targets) || []).length;
+    var groups = {};
+    Object.keys(BAG_SUMMARY_GROUPS).forEach(function (g) {
+      groups[g] = BAG_SUMMARY_GROUPS[g].reduce(function (n, st) { return n + (counts[st] || 0); }, 0);
+    });
     return {
-      targetCount: ((run && run.targets) || []).length,
+      targetCount: targetCount,
+      attempted: targetCount - (counts.not_attempted || 0),
+      groups: groups,
       clicks: (run && run.clicks) || 0,
       stopClicks: (run && run.stopClicks) || 0,
       routeResults: ((run && run.routeResults) || []).slice(),
@@ -1056,34 +1064,54 @@
     };
   }
 
-  var BAG_SUMMARY_LABELS = [
-    ['captured', 'captured'],
-    ['captured_null', 'null'],
+  // Display groups only; the per-package status values themselves are unchanged.
+  var BAG_SUMMARY_GROUPS = {
+    captured: ['captured'],
+    null: ['captured_null'],
+    notFound: ['dom_not_found', 'stop_not_found', 'package_dom_not_found'],
+    ambiguous: ['dom_ambiguous', 'stop_ambiguous'],
+    clickFailed: ['click_failed'],
+    timeout: ['timeout'],
+    uiBlocked: ['ui_blocked'],
+    otherError: ['stop_expand_failed', 'package_click_target_not_found', 'route_aborted'],
+    notAttempted: ['not_attempted']
+  };
+
+  var BAG_DETAIL_LABELS = [
     ['stop_not_found', 'Stop未発見'],
-    ['stop_ambiguous', 'Stop重複'],
-    ['stop_expand_failed', 'Stop展開失敗'],
     ['package_dom_not_found', 'Package未発見'],
-    ['dom_not_found', 'not found'],
+    ['dom_not_found', 'DA未発見'],
+    ['stop_ambiguous', 'Stop重複'],
+    ['dom_ambiguous', 'DA重複'],
+    ['stop_expand_failed', 'Stop展開失敗'],
     ['package_click_target_not_found', '荷物番号click対象なし'],
-    ['dom_ambiguous', 'ambiguous'],
-    ['click_failed', 'click失敗'],
-    ['timeout', 'timeout'],
-    ['route_aborted', 'Route中断'],
-    ['not_attempted', '未試行']
+    ['route_aborted', 'Route中断']
   ];
 
   function formatBagSummary(summary) {
-    var c = (summary && summary.counts) || emptyBagCounts();
-    var parts = ['Bag取得完了 対象 ' + ((summary && summary.targetCount) || 0)];
-    BAG_SUMMARY_LABELS.forEach(function (pair) {
-      var always = pair[0] === 'captured' || pair[0] === 'captured_null' || pair[0] === 'timeout' || pair[0] === 'not_attempted';
-      if (always || c[pair[0]]) parts.push(pair[1] + ' ' + (c[pair[0]] || 0));
-    });
-    parts.push('click ' + ((summary && summary.clicks) || 0));
-    parts.push('Stop click ' + ((summary && summary.stopClicks) || 0));
-    var text = parts.join(' / ');
-    if (summary && summary.aborted) text += ' / 中断: ' + summary.aborted;
-    return text;
+    summary = summary || {};
+    var c = summary.counts || emptyBagCounts();
+    var g = summary.groups || {};
+    var total = summary.targetCount || 0;
+    var attempted = summary.attempted != null ? summary.attempted : total - (c.not_attempted || 0);
+    var lines = [
+      'Bag取得完了',
+      '対象 ' + total + ' / 試行済み ' + attempted + ' / 未試行 ' + (c.not_attempted || 0) +
+        (attempted + (c.not_attempted || 0) === total ? '' : ' / 件数不一致'),
+      'captured ' + (g.captured || 0) + ' / null ' + (g.null || 0) + ' / not found ' + (g.notFound || 0) +
+        ' / ambiguous ' + (g.ambiguous || 0) + ' / click失敗 ' + (g.clickFailed || 0) +
+        ' / timeout ' + (g.timeout || 0) + ' / UI blocked ' + (g.uiBlocked || 0) +
+        ' / その他エラー ' + (g.otherError || 0)
+    ];
+    var detail = BAG_DETAIL_LABELS.filter(function (pair) { return c[pair[0]]; })
+      .map(function (pair) { return pair[1] + ' ' + c[pair[0]]; });
+    if (detail.length) lines.push('内訳: ' + detail.join(' / '));
+    lines.push('click ' + (summary.clicks || 0) + ' / Stop click ' + (summary.stopClicks || 0));
+    var failed = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
+      .map(function (r) { return r.routeCode + ' ' + (r.status === 'ui_blocked' ? 'UI blocked' : r.status); });
+    if (failed.length) lines.push('失敗Route: ' + failed.join(', '));
+    if (summary.aborted) lines.push('中断: ' + summary.aborted);
+    return lines.join('\n');
   }
 
   // Normal tour results are frozen before the Bag phase and restored after it,
@@ -1193,7 +1221,10 @@
     var driver = opts.driver;
     var routes = opts.routes || [];
     var now = opts.now || function () { return Date.now(); };
+    var schedule = opts.schedule || function (fn, ms) { return setTimeout(fn, ms); };
+    var cancel = opts.cancel || function (id) { clearTimeout(id); };
     var budget = opts.routeBudgetMs > 0 ? opts.routeBudgetMs : 90000;
+    var watchdogMs = budget + (opts.watchdogGraceMs > 0 ? opts.watchdogGraceMs : 60000);
     var progress = {
       routeIndex: 0, routeTotal: routes.length, routeCode: '',
       stopIndex: 0, stopTotal: 0, stopSeq: null,
@@ -1201,8 +1232,14 @@
     };
     run.routeResults = run.routeResults || [];
     run.stopClicks = run.stopClicks || 0;
+    run.log = run.log || [];
     var finished = false;
+    var failCurrent = null;
 
+    function log(line) {
+      run.log.push(line);
+      if (typeof opts.log === 'function') opts.log(line);
+    }
     function emit(patch) {
       Object.keys(patch || {}).forEach(function (k) { progress[k] = patch[k]; });
       progress.clicks = run.clicks;
@@ -1215,6 +1252,7 @@
     function finish(aborted) {
       if (finished) return;
       finished = true;
+      failCurrent = null;
       opts.done(aborted || '');
     }
     function markAll(targets, status, detail) {
@@ -1229,33 +1267,80 @@
       var stops = groupBagTargetsByStop(route.targets);
       var deadline = now() + budget;
       var result = { routeCode: route.routeCode, status: 'done', detail: '', stopClicks: 0 };
+      var closed = false;
+      var watchdog = null;
       run.routeResults.push(result);
 
-      function abortRoute(detail) {
-        result.status = BAG_STATUS.ROUTE_ABORTED;
+      // Callbacks from a Route that already ended (abort / watchdog) are ignored.
+      function live(fn) {
+        return function () {
+          if (stopped() || closed) return;
+          fn.apply(null, arguments);
+        };
+      }
+      // A throwing driver call only ends this Route.
+      function call(fn) {
+        try { fn(); } catch (e) { abortRoute('exception: ' + (e && e.message ? e.message : String(e))); }
+      }
+
+      function routeCounts() {
+        var c = {};
+        route.targets.forEach(function (t) {
+          var st = capturedBagStatus(trMap(), t.referenceId) ||
+            (run.results[t.referenceId] && run.results[t.referenceId].status) || BAG_STATUS.NOT_ATTEMPTED;
+          c[st] = (c[st] || 0) + 1;
+        });
+        return Object.keys(c).map(function (k) { return k + ' ' + c[k]; }).join(', ');
+      }
+
+      function abortRoute(detail, status) {
+        if (closed || stopped()) return;
+        status = status || BAG_STATUS.ROUTE_ABORTED;
+        result.status = status;
         result.detail = detail || '';
-        markAll(route.targets, BAG_STATUS.ROUTE_ABORTED, detail);
+        markAll(route.targets, status, detail);
         back();
       }
 
       function back() {
+        if (closed) return;
+        closed = true;
+        failCurrent = null;
+        if (watchdog != null) cancel(watchdog);
         emit({ state: 'Route一覧へ復帰中' });
-        driver.returnToList(function (res) {
+        var attempts = 0;
+        function tryBack() {
+          attempts += 1;
+          try {
+            driver.returnToList(onBack);
+          } catch (e) {
+            onBack({ ok: false, detail: 'exception: ' + (e && e.message ? e.message : String(e)) });
+          }
+        }
+        function onBack(res) {
           if (stopped()) return;
-          if (!res || !res.ok) {
-            if (result.status !== BAG_STATUS.ROUTE_ABORTED) {
-              result.status = BAG_STATUS.ROUTE_ABORTED;
-              result.detail = (res && res.detail) || 'Route一覧へ戻れません';
-            }
-            finish('Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : ''));
+          if (res && res.ok) {
+            var label = result.status === 'done' ? 'done' : (result.status === BAG_STATUS.UI_BLOCKED ? 'UI blocked' : result.status);
+            log('[Bag] ' + route.routeCode + ' ' + label + (result.detail ? ' (' + result.detail + ')' : '') +
+              ' [' + routeCounts() + '] -> continue');
+            nextRoute(i + 1);
             return;
           }
-          nextRoute(i + 1);
-        });
+          if (attempts < 2) { tryBack(); return; }
+          // Without the Route list no later Route can be opened: the only fatal case.
+          if (result.status === 'done') {
+            result.status = BAG_STATUS.ROUTE_ABORTED;
+            result.detail = (res && res.detail) || 'Route一覧へ戻れません';
+          }
+          var reason = 'Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : '');
+          log('[Bag] ' + route.routeCode + ' ' + reason + ' -> abort (以後のRouteを開けません)');
+          finish(reason);
+        }
+        tryBack();
       }
 
       function nextStop(j) {
-        if (stopped()) return;
+        if (stopped() || closed) return;
         if (j >= stops.length) { back(); return; }
         var stop = stops[j];
         var list = pend(stop.targets);
@@ -1266,82 +1351,105 @@
           packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
           state: 'Stop #' + stop.stop + '探索中'
         });
-        driver.ensureStop(stop, list, function (state) { emit({ state: state }); }, function (res) {
-          if (stopped()) return;
-          if (res && res.clicked) {
-            run.stopClicks += 1;
-            result.stopClicks += 1;
-          }
-          if (!res || !res.ok) {
-            markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
-            if (res && res.abortRoute) { abortRoute(res.detail); return; }
-            nextStop(j + 1);
-            return;
-          }
-          nextPackage(stop, function () {
-            driver.leaveStop(stop, function (lres) {
-              if (stopped()) return;
-              if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません'); return; }
+        call(function () {
+          driver.ensureStop(stop, list, function (state) { if (!closed) emit({ state: state }); }, live(function (res) {
+            if (res && res.clicked) {
+              run.stopClicks += 1;
+              result.stopClicks += 1;
+            }
+            if (!res || !res.ok) {
+              if (res && res.blocked) { abortRoute(res.detail, BAG_STATUS.UI_BLOCKED); return; }
+              markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
+              if (res && res.abortRoute) { abortRoute(res.detail); return; }
               nextStop(j + 1);
+              return;
+            }
+            nextPackage(stop, function () {
+              call(function () {
+                driver.leaveStop(stop, live(function (lres) {
+                  if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません'); return; }
+                  nextStop(j + 1);
+                }));
+              });
             });
-          });
+          }));
         });
       }
 
       function nextPackage(stop, doneStop) {
-        if (stopped()) return;
+        if (stopped() || closed) return;
         var list = pend(stop.targets);
         if (!list.length) { doneStop(); return; }
         if (now() > deadline) { abortRoute('Route上限時間を超過'); return; }
         var t = list[0];
         emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
-        driver.findPackage(t, stop, function (res) {
-          if (stopped()) return;
-          if (!res || !res.ok) {
-            recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
-            nextPackage(stop, doneStop);
-            return;
-          }
-          markBagAttempted(run, t.referenceId);
-          run.clicks += 1;
-          emit({ state: '荷物番号クリック' });
-          driver.clickPackage(t, res.handle, function (cres) {
-            if (stopped()) return;
-            if (!cres || !cres.ok) {
-              recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
-              if (cres && cres.abortRoute) { abortRoute(cres.detail); return; }
+        call(function () {
+          driver.findPackage(t, stop, live(function (res) {
+            if (!res || !res.ok) {
+              recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
               nextPackage(stop, doneStop);
               return;
             }
-            emit({ state: 'trDetails待機中' });
-            driver.waitTrDetails(t, function (got) {
-              if (stopped()) return;
-              var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
-              recordBagResult(run, t.referenceId, status || BAG_STATUS.TIMEOUT, status ? '' : 'trDetails not observed');
-              emit({ state: status || BAG_STATUS.TIMEOUT });
-              driver.restoreAfterPackage(t, function (rres) {
-                if (stopped()) return;
-                if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません'); return; }
-                nextPackage(stop, doneStop);
-              });
+            markBagAttempted(run, t.referenceId);
+            run.clicks += 1;
+            emit({ state: '荷物番号クリック' });
+            call(function () {
+              driver.clickPackage(t, res.handle, live(function (cres) {
+                if (!cres || !cres.ok) {
+                  recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
+                  if (cres && cres.blocked) { abortRoute(cres.detail, BAG_STATUS.UI_BLOCKED); return; }
+                  if (cres && cres.abortRoute) { abortRoute(cres.detail); return; }
+                  nextPackage(stop, doneStop);
+                  return;
+                }
+                emit({ state: 'trDetails待機中' });
+                call(function () {
+                  driver.waitTrDetails(t, live(function (got) {
+                    var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
+                    recordBagResult(run, t.referenceId, status || BAG_STATUS.TIMEOUT, status ? '' : 'trDetails not observed');
+                    emit({ state: status || BAG_STATUS.TIMEOUT });
+                    call(function () {
+                      driver.restoreAfterPackage(t, live(function (rres) {
+                        if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません'); return; }
+                        nextPackage(stop, doneStop);
+                      }));
+                    });
+                  }));
+                });
+              }));
             });
-          });
+          }));
         });
       }
 
+      failCurrent = function (detail) { abortRoute(detail); };
+      watchdog = schedule(function () {
+        watchdog = null;
+        abortRoute('watchdog: Route処理が' + Math.round(watchdogMs / 1000) + '秒以内に終わりません');
+      }, watchdogMs);
       emit({
         routeIndex: i + 1, routeCode: route.routeCode,
         stopIndex: 0, stopTotal: stops.length, stopSeq: null,
         packageIndex: 0, packageTotal: 0, scannableId: '', state: 'Routeを開いています'
       });
-      driver.openRoute(route, function (res) {
-        if (stopped()) return;
-        if (!res || !res.ok) { abortRoute((res && res.detail) || 'Routeを開けません'); return; }
-        nextStop(0);
+      call(function () {
+        driver.openRoute(route, live(function (res) {
+          if (!res || !res.ok) {
+            abortRoute((res && res.detail) || 'Routeを開けません', res && res.blocked ? BAG_STATUS.UI_BLOCKED : null);
+            return;
+          }
+          nextStop(0);
+        }));
       });
     }
 
     nextRoute(0);
+    return {
+      // Runner-side exceptions (timers) end only the current Route.
+      failRoute: function (detail) {
+        if (typeof failCurrent === 'function') failCurrent(detail);
+      }
+    };
   }
 
   function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {

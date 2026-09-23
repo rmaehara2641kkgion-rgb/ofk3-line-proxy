@@ -313,6 +313,9 @@ function fakeWorld(spec) {
   const driver = {
     openRoute(route, cb) {
       const r = spec.routes[route.routeCode];
+      if (r.throwOnOpen) throw new Error('boom');
+      if (r.hang) return; // never calls back -> watchdog
+      if (r.openBlocked) { cb({ ok: false, blocked: true, detail: 'Route click: covered by div#popover' }); return; }
       if (r.openFails) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
       current = r; log.opened.push(route.routeCode); cb({ ok: true });
     },
@@ -348,6 +351,7 @@ function fakeWorld(spec) {
     leaveStop(stop, cb) { cb({ ok: true }); },
     returnToList(cb) {
       log.back += 1;
+      if (current && current.backFailsOnce) { current.backFailsOnce = false; cb({ ok: false, detail: 'flaky' }); return; }
       cb(current && current.backFails ? { ok: false, detail: 'list not shown' } : { ok: true });
     }
   };
@@ -367,18 +371,26 @@ function routeTargets(spec) {
   return Core2.groupBagTargetsByRoute(out.sort((a, b) => a.routeCode.localeCompare(b.routeCode) || a.stop - b.stop));
 }
 
-function runEngine(spec) {
+function runEngine(spec, extra) {
   const w = fakeWorld(spec);
   const routes = routeTargets(spec);
   const all = [].concat(...routes.map((r) => r.targets));
   const run = Core2.createBagRun(all);
   let aborted = null;
-  Core2.runBagEngine({
+  const timers = [];
+  w.log.lines = [];
+  Core2.runBagEngine(Object.assign({
     run, routes, driver: w.driver,
     getTrMap: () => w.trMap,
     onProgress: (p) => w.log.progress.push(Core2.formatBagProgress(p)),
+    log: (line) => w.log.lines.push(line),
+    // manual timers: the watchdog only fires when the test flushes them
+    schedule: (fn) => { timers.push(fn); return timers.length - 1; },
+    cancel: (id) => { timers[id] = null; },
     done: (a) => { aborted = a; }
-  });
+  }, extra || {}));
+  // flush watchdogs (each fire may start the next Route, which may schedule another)
+  for (let k = 0; k < timers.length && aborted === null; k++) { const fn = timers[k]; if (fn) { timers[k] = null; fn(); } }
   const summary = Core2.summarizeBagRun(run, w.trMap);
   return { run, summary, aborted, log: w.log, trMap: w.trMap };
 }
@@ -502,10 +514,110 @@ v2Suite('root core');
 Core2 = PhaseCore;
 v2Suite('phase1-core');
 
+// ---------------- v3: Route-level fault tolerance ----------------
+function v3Suite(label) {
+  // UI blocked on one Route -> recorded, next Route continues, nothing left not_attempted
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { stops: { 2: { packages: [{ da: 'DA0000000402', ref: 'tr-402', tr: [['tr-402', 'JP_OB-AT-0402_NVY']] }] } } },
+      DCX41: { openBlocked: true, stops: { 3: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }, { da: 'DA0000000412', ref: 'tr-412' }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000425', ref: 'tr-425', tr: [['tr-425', null]] }] } } }
+    } });
+    const s = r.summary;
+    assert(r.aborted === '', label + ' v3: not aborted');
+    assert(s.byReferenceId['tr-411'] === 'ui_blocked' && s.byReferenceId['tr-412'] === 'ui_blocked', label + ' v3: ui_blocked recorded');
+    assert(s.byReferenceId['tr-425'] === 'captured_null', label + ' v3: next Route processed');
+    assert(s.counts.not_attempted === 0 && s.attempted === s.targetCount, label + ' v3: all classified');
+    assert(s.groups.uiBlocked === 2 && s.groups.captured === 1 && s.groups.null === 1, label + ' v3: groups');
+    assert(r.log.lines.some((l) => /^\[Bag\] DCX41 UI blocked .*-> continue$/.test(l)), label + ' v3: log line, got ' + r.log.lines.join(' | '));
+    const text = Core2.formatBagSummary(s);
+    ['対象 4', '試行済み 4', '未試行 0', 'captured 1', 'null 1', 'not found 0', 'ambiguous 0', 'click失敗 0',
+      'timeout 0', 'UI blocked 2', '失敗Route: DCX41 UI blocked'].forEach((k) => {
+      assert(text.indexOf(k) >= 0, label + ' v3: summary has ' + k + ' / ' + text);
+    });
+  })();
+
+  // driver exception / hanging Route -> only that Route fails (watchdog), then continue
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { throwOnOpen: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401' }] } } },
+      DCX41: { hang: true, stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }] } } },
+      DCX42: { stops: { 1: { packages: [{ da: 'DA0000000421', ref: 'tr-421', tr: [['tr-421', 'JP_OB-AT-0421_RED']] }] } } }
+    } });
+    assert(r.aborted === '', label + ' v3: exception/hang not fatal, got ' + r.aborted);
+    assert(r.summary.byReferenceId['tr-401'] === 'route_aborted' && /exception: boom/.test(r.run.results['tr-401'].detail),
+      label + ' v3: exception -> route_aborted');
+    assert(r.summary.byReferenceId['tr-411'] === 'route_aborted' && /watchdog/.test(r.run.results['tr-411'].detail),
+      label + ' v3: watchdog -> route_aborted');
+    assert(r.summary.byReferenceId['tr-421'] === 'captured', label + ' v3: continued after both');
+    assert(r.summary.counts.not_attempted === 0, label + ' v3: none left');
+  })();
+
+  // return to list: one flaky failure is retried; persistent failure is the only fatal case
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { backFailsOnce: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401', tr: [['tr-401', null]] }] } } },
+      DCX41: { stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411', tr: [['tr-411', null]] }] } } }
+    } });
+    assert(r.aborted === '' && r.summary.counts.not_attempted === 0, label + ' v3: flaky list return retried');
+    const r2 = runEngine({ routes: {
+      DCX40: { backFails: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401', tr: [['tr-401', null]] }] } } },
+      DCX41: { stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }] } } }
+    } });
+    assert(/Route一覧へ戻れませんでした（DCX40）/.test(r2.aborted), label + ' v3: fatal reason explicit');
+    assert(r2.summary.attempted + r2.summary.counts.not_attempted === r2.summary.targetCount, label + ' v3: totals add up');
+    assert(r2.log.lines.some((l) => /DCX40 .*-> abort/.test(l)), label + ' v3: fatal log');
+  })();
+
+  // 175 targets over 18 Routes with mixed failures: finishes, every target classified, no loop
+  (function () {
+    const routes = {};
+    let n = 0;
+    for (let ri = 0; ri < 18; ri++) {
+      const code = 'DCX' + (40 + ri);
+      const stops = {};
+      for (let si = 1; si <= 10 && n < 175; si++) {
+        const pkgs = [];
+        for (let pi = 0; pi < 1 + (si % 2) && n < 175; pi++, n++) {
+          const da = 'DA' + String(1000000000 + n);
+          const kind = n % 7;
+          pkgs.push({ da, ref: 'tr-' + n, clickable: kind !== 5,
+            tr: kind === 0 ? [['tr-' + n, 'JP_OB-AT-' + n + '_NVY']] : kind === 1 ? [['tr-' + n, null]] : [] });
+        }
+        stops[si] = { packages: pkgs, expandFails: si === 9, missing: si === 10 };
+      }
+      routes[code] = { stops, openBlocked: code === 'DCX41', openFails: code === 'DCX50' };
+    }
+    const r = runEngine({ routes });
+    const s = r.summary;
+    assert(s.targetCount === 175, label + ' v3-175: target count ' + s.targetCount);
+    assert(r.aborted === '', label + ' v3-175: finished');
+    assert(s.counts.not_attempted === 0 && s.attempted === 175, label + ' v3-175: 未試行 0');
+    const g = s.groups;
+    const sum = g.captured + g.null + g.notFound + g.ambiguous + g.clickFailed + g.timeout + g.uiBlocked + g.otherError + g.notAttempted;
+    assert(sum === 175, label + ' v3-175: groups add up to 175, got ' + sum);
+    assert(g.uiBlocked > 0 && g.captured > 0 && g.null > 0 && g.timeout > 0, label + ' v3-175: mixed outcomes');
+    const withTargets = Object.keys(routes).filter((c) => Object.keys(routes[c].stops).some((k) => routes[c].stops[k].packages.length)).length;
+    assert(withTargets >= 11 && r.run.routeResults.length === withTargets, label + ' v3-175: every Route with targets visited once');
+    assert(r.log.lines.filter((l) => /-> continue$/.test(l)).length === withTargets, label + ' v3-175: one continue log per Route');
+    const clicked = new Set(r.log.packageClicks);
+    assert(clicked.size === r.log.packageClicks.length, label + ' v3-175: no package clicked twice');
+  })();
+
+  console.log('ok: bag v3 route fault tolerance (' + label + ')');
+}
+Core2 = RootCore;
+v3Suite('root core');
+Core2 = PhaseCore;
+v3Suite('phase1-core');
+
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf('BAG_ROUTE_OPEN_ATTEMPTS = 3') >= 0 && bag.indexOf('attempt < BAG_ROUTE_OPEN_ATTEMPTS') >= 0,
+    'v3 bounded Route open retries');
+  assert(bag.indexOf('blocked: !!res.covered') >= 0 && bag.indexOf('bagEngine.failRoute(') >= 0, 'v3 UI blocked + timer exceptions per Route');
   ['runBagEngine', 'findStopLabels', 'packageCardOf', 'packageClickTarget', 'elementFromPoint',
     'closeNewDialogs', 'formatBagProgress', 'Core.BAG_STATUS.STOP_EXPAND_FAILED'].forEach((s) => {
     assert(bag.indexOf(s) >= 0, 'v2 runner has ' + s);

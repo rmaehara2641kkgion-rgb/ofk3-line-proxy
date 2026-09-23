@@ -1176,10 +1176,13 @@
   var BAG_DIALOG_CLOSE_TIMEOUT_MS = 2000;
   var BAG_STOP_SCROLL_MAX_STEPS = 80;
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
+  var BAG_ROUTE_OPEN_ATTEMPTS = 3;
+  var BAG_BUILD = 'Bag v3';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
   var bagProgressText = '';
+  var bagEngine = null;
 
   function bagActive() {
     return !!(bagRun && !bagRun.ended);
@@ -1189,11 +1192,20 @@
     return !!(bagRun && bagRun.id === runId && !bagRun.ended && !bagRun.stopRequested);
   }
 
+  // An exception inside a Bag timer ends only the current Route (never the tour or the page).
   function bagLater(fn, ms) {
     bagTimer = setTimeout(function () {
       bagTimer = 0;
-      fn();
+      try {
+        fn();
+      } catch (e) {
+        if (bagEngine && bagActive()) bagEngine.failRoute('exception: ' + (e && e.message ? e.message : String(e)));
+      }
     }, ms);
+  }
+
+  function bagLog(line) {
+    try { console.info(line); } catch (e1) {}
   }
 
   function setBagStatus(text) {
@@ -1536,33 +1548,50 @@
   function createBagDriver(ctx, runId) {
     ctx.reopenedStops = {};
     var driver = {
+      // Up to BAG_ROUTE_OPEN_ATTEMPTS tries: close new dialogs, wait for the list, re-find the
+      // card, scrollIntoView + hit test (inside safeCdpClick). Still covered -> UI blocked.
       openRoute: function (route, cb) {
         if (ctx.currentPage) { ctx.routeHref = hrefNow(); cb({ ok: true }); return; }
-        closeNewDialogs(ctx.baseDialogs, runId, function (closed) {
-          if (!closed.ok) { cb({ ok: false, detail: closed.detail }); return; }
-          findBagRouteCard(route, runId, function (card) {
-            if (!card) { cb({ ok: false, detail: 'Route DOM未発見' }); return; }
-            var beforeDetails = store.detailsByRouteId[route.routeId] || null;
-            safeCdpClick(function () {
-              var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
-              return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
-            }, runId, function (res) {
-              if (!res.ok) { cb({ ok: false, detail: 'Route click: ' + res.detail }); return; }
-              waitBag(function () {
-                var fresh = store.detailsByRouteId[route.routeId];
-                if (fresh && fresh !== beforeDetails) return true;
-                return hrefNow() !== ctx.listHref && !anyRouteCardShown();
-              }, tour.timeoutMs || 15000, runId, function (ok) {
-                if (!ok) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
-                bagLater(function () {
-                  ctx.routeHref = hrefNow();
-                  ctx.routeDialogs = visibleDialogs();
-                  cb({ ok: true });
-                }, 800);
+        var attempt = 0;
+        var lastDetail = '';
+        function tryOpen() {
+          if (!bagIsCurrent(runId)) return;
+          attempt += 1;
+          closeNewDialogs(ctx.baseDialogs, runId, function () {
+            waitBag(function () { return routeListShown(ctx); }, 2000, runId, function () {
+              findBagRouteCard(route, runId, function (card) {
+                if (!card) { cb({ ok: false, detail: 'Route DOM未発見' }); return; }
+                var beforeDetails = store.detailsByRouteId[route.routeId] || null;
+                safeCdpClick(function () {
+                  var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+                  return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
+                }, runId, function (res) {
+                  if (!res.ok) {
+                    lastDetail = 'Route click: ' + res.detail;
+                    bagLog('[Bag] ' + route.routeCode + ' ' + (res.covered ? 'Route一覧が覆われています' : 'Route click失敗') +
+                      ' (' + attempt + '/' + BAG_ROUTE_OPEN_ATTEMPTS + '): ' + res.detail);
+                    if (attempt < BAG_ROUTE_OPEN_ATTEMPTS) { bagLater(tryOpen, 700); return; }
+                    cb({ ok: false, blocked: !!res.covered, detail: lastDetail + '（' + attempt + '回試行）' });
+                    return;
+                  }
+                  waitBag(function () {
+                    var fresh = store.detailsByRouteId[route.routeId];
+                    if (fresh && fresh !== beforeDetails) return true;
+                    return hrefNow() !== ctx.listHref && !anyRouteCardShown();
+                  }, tour.timeoutMs || 15000, runId, function (ok) {
+                    if (!ok) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
+                    bagLater(function () {
+                      ctx.routeHref = hrefNow();
+                      ctx.routeDialogs = visibleDialogs();
+                      cb({ ok: true });
+                    }, 800);
+                  });
+                });
               });
             });
           });
-        });
+        }
+        tryOpen();
       },
 
       ensureStop: function (stop, pending, onState, cb) {
@@ -1601,7 +1630,7 @@
             return { el: label, container: ctx.stopBlock };
           }, runId, function (res) {
             if (!res.ok) {
-              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, abortRoute: !!res.covered });
+              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, blocked: !!res.covered });
               return;
             }
             waitBag(function () {
@@ -1679,9 +1708,20 @@
         }, runId, function (res) {
           if (res.ok) { cb({ ok: true }); return; }
           if (!res.covered) { cb({ ok: false, detail: res.detail }); return; }
-          // Covered: a native dialog left open? Close it via its own close UI and stop this Route.
+          // Covered: close a native dialog left open (own close UI only) and retry once.
           closeNewDialogs(ctx.routeDialogs || [], runId, function () {
-            cb({ ok: false, detail: res.detail, abortRoute: true });
+            bagLater(function () {
+              safeCdpClick(function () {
+                var m = collectExactDaElements([handle.scannableId])[handle.scannableId] || [];
+                if (m.length !== 1) return null;
+                var card = packageCardOf(m[0]);
+                var el = packageClickTarget(m[0], card);
+                return el ? { el: el, container: card } : null;
+              }, runId, function (res2) {
+                if (res2.ok) { cb({ ok: true }); return; }
+                cb({ ok: false, detail: res2.detail, blocked: !!res2.covered });
+              });
+            }, 500);
           });
         });
       },
@@ -1748,9 +1788,10 @@
     var summary = Core.summarizeBagRun(bagRun, store.trDetailsByTrId);
     store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
     bagRun.summary = summary;
-    var routeLines = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
-      .map(function (r) { return r.routeCode + ': ' + r.status + ' ' + (r.detail || ''); });
-    setBagStatus(Core.formatBagSummary(summary) + (routeLines.length ? '\n' + routeLines.join('\n') : ''));
+    setBagStatus(Core.formatBagSummary(summary) + '\n(' + BAG_BUILD + ')');
+    bagLog('[Bag] 完了: 対象 ' + summary.targetCount + ' / 試行済み ' + summary.attempted +
+      ' / 未試行 ' + (summary.counts.not_attempted || 0) + (summary.aborted ? ' / 中断: ' + summary.aborted : ''));
+    bagEngine = null;
     paint();
   }
 
@@ -1780,6 +1821,8 @@
       targets: bagRun.targets,
       results: results,
       routeResults: bagRun.routeResults || [],
+      log: bagRun.log || [],
+      build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText
     };
@@ -1833,15 +1876,18 @@
       routeHref: hrefNow(),
       baseDialogs: visibleDialogs()
     };
-    setBagStatus('Bag取得中…');
-    Core.runBagEngine({
+    setBagStatus('Bag取得中… (' + BAG_BUILD + ')');
+    bagEngine = Core.runBagEngine({
       run: bagRun,
       routes: routes,
       getTrMap: function () { return store.trDetailsByTrId; },
       driver: createBagDriver(ctx, runId),
       routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      log: bagLog,
       onProgress: function (p) {
-        if (bagIsCurrent(runId)) setBagStatus(Core.formatBagProgress(p));
+        if (!bagIsCurrent(runId)) return;
+        var tail = (bagRun.log || []).slice(-3);
+        setBagStatus(Core.formatBagProgress(p) + (tail.length ? '\n' + tail.join('\n') : '') + '\n(' + BAG_BUILD + ')');
       },
       done: function (aborted) {
         if (bagRun && bagRun.id === runId) finishBagPhase(aborted);
