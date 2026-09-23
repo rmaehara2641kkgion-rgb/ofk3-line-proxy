@@ -6,10 +6,15 @@
  *
  * 独立描画のみ。body監視・setIntervalなし。テンプレートリテラル不使用。
  *
- * 13:00対象: 有効 timeWindow かつ parsed.endMin <= 780（PR #16 と同一）。
- * 巡回順: OFK3Cortex13.getPackageSequenceIndex() を
- *   routeCode + '\0' + trackingId 完全一致で JOIN（PR #17）。
- * Cortex priority / MAP / LINE は使わない。
+ * 13:00対象:
+ *   Cortex capture済みRoute（packageSequenceIndexにRouteあり）:
+ *     既存 Cortex priority packages を正とし、
+ *     routeCode + '\0' + trackingId 完全一致で CYCLE 明細と JOIN。
+ *     （windowEnd exactly 13:00 かつ plannedEndTime <= 13:00 の抽出済み集合）
+ *   Cortex未取得Route:
+ *     従来どおり CYCLE timeWindow endMin <= 780（データ不足のため CYCLE 暫定）。
+ * 巡回順: packageSequenceIndex を同キーで JOIN。
+ * MAP / LINE / capture範囲は変更しない。
  */
 (function () {
   'use strict';
@@ -113,6 +118,34 @@
     return [];
   }
 
+  // Existing Cortex 13:00 priority packages (exact 13:00 windowEnd + plannedEnd <= 13:00).
+  function getPriorityPackages() {
+    try {
+      if (typeof window !== 'undefined' && window.OFK3Cortex13) {
+        if (typeof window.OFK3Cortex13.getPackages === 'function') {
+          var list = window.OFK3Cortex13.getPackages();
+          return Array.isArray(list) ? list : [];
+        }
+        var entry = typeof window.OFK3Cortex13.getEntry === 'function'
+          ? window.OFK3Cortex13.getEntry() : null;
+        if (entry && Array.isArray(entry.packages)) return entry.packages;
+      }
+    } catch (e) {}
+    return [];
+  }
+
+  function buildPriorityKeySet(packages) {
+    var set = {};
+    (packages || []).forEach(function (p) {
+      if (!p) return;
+      var rc = String(p.routeCode || '');
+      var tid = String(p.trackingId || '').trim();
+      if (!rc || !tid) return;
+      set[joinKey(rc, tid)] = true;
+    });
+    return set;
+  }
+
   function routeArea(route, areas, rc) {
     if (route && route.area) return String(route.area);
     if (Object.prototype.hasOwnProperty.call(areas, rc) && areas[rc]) return String(areas[rc]);
@@ -180,6 +213,7 @@
     var detail = getCycleDetailData();
     var areas = getRouteAreasMap();
     var seqMaps = buildSequenceMaps(getPackageSequenceIndex());
+    var priorityKeys = buildPriorityKeySet(getPriorityPackages());
     var hasAssign = routes.length > 0;
     var hasCycle = Object.keys(detail).length > 0;
 
@@ -187,15 +221,24 @@
     routes.forEach(function (route) {
       var rc = String((route && route.routeCode) || '');
       if (!rc) return;
+      var routeCaptured = !!seqMaps.byRoute[rc];
       var items = detail[rc] || [];
       var packages = [];
       items.forEach(function (it) {
-        var parsed = parseWindow(it && it.timeWindow);
-        if (!parsed) return;
-        if (!isUntil1300(parsed)) return;
         var tid = String((it && it.trackingId) || '').trim();
         if (!tid) return;
+        var parsed = parseWindow(it && it.timeWindow);
+        if (routeCaptured) {
+          // Captured: Cortex priority set is authoritative (not CYCLE end<=13:00 alone).
+          if (!priorityKeys[joinKey(rc, tid)]) return;
+        } else {
+          // Not captured (e.g. 09:00 Biker): keep CYCLE end<=13:00 provisional + 未取得.
+          if (!parsed) return;
+          if (!isUntil1300(parsed)) return;
+        }
         var resolved = resolvePackageSequence(rc, tid, seqMaps);
+        var windowLabel = '';
+        if (parsed) windowLabel = parsed.start + '-' + parsed.end;
         packages.push({
           trackingId: tid,
           timeWindow: String((it && it.timeWindow) || ''),
@@ -203,7 +246,7 @@
           sequenceStatus: resolved.status,
           sequenceNumber: resolved.sequenceNumber,
           sequenceLabel: resolved.label,
-          windowLabel: parsed.start + '-' + parsed.end
+          windowLabel: windowLabel
         });
       });
       if (!packages.length) return;
@@ -212,7 +255,6 @@
       packages.forEach(function (p) {
         if (p.sequenceStatus === 'ok' && p.sequenceNumber != null) okSeqs.push(p.sequenceNumber);
       });
-      var routeCaptured = !!seqMaps.byRoute[rc];
       var sequenceLabel;
       if (!routeCaptured) sequenceLabel = LABEL_NOT_CAPTURED;
       else if (!okSeqs.length) sequenceLabel = LABEL_NO_MATCH;
@@ -296,7 +338,7 @@
     var html = '';
     html += '<div class="tw-board-root tw-bulletin-screen" style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
     html += buildPageHeaderHtml(board, '全体掲示表');
-    html += '<div style="font-size:11px;color:#64748b;margin:-6px 0 10px;">Cortex未取得Routeの巡回順は「未取得」。住所・DA番号は掲示しません。</div>';
+    html += '<div style="font-size:11px;color:#64748b;margin:-6px 0 10px;">Cortex取得済みRouteはCortex 13:00必達Packageを正とする。未取得RouteはCYCLE暫定＋巡回順「未取得」。住所・DA番号は掲示しません。</div>';
     html += '<div style="overflow:auto;">';
     html += '<table class="tw-bulletin-table" style="width:100%;border-collapse:collapse;font-size:13px;">';
     html += '<thead><tr style="background:#f1f5f9;border-bottom:2px solid #111;">';
@@ -688,6 +730,7 @@
     buildDetailHtml: buildDetailHtml,
     resolvePackageSequence: resolvePackageSequence,
     buildSequenceMaps: buildSequenceMaps,
+    getPriorityPackages: getPriorityPackages,
     parseWindow: parseWindow,
     isUntil1300: isUntil1300,
     END_LIMIT_MIN: END_LIMIT_MIN,

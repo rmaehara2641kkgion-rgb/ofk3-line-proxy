@@ -433,6 +433,9 @@
     getRouteStops: function () { return state.routeStops || []; },
     getPackageSequenceIndex: function () { return state.packageSequenceIndex || []; },
     getPackageSequenceDiagnostics: function () { return state.packageSequenceDiagnostics; },
+    getPackages: function () {
+      return (state.entry && Array.isArray(state.entry.packages)) ? state.entry.packages : [];
+    },
     getEntry: function () { return state.entry; },
     ensureStopCoords: geocodeStop
   };
