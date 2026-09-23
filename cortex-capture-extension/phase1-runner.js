@@ -339,6 +339,7 @@
     var packages = (result && result.packages) || [];
     var routeStops = (result && result.routeStops) || [];
     var packageSequenceIndex = (result && result.packageSequenceIndex) || [];
+    var packageAssistIndex = (result && result.packageAssistIndex) || [];
     if (!result || !result.ok || (!packages.length && !routeStops.length)) {
       alert('13時優先データがありません。先に取得を完了してください。');
       return;
@@ -353,12 +354,18 @@
         routeStops: routeStops,
         packageSequenceIndex: packageSequenceIndex,
         packageSequenceDiagnostics: result.packageSequenceDiagnostics || null,
-        packageSequenceRouteCount: result.packageSequenceRouteCount || 0
+        packageSequenceRouteCount: result.packageSequenceRouteCount || 0,
+        packageAssistIndex: packageAssistIndex,
+        packageAssistDiagnostics: result.packageAssistDiagnostics || null
       });
       var idxCount = Array.isArray(body.packageSequenceIndex)
         ? body.packageSequenceIndex.length
         : (body.packageSequenceIndexCount != null ? body.packageSequenceIndexCount : packageSequenceIndex.length);
-      alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount + ' Packages / index ' + idxCount);
+      var assistCount = Array.isArray(body.packageAssistIndex)
+        ? body.packageAssistIndex.length
+        : (body.packageAssistIndexCount != null ? body.packageAssistIndexCount : packageAssistIndex.length);
+      alert('OFK3 Previewへ送信しました：' + body.stopCount + ' Stops / ' + body.packageCount +
+        ' Packages / index ' + idxCount + ' / assist ' + assistCount);
     } catch (e) {
       alert('OFK3送信に失敗しました: ' + e.message);
     }
