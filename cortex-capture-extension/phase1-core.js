@@ -921,7 +921,13 @@
     DOM_NOT_FOUND: 'dom_not_found',
     DOM_AMBIGUOUS: 'dom_ambiguous',
     CLICK_FAILED: 'click_failed',
-    TIMEOUT: 'timeout'
+    TIMEOUT: 'timeout',
+    STOP_NOT_FOUND: 'stop_not_found',
+    STOP_AMBIGUOUS: 'stop_ambiguous',
+    STOP_EXPAND_FAILED: 'stop_expand_failed',
+    PACKAGE_DOM_NOT_FOUND: 'package_dom_not_found',
+    PACKAGE_CLICK_TARGET_NOT_FOUND: 'package_click_target_not_found',
+    ROUTE_ABORTED: 'route_aborted'
   };
 
   function hasTrDetails(trDetailsByTrId, referenceId) {
@@ -1087,23 +1093,40 @@
     return {
       targetCount: ((run && run.targets) || []).length,
       clicks: (run && run.clicks) || 0,
+      stopClicks: (run && run.stopClicks) || 0,
+      routeResults: ((run && run.routeResults) || []).slice(),
       aborted: (run && run.aborted) || '',
       counts: counts,
       byReferenceId: byReferenceId
     };
   }
 
+  var BAG_SUMMARY_LABELS = [
+    ['captured', 'captured'],
+    ['captured_null', 'null'],
+    ['stop_not_found', 'Stop未発見'],
+    ['stop_ambiguous', 'Stop重複'],
+    ['stop_expand_failed', 'Stop展開失敗'],
+    ['package_dom_not_found', 'Package未発見'],
+    ['dom_not_found', 'not found'],
+    ['package_click_target_not_found', '荷物番号click対象なし'],
+    ['dom_ambiguous', 'ambiguous'],
+    ['click_failed', 'click失敗'],
+    ['timeout', 'timeout'],
+    ['route_aborted', 'Route中断'],
+    ['not_attempted', '未試行']
+  ];
+
   function formatBagSummary(summary) {
     var c = (summary && summary.counts) || emptyBagCounts();
-    var text = 'Bag取得完了 対象 ' + ((summary && summary.targetCount) || 0) +
-      ' / captured ' + (c.captured || 0) +
-      ' / null ' + (c.captured_null || 0) +
-      ' / not found ' + (c.dom_not_found || 0) +
-      ' / ambiguous ' + (c.dom_ambiguous || 0) +
-      ' / click失敗 ' + (c.click_failed || 0) +
-      ' / timeout ' + (c.timeout || 0) +
-      ' / 未試行 ' + (c.not_attempted || 0) +
-      ' / click ' + ((summary && summary.clicks) || 0);
+    var parts = ['Bag取得完了 対象 ' + ((summary && summary.targetCount) || 0)];
+    BAG_SUMMARY_LABELS.forEach(function (pair) {
+      var always = pair[0] === 'captured' || pair[0] === 'captured_null' || pair[0] === 'timeout' || pair[0] === 'not_attempted';
+      if (always || c[pair[0]]) parts.push(pair[1] + ' ' + (c[pair[0]] || 0));
+    });
+    parts.push('click ' + ((summary && summary.clicks) || 0));
+    parts.push('Stop click ' + ((summary && summary.stopClicks) || 0));
+    var text = parts.join(' / ');
     if (summary && summary.aborted) text += ' / 中断: ' + summary.aborted;
     return text;
   }
@@ -1125,6 +1148,245 @@
     store.detailsByRouteId = Object.assign({}, snap.detailsByRouteId);
     store.failures = snap.failures.slice();
     return store;
+  }
+
+  // ---- Bag v2: Route -> Stop -> Package engine (DOM-free; the runner supplies the driver) ----
+  // Stop labels: exact number only ("#16", "Stop 16", "Stop #16", "ストップ 16"). "#1" never matches 11.
+  var STOP_LABEL_PATTERNS = [
+    /^#\s*(\d{1,4})$/,
+    /^(?:stop|ストップ|停車地)\s*#?\s*(\d{1,4})$/i
+  ];
+
+  function parseStopLabel(text) {
+    var t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 20) return null;
+    for (var i = 0; i < STOP_LABEL_PATTERNS.length; i++) {
+      var m = t.match(STOP_LABEL_PATTERNS[i]);
+      if (m) return parseInt(m[1], 10);
+    }
+    return null;
+  }
+
+  // entries: [{ text, key }] -> keys whose text is exactly a label for sequenceNumber.
+  function matchStopLabelEntries(entries, sequenceNumber) {
+    var want = Number(sequenceNumber);
+    var out = [];
+    if (!isFinite(want)) return out;
+    (entries || []).forEach(function (e) {
+      if (!e) return;
+      if (parseStopLabel(e.text) === want && out.indexOf(e.key) < 0) out.push(e.key);
+    });
+    return out;
+  }
+
+  // Package-number-like token (e.g. DA0012405022); used only to bound a package card.
+  function isPackageNumberText(text) {
+    return /^[A-Z]{2,4}\d{8,14}$/.test(String(text == null ? '' : text).trim());
+  }
+
+  function groupBagTargetsByStop(targets) {
+    var stops = [];
+    var bySeq = {};
+    (targets || []).forEach(function (t) {
+      var key = String(t.stop);
+      if (!bySeq[key]) {
+        bySeq[key] = { stop: t.stop, targets: [] };
+        stops.push(bySeq[key]);
+      }
+      bySeq[key].targets.push(t);
+    });
+    stops.sort(function (a, b) { return Number(a.stop || 0) - Number(b.stop || 0); });
+    return stops;
+  }
+
+  // Any pending DA of the Stop already rendered -> the Stop is open; do not click (would collapse).
+  function stopNeedsExpand(stopTargets, presentByScannableId) {
+    presentByScannableId = presentByScannableId || {};
+    return !(stopTargets || []).some(function (t) {
+      var list = presentByScannableId[t.scannableId];
+      return Array.isArray(list) && list.length > 0;
+    });
+  }
+
+  function formatBagProgress(p) {
+    p = p || {};
+    var lines = ['Bag取得中'];
+    if (p.routeTotal) lines.push('Route ' + (p.routeIndex || 0) + '/' + p.routeTotal + ' ' + (p.routeCode || ''));
+    if (p.stopTotal) lines.push('Stop ' + (p.stopIndex || 0) + '/' + p.stopTotal + (p.stopSeq != null ? ' (#' + p.stopSeq + ')' : ''));
+    if (p.packageTotal) lines.push('Package ' + (p.packageIndex || 0) + '/' + p.packageTotal + (p.scannableId ? ' ' + p.scannableId : ''));
+    lines.push('状態: ' + (p.state || '-'));
+    lines.push('click ' + (p.clicks || 0) + ' / Stop click ' + (p.stopClicks || 0));
+    return lines.join('\n');
+  }
+
+  /**
+   * opts: { run, routes:[{routeId, routeCode, targets}], getTrMap(), driver, onProgress(p),
+   *         routeBudgetMs, now(), done(abortedMessage) }
+   * driver (all async via callback):
+   *   openRoute(route, cb({ok, detail}))
+   *   ensureStop(stop, pendingTargets, onState(text), cb({ok, clicked, status, detail, abortRoute}))
+   *   findPackage(target, stop, cb({ok, handle, status, detail}))
+   *   clickPackage(target, handle, cb({ok, detail, abortRoute}))
+   *   waitTrDetails(target, cb(gotBoolean))
+   *   restoreAfterPackage(target, cb({ok, detail}))
+   *   leaveStop(stop, cb({ok, detail}))
+   *   returnToList(cb({ok, detail}))
+   * One Route failing marks that Route route_aborted and continues when the list is back.
+   */
+  function runBagEngine(opts) {
+    var run = opts.run;
+    var driver = opts.driver;
+    var routes = opts.routes || [];
+    var now = opts.now || function () { return Date.now(); };
+    var budget = opts.routeBudgetMs > 0 ? opts.routeBudgetMs : 90000;
+    var progress = {
+      routeIndex: 0, routeTotal: routes.length, routeCode: '',
+      stopIndex: 0, stopTotal: 0, stopSeq: null,
+      packageIndex: 0, packageTotal: 0, scannableId: '', state: ''
+    };
+    run.routeResults = run.routeResults || [];
+    run.stopClicks = run.stopClicks || 0;
+    var finished = false;
+
+    function emit(patch) {
+      Object.keys(patch || {}).forEach(function (k) { progress[k] = patch[k]; });
+      progress.clicks = run.clicks;
+      progress.stopClicks = run.stopClicks;
+      if (typeof opts.onProgress === 'function') opts.onProgress(Object.assign({}, progress));
+    }
+    function trMap() { return opts.getTrMap(); }
+    function pend(targets) { return pendingBagTargets(run, targets, trMap()); }
+    function stopped() { return finished || run.ended || run.stopRequested; }
+    function finish(aborted) {
+      if (finished) return;
+      finished = true;
+      opts.done(aborted || '');
+    }
+    function markAll(targets, status, detail) {
+      pend(targets).forEach(function (t) { recordBagResult(run, t.referenceId, status, detail || ''); });
+    }
+
+    function nextRoute(i) {
+      if (stopped()) return;
+      if (i >= routes.length) { finish(''); return; }
+      var route = routes[i];
+      if (!pend(route.targets).length) { nextRoute(i + 1); return; }
+      var stops = groupBagTargetsByStop(route.targets);
+      var deadline = now() + budget;
+      var result = { routeCode: route.routeCode, status: 'done', detail: '', stopClicks: 0 };
+      run.routeResults.push(result);
+
+      function abortRoute(detail) {
+        result.status = BAG_STATUS.ROUTE_ABORTED;
+        result.detail = detail || '';
+        markAll(route.targets, BAG_STATUS.ROUTE_ABORTED, detail);
+        back();
+      }
+
+      function back() {
+        emit({ state: 'Route一覧へ復帰中' });
+        driver.returnToList(function (res) {
+          if (stopped()) return;
+          if (!res || !res.ok) {
+            if (result.status !== BAG_STATUS.ROUTE_ABORTED) {
+              result.status = BAG_STATUS.ROUTE_ABORTED;
+              result.detail = (res && res.detail) || 'Route一覧へ戻れません';
+            }
+            finish('Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : ''));
+            return;
+          }
+          nextRoute(i + 1);
+        });
+      }
+
+      function nextStop(j) {
+        if (stopped()) return;
+        if (j >= stops.length) { back(); return; }
+        var stop = stops[j];
+        var list = pend(stop.targets);
+        if (!list.length) { nextStop(j + 1); return; }
+        if (now() > deadline) { abortRoute('Route上限時間を超過'); return; }
+        emit({
+          stopIndex: j + 1, stopSeq: stop.stop,
+          packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
+          state: 'Stop #' + stop.stop + '探索中'
+        });
+        driver.ensureStop(stop, list, function (state) { emit({ state: state }); }, function (res) {
+          if (stopped()) return;
+          if (res && res.clicked) {
+            run.stopClicks += 1;
+            result.stopClicks += 1;
+          }
+          if (!res || !res.ok) {
+            markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
+            if (res && res.abortRoute) { abortRoute(res.detail); return; }
+            nextStop(j + 1);
+            return;
+          }
+          nextPackage(stop, function () {
+            driver.leaveStop(stop, function (lres) {
+              if (stopped()) return;
+              if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません'); return; }
+              nextStop(j + 1);
+            });
+          });
+        });
+      }
+
+      function nextPackage(stop, doneStop) {
+        if (stopped()) return;
+        var list = pend(stop.targets);
+        if (!list.length) { doneStop(); return; }
+        if (now() > deadline) { abortRoute('Route上限時間を超過'); return; }
+        var t = list[0];
+        emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
+        driver.findPackage(t, stop, function (res) {
+          if (stopped()) return;
+          if (!res || !res.ok) {
+            recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
+            nextPackage(stop, doneStop);
+            return;
+          }
+          markBagAttempted(run, t.referenceId);
+          run.clicks += 1;
+          emit({ state: '荷物番号クリック' });
+          driver.clickPackage(t, res.handle, function (cres) {
+            if (stopped()) return;
+            if (!cres || !cres.ok) {
+              recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
+              if (cres && cres.abortRoute) { abortRoute(cres.detail); return; }
+              nextPackage(stop, doneStop);
+              return;
+            }
+            emit({ state: 'trDetails待機中' });
+            driver.waitTrDetails(t, function (got) {
+              if (stopped()) return;
+              var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
+              recordBagResult(run, t.referenceId, status || BAG_STATUS.TIMEOUT, status ? '' : 'trDetails not observed');
+              emit({ state: status || BAG_STATUS.TIMEOUT });
+              driver.restoreAfterPackage(t, function (rres) {
+                if (stopped()) return;
+                if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません'); return; }
+                nextPackage(stop, doneStop);
+              });
+            });
+          });
+        });
+      }
+
+      emit({
+        routeIndex: i + 1, routeCode: route.routeCode,
+        stopIndex: 0, stopTotal: stops.length, stopSeq: null,
+        packageIndex: 0, packageTotal: 0, scannableId: '', state: 'Routeを開いています'
+      });
+      driver.openRoute(route, function (res) {
+        if (stopped()) return;
+        if (!res || !res.ok) { abortRoute((res && res.detail) || 'Routeを開けません'); return; }
+        nextStop(0);
+      });
+    }
+
+    nextRoute(0);
   }
 
   function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {
@@ -1864,7 +2126,14 @@
     summarizeBagRun: summarizeBagRun,
     formatBagSummary: formatBagSummary,
     snapshotNormalCapture: snapshotNormalCapture,
-    restoreNormalCapture: restoreNormalCapture
+    restoreNormalCapture: restoreNormalCapture,
+    parseStopLabel: parseStopLabel,
+    matchStopLabelEntries: matchStopLabelEntries,
+    isPackageNumberText: isPackageNumberText,
+    groupBagTargetsByStop: groupBagTargetsByStop,
+    stopNeedsExpand: stopNeedsExpand,
+    formatBagProgress: formatBagProgress,
+    runBagEngine: runBagEngine
   };
 
   if (typeof module !== 'undefined' && module.exports) {

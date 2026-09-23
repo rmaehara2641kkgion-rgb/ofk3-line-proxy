@@ -297,3 +297,226 @@ suite(PhaseCore, 'phase1-core');
   assert(all.indexOf('document.cookie') < 0 && all.indexOf('setRequestHeader') < 0, 'no auth reuse');
   console.log('ok: runner bag phase isolated from tour');
 })();
+
+// ---------------- v2: Route -> Stop -> Package engine ----------------
+// Fake driver models a Cortex Route detail: stops (collapsed/expanded), package cards, trDetails.
+function fakeWorld(spec) {
+  // spec.routes: { code: { openFails, backFails, stops: { seq: { expanded, expandFails, missing,
+  //   labelCount, packages: [{ da, ref, clickable, tr: [[trId, bagName]], dup }] } } } }
+  const log = { stopClicks: [], packageClicks: [], opened: [], back: 0, progress: [] };
+  const trMap = {};
+  let current = null;
+  function stopOf(stop) { return current && current.stops[stop.stop]; }
+  function daVisible(st, da) {
+    return !!(st && st.expanded && st.packages.some((p) => p.da === da));
+  }
+  const driver = {
+    openRoute(route, cb) {
+      const r = spec.routes[route.routeCode];
+      if (r.openFails) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
+      current = r; log.opened.push(route.routeCode); cb({ ok: true });
+    },
+    ensureStop(stop, pending, onState, cb) {
+      const st = stopOf(stop);
+      if (st && pending.some((t) => daVisible(st, t.scannableId))) { cb({ ok: true, clicked: false }); return; }
+      if (!st || st.missing) { cb({ ok: false, status: 'stop_not_found' }); return; }
+      if ((st.labelCount || 1) > 1) { cb({ ok: false, status: 'stop_ambiguous' }); return; }
+      onState('Stop #' + stop.stop + '展開中');
+      log.stopClicks.push(stop.stop);
+      if (st.expandFails) { cb({ ok: false, clicked: true, status: 'stop_expand_failed' }); return; }
+      st.expanded = true;
+      cb({ ok: true, clicked: true });
+    },
+    findPackage(target, stop, cb) {
+      const st = stopOf(stop);
+      const hits = st && st.expanded ? st.packages.filter((p) => p.da === target.scannableId) : [];
+      const count = hits.reduce((n, p) => n + (p.dup ? 2 : 1), 0);
+      if (!count) { cb({ ok: false, status: 'package_dom_not_found' }); return; }
+      if (count > 1) { cb({ ok: false, status: 'dom_ambiguous' }); return; }
+      if (hits[0].clickable === false) { cb({ ok: false, status: 'package_click_target_not_found' }); return; }
+      cb({ ok: true, handle: hits[0] });
+    },
+    clickPackage(target, handle, cb) {
+      log.packageClicks.push(handle.da);
+      (handle.tr || []).forEach(([trId, bagName]) => {
+        Core2.mergeTrDetailsMaps(trMap, { [trId]: { trId, bagName, bagScannableId: bagName ? 's' : null } });
+      });
+      cb({ ok: true });
+    },
+    waitTrDetails(target, cb) { cb(Core2.hasTrDetails(trMap, target.referenceId)); },
+    restoreAfterPackage(target, cb) { cb({ ok: true }); },
+    leaveStop(stop, cb) { cb({ ok: true }); },
+    returnToList(cb) {
+      log.back += 1;
+      cb(current && current.backFails ? { ok: false, detail: 'list not shown' } : { ok: true });
+    }
+  };
+  return { driver, trMap, log };
+}
+
+function routeTargets(spec) {
+  const out = [];
+  Object.keys(spec.routes).forEach((code) => {
+    const stops = spec.routes[code].stops;
+    Object.keys(stops).forEach((seq) => {
+      stops[seq].packages.filter((p) => !p.noise).forEach((p) => {
+        out.push({ routeId: 'R-' + code, routeCode: code, stop: Number(seq), scannableId: p.da, referenceId: p.ref });
+      });
+    });
+  });
+  return Core2.groupBagTargetsByRoute(out.sort((a, b) => a.routeCode.localeCompare(b.routeCode) || a.stop - b.stop));
+}
+
+function runEngine(spec) {
+  const w = fakeWorld(spec);
+  const routes = routeTargets(spec);
+  const all = [].concat(...routes.map((r) => r.targets));
+  const run = Core2.createBagRun(all);
+  let aborted = null;
+  Core2.runBagEngine({
+    run, routes, driver: w.driver,
+    getTrMap: () => w.trMap,
+    onProgress: (p) => w.log.progress.push(Core2.formatBagProgress(p)),
+    done: (a) => { aborted = a; }
+  });
+  const summary = Core2.summarizeBagRun(run, w.trMap);
+  return { run, summary, aborted, log: w.log, trMap: w.trMap };
+}
+
+let Core2 = RootCore;
+function v2Suite(label) {
+  // 1. several 13:00 packages in one Stop -> one Stop click
+  // 14. one Response with several trDetails -> no extra package click
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 5: { packages: [
+      { da: 'DA0000000001', ref: 'tr-a', tr: [['tr-a', 'JP_OB-AT-5597_NVY'], ['tr-b', null]] },
+      { da: 'DA0000000002', ref: 'tr-b' },
+      { da: 'DA0000000003', ref: 'tr-c', tr: [['tr-c', 'JP_OB-AM-1956_YLO']] }
+    ] } } } } });
+    assert(r.log.stopClicks.join(',') === '5', label + ' v2-1: one Stop click, got ' + r.log.stopClicks);
+    assert(r.log.packageClicks.join(',') === 'DA0000000001,DA0000000003', label + ' v2-14: tr-b skipped');
+    assert(r.summary.byReferenceId['tr-b'] === 'captured_null' && r.summary.counts.captured === 2, label + ' v2-14: statuses');
+    assert(r.summary.clicks === 2 && r.summary.stopClicks === 1, label + ' v2-1: counters');
+  })();
+
+  // 2. Stop already expanded -> no Stop click
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 16: { expanded: true, packages: [
+      { da: 'DA0000000016', ref: 'tr-16', tr: [['tr-16', 'JP_OB-AT-0016_GRN']] }
+    ] } } } } });
+    assert(r.log.stopClicks.length === 0 && r.summary.counts.captured === 1, label + ' v2-2: no Stop re-click');
+  })();
+
+  // 3. "#1" never matches Stop 11 (and vice versa)
+  (function () {
+    assert(Core2.parseStopLabel('#1') === 1 && Core2.parseStopLabel('#11') === 11, label + ' v2-3: parse');
+    assert(Core2.parseStopLabel('Stop 16') === 16 && Core2.parseStopLabel('Stop #16') === 16 &&
+      Core2.parseStopLabel('ストップ 16') === 16, label + ' v2-3: formats');
+    assert(Core2.parseStopLabel('16') === null && Core2.parseStopLabel('#1 東京都') === null &&
+      Core2.parseStopLabel('565') === null && Core2.parseStopLabel('#1a') === null, label + ' v2-3: no loose match');
+    const keys = Core2.matchStopLabelEntries([
+      { text: '#11', key: 'a' }, { text: ' #1 ', key: 'b' }, { text: '1', key: 'c' }, { text: '#111', key: 'd' }
+    ], 1);
+    assert(keys.join(',') === 'b', label + ' v2-3: only exact #1, got ' + keys);
+    assert(Core2.matchStopLabelEntries([{ text: '#1', key: 'x' }], 11).length === 0, label + ' v2-3: 11 != 1');
+  })();
+
+  // 4. DA found after Stop expand; 5. expand failure; 6. Stop missing; 7. no click target
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: {
+      3: { packages: [{ da: 'DA0000000030', ref: 'tr-30', tr: [['tr-30', 'JP_OB-AT-0030_RED']] }] },
+      7: { expandFails: true, packages: [{ da: 'DA0000000070', ref: 'tr-70' }] },
+      9: { missing: true, packages: [{ da: 'DA0000000090', ref: 'tr-90' }] },
+      12: { packages: [{ da: 'DA0000000120', ref: 'tr-120', clickable: false }] },
+      13: { labelCount: 2, packages: [{ da: 'DA0000000130', ref: 'tr-130' }] }
+    } } } });
+    const s = r.summary.byReferenceId;
+    assert(s['tr-30'] === 'captured', label + ' v2-4: DA after expand');
+    assert(s['tr-70'] === 'stop_expand_failed', label + ' v2-5: stop_expand_failed');
+    assert(s['tr-90'] === 'stop_not_found', label + ' v2-6: stop_not_found');
+    assert(s['tr-120'] === 'package_click_target_not_found', label + ' v2-7: click target missing');
+    assert(s['tr-130'] === 'stop_ambiguous', label + ' v2: stop_ambiguous');
+    assert(r.log.packageClicks.join(',') === 'DA0000000030', label + ' v2-7: nothing else clicked');
+    assert(r.summary.stopClicks === 3, label + ' v2-5: failed expand click still counted');
+  })();
+
+  // 8 / 9. one Route failing -> route_aborted, next Route continues; list not restorable -> stop
+  (function () {
+    const r = runEngine({ routes: {
+      DCX41: { openFails: true, stops: { 3: { packages: [{ da: 'DA0000000041', ref: 'tr-41' }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000042', ref: 'tr-42', tr: [['tr-42', 'JP_OB-AT-0042_BLK']] }] } } }
+    } });
+    assert(r.summary.byReferenceId['tr-41'] === 'route_aborted', label + ' v2-8: route_aborted');
+    assert(r.summary.byReferenceId['tr-42'] === 'captured', label + ' v2-9: next Route continued');
+    assert(r.aborted === '', label + ' v2-9: whole phase not aborted');
+    const rr = r.summary.routeResults;
+    assert(rr[0].status === 'route_aborted' && rr[1].status === 'done', label + ' v2-8: routeResults');
+
+    const r2 = runEngine({ routes: {
+      DCX41: { backFails: true, stops: { 3: { packages: [{ da: 'DA0000000041', ref: 'tr-41', tr: [['tr-41', null]] }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000042', ref: 'tr-42' }] } } }
+    } });
+    assert(/Route一覧へ戻れませんでした/.test(r2.aborted), label + ' v2-8: stops only when list is not restorable');
+    assert(r2.summary.byReferenceId['tr-41'] === 'captured_null' && r2.summary.byReferenceId['tr-42'] === 'not_attempted',
+      label + ' v2-8: later Route untouched');
+  })();
+
+  // 11 (engine): each package clicked at most once even when trDetails never arrives
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 4: { packages: [
+      { da: 'DA0000000401', ref: 'tr-401' }, { da: 'DA0000000402', ref: 'tr-402' }
+    ] } } } } });
+    assert(r.log.packageClicks.join(',') === 'DA0000000401,DA0000000402', label + ' v2: one click each');
+    assert(r.summary.counts.timeout === 2, label + ' v2: timeouts recorded');
+  })();
+
+  // 15. progress shows Route / Stop / Package / state
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 5: { packages: [
+      { da: 'DA0000000001', ref: 'tr-a', tr: [['tr-a', 'JP_OB-AT-5597_NVY']] }
+    ] } } } } });
+    const all = r.log.progress.join('\n---\n');
+    assert(/Route 1\/1 DCX40/.test(all) && /Stop 1\/1 \(#5\)/.test(all) && /Package 1\/1 DA0000000001/.test(all),
+      label + ' v2-15: route/stop/package lines');
+    ['Routeを開いています', 'Stop #5探索中', 'Stop #5展開中', 'DA0000000001探索中', '荷物番号クリック',
+      'trDetails待機中', '状態: captured', 'Route一覧へ復帰中'].forEach((s) => {
+      assert(all.indexOf(s) >= 0, label + ' v2-15: state ' + s);
+    });
+    assert(/Stop click 1/.test(Core2.formatBagSummary(r.summary)), label + ' v2-15: summary Stop click');
+  })();
+
+  // package card token + stopNeedsExpand
+  (function () {
+    assert(Core2.isPackageNumberText('DA0012405022') && !Core2.isPackageNumberText('250-7121269-8569466') &&
+      !Core2.isPackageNumberText('565'), label + ' v2: package number token');
+    assert(Core2.stopNeedsExpand([{ scannableId: 'DA1' }], {}) === true, label + ' v2: needs expand');
+    assert(Core2.stopNeedsExpand([{ scannableId: 'DA1' }, { scannableId: 'DA2' }], { DA2: [{}] }) === false,
+      label + ' v2: partially visible -> no click');
+    const g = Core2.groupBagTargetsByStop([{ stop: 19 }, { stop: 5 }, { stop: 19 }]);
+    assert(g.length === 2 && g[0].stop === 5 && g[1].targets.length === 2, label + ' v2: grouped by Stop');
+  })();
+
+  console.log('ok: bag v2 engine (' + label + ')');
+}
+v2Suite('root core');
+Core2 = PhaseCore;
+v2Suite('phase1-core');
+
+// v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  ['runBagEngine', 'findStopLabels', 'packageCardOf', 'packageClickTarget', 'elementFromPoint',
+    'closeNewDialogs', 'formatBagProgress', 'Core.BAG_STATUS.STOP_EXPAND_FAILED'].forEach((s) => {
+    assert(bag.indexOf(s) >= 0, 'v2 runner has ' + s);
+  });
+  const outside = runner.replace(bag, '');
+  ['runBagEngine', 'findStopLabels', 'packageCardOf', 'ensureStop'].forEach((s) => {
+    assert(outside.indexOf(s) < 0, 'v2 Bag code not outside the Bag block: ' + s);
+  });
+  assert(bag.indexOf('fetch(') < 0 && bag.indexOf('XMLHttpRequest') < 0 && bag.indexOf('setRequestHeader') < 0,
+    'v2 no request creation');
+  assert(bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v2 no persistent watchers');
+  assert(runner.indexOf("mk('Bag診断保存'") >= 0, 'v2 diagnostics download button');
+  console.log('ok: v2 runner isolation');
+})();

@@ -433,6 +433,7 @@
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
       row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('Bag診断保存', function () { saveBagDiagnostics(); }));
       row.appendChild(mk('停止', function () {
         if (bagActive()) stopBagPhase();
         else stopPoc();
@@ -1163,17 +1164,22 @@
 
   // ---- Bag enrichment phase ----
   // Separate from the Route tour above: started only by the「Bag取得」button after the
-  // normal capture is complete. Clicks the 13:00 package number (native Cortex UI) so
-  // Cortex itself POSTs /tasks/trDetails; the existing fetch/XHR hook stores the Response.
-  // Normal results are frozen before and restored after; nothing is added to store.failures.
+  // normal capture is complete. Route -> Stop -> Package order comes from Core.runBagEngine;
+  // this block is only the DOM driver. Stops are opened and package numbers clicked via the
+  // existing CDP click so Cortex itself POSTs /tasks/trDetails; the existing fetch/XHR hook
+  // stores the Response. Normal results are frozen before and restored after; nothing is
+  // added to store.failures.
   var BAG_PACKAGE_TIMEOUT_MS = 4500;
-  var BAG_ROUTE_BUDGET_MS = 90000;
+  var BAG_ROUTE_BUDGET_MS = 120000;
   var BAG_HISTORY_TIMEOUT_MS = 4000;
-  var BAG_SCROLL_MAX_STEPS = 100;
-  var BAG_MAX_SCROLLERS = 3;
+  var BAG_STOP_EXPAND_TIMEOUT_MS = 3000;
+  var BAG_DIALOG_CLOSE_TIMEOUT_MS = 2000;
+  var BAG_STOP_SCROLL_MAX_STEPS = 80;
+  var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
+  var bagProgressText = '';
 
   function bagActive() {
     return !!(bagRun && !bagRun.ended);
@@ -1191,7 +1197,12 @@
   }
 
   function setBagStatus(text) {
-    setText('ofk3-bag-status', text);
+    bagProgressText = String(text || '');
+    var el = document.getElementById('ofk3-bag-status');
+    if (el) {
+      el.style.whiteSpace = 'pre-line';
+      el.textContent = bagProgressText;
+    }
   }
 
   function afterBagLayout(fn) {
@@ -1202,68 +1213,8 @@
     }
   }
 
-  // Exact textContent.trim() === scannableId, innermost element per text node, panel excluded.
-  function collectExactDaElements(scannableIds) {
-    var entries = [];
-    var els = [];
-    var root = document.body || document.documentElement;
-    if (!root || !scannableIds.length) return {};
-    var want = {};
-    scannableIds.forEach(function (id) { want[id] = true; });
-    var walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null);
-    var node;
-    while ((node = walker.nextNode())) {
-      var value = String(node.nodeValue || '').trim();
-      if (!value || !want[value]) continue;
-      var el = node.parentElement;
-      if (!el || inPanel(el)) continue;
-      if (els.indexOf(el) >= 0) continue;
-      els.push(el);
-      entries.push({ text: el.textContent, key: els.length - 1 });
-    }
-    var byText = Core.indexExactDomTextMatches(entries, scannableIds);
-    var out = {};
-    Object.keys(byText).forEach(function (text) {
-      out[text] = byText[text].map(function (idx) { return els[idx]; });
-    });
-    return out;
-  }
-
-  function bagScrollers(els) {
-    var out = [];
-    function add(el) {
-      if (!el || inPanel(el) || out.indexOf(el) >= 0) return;
-      if ((el.scrollHeight || 0) - (el.clientHeight || 0) < 40) return;
-      out.push(el);
-    }
-    (els || []).forEach(function (el) {
-      for (var cur = el && el.parentElement, depth = 0; cur && depth < 16; depth += 1, cur = cur.parentElement) {
-        var overflowY = '';
-        try { overflowY = global.getComputedStyle(cur).overflowY; } catch (e1) {}
-        if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') add(cur);
-      }
-    });
-    var nodes = document.querySelectorAll('div, section, main, ul, tbody, [role="list"], [role="grid"], [role="table"]');
-    var generic = [];
-    for (var i = 0; i < nodes.length; i++) {
-      var overflow = '';
-      try { overflow = global.getComputedStyle(nodes[i]).overflowY; } catch (e2) {}
-      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') generic.push(nodes[i]);
-    }
-    generic.sort(function (a, b) {
-      return ((b.scrollHeight || 0) - (b.clientHeight || 0)) - ((a.scrollHeight || 0) - (a.clientHeight || 0));
-    });
-    generic.forEach(add);
-    add(document.scrollingElement || document.documentElement);
-    return out.slice(0, BAG_MAX_SCROLLERS);
-  }
-
-  function hitTestAllows(el, point) {
-    var hit = null;
-    try { hit = document.elementFromPoint(point.x, point.y); } catch (e1) {}
-    if (!hit || inPanel(hit)) return false;
-    if (hit === el || el.contains(hit)) return true;
-    return hit !== document.body && hit !== document.documentElement && hit.contains(el);
+  function hrefNow() {
+    return String(global.location.href || '');
   }
 
   function waitBag(check, timeoutMs, runId, done) {
@@ -1277,158 +1228,289 @@
     poll();
   }
 
-  // Package detail close: only history is restored (Cortex close UI is not confirmed).
-  // If the click changed the URL and history.back() cannot restore it, the Route is aborted.
-  function restoreRouteView(ctx, runId, done) {
-    if (String(global.location.href || '') === ctx.routeHref) { done(true); return; }
-    try { global.history.back(); } catch (e1) { done(false); return; }
-    waitBag(function () {
-      return String(global.location.href || '') === ctx.routeHref;
-    }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+  // Short, non-secret description of an element for diagnostics (generated css-* classes dropped).
+  function describeEl(el) {
+    if (!el || !el.tagName) return '-';
+    var out = String(el.tagName).toLowerCase();
+    if (el.id) out += '#' + el.id;
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 2);
+    if (cls.length) out += '.' + cls.join('.');
+    var role = el.getAttribute && el.getAttribute('role');
+    if (role) out += '[role=' + role + ']';
+    var aria = el.getAttribute && el.getAttribute('aria-label');
+    if (aria) out += '[aria-label=' + String(aria).slice(0, 20) + ']';
+    var text = String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (text) out += ' "' + text + '"';
+    return out;
   }
 
-  function clickBagPackage(target, el, ctx, runId, done) {
-    Core.markBagAttempted(bagRun, target.referenceId);
-    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
+  function elementVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    var r = null;
+    try { r = el.getBoundingClientRect(); } catch (e1) {}
+    return !!(r && r.width > 0 && r.height > 0);
+  }
+
+  // Text-node walk: innermost element whose textContent passes accept(text). Panel excluded.
+  function collectTextElements(root, acceptText) {
+    var els = [];
+    root = root || document.body || document.documentElement;
+    if (!root) return els;
+    var walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var value = String(node.nodeValue || '').trim();
+      if (!value) continue;
+      var el = node.parentElement;
+      if (!el || inPanel(el) || els.indexOf(el) >= 0) continue;
+      if (!acceptText(String(el.textContent || ''), value)) continue;
+      els.push(el);
+    }
+    return els;
+  }
+
+  // Exact textContent.trim() === scannableId, across the whole document (uniqueness is global).
+  function collectExactDaElements(scannableIds) {
+    var want = {};
+    scannableIds.forEach(function (id) { want[id] = true; });
+    var els = collectTextElements(null, function (full, own) { return !!want[own]; });
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
+    var byText = Core.indexExactDomTextMatches(entries, scannableIds);
+    var out = {};
+    Object.keys(byText).forEach(function (text) {
+      out[text] = byText[text].map(function (idx) { return els[idx]; });
+    });
+    return out;
+  }
+
+  function collectStopLabelElements(root) {
+    return collectTextElements(root, function (full) { return Core.parseStopLabel(full) != null; });
+  }
+
+  function findStopLabels(seq) {
+    var els = collectStopLabelElements(null);
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
+    return Core.matchStopLabelEntries(entries, seq).map(function (i) { return els[i]; });
+  }
+
+  // Highest ancestor holding this Stop label and no other Stop label.
+  function stopBlockOf(label) {
+    var block = label;
+    for (var cur = label.parentElement, depth = 0; cur && depth < 10; depth += 1, cur = cur.parentElement) {
+      if (cur === document.body || cur === document.documentElement || inPanel(cur)) break;
+      if (collectStopLabelElements(cur).length > 1) break;
+      block = cur;
+    }
+    return block;
+  }
+
+  // Package card: highest ancestor (<= 8 levels) containing exactly one package-number token.
+  function packageCardOf(daEl) {
+    var card = daEl;
+    for (var cur = daEl.parentElement, depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
+      if (cur === document.body || cur === document.documentElement || inPanel(cur)) break;
+      var numbers = collectTextElements(cur, function (full) { return Core.isPackageNumberText(full); });
+      if (numbers.length !== 1) break;
+      if (collectStopLabelElements(cur).length > 0) break;
+      card = cur;
+    }
+    return card;
+  }
+
+  function isNativeClickable(el) {
+    if (!el || !el.tagName) return false;
+    var tag = String(el.tagName).toLowerCase();
+    if (tag === 'a' || tag === 'button') return true;
+    var role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    if (role === 'button' || role === 'link') return true;
+    if (el.hasAttribute && (el.hasAttribute('tabindex') || el.hasAttribute('onclick'))) return true;
+    var cursor = '';
+    try { cursor = global.getComputedStyle(el).cursor; } catch (e1) {}
+    return cursor === 'pointer';
+  }
+
+  // The package-number element itself or its nearest clickable ancestor inside the same card.
+  function packageClickTarget(daEl, card) {
+    for (var cur = daEl; cur; cur = cur.parentElement) {
+      if (isNativeClickable(cur)) return cur;
+      if (cur === card) break;
+    }
+    return null;
+  }
+
+  function scrollableAncestors(el) {
+    var out = [];
+    for (var cur = el && el.parentElement, depth = 0; cur && depth < 20; depth += 1, cur = cur.parentElement) {
+      if (inPanel(cur)) break;
+      var overflowY = '';
+      try { overflowY = global.getComputedStyle(cur).overflowY; } catch (e1) {}
+      if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+        (cur.scrollHeight || 0) - (cur.clientHeight || 0) > 20) out.push(cur);
+    }
+    return out;
+  }
+
+  // Main scroller of the Route detail: scrollable ancestor of any Stop label, else the largest one.
+  function bagMainScroller() {
+    var labels = collectStopLabelElements(null);
+    for (var i = 0; i < labels.length; i++) {
+      var anc = scrollableAncestors(labels[i]);
+      if (anc.length) return anc[0];
+    }
+    var best = null;
+    var nodes = document.querySelectorAll('div, section, main, ul, tbody, [role="list"], [role="grid"], [role="table"]');
+    for (var j = 0; j < nodes.length; j++) {
+      if (inPanel(nodes[j])) continue;
+      var overflow = '';
+      try { overflow = global.getComputedStyle(nodes[j]).overflowY; } catch (e2) {}
+      if (overflow !== 'auto' && overflow !== 'scroll' && overflow !== 'overlay') continue;
+      var delta = (nodes[j].scrollHeight || 0) - (nodes[j].clientHeight || 0);
+      if (delta > 40 && (!best || delta > (best.scrollHeight - best.clientHeight))) best = nodes[j];
+    }
+    return best || document.scrollingElement || document.documentElement;
+  }
+
+  // Scroll-search: current position first, then downward, then wrap once from the top.
+  function scrollSearch(find, maxSteps, runId, done) {
+    var scroller = bagMainScroller();
+    var steps = 0;
+    var wrapped = false;
+    function scrollTo(y) {
+      scroller.scrollTop = y;
+      try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
+    }
+    function tick() {
+      if (!bagIsCurrent(runId)) return;
+      var hit = find();
+      if (hit) { done(hit); return; }
+      if (!scroller || steps >= maxSteps) { done(null); return; }
+      var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
+      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.6));
+      steps += 1;
+      if (scroller.scrollTop >= maxScroll - 1) {
+        if (wrapped || maxScroll <= 0) { done(null); return; }
+        wrapped = true;
+        scrollTo(0);
+      } else {
+        scrollTo(Math.min(scroller.scrollTop + stepPx, maxScroll));
+      }
+      bagLater(tick, 160);
+    }
+    tick();
+  }
+
+  function hitAllowed(hit, el, container) {
+    if (!hit || inPanel(hit)) return false;
+    if (hit === el || el.contains(hit)) return true;
+    if (container && (hit === container || container.contains(hit))) return true;
+    return hit !== document.body && hit !== document.documentElement && hit.contains(el);
+  }
+
+  // Points inside the element's own rect (center first). Each is verified with elementFromPoint.
+  function candidatePoints(rect) {
+    var c = Core.viewportClickPoint(rect);
+    if (!c) return [];
+    var pts = [c];
+    [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]].forEach(function (f) {
+      pts.push({ x: rect.left + rect.width * f[0], y: rect.top + rect.height * f[1] });
+    });
+    return pts.filter(function (p) {
+      return p.x > 0 && p.y > 0 && p.x < global.innerWidth && p.y < global.innerHeight;
+    });
+  }
+
+  // scrollIntoView -> rAF x2 -> rect -> elementFromPoint check -> requestCdpClick.
+  // resolve() re-finds the element after layout (virtualized lists re-render on scroll).
+  function safeCdpClick(resolve, runId, done) {
+    var first = resolve();
+    if (!first || !first.el) { done({ ok: false, detail: 'element lost' }); return; }
+    try { first.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
     afterBagLayout(function () {
       if (!bagIsCurrent(runId)) return;
-      // Virtualized lists may re-render on scroll: re-resolve by exact DA after layout.
-      var fresh = collectExactDaElements([target.scannableId])[target.scannableId] || [];
-      if (Core.domMatchStatus(fresh) !== 'unique') {
-        Core.recordBagResult(bagRun, target.referenceId,
-          fresh.length ? Core.BAG_STATUS.DOM_AMBIGUOUS : Core.BAG_STATUS.DOM_NOT_FOUND, 'after scroll');
-        done();
-        return;
-      }
-      el = fresh[0];
+      var cur = resolve();
+      if (!cur || !cur.el) { done({ ok: false, detail: 'element lost after scroll' }); return; }
       var rect = null;
-      try { rect = el.getBoundingClientRect(); } catch (e2) {}
-      var point = Core.viewportClickPoint(rect);
-      if (!point) {
-        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'no coords');
-        done();
-        return;
-      }
+      try { rect = cur.el.getBoundingClientRect(); } catch (e2) {}
+      var pts = candidatePoints(rect);
+      if (!pts.length) { done({ ok: false, detail: 'no coords' }); return; }
       setPanelClickable(false);
-      if (!hitTestAllows(el, point)) {
+      var point = null;
+      var lastHit = null;
+      for (var i = 0; i < pts.length && !point; i++) {
+        var hit = null;
+        try { hit = document.elementFromPoint(pts[i].x, pts[i].y); } catch (e3) {}
+        if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];
+        else lastHit = hit;
+      }
+      if (!point) {
         setPanelClickable(true);
-        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'covered');
-        ctx.abort = 'Package番号が他要素に覆われています（detailの閉じ方不明）';
-        done();
+        done({ ok: false, covered: true, detail: 'covered by ' + describeEl(lastHit) });
         return;
       }
-      bagRun.clicks += 1;
       requestCdpClick(point, function (res) {
         setPanelClickable(true);
         if (!bagIsCurrent(runId)) return;
-        if (!res || !res.ok) {
-          Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED,
-            (res && (res.message || res.error)) || 'CDP');
-          done();
-          return;
-        }
-        waitBag(function () {
-          return Core.hasTrDetails(store.trDetailsByTrId, target.referenceId);
-        }, BAG_PACKAGE_TIMEOUT_MS, runId, function (got) {
-          Core.recordBagResult(bagRun, target.referenceId,
-            got ? Core.capturedBagStatus(store.trDetailsByTrId, target.referenceId) : Core.BAG_STATUS.TIMEOUT,
-            got ? '' : 'trDetails not observed');
-          restoreRouteView(ctx, runId, function (ok) {
-            if (!ok) ctx.abort = 'Package detail後にRoute詳細へ戻れませんでした';
-            bagLater(done, 300);
-          });
-        });
+        done(res && res.ok ? { ok: true } : { ok: false, detail: (res && (res.message || res.error)) || 'CDP' });
       });
     });
   }
 
-  // One top-to-bottom sweep per scroller; at each position click the first pending
-  // target whose DA is exactly and uniquely present, then re-check without scrolling.
-  function sweepBagTargets(targets, ctx, runId, done) {
-    var scrollers = null;
-    var scrollerIndex = 0;
-    var steps = 0;
-
-    function pending() {
-      return Core.pendingBagTargets(bagRun, targets, store.trDetailsByTrId);
+  function visibleDialogs() {
+    var out = [];
+    var nodes = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]');
+    for (var i = 0; i < nodes.length; i++) {
+      if (!inPanel(nodes[i]) && elementVisible(nodes[i]) && out.indexOf(nodes[i]) < 0) out.push(nodes[i]);
     }
+    return out;
+  }
 
-    function finish() {
-      pending().forEach(function (t) {
-        if (ctx.abort || Date.now() > ctx.deadline) return; // stay not_attempted
-        Core.recordBagResult(bagRun, t.referenceId, Core.BAG_STATUS.DOM_NOT_FOUND, '');
+  // Native close control inside a Cortex dialog: identified by role/aria-label/text, never by position.
+  function dialogCloseControl(dialog) {
+    var nodes = dialog.querySelectorAll('button, [role="button"], a');
+    for (var i = 0; i < nodes.length; i++) {
+      var aria = String((nodes[i].getAttribute && nodes[i].getAttribute('aria-label')) || '');
+      var text = String(nodes[i].textContent || '').replace(/\s+/g, ' ').trim();
+      if (/^(close|閉じる|キャンセル|cancel|戻る|back)$/i.test(aria) ||
+        /^(×|✕|✖|x|close|閉じる|キャンセル|cancel|戻る|back)$/i.test(text)) {
+        if (elementVisible(nodes[i])) return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  // Close dialogs that were not open before (before = list of dialogs to keep).
+  function closeNewDialogs(before, runId, done) {
+    var fresh = visibleDialogs().filter(function (d) { return (before || []).indexOf(d) < 0; });
+    if (!fresh.length) { done({ ok: true }); return; }
+    var dialog = fresh[0];
+    var control = dialogCloseControl(dialog);
+    if (!control) { done({ ok: false, detail: 'dialogの閉じるUIが見つかりません: ' + describeEl(dialog) }); return; }
+    safeCdpClick(function () { return control.isConnected ? { el: control, container: dialog } : null; }, runId, function (res) {
+      if (!res.ok) { done({ ok: false, detail: 'dialog close click失敗: ' + res.detail }); return; }
+      waitBag(function () { return !dialog.isConnected || !elementVisible(dialog); }, BAG_DIALOG_CLOSE_TIMEOUT_MS, runId, function (gone) {
+        if (!gone) { done({ ok: false, detail: 'dialogが閉じません: ' + describeEl(dialog) }); return; }
+        closeNewDialogs(before, runId, done);
       });
-      done();
-    }
+    });
+  }
 
-    function check() {
-      if (!bagIsCurrent(runId)) return;
-      paint();
-      var list = pending();
-      if (!list.length || ctx.abort) { finish(); return; }
-      if (Date.now() > ctx.deadline) {
-        ctx.abort = 'Route上限時間を超過';
-        finish();
-        return;
-      }
-      var found = collectExactDaElements(list.map(function (t) { return t.scannableId; }));
-      for (var i = 0; i < list.length; i++) {
-        var matches = found[list[i].scannableId] || [];
-        var status = Core.domMatchStatus(matches);
-        if (status === 'ambiguous') {
-          Core.recordBagResult(bagRun, list[i].referenceId, Core.BAG_STATUS.DOM_AMBIGUOUS, matches.length + ' matches');
-          bagLater(check, 0);
-          return;
-        }
-        if (status === 'unique') {
-          clickBagPackage(list[i], matches[0], ctx, runId, check);
-          return;
-        }
-      }
-      if (!scrollers) {
-        scrollers = bagScrollers([]);
-        scrollerIndex = 0;
-        steps = 0;
-        if (scrollers[0]) scrollers[0].scrollTop = 0;
-      }
-      var scroller = scrollers[scrollerIndex];
-      if (!scroller) { finish(); return; }
-      var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
-      if (steps >= BAG_SCROLL_MAX_STEPS || (steps > 0 && scroller.scrollTop >= maxScroll)) {
-        scrollerIndex += 1;
-        steps = 0;
-        if (scrollers[scrollerIndex]) scrollers[scrollerIndex].scrollTop = 0;
-        bagLater(check, 120);
-        return;
-      }
-      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.55));
-      scroller.scrollTop = Math.min((steps === 0 ? 0 : scroller.scrollTop + stepPx), maxScroll);
-      try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
-      steps += 1;
-      bagLater(check, 150);
-    }
-    check();
+  function historyBackTo(href, runId, done) {
+    if (hrefNow() === href) { done(true); return; }
+    try { global.history.back(); } catch (e1) { done(false); return; }
+    waitBag(function () { return hrefNow() === href; }, BAG_HISTORY_TIMEOUT_MS, runId, done);
   }
 
   function anyRouteCardShown() {
     var cards = visibleRouteCards();
     for (var i = 0; i < cards.length; i++) {
-      var rect = null;
-      try { rect = cards[i].getBoundingClientRect(); } catch (e1) {}
-      if (rect && rect.width > 0 && rect.height > 0) return true;
+      if (elementVisible(cards[i])) return true;
     }
     return false;
   }
 
   function routeListShown(ctx) {
-    return String(global.location.href || '') === ctx.listHref && anyRouteCardShown();
-  }
-
-  function bagReturnToList(ctx, runId, done) {
-    if (routeListShown(ctx)) { done(true); return; }
-    if (String(global.location.href || '') === ctx.listHref) { done(false); return; }
-    try { global.history.back(); } catch (e1) { done(false); return; }
-    waitBag(function () { return routeListShown(ctx); }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+    return hrefNow() === ctx.listHref && anyRouteCardShown();
   }
 
   // Same search order as the tour: exact card, then CDP wheel up 12 / down 30.
@@ -1451,99 +1533,224 @@
     look();
   }
 
-  function openBagRoute(group, ctx, runId, done) {
-    var route = { routeId: group.routeId, routeCode: group.routeCode };
-    findBagRouteCard(route, runId, function (card) {
-      if (!card) { done(false, 'Route DOM未発見'); return; }
-      clickBagRouteCard(route, card, ctx, runId, done);
-    });
-  }
-
-  function clickBagRouteCard(route, card, ctx, runId, done) {
-    var beforeDetails = store.detailsByRouteId[route.routeId] || null;
-    try { card.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
-    afterBagLayout(function () {
-      if (!bagIsCurrent(runId)) return;
-      var target = findInnerClickTarget(card, route) || card;
-      var rect = null;
-      try { rect = target.getBoundingClientRect(); } catch (e2) {}
-      var point = Core.viewportClickPoint(rect);
-      if (!point) { done(false, 'Route座標取得失敗'); return; }
-      setPanelClickable(false);
-      if (!hitTestAllows(target, point)) {
-        setPanelClickable(true);
-        done(false, 'Route一覧が他要素に覆われています', true);
-        return;
-      }
-      requestCdpClick(point, function (res) {
-        setPanelClickable(true);
-        if (!bagIsCurrent(runId)) return;
-        if (!res || !res.ok) { done(false, (res && res.message) || 'Route CDP click失敗'); return; }
-        waitBag(function () {
-          var fresh = store.detailsByRouteId[route.routeId];
-          if (fresh && fresh !== beforeDetails) return true;
-          return String(global.location.href || '') !== ctx.listHref && visibleRouteCards().length === 0;
-        }, tour.timeoutMs || 15000, runId, function (ok) {
-          if (!ok) { done(false, 'Route詳細が開きませんでした'); return; }
-          bagLater(function () {
-            ctx.routeHref = String(global.location.href || '');
-            done(true, '');
-          }, 800);
+  function createBagDriver(ctx, runId) {
+    ctx.reopenedStops = {};
+    var driver = {
+      openRoute: function (route, cb) {
+        if (ctx.currentPage) { ctx.routeHref = hrefNow(); cb({ ok: true }); return; }
+        closeNewDialogs(ctx.baseDialogs, runId, function (closed) {
+          if (!closed.ok) { cb({ ok: false, detail: closed.detail }); return; }
+          findBagRouteCard(route, runId, function (card) {
+            if (!card) { cb({ ok: false, detail: 'Route DOM未発見' }); return; }
+            var beforeDetails = store.detailsByRouteId[route.routeId] || null;
+            safeCdpClick(function () {
+              var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+              return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
+            }, runId, function (res) {
+              if (!res.ok) { cb({ ok: false, detail: 'Route click: ' + res.detail }); return; }
+              waitBag(function () {
+                var fresh = store.detailsByRouteId[route.routeId];
+                if (fresh && fresh !== beforeDetails) return true;
+                return hrefNow() !== ctx.listHref && !anyRouteCardShown();
+              }, tour.timeoutMs || 15000, runId, function (ok) {
+                if (!ok) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
+                bagLater(function () {
+                  ctx.routeHref = hrefNow();
+                  ctx.routeDialogs = visibleDialogs();
+                  cb({ ok: true });
+                }, 800);
+              });
+            });
+          });
         });
-      });
-    });
-  }
+      },
 
-  function runBagRoutes(groups, index, ctx, runId) {
-    if (!bagIsCurrent(runId)) return;
-    if (index >= groups.length) { finishBagPhase(''); return; }
-    var group = groups[index];
-    if (!Core.pendingBagTargets(bagRun, group.targets, store.trDetailsByTrId).length) {
-      runBagRoutes(groups, index + 1, ctx, runId);
-      return;
-    }
-    setBagStatus('Bag取得中… ' + group.routeCode + '（' + (index + 1) + '/' + groups.length + ' Route）');
-    ctx.abort = '';
-    ctx.deadline = Date.now() + BAG_ROUTE_BUDGET_MS;
-    openBagRoute(group, ctx, runId, function (opened, message, fatal) {
-      if (!bagIsCurrent(runId)) return;
-      if (fatal) {
-        finishBagPhase(group.routeCode + ': ' + message);
-        return;
-      }
-      function next() {
-        bagReturnToList(ctx, runId, function (back) {
-          if (!back) {
-            finishBagPhase('Route一覧へ戻れませんでした（' + group.routeCode + '）');
+      ensureStop: function (stop, pending, onState, cb) {
+        ctx.stopBlock = null;
+        ctx.stopHref = hrefNow();
+        var das = pending.map(function (t) { return t.scannableId; });
+        var outcome = null;
+        scrollSearch(function () {
+          if (!Core.stopNeedsExpand(pending, collectExactDaElements(das))) {
+            outcome = { present: true };
+            return outcome;
+          }
+          var labels = findStopLabels(stop.stop);
+          if (labels.length > 1) { outcome = { ambiguous: labels.length }; return outcome; }
+          if (labels.length === 1) { outcome = { label: labels[0] }; return outcome; }
+          return null;
+        }, BAG_STOP_SCROLL_MAX_STEPS, runId, function (found) {
+          if (!found) {
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND, detail: 'Stop #' + stop.stop + ' label未発見' });
             return;
           }
-          bagLater(function () { runBagRoutes(groups, index + 1, ctx, runId); }, 350);
+          if (found.present) { cb({ ok: true, clicked: false }); return; }
+          if (found.ambiguous) {
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_AMBIGUOUS, detail: 'Stop #' + stop.stop + ' label ' + found.ambiguous + '件' });
+            return;
+          }
+          var label = found.label;
+          ctx.stopBlock = stopBlockOf(label);
+          onState('Stop #' + stop.stop + '展開中');
+          safeCdpClick(function () {
+            if (label.isConnected) return { el: label, container: ctx.stopBlock };
+            var again = findStopLabels(stop.stop);
+            if (again.length !== 1) return null;
+            label = again[0];
+            ctx.stopBlock = stopBlockOf(label);
+            return { el: label, container: ctx.stopBlock };
+          }, runId, function (res) {
+            if (!res.ok) {
+              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, abortRoute: !!res.covered });
+              return;
+            }
+            waitBag(function () {
+              var present = collectExactDaElements(das);
+              return !Core.stopNeedsExpand(pending, present);
+            }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
+              if (opened) { cb({ ok: true, clicked: true }); return; }
+              // Stop click did not render the targets; undo any navigation it caused.
+              historyBackTo(ctx.stopHref, runId, function (back) {
+                cb({
+                  ok: false,
+                  clicked: true,
+                  status: Core.BAG_STATUS.STOP_EXPAND_FAILED,
+                  detail: 'Stop #' + stop.stop + ' click後に対象DAが表示されません',
+                  abortRoute: !back
+                });
+              });
+            });
+          });
+        });
+      },
+
+      findPackage: function (target, stop, cb) {
+        driver.searchPackage(target, function (res) {
+          if (res.ok || res.status !== Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND || ctx.reopenedStops[stop.stop]) {
+            cb(res);
+            return;
+          }
+          // The Stop may have collapsed after returning from a package detail: reopen it once.
+          ctx.reopenedStops[stop.stop] = true;
+          driver.ensureStop(stop, [target], function () {}, function (sres) {
+            if (sres && sres.clicked) bagRun.stopClicks = (bagRun.stopClicks || 0) + 1;
+            if (!sres || !sres.ok) { cb(res); return; }
+            driver.searchPackage(target, cb);
+          });
+        });
+      },
+
+      searchPackage: function (target, cb) {
+        var lastCount = 0;
+        scrollSearch(function () {
+          var matches = collectExactDaElements([target.scannableId])[target.scannableId] || [];
+          lastCount = matches.length;
+          return matches.length ? matches : null;
+        }, BAG_PACKAGE_SCROLL_MAX_STEPS, runId, function (matches) {
+          var status = Core.domMatchStatus(matches || []);
+          if (status === 'none') {
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND, detail: 'DA未表示' });
+            return;
+          }
+          if (status === 'ambiguous') {
+            cb({ ok: false, status: Core.BAG_STATUS.DOM_AMBIGUOUS, detail: lastCount + ' matches' });
+            return;
+          }
+          var da = matches[0];
+          var card = packageCardOf(da);
+          var clickEl = packageClickTarget(da, card);
+          if (!clickEl) {
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND, detail: 'card ' + describeEl(card) });
+            return;
+          }
+          cb({ ok: true, handle: { scannableId: target.scannableId } });
+        });
+      },
+
+      clickPackage: function (target, handle, cb) {
+        ctx.packageHref = hrefNow();
+        ctx.packageDialogs = visibleDialogs();
+        safeCdpClick(function () {
+          var m = collectExactDaElements([handle.scannableId])[handle.scannableId] || [];
+          if (m.length !== 1) return null;
+          var card = packageCardOf(m[0]);
+          var el = packageClickTarget(m[0], card);
+          return el ? { el: el, container: card } : null;
+        }, runId, function (res) {
+          if (res.ok) { cb({ ok: true }); return; }
+          if (!res.covered) { cb({ ok: false, detail: res.detail }); return; }
+          // Covered: a native dialog left open? Close it via its own close UI and stop this Route.
+          closeNewDialogs(ctx.routeDialogs || [], runId, function () {
+            cb({ ok: false, detail: res.detail, abortRoute: true });
+          });
+        });
+      },
+
+      waitTrDetails: function (target, cb) {
+        waitBag(function () {
+          return Core.hasTrDetails(store.trDetailsByTrId, target.referenceId);
+        }, BAG_PACKAGE_TIMEOUT_MS, runId, cb);
+      },
+
+      restoreAfterPackage: function (target, cb) {
+        bagLater(function () {
+          historyBackTo(ctx.packageHref, runId, function (back) {
+            if (!back) { cb({ ok: false, detail: 'Package detail後にURLが戻りません' }); return; }
+            closeNewDialogs(ctx.packageDialogs, runId, function (closed) {
+              cb(closed.ok ? { ok: true } : { ok: false, detail: closed.detail });
+            });
+          });
+        }, 300);
+      },
+
+      leaveStop: function (stop, cb) {
+        historyBackTo(ctx.stopHref, runId, function (back) {
+          cb(back ? { ok: true } : { ok: false, detail: 'Stop表示からRoute詳細へ戻れません' });
+        });
+      },
+
+
+      returnToList: function (cb) {
+        if (ctx.currentPage) { cb({ ok: true }); return; }
+        closeNewDialogs(ctx.baseDialogs, runId, function () {
+          var backs = 0;
+          function step() {
+            if (!bagIsCurrent(runId)) return;
+            if (routeListShown(ctx)) { cb({ ok: true }); return; }
+            if (hrefNow() === ctx.listHref) {
+              waitBag(function () { return anyRouteCardShown(); }, BAG_HISTORY_TIMEOUT_MS, runId, function (shown) {
+                cb(shown ? { ok: true } : { ok: false, detail: 'Route一覧URLだがRoute cardが見えません' });
+              });
+              return;
+            }
+            if (backs >= 3) { cb({ ok: false, detail: 'history.back 3回でも一覧URLに戻りません' }); return; }
+            backs += 1;
+            try { global.history.back(); } catch (e1) { cb({ ok: false, detail: 'history.back失敗' }); return; }
+            waitBag(function () { return hrefNow() === ctx.listHref; }, BAG_HISTORY_TIMEOUT_MS, runId, function () {
+              step();
+            });
+          }
+          step();
         });
       }
-      if (!opened) {
-        bagRun.routeErrors.push(group.routeCode + ': ' + message);
-        next();
-        return;
-      }
-      sweepBagTargets(group.targets, ctx, runId, function () {
-        if (ctx.abort) bagRun.routeErrors.push(group.routeCode + ': ' + ctx.abort);
-        next();
-      });
-    });
+    };
+    return driver;
   }
 
   function finishBagPhase(aborted) {
     if (!bagRun || bagRun.ended) return;
     if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
     setPanelClickable(true);
-    bagRun.aborted = aborted || (bagRun.routeErrors.length ? bagRun.routeErrors.join(' / ') : '');
+    bagRun.aborted = aborted || '';
     bagRun.ended = true;
     Core.restoreNormalCapture(store, bagSnapshot);
     bagSnapshot = null;
     var summary = Core.summarizeBagRun(bagRun, store.trDetailsByTrId);
     store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
     bagRun.summary = summary;
-    setBagStatus(Core.formatBagSummary(summary));
+    var routeLines = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
+      .map(function (r) { return r.routeCode + ': ' + r.status + ' ' + (r.detail || ''); });
+    setBagStatus(Core.formatBagSummary(summary) + (routeLines.length ? '\n' + routeLines.join('\n') : ''));
     paint();
   }
 
@@ -1551,6 +1758,38 @@
     if (!bagActive()) return;
     bagRun.stopRequested = true;
     finishBagPhase('手動停止');
+  }
+
+  function routeFromHref(routes) {
+    var href = hrefNow();
+    var hits = routes.filter(function (r) {
+      if (!r.routeId) return false;
+      var re = new RegExp('(?:^|[/=?&])' + String(r.routeId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:$|[/?#&])');
+      return re.test(href);
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  function saveBagDiagnostics() {
+    if (!bagRun) { alert('Bag取得はまだ実行されていません。'); return; }
+    var results = {};
+    Object.keys(bagRun.results || {}).forEach(function (ref) { results[ref] = bagRun.results[ref]; });
+    var payload = {
+      localDate: currentLocalDate(),
+      summary: bagRun.summary || Core.summarizeBagRun(bagRun, store.trDetailsByTrId),
+      targets: bagRun.targets,
+      results: results,
+      routeResults: bagRun.routeResults || [],
+      selection: bagRun.selection ? bagRun.selection.skipped : null,
+      progress: bagProgressText
+    };
+    try {
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'cortex-bag-diagnostics_' + currentLocalDate() + '.json';
+      a.click();
+    } catch (e) { alert('Bag診断JSONの保存に失敗しました。'); }
   }
 
   function startBagPhase() {
@@ -1569,29 +1808,44 @@
       return;
     }
     var selection = Core.selectBagTargets(detailsList, store.trDetailsByTrId);
+    var routes = Core.groupBagTargetsByRoute(selection.targets);
+    var currentPage = !anyRouteCardShown();
+    if (currentPage && selection.targets.length) {
+      // Not on the Route list: only the Route whose routeId is in the URL, no navigation.
+      var only = routeFromHref(routes);
+      if (!only) {
+        alert('表示中のRouteを特定できません。Route一覧で「Bag取得」を押してください。');
+        return;
+      }
+      routes = [only];
+    }
     bagSnapshot = Core.snapshotNormalCapture(store);
     bagRun = Core.createBagRun(selection.targets);
     bagRun.selection = selection;
-    bagRun.routeErrors = [];
     var runId = bagRun.id;
     if (!selection.targets.length) {
       finishBagPhase('');
       return;
     }
     var ctx = {
-      listHref: String(global.location.href || ''),
-      routeHref: String(global.location.href || ''),
-      abort: '',
-      deadline: Date.now() + BAG_ROUTE_BUDGET_MS
+      currentPage: currentPage,
+      listHref: hrefNow(),
+      routeHref: hrefNow(),
+      baseDialogs: visibleDialogs()
     };
-    if (anyRouteCardShown()) {
-      runBagRoutes(Core.groupBagTargetsByRoute(selection.targets), 0, ctx, runId);
-      return;
-    }
-    // Not on the Route list: work on the currently open page only (no navigation).
-    setBagStatus('Bag取得中…（表示中の画面）');
-    sweepBagTargets(selection.targets, ctx, runId, function () {
-      finishBagPhase(ctx.abort || '');
+    setBagStatus('Bag取得中…');
+    Core.runBagEngine({
+      run: bagRun,
+      routes: routes,
+      getTrMap: function () { return store.trDetailsByTrId; },
+      driver: createBagDriver(ctx, runId),
+      routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      onProgress: function (p) {
+        if (bagIsCurrent(runId)) setBagStatus(Core.formatBagProgress(p));
+      },
+      done: function (aborted) {
+        if (bagRun && bagRun.id === runId) finishBagPhase(aborted);
+      }
     });
   }
 
