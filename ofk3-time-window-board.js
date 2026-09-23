@@ -24,7 +24,6 @@
   var CONTENT_ID = 'ofk3-tw-board-content';
   var ANCHOR_ID = 'ofk3-cortex13-dash-card';
   var END_LIMIT_MIN = 780;
-  var BULLETIN_ROWS_PER_PAGE = 16;
   var LABEL_NOT_CAPTURED = '未取得';
   var LABEL_NO_MATCH = '照合不可';
   var LABEL_NO_SEQ = '順番なし';
@@ -373,44 +372,50 @@
     return html;
   }
 
-  // A: 印刷用（ページ分割・各ページにヘッダ+表見出し）
+  // A: 印刷用ヘッダ（1回のみ・コンパクト。2ページ目では再掲しない）
+  function buildBulletinPrintHeaderHtml(board) {
+    var h = '';
+    h += '<div class="tw-board-print-header">';
+    h += '<div class="tw-board-print-title">OFK3　本日の時間指定　<span class="tw-board-print-accent">13:00まで</span>　全体掲示表</div>';
+    h += '<div class="tw-board-print-meta">' + esc(board.dateDisplay)
+      + '　※積み込み前に必ず確認　※13:00までの時間指定があるRouteのみ</div>';
+    h += '</div>';
+    return h;
+  }
+
+  // A: 印刷用（連続1テーブル。強制page-breakなし。theadのみページ跨ぎで繰返し）
   function buildBulletinPrintHtml(board) {
     if (!board.routeList.length) return buildEmptyHtml(board);
     var html = '';
-    html += '<div class="tw-board-root" style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
-    html += '<div class="tw-board-pages">';
-    var list = board.routeList;
-    var pi;
-    for (pi = 0; pi < list.length; pi += BULLETIN_ROWS_PER_PAGE) {
-      var pageRows = list.slice(pi, pi + BULLETIN_ROWS_PER_PAGE);
-      html += '<div class="tw-board-page" style="margin-bottom:24px;">';
-      html += buildPageHeaderHtml(board, '全体掲示表');
-      html += '<table class="tw-bulletin-table" style="width:100%;border-collapse:collapse;font-size:12px;">';
-      html += '<thead><tr style="background:#f1f5f9;border-bottom:2px solid #111;">';
-      html += '<th style="text-align:left;padding:6px 4px;">Driver</th>';
-      html += '<th style="text-align:left;padding:6px 4px;">Route</th>';
-      html += '<th style="text-align:left;padding:6px 4px;">Area</th>';
-      html += '<th style="text-align:right;padding:6px 4px;">配達数</th>';
-      html += '<th style="text-align:right;padding:6px 4px;">目的地</th>';
-      html += '<th style="text-align:right;padding:6px 4px;color:#b91c1c;">13:00まで</th>';
-      html += '<th style="text-align:left;padding:6px 4px;">対象巡回順</th>';
-      html += '</tr></thead><tbody>';
-      pageRows.forEach(function (r, i) {
-        var bg = i % 2 ? 'background:#f8fafc;' : '';
-        html += '<tr style="border-bottom:1px solid #cbd5e1;' + bg + 'page-break-inside:avoid;break-inside:avoid;">';
-        html += '<td style="padding:6px 4px;">' + esc(r.driverName || '-') + '</td>';
-        html += '<td style="padding:6px 4px;font-family:monospace;font-weight:800;">' + esc(r.routeCode) + '</td>';
-        html += '<td style="padding:6px 4px;font-size:11px;">' + esc(r.area) + '</td>';
-        html += '<td style="padding:6px 4px;text-align:right;">' + r.totalDeliveries + '個</td>';
-        html += '<td style="padding:6px 4px;text-align:right;">' + r.allDestinations + '件</td>';
-        html += '<td style="padding:6px 4px;text-align:right;font-weight:900;color:#b91c1c;font-size:14px;">' + r.until1300Count + '個</td>';
-        html += '<td style="padding:6px 4px;font-family:monospace;font-size:11px;">' + esc(r.sequenceLabel) + '</td>';
-        html += '</tr>';
-      });
-      html += '</tbody></table></div>';
-    }
-    html += '</div>';
-    html += '<div class="tw-board-footer" style="margin-top:8px;font-size:10px;color:#666;">※ 住所・氏名・電話・Tracking ID は掲示しません。　掲載 '
+    html += '<div class="tw-board-root tw-bulletin-print" style="font-family:\'Hiragino Sans\',\'Noto Sans JP\',sans-serif;color:#111;">';
+    html += buildBulletinPrintHeaderHtml(board);
+    html += '<table class="tw-bulletin-table">';
+    html += '<colgroup>';
+    html += '<col class="tw-col-driver"><col class="tw-col-route"><col class="tw-col-area">';
+    html += '<col class="tw-col-del"><col class="tw-col-dest"><col class="tw-col-until"><col class="tw-col-seq">';
+    html += '</colgroup>';
+    html += '<thead><tr>';
+    html += '<th class="tw-th-l">Driver</th>';
+    html += '<th class="tw-th-l">Route</th>';
+    html += '<th class="tw-th-l">Area</th>';
+    html += '<th class="tw-th-r">配達数</th>';
+    html += '<th class="tw-th-r">目的地</th>';
+    html += '<th class="tw-th-r tw-th-until">13:00まで</th>';
+    html += '<th class="tw-th-l">対象巡回順</th>';
+    html += '</tr></thead><tbody>';
+    board.routeList.forEach(function (r, i) {
+      html += '<tr class="' + (i % 2 ? 'tw-row-alt' : '') + '">';
+      html += '<td>' + esc(r.driverName || '-') + '</td>';
+      html += '<td class="tw-td-route">' + esc(r.routeCode) + '</td>';
+      html += '<td class="tw-td-area">' + esc(r.area) + '</td>';
+      html += '<td class="tw-td-num">' + r.totalDeliveries + '個</td>';
+      html += '<td class="tw-td-num">' + r.allDestinations + '件</td>';
+      html += '<td class="tw-td-until">' + r.until1300Count + '個</td>';
+      html += '<td class="tw-td-seq">' + esc(r.sequenceLabel) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="tw-board-footer">※ 住所・氏名・電話・Tracking ID は掲示しません。　掲載 '
       + board.routeList.length + ' Route</div>';
     html += '</div>';
     return html;
@@ -528,15 +533,34 @@
     try {
       var board = lastBoard || buildBoard();
       var css = ''
-        + '.tw-board-page{margin-bottom:20px;}'
+        + 'html,body{margin:0;padding:0;}'
+        + '.tw-bulletin-print{margin:0;padding:0;}'
+        + '.tw-board-print-header{text-align:center;border-bottom:1.5px solid #111;padding:0 0 3px;margin:0 0 4px;}'
+        + '.tw-board-print-title{font-size:11pt;font-weight:800;line-height:1.2;}'
+        + '.tw-board-print-accent{color:#b91c1c;}'
+        + '.tw-board-print-meta{font-size:8pt;line-height:1.15;margin-top:1px;color:#333;}'
+        + '.tw-bulletin-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5pt;line-height:1.15;}'
+        + '.tw-col-driver{width:12%;}.tw-col-route{width:7%;}.tw-col-area{width:10%;}'
+        + '.tw-col-del{width:7%;}.tw-col-dest{width:7%;}.tw-col-until{width:8%;}.tw-col-seq{width:49%;}'
+        + '.tw-bulletin-table th,.tw-bulletin-table td{padding:2px 3px;vertical-align:top;}'
+        + '.tw-bulletin-table th{background:#f1f5f9;border-bottom:1.5px solid #111;font-weight:700;}'
+        + '.tw-bulletin-table td{border-bottom:0.5px solid #cbd5e1;}'
+        + '.tw-th-l{text-align:left;}.tw-th-r{text-align:right;}.tw-th-until{color:#b91c1c;}'
+        + '.tw-row-alt td{background:#f8fafc;}'
+        + '.tw-td-route{font-family:monospace;font-weight:800;}'
+        + '.tw-td-area{font-size:8pt;}'
+        + '.tw-td-num{text-align:right;}'
+        + '.tw-td-until{text-align:right;font-weight:900;color:#b91c1c;}'
+        + '.tw-td-seq{font-family:monospace;font-size:8pt;white-space:normal;word-break:break-word;overflow-wrap:anywhere;}'
+        + '.tw-board-footer{margin-top:4px;font-size:7.5pt;color:#666;}'
         + '@media print{'
-        + 'body{padding:6mm;}'
-        + '@page{size:A4 landscape;margin:8mm;}'
-        + '.tw-board-page{break-after:page;page-break-after:always;margin-bottom:0;}'
-        + '.tw-board-page:last-child{break-after:auto;page-break-after:auto;}'
-        + '.tw-board-footer{display:none;}'
+        + 'html,body{margin:0;padding:0;}'
+        + '@page{size:A4 landscape;margin:6mm;}'
+        + '.tw-board-print-header{break-after:avoid;page-break-after:avoid;}'
         + 'thead{display:table-header-group;}'
+        + 'tfoot{display:table-footer-group;}'
         + 'tr{break-inside:avoid;page-break-inside:avoid;}'
+        + '.tw-bulletin-table{font-size:8.5pt;}'
         + '}';
       openPrintWindow('OFK3 13:00まで 全体掲示表', buildBulletinPrintHtml(board), css);
     } catch (e) {
