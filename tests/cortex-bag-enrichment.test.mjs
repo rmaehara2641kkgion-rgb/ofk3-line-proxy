@@ -316,6 +316,7 @@ function fakeWorld(spec) {
       if (r.throwOnOpen) throw new Error('boom');
       if (r.hang) return; // never calls back -> watchdog
       if (r.openBlocked) { cb({ ok: false, blocked: true, detail: 'Route click: covered by div#popover' }); return; }
+      if (r.openCode) { cb({ ok: false, code: r.openCode, detail: 'no detail page' }); return; }
       if (r.openFails) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
       current = r; log.opened.push(route.routeCode); cb({ ok: true });
     },
@@ -610,6 +611,57 @@ Core2 = RootCore;
 v3Suite('root core');
 Core2 = PhaseCore;
 v3Suite('phase1-core');
+
+// ---------------- v3.1: explicit route_aborted reasons + Stop diagnostics ----------------
+function v31Suite(label) {
+  (function () {
+    let clock = 0;
+    const r = runEngine({ routes: {
+      DCX43: { openCode: 'route_detail_not_detected', stops: { 1: { packages: [{ da: 'DA0000000431', ref: 'tr-431' }] } } },
+      DCX44: { openFails: true, stops: { 1: { packages: [{ da: 'DA0000000441', ref: 'tr-441' }] } } },
+      DCX45: { stops: { 1: { packages: [{ da: 'DA0000000451', ref: 'tr-451' }] }, 2: { packages: [{ da: 'DA0000000452', ref: 'tr-452' }] } } }
+    } }, { now: () => (clock += 50000), routeBudgetMs: 90000 });
+    const fatal = runEngine({ routes: {
+      DCX46: { backFails: true, stops: { 1: { packages: [{ da: 'DA0000000461', ref: 'tr-461', tr: [['tr-461', null]] }] } } }
+    } });
+    const byCode = {};
+    r.summary.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX43.reasonCode === 'route_detail_not_detected', label + ' v3.1: detail not detected code');
+    assert(byCode.DCX44.reasonCode === 'route_open_failed', label + ' v3.1: default open code');
+    assert(byCode.DCX45.reasonCode === 'route_budget_exceeded', label + ' v3.1: budget code, got ' + byCode.DCX45.reasonCode);
+    assert(fatal.summary.routeResults[0].reasonCode === 'list_return_failed', label + ' v3.1: list return code');
+    const text = Core2.formatBagSummary(r.summary);
+    assert(/DCX43 route_aborted\(route_detail_not_detected\)/.test(text) && /DCX44 route_aborted\(route_open_failed\)/.test(text),
+      label + ' v3.1: reasons in summary: ' + text);
+    assert(r.log.lines.some((l) => /\[Bag\] DCX43 route_aborted\(route_detail_not_detected\).*-> continue/.test(l)), label + ' v3.1: reason in log');
+    assert(r.summary.attempted + r.summary.counts.not_attempted === r.summary.targetCount, label + ' v3.1: totals');
+  })();
+  console.log('ok: bag v3.1 route reasons (' + label + ')');
+}
+Core2 = RootCore;
+v31Suite('root core');
+Core2 = PhaseCore;
+v31Suite('phase1-core');
+
+// v3.1 runner: split Stop labels, bounded Stop wait, route diagnostics JSON
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(/for \(var d = 0; el && d < 3; d \+= 1, el = el\.parentElement\)/.test(bag), 'v3.1 label may span child elements (bounded ancestors)');
+  assert(bag.indexOf('if (t.length > 20) break;') >= 0, 'v3.1 only short texts can be labels');
+  assert(bag.indexOf('BAG_STOP_APPEAR_TIMEOUT_MS = 6000') >= 0 && bag.indexOf('BAG_STOP_APPEAR_TIMEOUT_MS, runId') >= 0,
+    'v3.1 bounded condition wait for Stops');
+  ['url: hrefNow()', 'title:', 'routeCode:', 'headings:', 'controls:', 'stopLabelCandidates:', 'targetStopProbes:',
+    'routeDetailBasis:', 'iframes:', 'shadowHosts:', 'outline:'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'v3.1 diagnostics field ' + k);
+  });
+  assert(bag.indexOf("'[text:' + t.length + ']'") >= 0, 'v3.1 long texts are not stored');
+  assert(bag.indexOf('routeDiagnostics: bagRun.routeDiagnostics') >= 0, 'v3.1 diagnostics JSON includes route snapshots');
+  assert(bag.indexOf("code: 'route_detail_not_detected'") >= 0 && bag.indexOf("code: 'route_card_not_found'") >= 0,
+    'v3.1 runner reports route reason codes');
+  assert(bag.indexOf('fetch(') < 0 && bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v3.1 no requests/watchers');
+  console.log('ok: v3.1 runner Stop detection + diagnostics');
+})();
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
 (function () {

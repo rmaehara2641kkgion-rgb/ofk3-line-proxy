@@ -1108,7 +1108,9 @@
     if (detail.length) lines.push('内訳: ' + detail.join(' / '));
     lines.push('click ' + (summary.clicks || 0) + ' / Stop click ' + (summary.stopClicks || 0));
     var failed = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
-      .map(function (r) { return r.routeCode + ' ' + (r.status === 'ui_blocked' ? 'UI blocked' : r.status); });
+      .map(function (r) {
+        return r.routeCode + ' ' + (r.status === 'ui_blocked' ? 'UI blocked' : r.status) + (r.reasonCode ? '(' + r.reasonCode + ')' : '');
+      });
     if (failed.length) lines.push('失敗Route: ' + failed.join(', '));
     if (summary.aborted) lines.push('中断: ' + summary.aborted);
     return lines.join('\n');
@@ -1266,7 +1268,7 @@
       if (!pend(route.targets).length) { nextRoute(i + 1); return; }
       var stops = groupBagTargetsByStop(route.targets);
       var deadline = now() + budget;
-      var result = { routeCode: route.routeCode, status: 'done', detail: '', stopClicks: 0 };
+      var result = { routeCode: route.routeCode, status: 'done', detail: '', reasonCode: '', stopClicks: 0, startedAt: now() };
       var closed = false;
       var watchdog = null;
       run.routeResults.push(result);
@@ -1280,7 +1282,7 @@
       }
       // A throwing driver call only ends this Route.
       function call(fn) {
-        try { fn(); } catch (e) { abortRoute('exception: ' + (e && e.message ? e.message : String(e))); }
+        try { fn(); } catch (e) { abortRoute('exception: ' + (e && e.message ? e.message : String(e)), null, 'exception'); }
       }
 
       function routeCounts() {
@@ -1293,11 +1295,15 @@
         return Object.keys(c).map(function (k) { return k + ' ' + c[k]; }).join(', ');
       }
 
-      function abortRoute(detail, status) {
+      // code: machine-readable reason (route_open_failed, route_detail_not_detected,
+      // route_budget_exceeded, watchdog, exception, stop_state_error, stop_leave_failed,
+      // package_restore_failed, list_return_failed, ...).
+      function abortRoute(detail, status, code) {
         if (closed || stopped()) return;
         status = status || BAG_STATUS.ROUTE_ABORTED;
         result.status = status;
         result.detail = detail || '';
+        result.reasonCode = code || (status === BAG_STATUS.UI_BLOCKED ? 'ui_blocked' : 'route_aborted');
         markAll(route.targets, status, detail);
         back();
       }
@@ -1320,7 +1326,9 @@
         function onBack(res) {
           if (stopped()) return;
           if (res && res.ok) {
-            var label = result.status === 'done' ? 'done' : (result.status === BAG_STATUS.UI_BLOCKED ? 'UI blocked' : result.status);
+            result.durationMs = now() - result.startedAt;
+            var label = result.status === 'done' ? 'done' : (result.status === BAG_STATUS.UI_BLOCKED ? 'UI blocked' :
+              result.status + '(' + result.reasonCode + ')');
             log('[Bag] ' + route.routeCode + ' ' + label + (result.detail ? ' (' + result.detail + ')' : '') +
               ' [' + routeCounts() + '] -> continue');
             nextRoute(i + 1);
@@ -1331,7 +1339,9 @@
           if (result.status === 'done') {
             result.status = BAG_STATUS.ROUTE_ABORTED;
             result.detail = (res && res.detail) || 'Route一覧へ戻れません';
+            result.reasonCode = 'list_return_failed';
           }
+          result.durationMs = now() - result.startedAt;
           var reason = 'Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : '');
           log('[Bag] ' + route.routeCode + ' ' + reason + ' -> abort (以後のRouteを開けません)');
           finish(reason);
@@ -1345,7 +1355,7 @@
         var stop = stops[j];
         var list = pend(stop.targets);
         if (!list.length) { nextStop(j + 1); return; }
-        if (now() > deadline) { abortRoute('Route上限時間を超過'); return; }
+        if (now() > deadline) { abortRoute('Route上限時間を超過', null, 'route_budget_exceeded'); return; }
         emit({
           stopIndex: j + 1, stopSeq: stop.stop,
           packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
@@ -1360,14 +1370,14 @@
             if (!res || !res.ok) {
               if (res && res.blocked) { abortRoute(res.detail, BAG_STATUS.UI_BLOCKED); return; }
               markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
-              if (res && res.abortRoute) { abortRoute(res.detail); return; }
+              if (res && res.abortRoute) { abortRoute(res.detail, null, res.code || 'stop_state_error'); return; }
               nextStop(j + 1);
               return;
             }
             nextPackage(stop, function () {
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
-                  if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません'); return; }
+                  if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません', null, 'stop_leave_failed'); return; }
                   nextStop(j + 1);
                 }));
               });
@@ -1380,7 +1390,7 @@
         if (stopped() || closed) return;
         var list = pend(stop.targets);
         if (!list.length) { doneStop(); return; }
-        if (now() > deadline) { abortRoute('Route上限時間を超過'); return; }
+        if (now() > deadline) { abortRoute('Route上限時間を超過', null, 'route_budget_exceeded'); return; }
         var t = list[0];
         emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
         call(function () {
@@ -1398,7 +1408,7 @@
                 if (!cres || !cres.ok) {
                   recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
                   if (cres && cres.blocked) { abortRoute(cres.detail, BAG_STATUS.UI_BLOCKED); return; }
-                  if (cres && cres.abortRoute) { abortRoute(cres.detail); return; }
+                  if (cres && cres.abortRoute) { abortRoute(cres.detail, null, 'package_click_state_error'); return; }
                   nextPackage(stop, doneStop);
                   return;
                 }
@@ -1410,7 +1420,7 @@
                     emit({ state: status || BAG_STATUS.TIMEOUT });
                     call(function () {
                       driver.restoreAfterPackage(t, live(function (rres) {
-                        if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません'); return; }
+                        if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません', null, 'package_restore_failed'); return; }
                         nextPackage(stop, doneStop);
                       }));
                     });
@@ -1422,10 +1432,10 @@
         });
       }
 
-      failCurrent = function (detail) { abortRoute(detail); };
+      failCurrent = function (detail) { abortRoute(detail, null, 'exception'); };
       watchdog = schedule(function () {
         watchdog = null;
-        abortRoute('watchdog: Route処理が' + Math.round(watchdogMs / 1000) + '秒以内に終わりません');
+        abortRoute('watchdog: Route処理が' + Math.round(watchdogMs / 1000) + '秒以内に終わりません', null, 'watchdog');
       }, watchdogMs);
       emit({
         routeIndex: i + 1, routeCode: route.routeCode,
@@ -1435,7 +1445,8 @@
       call(function () {
         driver.openRoute(route, live(function (res) {
           if (!res || !res.ok) {
-            abortRoute((res && res.detail) || 'Routeを開けません', res && res.blocked ? BAG_STATUS.UI_BLOCKED : null);
+            abortRoute((res && res.detail) || 'Routeを開けません', res && res.blocked ? BAG_STATUS.UI_BLOCKED : null,
+              (res && res.code) || (res && res.blocked ? 'ui_blocked' : 'route_open_failed'));
             return;
           }
           nextStop(0);

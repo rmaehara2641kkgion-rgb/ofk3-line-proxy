@@ -1177,7 +1177,8 @@
   var BAG_STOP_SCROLL_MAX_STEPS = 80;
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
-  var BAG_BUILD = 'Bag v3';
+  var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
+  var BAG_BUILD = 'Bag v3.1';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1296,14 +1297,151 @@
     return out;
   }
 
+  // Stop label = innermost element (text-node parent or up to 2 ancestors, short text only)
+  // whose whole text is an exact label. Ancestors cover labels split over child elements,
+  // e.g. <span>Stop</span><span>16</span> or <span>#</span><span>16</span>.
   function collectStopLabelElements(root) {
-    return collectTextElements(root, function (full) { return Core.parseStopLabel(full) != null; });
+    var els = [];
+    var base = root || document.body || document.documentElement;
+    if (!base) return els;
+    var walker = document.createTreeWalker(base, 4 /* NodeFilter.SHOW_TEXT */, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      if (!String(node.nodeValue || '').trim()) continue;
+      var el = node.parentElement;
+      for (var d = 0; el && d < 3; d += 1, el = el.parentElement) {
+        if (inPanel(el) || (root && !root.contains(el))) break;
+        var t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length > 20) break;
+        if (Core.parseStopLabel(t) != null) {
+          if (els.indexOf(el) < 0) els.push(el);
+          break;
+        }
+      }
+    }
+    return els;
+  }
+
+  function stopLabelsFor(els, seq) {
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
+    return Core.matchStopLabelEntries(entries, seq).map(function (i) { return els[i]; });
   }
 
   function findStopLabels(seq) {
-    var els = collectStopLabelElements(null);
-    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
-    return Core.matchStopLabelEntries(entries, seq).map(function (i) { return els[i]; });
+    return stopLabelsFor(collectStopLabelElements(null), seq);
+  }
+
+  // ---- Bag diagnostics (Stop detection). Short texts only; long texts become [text:N]. ----
+  function diagText(el, max) {
+    var t = String((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    return t.length <= (max || 12) ? t : '[text:' + t.length + ']';
+  }
+
+  function diagEl(el) {
+    if (!el || !el.tagName) return '-';
+    var out = String(el.tagName).toLowerCase();
+    if (el.id) out += '#' + String(el.id).slice(0, 30);
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 3);
+    if (cls.length) out += '.' + cls.join('.');
+    ['role', 'aria-label', 'aria-expanded', 'data-testid', 'mdn-text'].forEach(function (a) {
+      var v = el.getAttribute && el.getAttribute(a);
+      if (v != null && v !== '') out += '[' + a + '=' + String(v).slice(0, 24) + ']';
+    });
+    var t = diagText(el, 12);
+    if (t) out += ' "' + t + '"';
+    return out;
+  }
+
+  function diagOutline(root, maxNodes) {
+    var lines = [];
+    function walk(el, depth) {
+      if (!el || lines.length >= maxNodes || depth > 4 || inPanel(el)) return;
+      var kids = el.children || [];
+      lines.push(new Array(depth + 1).join('  ') + diagEl(el) + (kids.length ? ' {' + kids.length + '}' : ''));
+      for (var i = 0; i < kids.length && i < 4; i++) walk(kids[i], depth + 1);
+    }
+    walk(root, 0);
+    return lines;
+  }
+
+  function diagExactText(values, limit) {
+    var want = {};
+    values.forEach(function (v) { want[v] = true; });
+    var hits = collectTextElements(null, function (full) {
+      return !!want[String(full).replace(/\s+/g, ' ').trim()];
+    });
+    return {
+      count: hits.length,
+      samples: hits.slice(0, limit || 3).map(function (el) {
+        return diagEl(el) + ' < ' + diagEl(el.parentElement) + ' < ' + diagEl(el.parentElement && el.parentElement.parentElement);
+      })
+    };
+  }
+
+  function routeDomSnapshot(route, extra) {
+    var targets = (route && route.targets) || [];
+    var labels = collectStopLabelElements(null);
+    var all = document.querySelectorAll('*');
+    var shadowHosts = 0;
+    for (var i = 0; i < all.length; i++) { if (all[i].shadowRoot) shadowHosts += 1; }
+    function list(sel, limit, fmt) {
+      var out = [];
+      var nodes = document.querySelectorAll(sel);
+      for (var k = 0; k < nodes.length && out.length < limit; k++) {
+        if (!inPanel(nodes[k]) && elementVisible(nodes[k])) out.push(fmt(nodes[k]));
+      }
+      return { count: nodes.length, samples: out };
+    }
+    var seqs = [];
+    targets.forEach(function (t) { if (seqs.indexOf(t.stop) < 0) seqs.push(t.stop); });
+    var probes = seqs.slice(0, 3).map(function (seq) {
+      return {
+        stop: seq,
+        bareNumber: diagExactText([String(seq)], 3),
+        labelForms: diagExactText(['#' + seq, '# ' + seq, 'Stop ' + seq, 'Stop #' + seq, 'ストップ ' + seq], 3)
+      };
+    });
+    var das = targets.map(function (t) { return t.scannableId; });
+    var visibleDa = collectExactDaElements(das);
+    var scroller = bagMainScroller();
+    var stopWords = collectTextElements(null, function (full) {
+      var t = String(full).replace(/\s+/g, ' ').trim();
+      return t.length <= 30 && /stop|ストップ|停車|配達先|訪問/i.test(t);
+    });
+    return Object.assign({
+      at: new Date().toISOString(),
+      routeCode: route && route.routeCode,
+      url: hrefNow(),
+      title: String(document.title || '').slice(0, 80),
+      headings: list('h1, h2, h3, h4, [role="heading"]', 8, function (el) { return diagText(el, 30); }),
+      tabs: list('[role="tab"]', 10, function (el) { return diagEl(el); }),
+      controls: list('button, a[href], [role="button"], [role="link"], [role="tab"], [aria-expanded]', 25, function (el) { return diagEl(el); }),
+      roles: ['list', 'listitem', 'row', 'grid', 'treeitem', 'region', 'dialog'].reduce(function (m, r) {
+        m[r] = document.querySelectorAll('[role="' + r + '"]').length;
+        return m;
+      }, {}),
+      iframes: document.querySelectorAll('iframe').length,
+      shadowHosts: shadowHosts,
+      elementCount: all.length,
+      stopLabelCandidates: { count: labels.length, samples: labels.slice(0, 10).map(diagEl) },
+      stopWordTexts: stopWords.slice(0, 10).map(diagEl),
+      targetStopProbes: probes,
+      packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
+      targetDaVisible: Object.keys(visibleDa).length,
+      mainScroller: scroller ? {
+        el: diagEl(scroller), scrollHeight: scroller.scrollHeight || 0, clientHeight: scroller.clientHeight || 0,
+        children: (scroller.children || []).length
+      } : null,
+      outline: scroller ? diagOutline(scroller, 40) : []
+    }, extra || {});
+  }
+
+  function pushRouteDiag(entry) {
+    if (!bagRun) return;
+    bagRun.routeDiagnostics = bagRun.routeDiagnostics || [];
+    if (bagRun.routeDiagnostics.length < 60) bagRun.routeDiagnostics.push(entry);
   }
 
   // Highest ancestor holding this Stop label and no other Stop label.
@@ -1547,11 +1685,41 @@
 
   function createBagDriver(ctx, runId) {
     ctx.reopenedStops = {};
+
+    // Route detail reached: wait (condition, bounded) for Stop labels or target DAs, then
+    // record what the page shows so a Stop-detection mismatch is visible in the diagnostics.
+    function afterRouteOpened(route, basis, cb) {
+      ctx.route = route;
+      var das = (route.targets || []).map(function (t) { return t.scannableId; });
+      var started = Date.now();
+      waitBag(function () {
+        return collectStopLabelElements(null).length > 0 || Object.keys(collectExactDaElements(das)).length > 0;
+      }, BAG_STOP_APPEAR_TIMEOUT_MS, runId, function (appeared) {
+        ctx.routeDialogs = visibleDialogs();
+        var snap = routeDomSnapshot(route, {
+          phase: 'route_opened',
+          routeDetailBasis: basis,
+          stopWaitMs: Date.now() - started,
+          stopCandidatesAppeared: appeared
+        });
+        pushRouteDiag(snap);
+        bagLog('[Bag] ' + route.routeCode + ' opened (' + basis + ') stopLabelCandidates=' + snap.stopLabelCandidates.count +
+          ' packageNumbers=' + snap.packageNumbersVisible + ' wait=' + snap.stopWaitMs + 'ms');
+        cb({ ok: true });
+      });
+    }
+
     var driver = {
       // Up to BAG_ROUTE_OPEN_ATTEMPTS tries: close new dialogs, wait for the list, re-find the
       // card, scrollIntoView + hit test (inside safeCdpClick). Still covered -> UI blocked.
       openRoute: function (route, cb) {
-        if (ctx.currentPage) { ctx.routeHref = hrefNow(); cb({ ok: true }); return; }
+        ctx.routeNoStopLabels = false;
+        ctx.stopMissLogged = false;
+        if (ctx.currentPage) {
+          ctx.routeHref = hrefNow();
+          afterRouteOpened(route, 'current page (no navigation)', cb);
+          return;
+        }
         var attempt = 0;
         var lastDetail = '';
         function tryOpen() {
@@ -1560,7 +1728,7 @@
           closeNewDialogs(ctx.baseDialogs, runId, function () {
             waitBag(function () { return routeListShown(ctx); }, 2000, runId, function () {
               findBagRouteCard(route, runId, function (card) {
-                if (!card) { cb({ ok: false, detail: 'Route DOM未発見' }); return; }
+                if (!card) { cb({ ok: false, code: 'route_card_not_found', detail: 'Route一覧にRoute cardが見つかりません' }); return; }
                 var beforeDetails = store.detailsByRouteId[route.routeId] || null;
                 safeCdpClick(function () {
                   var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
@@ -1571,20 +1739,25 @@
                     bagLog('[Bag] ' + route.routeCode + ' ' + (res.covered ? 'Route一覧が覆われています' : 'Route click失敗') +
                       ' (' + attempt + '/' + BAG_ROUTE_OPEN_ATTEMPTS + '): ' + res.detail);
                     if (attempt < BAG_ROUTE_OPEN_ATTEMPTS) { bagLater(tryOpen, 700); return; }
-                    cb({ ok: false, blocked: !!res.covered, detail: lastDetail + '（' + attempt + '回試行）' });
+                    cb({ ok: false, blocked: !!res.covered, code: res.covered ? 'ui_blocked' : 'route_click_failed',
+                      detail: lastDetail + '（' + attempt + '回試行）' });
                     return;
                   }
+                  var basis = '';
                   waitBag(function () {
                     var fresh = store.detailsByRouteId[route.routeId];
-                    if (fresh && fresh !== beforeDetails) return true;
-                    return hrefNow() !== ctx.listHref && !anyRouteCardShown();
+                    if (fresh && fresh !== beforeDetails) { basis = 'route-details response captured'; return true; }
+                    if (hrefNow() !== ctx.listHref && !anyRouteCardShown()) { basis = 'URL changed and Route list hidden'; return true; }
+                    return false;
                   }, tour.timeoutMs || 15000, runId, function (ok) {
-                    if (!ok) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
-                    bagLater(function () {
-                      ctx.routeHref = hrefNow();
-                      ctx.routeDialogs = visibleDialogs();
-                      cb({ ok: true });
-                    }, 800);
+                    if (!ok) {
+                      pushRouteDiag(routeDomSnapshot(route, { phase: 'route_detail_not_detected' }));
+                      cb({ ok: false, code: 'route_detail_not_detected',
+                        detail: 'Route click後' + Math.round((tour.timeoutMs || 15000) / 1000) + '秒以内にroute-details/URL変化なし' });
+                      return;
+                    }
+                    ctx.routeHref = hrefNow();
+                    afterRouteOpened(route, basis, cb);
                   });
                 });
               });
@@ -1595,22 +1768,42 @@
       },
 
       ensureStop: function (stop, pending, onState, cb) {
+        if (ctx.routeNoStopLabels) {
+          // A full sweep of this Route already found no Stop label of any number: check the
+          // current view once (no scrolling) instead of sweeping again for every Stop.
+          var quick = findStopLabels(stop.stop);
+          var visible = !Core.stopNeedsExpand(pending, collectExactDaElements(pending.map(function (t) { return t.scannableId; })));
+          if (!quick.length && !visible) {
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND,
+              detail: 'Stop #' + stop.stop + ' label未発見（このRouteはStop label候補0件）' });
+            return;
+          }
+        }
         ctx.stopBlock = null;
         ctx.stopHref = hrefNow();
         var das = pending.map(function (t) { return t.scannableId; });
         var outcome = null;
+        var maxCandidates = 0;
         scrollSearch(function () {
           if (!Core.stopNeedsExpand(pending, collectExactDaElements(das))) {
             outcome = { present: true };
             return outcome;
           }
-          var labels = findStopLabels(stop.stop);
+          var allLabels = collectStopLabelElements(null);
+          if (allLabels.length > maxCandidates) maxCandidates = allLabels.length;
+          var labels = stopLabelsFor(allLabels, stop.stop);
           if (labels.length > 1) { outcome = { ambiguous: labels.length }; return outcome; }
           if (labels.length === 1) { outcome = { label: labels[0] }; return outcome; }
           return null;
         }, BAG_STOP_SCROLL_MAX_STEPS, runId, function (found) {
           if (!found) {
-            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND, detail: 'Stop #' + stop.stop + ' label未発見' });
+            if (maxCandidates === 0) ctx.routeNoStopLabels = true;
+            if (!ctx.stopMissLogged) {
+              ctx.stopMissLogged = true;
+              pushRouteDiag(routeDomSnapshot(ctx.route, { phase: 'stop_not_found', stop: stop.stop, maxStopLabelCandidates: maxCandidates }));
+            }
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND,
+              detail: 'Stop #' + stop.stop + ' label未発見（探索中のStop label候補 最大' + maxCandidates + '件）' });
             return;
           }
           if (found.present) { cb({ ok: true, clicked: false }); return; }
@@ -1630,7 +1823,7 @@
             return { el: label, container: ctx.stopBlock };
           }, runId, function (res) {
             if (!res.ok) {
-              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, blocked: !!res.covered });
+              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, blocked: !!res.covered, code: 'stop_click_failed' });
               return;
             }
             waitBag(function () {
@@ -1645,7 +1838,8 @@
                   clicked: true,
                   status: Core.BAG_STATUS.STOP_EXPAND_FAILED,
                   detail: 'Stop #' + stop.stop + ' click後に対象DAが表示されません',
-                  abortRoute: !back
+                  abortRoute: !back,
+                  code: 'stop_click_navigation_not_restored'
                 });
               });
             });
@@ -1811,8 +2005,8 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
-  function saveBagDiagnostics() {
-    if (!bagRun) { alert('Bag取得はまだ実行されていません。'); return; }
+  function buildBagDiagnostics() {
+    if (!bagRun) return null;
     var results = {};
     Object.keys(bagRun.results || {}).forEach(function (ref) { results[ref] = bagRun.results[ref]; });
     var payload = {
@@ -1822,10 +2016,17 @@
       results: results,
       routeResults: bagRun.routeResults || [],
       log: bagRun.log || [],
+      routeDiagnostics: bagRun.routeDiagnostics || [],
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText
     };
+    return payload;
+  }
+
+  function saveBagDiagnostics() {
+    var payload = buildBagDiagnostics();
+    if (!payload) { alert('Bag取得はまだ実行されていません。'); return; }
     try {
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       var a = document.createElement('a');
@@ -1912,6 +2113,7 @@
     stop: stopPoc,
     save: saveBundle,
     bag: startBagPhase,
+    bagDiagnostics: buildBagDiagnostics,
     _store: store
   };
 })(typeof window !== 'undefined' ? window : global);
