@@ -97,6 +97,9 @@
     if (unfinishedTest && unfinishedTest.active && /\/tasks\/trDetails(?:[/?#]|$)/.test(String(url || ''))) {
       recordTrDetailsShape(url, status, body);
     }
+    if (bagRun && !bagRun.ended && /\/tasks\/trDetails(?:[/?#]|$)/.test(String(url || ''))) {
+      recordBagTrRows(body);
+    }
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
     if (pocRun && !pocRun.ended && pocRun.route && pocRun.route.routeId && store.detailsByRouteId[pocRun.route.routeId]) {
       pocRun.diagnostics.details = 'success';
@@ -1182,7 +1185,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.6';
+  var BAG_BUILD = 'Bag v3.7';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
@@ -1431,6 +1434,12 @@
     return labels.length === 1 ? stopListTargetOf(labels[0]) : null;
   }
 
+  // Package-number texts rendered inside one Stop list row (v3.7 open evidence; row-scoped only).
+  function rowPackageCount(row) {
+    if (!row || !row.isConnected) return 0;
+    return collectTextElements(row, function (full) { return Core.isPackageNumberText(full); }).length;
+  }
+
   // ---- v3.5: safe click points inside a Stop list header button ----
   var INTERACTIVE_ROLES = ['button', 'link', 'checkbox', 'menuitem', 'switch', 'tab', 'option', 'radio', 'combobox'];
 
@@ -1484,7 +1493,9 @@
   // Click a Stop list header button at a point whose elementFromPoint is the button itself or a
   // non-interactive child. All points outside the button -> covered (ui_blocked, as before);
   // only interactive children -> no safe point (no click). getTarget() re-reads the current DOM.
-  function clickListButton(getTarget, runId, done, diag, skipLabels) {
+  // preferLater (v3.7 retry): labels clicked by an earlier attempt are tried last, so a different safe
+  // point is used when one exists; the same point is still allowed when it is the only safe one.
+  function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater) {
     var t = getTarget();
     if (!t) { done({ ok: false, detail: 'Stop行ボタンが見つかりません' }); return; }
     try { t.button.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e1) {}
@@ -1497,6 +1508,10 @@
       var pts = listButtonPoints(t.button, t.numberEl).filter(function (p) {
         return !skipLabels || skipLabels.indexOf(p.label) < 0;
       });
+      if (preferLater && preferLater.length) {
+        pts = pts.filter(function (p) { return preferLater.indexOf(p.label) < 0; })
+          .concat(pts.filter(function (p) { return preferLater.indexOf(p.label) >= 0; }));
+      }
       setPanelClickable(false);
       var tried = [];
       var chosen = null;
@@ -1806,6 +1821,7 @@
 
   // ---- Stop click diagnostics (evidence only; the click decision is unchanged) ----
   var BAG_STOP_CLICK_DIAG_MAX = 40;
+  var BAG_STOP_CLICK_FAIL_DIAG_MAX = 240;
 
   function diagChain(el, depth) {
     var out = [];
@@ -1909,7 +1925,11 @@
   function pushStopClickDiag(entry) {
     if (!bagRun) return;
     bagRun.stopClickDiagnostics = bagRun.stopClickDiagnostics || [];
-    if (bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX) bagRun.stopClickDiagnostics.push(entry);
+    // v3.7: failed / retried opens are always kept (up to BAG_STOP_CLICK_FAIL_DIAG_MAX); 09-25 lost most
+    // failures to the 40-entry cap.
+    var failed = entry && (entry.result !== 'expanded' || (entry.attempts || []).length > 1);
+    if (bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX ||
+      (failed && bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_FAIL_DIAG_MAX)) bagRun.stopClickDiagnostics.push(entry);
   }
 
   // scrollIntoView -> rAF x2 -> rect -> elementFromPoint check -> requestCdpClick.
@@ -2193,7 +2213,8 @@
         tryOpen();
       },
 
-      ensureStop: function (stop, pending, onState, cb) {
+      // openOpts.maxAttempts: 1 for the package-fallback reopen (v3.6 behaviour); default 3 (v3.7 retry v2).
+      ensureStop: function (stop, pending, onState, cb, openOpts) {
         // Bag v3.6: a row already open / already showing the DAs gets the same bounded wait for
         // Cortex's own trDetails as a freshly opened one (returns at once when all rows are there).
         function waitCortexTr(kind, done) {
@@ -2211,7 +2232,14 @@
               expected: pending.length,
               received: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length
             };
-            done({ ok: true, clicked: false });
+            done({ ok: true, clicked: false, stopDiag: {
+              openResult: kind, initialAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              initialSelectedStopId: selectedStopIdOf(hrefNow()), clickAttempts: [],
+              finalAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              finalSelectedStopId: selectedStopIdOf(hrefNow()),
+              targetDaVisible: Object.keys(collectExactDaElements(pending.map(function (t) { return t.scannableId; }))).length,
+              openedBy: kind, openedAttempt: 0
+            } });
           });
         }
         if (ctx.routeNoStopLabels) {
@@ -2281,57 +2309,223 @@
             targetDas: das.length, before: stopClickState(das), plainNumber: plainNumberContext(stop.stop),
             clickKind: listTarget ? 'stop-list-button' : 'text-label'
           };
+          var selBefore = selectedStopIdOf(hrefNow());
           if (listTarget) {
             clickDiag.stopList = {
               row: diagEl(listTarget.row), button: diagEl(listTarget.button),
               ariaExpandedBefore: listTarget.button.getAttribute('aria-expanded'),
-              selectedStopIdBefore: selectedStopIdOf(hrefNow()),
+              selectedStopIdBefore: selBefore,
               rowElementsBefore: listTarget.row.querySelectorAll('*').length
             };
           }
+          // Bag v3.7: trDetails rows already present when the open started never count as proof.
+          var trBaseline = {};
+          pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) trBaseline[t.referenceId] = true; });
+          var rowPackagesBefore = listTarget ? rowPackageCount(listTarget.row) : 0;
+          var usedLabels = [];
+          var expandedBy = '';
           function rowElementsNow() {
             return listTarget && listTarget.row && listTarget.row.isConnected ? listTarget.row.querySelectorAll('*').length : null;
           }
-          function onClicked(res) {
-            if (!res.ok) {
-              clickDiag.result = res.covered ? 'covered' : 'click_failed';
-              clickDiag.detail = res.detail;
-              clickDiag.elapsedMs = Date.now() - openStarted;
-              pushStopClickDiag(clickDiag);
-              cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: 'Stop click: ' + res.detail, blocked: !!res.covered, code: 'stop_click_failed' });
+          // Current DOM only: the Stop's list row (re-found when the saved one was re-rendered).
+          function liveListTarget() {
+            if (!listTarget) return null;
+            if (!listTarget.button.isConnected) {
+              var t = freshListTarget(stop.stop);
+              if (!t) return null;
+              listTarget = t;
+            }
+            return listTarget;
+          }
+          function observation() {
+            var t = liveListTarget();
+            return {
+              ariaExpanded: t ? t.button.getAttribute('aria-expanded') === 'true' : false,
+              targetDaVisible: !Core.stopNeedsExpand(pending, collectExactDaElements(das)),
+              targetTrDetailsReceived: Core.targetTrDetailsArrived(store.trDetailsByTrId, pending, trBaseline).length,
+              selectedStopIdBefore: selBefore,
+              selectedStopIdAfter: selectedStopIdOf(hrefNow()),
+              targetPackageDom: !!(t && t.row.isConnected && rowPackageCount(t.row) > rowPackagesBefore)
+            };
+          }
+          function openSignal() {
+            var s = Core.stopOpenSignal(observation());
+            if (s) expandedBy = s;
+            return s;
+          }
+          // The row / button used by one attempt; re-read from the DOM right before the click.
+          function adopt(t) {
+            if (t) {
+              listTarget = t;
+              ctx.stopBlock = t.row;
+              ctx.openedListTarget = t;
+            }
+            return t;
+          }
+          function resolveAttempt(n, strategy, done) {
+            if (!listTarget) {
+              // Text label (not a Stop list row): v3.6 single attempt.
+              if (!label.isConnected) {
+                var again = findStopLabels(stop.stop);
+                label = again.length === 1 ? again[0] : null;
+              }
+              done(label ? { el: label, connected: label.isConnected } : null, { candidateCount: label ? 1 : 0 });
               return;
             }
-            clickDiag.afterClick = stopClickState(das);
-            var expandedBy = '';
-            function listExpanded() {
-              if (!listTarget) return false;
-              if (!listTarget.button.isConnected) {
-                var t = freshListTarget(stop.stop);
-                if (!t) return false;
-                listTarget = t;
+            if (strategy === 'initial') {
+              var t0 = liveListTarget();
+              done(t0 ? { list: t0, connected: t0.button.isConnected } : null, { candidateCount: findStopLabels(stop.stop).length });
+              return;
+            }
+            if (strategy === 'row_refind') {
+              // Retry 1: the same div.stops-list-item, its current div[role=button][aria-expanded].
+              var row = listTarget.row && listTarget.row.isConnected ? listTarget.row : null;
+              var info = row ? stopListRowInfo(row) : null;
+              var t1 = info && info.number === stop.stop && info.button ? { row: row, button: info.button, numberEl: info.numberEl } : null;
+              if (!t1) t1 = freshListTarget(stop.stop);
+              done(t1 ? { list: t1, connected: t1.button.isConnected } : null, {
+                candidateCount: row ? row.querySelectorAll('[role="button"][aria-expanded]').length : findStopLabels(stop.stop).length,
+                rowReused: !!(t1 && row && t1.row === row)
+              });
+              return;
+            }
+            // Retry 2: search the whole Route detail again; exact Stop number, Stop list rows only
+            // (Mapbox markers are excluded by stopLabelsFor / stopListRows).
+            var cands = 0;
+            scrollSearch(function () {
+              var labels = findStopLabels(stop.stop);
+              cands = labels.length;
+              if (labels.length > 1) return { ambiguous: labels.length };
+              if (labels.length === 1) {
+                var lt = stopListTargetOf(labels[0]);
+                return lt ? { list: lt } : null;
               }
-              return listTarget.button.getAttribute('aria-expanded') === 'true';
+              return null;
+            }, BAG_STOP_SCROLL_MAX_STEPS, runId, function (hit) {
+              done(hit && hit.list ? { list: hit.list, connected: hit.list.button.isConnected } : null, { candidateCount: cands, ambiguous: !!(hit && hit.ambiguous) });
+            });
+          }
+          function clickAttempt(n, target, rec, done) {
+            rec.ariaBefore = target.list ? target.list.button.getAttribute('aria-expanded') : null;
+            rec.selectedStopIdBefore = selectedStopIdOf(hrefNow());
+            rec.urlBefore = hrefNow();
+            rec.rowElementsBefore = target.list && target.list.row.isConnected ? target.list.row.querySelectorAll('*').length : null;
+            rec.startedAtMs = Date.now() - openStarted;
+            var ad = {};
+            function finishClick(res) {
+              rec.safePoint = ad.clicked || null;
+              rec.elementFromPoint = (ad.points || []).filter(function (p) {
+                return ad.clicked && p.label === ad.clicked.label;
+              }).map(function (p) { return p.hit + ' => ' + p.relation; })[0] || (ad.points && ad.points[0] ? ad.points[0].hit + ' => ' + ad.points[0].relation : null);
+              rec.pointsTried = (ad.points || []).length;
+              if (ad.clicked && ad.clicked.label) usedLabels.push(ad.clicked.label);
+              if (res.ok && n === 1) clickDiag.afterClick = stopClickState(das);
+              done(res.ok ? { ok: true } : { ok: false, covered: !!res.covered, dispatched: !!res.dispatched, detail: res.detail });
             }
-            function expandedNow() {
-              if (!Core.stopNeedsExpand(pending, collectExactDaElements(das))) { expandedBy = 'target_da'; return true; }
-              if (listExpanded()) { expandedBy = 'aria_expanded'; return true; }
-              return false;
+            if (!target.list) {
+              safeCdpClick(function () {
+                if (!label || !label.isConnected) return null;
+                ctx.stopBlock = stopBlockOf(label);
+                return { el: label, container: ctx.stopBlock };
+              }, runId, function (res) {
+                if (n === 1) clickDiag.clicked = ad.clicked || null;
+                finishClick(res);
+              }, ad);
+              return;
             }
-            function settle(opened) {
-              clickDiag.result = opened ? 'expanded' : 'target_da_not_shown';
-              clickDiag.expandedBy = expandedBy;
+            var chosen = target.list;
+            clickListButton(function () {
+              // Never a saved node: the chosen button while connected, else this Stop's row re-found now.
+              if (chosen && chosen.button.isConnected) return adopt(chosen);
+              chosen = freshListTarget(stop.stop);
+              return adopt(chosen);
+            }, runId, function (res) {
+              if (n === 1) {
+                clickDiag.buttonConnected = ad.buttonConnected;
+                clickDiag.buttonRect = ad.buttonRect;
+                clickDiag.points = ad.points;
+                if (ad.clicked) clickDiag.clicked = ad.clicked;
+              }
+              finishClick(res);
+            }, ad, null, n > 1 ? usedLabels : null);
+          }
+          function observeAttempt(n, rec, done) {
+            if (n > 1 && bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_TIMEOUT_MS);
+            function record(signal) {
+              var t = liveListTarget();
+              rec.ariaAfter = t ? t.button.getAttribute('aria-expanded') : null;
+              rec.selectedStopIdAfter = selectedStopIdOf(hrefNow());
+              rec.urlAfter = hrefNow();
+              rec.rowElementsAfter = rowElementsNow();
+              rec.targetDaVisibleAfter = Object.keys(collectExactDaElements(das)).length;
+              rec.targetTrDetailsReceived = Core.targetTrDetailsArrived(store.trDetailsByTrId, pending, trBaseline).length;
+              rec.elapsedMs = Date.now() - openStarted - (rec.startedAtMs || 0);
+              done(signal);
+            }
+            waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
+              if (opened || !listTarget) { record(opened ? expandedBy : ''); return; }
+              // v3.6: the row content grew but nothing proves the open yet -> wait a little longer once.
+              var grew = rowElementsNow() != null && rec.rowElementsBefore != null && rowElementsNow() > rec.rowElementsBefore;
+              if (grew && !rec.extendedWait) {
+                rec.extendedWait = true;
+                clickDiag.extendedWait = true;
+                if (bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_EXTRA_MS);
+                waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_EXTRA_MS, runId, function (ok2) {
+                  record(ok2 ? expandedBy : '');
+                });
+                return;
+              }
+              record('');
+            });
+          }
+          function stopDiagOf(final, kind) {
+            var t = liveListTarget();
+            return {
+              openResult: kind,
+              initialAriaExpanded: clickDiag.stopList ? clickDiag.stopList.ariaExpandedBefore : null,
+              initialSelectedStopId: selBefore,
+              clickAttempts: final.attempts || [],
+              finalAriaExpanded: t ? t.button.getAttribute('aria-expanded') : null,
+              finalSelectedStopId: selectedStopIdOf(hrefNow()),
+              targetDaVisible: Object.keys(collectExactDaElements(das)).length,
+              openedBy: final.openedBy || '',
+              openedAttempt: final.openedAttempt || 0,
+              lateDetected: !!final.lateDetected
+            };
+          }
+          Core.runStopOpenAttempts({
+            // Package-fallback reopen stays a single v3.6 click; text labels too.
+            maxAttempts: listTarget ? ((openOpts && openOpts.maxAttempts) || Core.STOP_OPEN_MAX_ATTEMPTS) : 1,
+            resolve: resolveAttempt,
+            click: clickAttempt,
+            observe: observeAttempt,
+            isOpen: openSignal,
+            done: function (final) {
+              clickDiag.attempts = final.attempts;
+              clickDiag.retryCount = Math.max(0, (final.attempts || []).length - 1);
+              clickDiag.openedAttempt = final.openedAttempt || 0;
+              clickDiag.expandedBy = final.openedBy || '';
               clickDiag.elapsedMs = Date.now() - openStarted;
               if (listTarget) {
                 clickDiag.stopList.ariaExpandedAfter = listTarget.button.getAttribute('aria-expanded');
                 clickDiag.stopList.selectedStopIdAfter = selectedStopIdOf(hrefNow());
                 clickDiag.stopList.rowElementsAfter = rowElementsNow();
               }
-              clickDiag.afterWait = stopClickState(das);
-              if (!opened) {
-                var scroller = bagMainScroller();
-                clickDiag.afterWait.outline = scroller ? diagOutline(scroller, 40) : [];
+              if (final.blocked) {
+                clickDiag.result = 'covered';
+                clickDiag.detail = final.detail;
+                pushStopClickDiag(clickDiag);
+                cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: final.detail, blocked: true, code: 'stop_click_failed',
+                  clicked: final.clickCount > 0, clickCount: final.clickCount, stopDiag: stopDiagOf(final, 'ui_blocked') });
+                return;
               }
-              if (opened) {
+              clickDiag.result = final.opened ? 'expanded' : 'target_da_not_shown';
+              clickDiag.afterWait = stopClickState(das);
+              if (final.opened) {
+                if (final.openedAttempt > 1) {
+                  bagLog('[Bag] ' + (ctx.route && ctx.route.routeCode) + ' Stop #' + stop.stop + ' retry' + (final.openedAttempt - 1) +
+                    'で展開 (' + final.openedBy + ')');
+                }
                 // Cortex itself requests trDetails when a Stop is selected: give it a moment so the
                 // package lookup/click is only used for packages that did not arrive that way.
                 var trStarted = Date.now();
@@ -2347,58 +2541,34 @@
                     pending: pending.length, all: allArrived
                   };
                   pushStopClickDiag(clickDiag);
-                  cb({ ok: true, clicked: true });
+                  cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, stopDiag: stopDiagOf(final, 'opened') });
                 });
                 return;
               }
+              if (final.clickCount === 0 && !(final.attempts || []).some(function (a) { return a.result === 'not_opened'; })) {
+                clickDiag.result = 'click_failed';
+                clickDiag.detail = final.detail;
+              }
+              var scroller = bagMainScroller();
+              clickDiag.afterWait.outline = scroller ? diagOutline(scroller, 40) : [];
+              noteTrSeen(pending, openStarted);
               pushStopClickDiag(clickDiag);
               // Stop click did not render the targets; undo navigation only if it added history.
               restoreHistory(ctx.stopHref, ctx.stopHistoryLen, runId, function (back) {
                 cb({
                   ok: false,
-                  clicked: true,
+                  clicked: final.clickCount > 0,
+                  clickCount: final.clickCount,
                   status: Core.BAG_STATUS.STOP_EXPAND_FAILED,
-                  detail: 'Stop #' + stop.stop + ' click後に対象DAが表示されません',
+                  detail: 'Stop #' + stop.stop + ' ' + (final.attempts || []).length + '回試行しても展開を確認できません' +
+                    (final.detail ? '（' + final.detail + '）' : ''),
                   abortRoute: !back.ok,
-                  code: 'stop_click_navigation_not_restored'
+                  code: 'stop_click_navigation_not_restored',
+                  stopDiag: stopDiagOf(final, Core.BAG_STATUS.STOP_EXPAND_FAILED)
                 });
               });
             }
-            waitBag(expandedNow, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
-              if (opened || !listTarget) { settle(opened); return; }
-              // Something changed (selectedStopId / row content) but not open yet: wait a little longer once.
-              var selNow = selectedStopIdOf(hrefNow());
-              var grew = rowElementsNow() != null && rowElementsNow() > clickDiag.stopList.rowElementsBefore;
-              if (selNow !== clickDiag.stopList.selectedStopIdBefore || grew) {
-                clickDiag.extendedWait = true;
-                if (bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_EXTRA_MS);
-                waitBag(expandedNow, BAG_STOP_EXPAND_EXTRA_MS, runId, settle);
-                return;
-              }
-              settle(false);
-            });
-          }
-          if (listTarget) {
-            clickListButton(function () {
-              var t = listTarget && listTarget.button.isConnected ? listTarget : freshListTarget(stop.stop);
-              if (t) {
-                listTarget = t;
-                ctx.stopBlock = t.row;
-                ctx.openedListTarget = t;
-              }
-              return t;
-            }, runId, onClicked, clickDiag);
-            return;
-          }
-          safeCdpClick(function () {
-            if (!label.isConnected) {
-              var again = findStopLabels(stop.stop);
-              if (again.length !== 1) return null;
-              label = again[0];
-            }
-            ctx.stopBlock = stopBlockOf(label);
-            return { el: label, container: ctx.stopBlock };
-          }, runId, onClicked, clickDiag);
+          });
         });
       },
 
@@ -2414,7 +2584,7 @@
             if (sres && sres.clicked) bagRun.stopClicks = (bagRun.stopClicks || 0) + 1;
             if (!sres || !sres.ok) { cb(res); return; }
             driver.searchPackage(target, cb);
-          });
+          }, { maxAttempts: 1 });
         });
       },
 
@@ -2426,22 +2596,23 @@
           return matches.length ? matches : null;
         }, BAG_PACKAGE_SCROLL_MAX_STEPS, runId, function (matches) {
           var status = Core.domMatchStatus(matches || []);
+          var n = (matches || []).length;
           if (status === 'none') {
-            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND, detail: 'DA未表示' });
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND, detail: 'DA未表示', candidateCount: 0 });
             return;
           }
           if (status === 'ambiguous') {
-            cb({ ok: false, status: Core.BAG_STATUS.DOM_AMBIGUOUS, detail: lastCount + ' matches' });
+            cb({ ok: false, status: Core.BAG_STATUS.DOM_AMBIGUOUS, detail: lastCount + ' matches', candidateCount: n });
             return;
           }
           var da = matches[0];
           var card = packageCardOf(da);
           var clickEl = packageClickTarget(da, card);
           if (!clickEl) {
-            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND, detail: 'card ' + describeEl(card) });
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND, detail: 'card ' + describeEl(card), candidateCount: n });
             return;
           }
-          cb({ ok: true, handle: { scannableId: target.scannableId } });
+          cb({ ok: true, handle: { scannableId: target.scannableId }, candidateCount: n });
         });
       },
 
@@ -2861,6 +3032,48 @@
     });
   }
 
+  // Bag v3.7: first trDetails row seen for each Bag target (keys + raw bag fields only), so a
+  // captured_null can be shown to be Cortex's own null. Values are never inferred or filled in.
+  function recordBagTrRows(body) {
+    var rows = body && Array.isArray(body.trDetails) ? body.trDetails : [];
+    if (!rows.length || !bagRun) return;
+    var want = bagRun.targetRefSet;
+    if (!want) {
+      want = bagRun.targetRefSet = {};
+      (bagRun.targets || []).forEach(function (t) { want[t.referenceId] = true; });
+    }
+    bagRun.trRowShapes = bagRun.trRowShapes || {};
+    var at = new Date().toISOString();
+    rows.forEach(function (r) {
+      var id = r && r.trId != null ? String(r.trId).trim() : '';
+      if (!id || !want[id] || bagRun.trRowShapes[id]) return;
+      var shape = Core.trDetailsRowShape(r);
+      if (!shape) return;
+      shape.receivedAt = at;
+      shape.rowsInResponse = rows.length;
+      bagRun.trRowShapes[id] = shape;
+    });
+  }
+
+  function bagNullDiagnostics() {
+    return (bagRun.targets || []).filter(function (t) {
+      return Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) === Core.BAG_STATUS.CAPTURED_NULL;
+    }).map(function (t) {
+      var shape = (bagRun.trRowShapes || {})[t.referenceId] || null;
+      return {
+        routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus || null,
+        referenceId: t.referenceId, scannableId: t.scannableId,
+        trDetailsReceivedAt: shape ? shape.receivedAt : null,
+        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null,
+        responseKeys: shape ? shape.keys : null,
+        hasBagNameField: shape ? shape.hasBagName : null,
+        bagNameRaw: shape ? shape.bagNameRaw : null,
+        bagFields: shape ? shape.bagFields : null,
+        actualPackageClick: !!(bagRun.clickedRefs && bagRun.clickedRefs[t.referenceId])
+      };
+    });
+  }
+
   function buildBagDiagnostics() {
     if (!bagRun) return lastUnfinishedTest ? { build: BAG_BUILD, unfinishedBagTest: lastUnfinishedTest } : null;
     var results = {};
@@ -2877,6 +3090,9 @@
       stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics || [],
       unfinishedBagTest: lastUnfinishedTest,
       targetDiagnostics: targetDiagnostics(),
+      stopProcessingDiagnostics: Core.buildStopProcessingDiagnostics(bagRun, store.trDetailsByTrId),
+      packageFallbackDiagnostics: Object.keys(bagRun.fallbackDiagnostics || {}).map(function (k) { return bagRun.fallbackDiagnostics[k]; }),
+      bagNullDiagnostics: bagNullDiagnostics(),
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText

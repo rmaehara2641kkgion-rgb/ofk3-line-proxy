@@ -1156,6 +1156,9 @@
       if (st === BAG_STATUS.CAPTURED || st === BAG_STATUS.CAPTURED_NULL) byStopStatus[cat][st] += 1;
       else byStopStatus[cat].other += 1;
     });
+    // Bag v3.7: Stop-level counts next to the v3.6 package-level ones (all v3.6 keys kept).
+    var stopLevel = summarizeStopProcessing(run, trDetailsByTrId, byReferenceId);
+    Object.keys(stopLevel).forEach(function (k) { stopOpen[k] = stopLevel[k]; });
     return {
       targetCount: targetCount,
       attempted: targetCount - (counts.not_attempted || 0),
@@ -1217,6 +1220,15 @@
     if (so) {
       lines.push('Stop-open取得 ' + (so.stopOpenBagCaptured || 0) + ' / Stop-open null ' + (so.stopOpenBagNull || 0) +
         ' / trDetailsなし ' + (so.stopOpenNoTrDetails || 0));
+      if (so.processedStops != null) {
+        lines.push('Stop成功 ' + (so.successfulStopOpens || 0) + '/' + (so.processedStops || 0) +
+          ' / retry救済 ' + (so.stopOpenRetryRescued || 0) +
+          ' (retry1 ' + (so.stopOpenRetry1Success || 0) + '/' + (so.stopOpenRetry1 || 0) +
+          ', retry2 ' + (so.stopOpenRetry2Success || 0) + '/' + (so.stopOpenRetry2 || 0) + ')');
+        if (so.stopExpandFailedPackages) {
+          lines.push('Stop展開失敗 ' + so.stopExpandFailedPackages + ' package / ' + (so.stopExpandFailedStops || 0) + ' Stop');
+        }
+      }
       lines.push('package fallback ' + (so.packageFallbackTargets || 0) + ' / package click ' + (so.actualPackageClicks || 0) +
         ' / click取得 ' + (so.capturedByPackageClick || 0));
     }
@@ -1230,6 +1242,302 @@
     if (failed.length) lines.push('失敗Route: ' + failed.join(', '));
     if (summary.aborted) lines.push('中断: ' + summary.aborted);
     return lines.join('\n');
+  }
+
+  // ---- Bag v3.7: Stop-open retry v2 + per-Stop diagnostics (DOM-free; the runner supplies the DOM) ----
+  // The v3.6 path is unchanged: open the Stop, let Cortex send its own trDetails, match by referenceId.
+  // v3.7 only (a) accepts more proof that the Stop really opened and (b) retries a failed open at most
+  // twice with a freshly found button. A Stop is handled once for all its target packages.
+  var STOP_OPEN_MAX_ATTEMPTS = 3;
+  var STOP_OPEN_STRATEGIES = ['initial', 'row_refind', 'route_refind'];
+  var STOP_OPEN_SUCCESS_RESULTS = ['opened', 'already_open', 'present'];
+
+  // Pending targets of THIS Stop whose trDetails row exists now and did not before the open started.
+  // trDetails of any other referenceId (another Stop, a prefetch) never counts.
+  function targetTrDetailsArrived(trDetailsByTrId, pendingTargets, baseline) {
+    baseline = baseline || {};
+    return (pendingTargets || []).filter(function (t) {
+      return t && t.referenceId && !baseline[t.referenceId] && hasTrDetails(trDetailsByTrId, t.referenceId);
+    }).map(function (t) { return t.referenceId; });
+  }
+
+  // obs: { ariaExpanded, targetDaVisible, targetTrDetailsReceived, selectedStopIdBefore,
+  //        selectedStopIdAfter, targetPackageDom }. First signal proving the Stop opened, or ''.
+  // Row DOM growth alone is not proof (it only earns the v3.6 extra wait).
+  function stopOpenSignal(obs) {
+    obs = obs || {};
+    if (obs.ariaExpanded === true || obs.ariaExpanded === 'true') return 'aria_expanded';
+    if (obs.targetDaVisible) return 'target_da';
+    if (Number(obs.targetTrDetailsReceived) > 0) return 'target_tr_details';
+    var after = obs.selectedStopIdAfter;
+    var before = obs.selectedStopIdBefore;
+    if (after != null && after !== '' && String(after) !== String(before == null ? '' : before)) return 'selected_stop_id';
+    if (obs.targetPackageDom) return 'target_package_dom';
+    return '';
+  }
+
+  /**
+   * Initial click + at most 2 retries, only while the open is not proven. Never more than 3 clicks.
+   * o: { maxAttempts, resolve(n, strategy, cb(target|null, info)), click(n, target, rec, cb(res)),
+   *      observe(n, rec, cb(signal)), isOpen() -> signal|'', done(final) }
+   *  - resolve() must re-find the button in the current DOM every attempt; a target reported as
+   *    disconnected (target.connected === false) is never clicked.
+   *  - click res: { ok, covered, dispatched, detail }. covered -> blocked (no retry, as v3.6 ui_blocked).
+   *  - before every retry isOpen() is checked first: an open that became visible late is never clicked
+   *    again (a second click on an open row would collapse it).
+   * final: { opened, openedBy, openedAttempt, lateDetected, blocked, detail, attempts, clickCount }
+   */
+  function runStopOpenAttempts(o) {
+    var max = Math.min(o.maxAttempts > 0 ? o.maxAttempts : STOP_OPEN_MAX_ATTEMPTS, STOP_OPEN_MAX_ATTEMPTS);
+    var attempts = [];
+    var ended = false;
+    var lastDetail = '';
+    function end(r) {
+      if (ended) return;
+      ended = true;
+      r.attempts = attempts;
+      r.clickCount = attempts.filter(function (a) { return a.clicked; }).length;
+      if (!r.detail) r.detail = lastDetail;
+      o.done(r);
+    }
+    function lateOpen(n) {
+      var late = typeof o.isOpen === 'function' ? o.isOpen() : '';
+      if (!late) return false;
+      end({ opened: true, openedBy: late, openedAttempt: n, lateDetected: true });
+      return true;
+    }
+    function next(n) {
+      if (ended) return;
+      if (n > 1 && lateOpen(n - 1)) return;
+      if (n > max) { end({ opened: false, openedBy: '', openedAttempt: 0 }); return; }
+      var strategy = STOP_OPEN_STRATEGIES[n - 1];
+      var rec = { attempt: n, strategy: strategy, buttonFound: false, clicked: false, result: '' };
+      attempts.push(rec);
+      o.resolve(n, strategy, function (target, info) {
+        if (ended) return;
+        Object.keys(info || {}).forEach(function (k) { rec[k] = info[k]; });
+        if (!target || target.connected === false) {
+          rec.result = target ? 'stale_element' : 'button_not_found';
+          lastDetail = 'Stop行ボタン再取得失敗 (' + strategy + ')';
+          next(n + 1);
+          return;
+        }
+        rec.buttonFound = true;
+        o.click(n, target, rec, function (res) {
+          if (ended) return;
+          res = res || {};
+          if (!res.ok) {
+            rec.clicked = !!res.dispatched;
+            rec.detail = res.detail || '';
+            lastDetail = 'Stop click: ' + (res.detail || '');
+            if (res.covered) {
+              rec.result = 'covered';
+              end({ opened: false, blocked: true, openedBy: '', openedAttempt: 0, detail: lastDetail });
+              return;
+            }
+            rec.result = 'click_failed';
+            next(n + 1);
+            return;
+          }
+          rec.clicked = true;
+          o.observe(n, rec, function (signal) {
+            if (ended) return;
+            if (signal) {
+              rec.result = 'opened';
+              rec.openedBy = signal;
+              end({ opened: true, openedBy: signal, openedAttempt: n, lateDetected: false });
+              return;
+            }
+            rec.result = 'not_opened';
+            lastDetail = 'Stop click後に展開を確認できません (attempt ' + n + ')';
+            next(n + 1);
+          });
+        });
+      });
+    }
+    next(1);
+  }
+
+  // Engine side: one record per Route + Stop (the driver adds its click evidence as res.stopDiag).
+  function beginStopRecord(run, route, stop, pending, startedAt) {
+    run.stopRecords = run.stopRecords || [];
+    var targets = stop.targets || [];
+    var rec = {
+      routeCode: route.routeCode,
+      stopNumber: stop.stop,
+      stopStatus: targets.length && targets[0].stopStatus != null ? targets[0].stopStatus : null,
+      targetCount: targets.length,
+      pendingCount: (pending || []).length,
+      targetReferenceIds: targets.map(function (t) { return t.referenceId; }),
+      targetScannableIds: targets.map(function (t) { return t.scannableId; }),
+      initialAriaExpanded: null,
+      initialSelectedStopId: null,
+      clickAttemptCount: 0,
+      clickAttempts: [],
+      finalAriaExpanded: null,
+      finalSelectedStopId: null,
+      targetDaVisible: null,
+      openedBy: '',
+      openedAttempt: 0,
+      openResult: '',
+      closeResult: '',
+      failureReason: '',
+      startedAt: startedAt,
+      elapsedMs: null
+    };
+    run.stopRecords.push(rec);
+    return rec;
+  }
+
+  function applyStopOpenResult(rec, res) {
+    if (!rec) return;
+    var d = (res && res.stopDiag) || {};
+    ['initialAriaExpanded', 'initialSelectedStopId', 'finalAriaExpanded', 'finalSelectedStopId', 'targetDaVisible',
+      'openedBy', 'openedAttempt', 'lateDetected'].forEach(function (k) {
+      if (d[k] !== undefined) rec[k] = d[k];
+    });
+    rec.clickAttempts = Array.isArray(d.clickAttempts) ? d.clickAttempts : [];
+    rec.clickAttemptCount = rec.clickAttempts.filter(function (a) { return a && a.clicked; }).length;
+    if (res && res.ok) {
+      rec.openResult = d.openResult || 'opened';
+    } else {
+      rec.openResult = (res && res.status) || BAG_STATUS.STOP_NOT_FOUND;
+      rec.failureReason = (res && res.blocked ? 'ui_blocked: ' : '') + ((res && res.detail) || '');
+    }
+  }
+
+  function stopKeyOf(t) {
+    return String(t.routeCode) + '#' + String(t.stop);
+  }
+
+  // stopProcessingDiagnostics: the engine records + per-Stop trDetails outcome (package clicks excluded).
+  function buildStopProcessingDiagnostics(run, trDetailsByTrId) {
+    var clicked = (run && run.clickedRefs) || {};
+    return ((run && run.stopRecords) || []).map(function (rec) {
+      var out = {};
+      Object.keys(rec).forEach(function (k) { if (k !== 'startedAt') out[k] = rec[k]; });
+      var tr = 0, bag = 0, nul = 0;
+      rec.targetReferenceIds.forEach(function (ref) {
+        if (clicked[ref] || !hasTrDetails(trDetailsByTrId, ref)) return;
+        tr += 1;
+        if (trDetailsByTrId[ref] && trDetailsByTrId[ref].bagName) bag += 1; else nul += 1;
+      });
+      out.trDetailsReceivedCount = tr;
+      out.bagCapturedCount = bag;
+      out.bagNullCount = nul;
+      out.noTrDetailsCount = rec.targetCount - tr;
+      return out;
+    });
+  }
+
+  // v3.7 summary.stopOpen additions. byReferenceId: final per-package status.
+  function summarizeStopProcessing(run, trDetailsByTrId, byReferenceId) {
+    var targets = (run && run.targets) || [];
+    var keys = {};
+    targets.forEach(function (t) { keys[stopKeyOf(t)] = true; });
+    var failedPkgStops = {};
+    var failedPkgs = 0;
+    targets.forEach(function (t) {
+      if ((byReferenceId || {})[t.referenceId] === BAG_STATUS.STOP_EXPAND_FAILED) {
+        failedPkgs += 1;
+        failedPkgStops[stopKeyOf(t)] = true;
+      }
+    });
+    var out = {
+      uniqueTargetStops: Object.keys(keys).length,
+      processedStops: 0,
+      successfulStopOpens: 0,
+      failedStopOpens: 0,
+      stopOpenRetry1: 0,
+      stopOpenRetry1Success: 0,
+      stopOpenRetry2: 0,
+      stopOpenRetry2Success: 0,
+      stopOpenRetryRescued: 0,
+      stopExpandFailedPackages: failedPkgs,
+      stopExpandFailedStops: Object.keys(failedPkgStops).length,
+      trDetailsReceivedAfterRetry: 0,
+      bagCapturedAfterRetry: 0
+    };
+    var clicked = (run && run.clickedRefs) || {};
+    ((run && run.stopRecords) || []).forEach(function (rec) {
+      out.processedStops += 1;
+      var ok = STOP_OPEN_SUCCESS_RESULTS.indexOf(rec.openResult) >= 0;
+      if (ok) out.successfulStopOpens += 1; else out.failedStopOpens += 1;
+      var tried = {};
+      (rec.clickAttempts || []).forEach(function (a) { if (a) tried[a.attempt] = true; });
+      if (tried[2]) out.stopOpenRetry1 += 1;
+      if (tried[3]) out.stopOpenRetry2 += 1;
+      if (ok && rec.openedAttempt === 2) out.stopOpenRetry1Success += 1;
+      if (ok && rec.openedAttempt === 3) out.stopOpenRetry2Success += 1;
+      if (ok && rec.openedAttempt >= 2) {
+        out.stopOpenRetryRescued += 1;
+        rec.targetReferenceIds.forEach(function (ref) {
+          if (clicked[ref] || !hasTrDetails(trDetailsByTrId, ref)) return;
+          out.trDetailsReceivedAfterRetry += 1;
+          if (trDetailsByTrId[ref] && trDetailsByTrId[ref].bagName) out.bagCapturedAfterRetry += 1;
+        });
+      }
+    });
+    return out;
+  }
+
+  // Package fallback evidence (engine side; the driver adds candidateCount when it knows it).
+  function recordPackageFallback(run, target, patch) {
+    if (!run || !target) return null;
+    run.fallbackDiagnostics = run.fallbackDiagnostics || {};
+    var d = run.fallbackDiagnostics[target.referenceId];
+    if (!d) {
+      d = run.fallbackDiagnostics[target.referenceId] = {
+        routeCode: target.routeCode, stopNumber: target.stop, scannableId: target.scannableId,
+        referenceId: target.referenceId, packageDomFound: null, packageCandidateCount: null,
+        clickTargetFound: null, actualClickAttempted: false, failureReason: '', result: ''
+      };
+    }
+    Object.keys(patch || {}).forEach(function (k) { d[k] = patch[k]; });
+    return d;
+  }
+
+  function packageLookupFallbackPatch(res) {
+    res = res || {};
+    var st = res.ok ? '' : (res.status || BAG_STATUS.PACKAGE_DOM_NOT_FOUND);
+    var patch = { packageCandidateCount: res.candidateCount != null ? res.candidateCount : null };
+    if (res.ok) {
+      patch.packageDomFound = true;
+      patch.clickTargetFound = true;
+    } else if (st === BAG_STATUS.PACKAGE_DOM_NOT_FOUND || st === BAG_STATUS.DOM_NOT_FOUND) {
+      patch.packageDomFound = false;
+      patch.clickTargetFound = false;
+      patch.failureReason = 'package_dom_not_found';
+    } else if (st === BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND) {
+      patch.packageDomFound = true;
+      patch.clickTargetFound = false;
+      patch.failureReason = 'package_click_target_not_found';
+    } else if (st === BAG_STATUS.DOM_AMBIGUOUS) {
+      patch.packageDomFound = true;
+      patch.failureReason = 'package_ambiguous';
+    } else {
+      patch.failureReason = st;
+    }
+    if (!res.ok) patch.result = st;
+    return patch;
+  }
+
+  // Shape of one trDetails row (keys + raw bag fields) for captured_null diagnostics. No other values.
+  function trDetailsRowShape(row) {
+    if (!row || typeof row !== 'object') return null;
+    var keys = Object.keys(row);
+    var bagFields = {};
+    keys.forEach(function (k) {
+      if (!/bag|tote|container|cart|pallet/i.test(k)) return;
+      var v = row[k];
+      bagFields[k] = v == null ? v : (typeof v === 'object' ? '[' + (Array.isArray(v) ? 'array' : 'object') + ']' : String(v).slice(0, 60));
+    });
+    return {
+      keys: keys.slice(0, 40),
+      hasBagName: Object.prototype.hasOwnProperty.call(row, 'bagName'),
+      bagNameRaw: Object.prototype.hasOwnProperty.call(row, 'bagName') ? (row.bagName === undefined ? 'undefined' : row.bagName) : 'missing',
+      bagFields: bagFields
+    };
   }
 
   // Normal tour results are frozen before the Bag phase and restored after it,
@@ -1566,13 +1874,19 @@
           packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
           state: 'Stop #' + stop.stop + '探索中'
         });
+        // Bag v3.7: one record per Route + Stop; the Stop is opened once for all its targets.
+        var stopRec = beginStopRecord(run, route, stop, list, now());
         call(function () {
           driver.ensureStop(stop, list, function (state) { if (!closed) emit({ state: state }); }, live(function (res) {
             if (res && res.clicked) {
-              run.stopClicks += 1;
-              result.stopClicks += 1;
+              // Retries click more than once; each dispatched click is counted.
+              var n = res.clickCount > 0 ? res.clickCount : 1;
+              run.stopClicks += n;
+              result.stopClicks += n;
             }
+            applyStopOpenResult(stopRec, res);
             if (!res || !res.ok) {
+              stopRec.elapsedMs = now() - stopRec.startedAt;
               if (res && res.blocked) { abortRoute(res.detail, BAG_STATUS.UI_BLOCKED); return; }
               markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
               if (res && res.abortRoute) { abortRoute(res.detail, null, res.code || 'stop_state_error'); return; }
@@ -1591,6 +1905,8 @@
             nextPackage(stop, function () {
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
+                  stopRec.closeResult = !lres || !lres.ok ? 'failed' : (lres.leftOpen ? 'left_open' : 'closed');
+                  stopRec.elapsedMs = now() - stopRec.startedAt;
                   if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません', null, 'stop_leave_failed'); return; }
                   if (lres.leftOpen) {
                     // The Stop stayed open but the Route detail was verified usable: record and go on.
@@ -1614,6 +1930,7 @@
         emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
         call(function () {
           driver.findPackage(t, stop, live(function (res) {
+            recordPackageFallback(run, t, packageLookupFallbackPatch(res));
             if (!res || !res.ok) {
               recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
               nextPackage(stop, doneStop);
@@ -1626,6 +1943,7 @@
             call(function () {
               driver.clickPackage(t, res.handle, live(function (cres) {
                 // Counted only when a click was really dispatched (not when covered / element lost).
+                recordPackageFallback(run, t, { actualClickAttempted: !!(cres && (cres.ok || cres.clicked)) });
                 if (cres && (cres.ok || cres.clicked)) {
                   run.clicks += 1;
                   run.clickedRefs = run.clickedRefs || {};
@@ -1634,6 +1952,7 @@
                 }
                 if (!cres || !cres.ok) {
                   recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
+                  recordPackageFallback(run, t, { result: BAG_STATUS.CLICK_FAILED, failureReason: 'click_failed' });
                   if (cres && cres.blocked) { abortRoute(cres.detail, BAG_STATUS.UI_BLOCKED); return; }
                   if (cres && cres.abortRoute) { abortRoute(cres.detail, null, 'package_click_state_error'); return; }
                   nextPackage(stop, doneStop);
@@ -1644,6 +1963,7 @@
                   driver.waitTrDetails(t, live(function (got) {
                     var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
                     recordBagResult(run, t.referenceId, status || BAG_STATUS.TIMEOUT, status ? '' : 'trDetails not observed');
+                    recordPackageFallback(run, t, { result: status || BAG_STATUS.TIMEOUT, failureReason: status ? '' : 'timeout' });
                     emit({ state: status || BAG_STATUS.TIMEOUT });
                     call(function () {
                       driver.restoreAfterPackage(t, live(function (rres) {
@@ -2655,7 +2975,19 @@
     groupBagTargetsByStop: groupBagTargetsByStop,
     stopNeedsExpand: stopNeedsExpand,
     formatBagProgress: formatBagProgress,
-    runBagEngine: runBagEngine
+    runBagEngine: runBagEngine,
+    STOP_OPEN_MAX_ATTEMPTS: STOP_OPEN_MAX_ATTEMPTS,
+    STOP_OPEN_STRATEGIES: STOP_OPEN_STRATEGIES,
+    targetTrDetailsArrived: targetTrDetailsArrived,
+    stopOpenSignal: stopOpenSignal,
+    runStopOpenAttempts: runStopOpenAttempts,
+    beginStopRecord: beginStopRecord,
+    applyStopOpenResult: applyStopOpenResult,
+    buildStopProcessingDiagnostics: buildStopProcessingDiagnostics,
+    summarizeStopProcessing: summarizeStopProcessing,
+    recordPackageFallback: recordPackageFallback,
+    packageLookupFallbackPatch: packageLookupFallbackPatch,
+    trDetailsRowShape: trDetailsRowShape
   };
 
   if (typeof module !== 'undefined' && module.exports) {
