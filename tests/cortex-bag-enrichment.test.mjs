@@ -926,11 +926,11 @@ v35Suite('phase1-core');
   assert(bag.indexOf('clickDiag.extendedWait = true;') >= 0 && bag.indexOf('selectedStopIdAfter') >= 0, 'v3.5 Stop open diag + conditional wait');
   assert(bag.indexOf('actualPackageClick: clicked') >= 0 && bag.indexOf('priorFailureDetail') >= 0, 'v3.5 target diag');
   assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
-  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 1200') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
-    'v3.5 short bounded wait for Cortex own trDetails after a Stop opens');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.5'") >= 0, 'v3.5 build label');
+  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
+    'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.6'") >= 0, 'v3.6 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.10', 'manifest 1.6.10');
+  assert(manifest.version === '1.6.11', 'manifest 1.6.11');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -1090,7 +1090,7 @@ ubtSuite('phase1-core');
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
-  assert(runner.indexOf("BAG_BUILD = 'Bag v3.5'") >= 0, 'ubt: normal Bag stays v3.5');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.6'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.6 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
   const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
   assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
@@ -1104,4 +1104,146 @@ ubtSuite('phase1-core');
   assert(runner.indexOf('unfinishedBagTest: lastUnfinishedTest') >= 0, 'ubt: diagnostics JSON block');
   assert(t.indexOf('fetch(') < 0 && t.indexOf('XMLHttpRequest') < 0, 'ubt: no request creation');
   console.log('ok: Unfinished Bag Test v1 runner wiring');
+})();
+
+// ---------------- Bag v3.6: Stop open is the first capture path ----------------
+function v36Details(code, stops) {
+  return details(code, stops.map((st) => Object.assign(stop(st.seq, st.pk.map(([da, ref]) => task({ scannableId: da, referenceId: ref }))),
+    { status: st.status })));
+}
+function v36Run(C, detailsList, world, override) {
+  const sel = C.selectBagTargets(detailsList, {});
+  const w = fakeWorld(world);
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  let aborted = null;
+  const driver = Object.assign({}, w.driver, override ? override(w) : {});
+  C.runBagEngine({ run, routes, driver, getTrMap: () => w.trMap, schedule: () => 1, cancel: () => {}, done: (a) => { aborted = a; } });
+  return { sel, run, log: w.log, aborted, trMap: w.trMap, summary: C.summarizeBagRun(run, w.trMap) };
+}
+function v36Suite(label) {
+  const C = Core2;
+  // 1/2/3/4/7/13: status categories, order, Stop-open capture, null never falls back, click 0
+  (function () {
+    const d = [v36Details('DCX60', [
+      { seq: 1, status: 'COMPLETE', pk: [['DA0000006001', 'tr-601']] },
+      { seq: 2, status: 'ARRIVED', pk: [['DA0000006002', 'tr-602']] },
+      { seq: 3, status: 'IN_PROGRESS', pk: [['DA0000006003', 'tr-603']] },
+      { seq: 4, status: 'NOT_STARTED', pk: [['DA0000006004', 'tr-604']] }
+    ])];
+    const world = { routes: { DCX60: { stops: {
+      1: { packages: [{ da: 'DA0000006001', ref: 'tr-601', tr: [['tr-601', 'SHOULD_NOT_CLICK']] }], onOpenTr: [['tr-601', null]] },
+      2: { packages: [{ da: 'DA0000006002', ref: 'tr-602' }], onOpenTr: [['tr-602', 'JP_OB-AT-0602_RED']] },
+      3: { packages: [{ da: 'DA0000006003', ref: 'tr-603' }], onOpenTr: [['tr-603', 'JP_OB-AT-0603_NVY']] },
+      4: { packages: [{ da: 'DA0000006004', ref: 'tr-604' }], onOpenTr: [['tr-604', 'JP_OB-AT-0604_YLO']] }
+    } } } };
+    const r = v36Run(C, d, world);
+    assert(r.sel.targets.length === 4, label + ' v3.6-14: COMPLETE stays a 13:00 target');
+    assert(r.log.stopClicks.join(',') === '4,3,2,1', label + ' v3.6-13: NOT_STARTED, IN_PROGRESS, other, COMPLETE, got ' + r.log.stopClicks);
+    const b = r.summary.byReferenceId;
+    assert(b['tr-604'] === 'captured' && b['tr-603'] === 'captured' && b['tr-602'] === 'captured', label + ' v3.6-1/2: captured by Stop open');
+    assert(b['tr-601'] === 'captured_null', label + ' v3.6-3: COMPLETE null');
+    assert(r.log.packageClicks.length === 0 && r.summary.clicks === 0, label + ' v3.6-4/7: package click 0, null not retried');
+    const so = r.summary.stopOpen;
+    assert(so.stopOpenBagCaptured === 3 && so.stopOpenBagNull === 1 && so.stopOpenNoTrDetails === 0 && so.stopOpenTrDetailsReceived === 4 &&
+      so.capturedByStopOpen === 3 && so.capturedByPackageClick === 0 && so.packageFallbackTargets === 0 && so.actualPackageClicks === 0,
+    label + ' v3.6: stopOpen summary ' + JSON.stringify(so));
+    assert(r.summary.byStopStatus.COMPLETE.captured_null === 1 && r.summary.byStopStatus.NOT_STARTED.captured === 1 &&
+      r.summary.byStopStatus.OTHER.captured === 1 && r.summary.byStopStatus.IN_PROGRESS.captured === 1, label + ' v3.6: byStopStatus');
+    assert(C.stopStatusCategory('complete') === 'COMPLETE' && C.stopStatusCategory('') === 'UNKNOWN' && C.stopStatusPriority('NOT_STARTED') === 0 &&
+      C.stopStatusPriority('IN_PROGRESS') === 1 && C.stopStatusPriority('ARRIVED') === 2 && C.stopStatusPriority('COMPLETE') === 3, label + ' v3.6: categories');
+    const text = C.formatBagSummary(r.summary);
+    assert(text.indexOf('Stop-open取得 3 / Stop-open null 1 / trDetailsなし 0') >= 0 && text.indexOf('package fallback 0 / package click 0') >= 0 &&
+      text.indexOf('click 0 / Stop click 4') >= 0 && text.indexOf('Bag取得完了') === 0, label + ' v3.6: panel text');
+  })();
+
+  // 5/6/8: one Stop, 3 packages, one open; only the package without trDetails falls back
+  (function () {
+    const d = [v36Details('DCX61', [{ seq: 15, status: 'NOT_STARTED', pk: [['DA0000006101', 'tr-a'], ['DA0000006102', 'tr-b'], ['DA0000006103', 'tr-c']] }])];
+    const all = { routes: { DCX61: { stops: { 15: {
+      packages: [{ da: 'DA0000006101', ref: 'tr-a' }, { da: 'DA0000006102', ref: 'tr-b' }, { da: 'DA0000006103', ref: 'tr-c' }],
+      onOpenTr: [['tr-a', 'BAG_A'], ['tr-b', 'BAG_A'], ['tr-c', 'BAG_B']] } } } } };
+    const r1 = v36Run(C, d, all);
+    assert(r1.log.stopClicks.join(',') === '15' && r1.summary.counts.captured === 3 && r1.summary.clicks === 0 && r1.log.packageClicks.length === 0,
+      label + ' v3.6-5: one Stop click, 3 captured, 0 package click');
+    const part = { routes: { DCX61: { stops: { 15: {
+      packages: [{ da: 'DA0000006101', ref: 'tr-a' }, { da: 'DA0000006102', ref: 'tr-b' }, { da: 'DA0000006103', ref: 'tr-c', tr: [['tr-c', 'BAG_B']] }],
+      onOpenTr: [['tr-a', 'BAG_A'], ['tr-b', null]] } } } } };
+    const r2 = v36Run(C, d, part);
+    assert(r2.log.stopClicks.length === 1 && r2.log.packageClicks.join(',') === 'DA0000006103', label + ' v3.6-6/8: only no-trDetails package clicked');
+    const so = r2.summary.stopOpen;
+    assert(so.stopOpenBagCaptured === 1 && so.stopOpenBagNull === 1 && so.stopOpenNoTrDetails === 1 && so.packageFallbackTargets === 1 &&
+      so.packageFallbackAttempted === 1 && so.actualPackageClicks === 1 && so.capturedByPackageClick === 1 && so.capturedByStopOpen === 1,
+    label + ' v3.6-6: fallback stats ' + JSON.stringify(so));
+    assert(r2.summary.byReferenceId['tr-b'] === 'captured_null' && r2.summary.byReferenceId['tr-c'] === 'captured', label + ' v3.6-7: null kept, fallback captured');
+    assert(r2.run.clickedRefs['tr-c'] && !r2.run.clickedRefs['tr-a'] && !r2.run.clickedRefs['tr-b'], label + ' v3.6: actualPackageClick only for tr-c');
+  })();
+
+  // 9: click counted only when really dispatched
+  (function () {
+    const d = [v36Details('DCX62', [{ seq: 1, status: 'NOT_STARTED', pk: [['DA0000006201', 'tr-x']] }, { seq: 2, status: 'NOT_STARTED', pk: [['DA0000006202', 'tr-y']] }])];
+    const world = { routes: { DCX62: { stops: { 1: { packages: [{ da: 'DA0000006201', ref: 'tr-x' }] }, 2: { packages: [{ da: 'DA0000006202', ref: 'tr-y' }] } } } } };
+    const r = v36Run(C, d, world, () => ({
+      clickPackage(target, handle, cb) {
+        if (target.referenceId === 'tr-x') cb({ ok: false, detail: 'element lost' }); // nothing dispatched
+        else cb({ ok: false, clicked: true, detail: 'CDP error' }); // dispatched, then failed
+      }
+    }));
+    assert(r.summary.clicks === 1 && r.run.clickedRefs['tr-y'] && !r.run.clickedRefs['tr-x'], label + ' v3.6-9: clicks ' + r.summary.clicks);
+    assert(r.summary.byReferenceId['tr-x'] === 'click_failed' && r.summary.stopOpen.packageFallbackTargets === 2, label + ' v3.6-9: statuses');
+  })();
+
+  // 10/11/12: Stop close outcomes (the retry-once itself lives in the runner, asserted in wiring)
+  (function () {
+    const d = [v36Details('DCX63', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA0000006301', 'tr-1']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA0000006302', 'tr-2']] },
+      { seq: 3, status: 'NOT_STARTED', pk: [['DA0000006303', 'tr-3']] }
+    ])];
+    const world = (leave1, leave2) => ({ routes: { DCX63: { stops: {
+      1: { leave: leave1, packages: [{ da: 'DA0000006301', ref: 'tr-1' }], onOpenTr: [['tr-1', 'B1']] },
+      2: { leave: leave2, packages: [{ da: 'DA0000006302', ref: 'tr-2' }], onOpenTr: [['tr-2', 'B2']] },
+      3: { packages: [{ da: 'DA0000006303', ref: 'tr-3' }], onOpenTr: [['tr-3', 'B3']] }
+    } } } });
+    const ok = v36Run(C, d, world('leftOpen'));
+    assert(ok.log.stopClicks.join(',') === '1,2,3' && ok.summary.counts.captured === 3 && ok.run.routeResults[0].status === 'done' &&
+      ok.run.routeResults[0].leaveFailures.length === 1, label + ' v3.6-10/11: recoverable close failure -> next Stop');
+    const bad = v36Run(C, d, world(undefined, 'fail'));
+    assert(bad.log.stopClicks.join(',') === '1,2' && bad.run.routeResults[0].reasonCode === 'stop_leave_failed' &&
+      bad.summary.byReferenceId['tr-1'] === 'captured' && bad.summary.byReferenceId['tr-3'] === 'route_aborted', label + ' v3.6-12: unrecoverable -> Route abort');
+  })();
+  console.log('ok: Bag v3.6 Stop-open first (' + label + ')');
+}
+Core2 = RootCore;
+v36Suite('root core');
+Core2 = PhaseCore;
+v36Suite('phase1-core');
+
+// 14: the 13:00 target set does not depend on Stop status
+(function () {
+  [RootCore, PhaseCore].forEach((C, k) => {
+    const base = fixture();
+    const withStatus = fixture();
+    withStatus.rmsRouteDetails.stops.forEach((st, i) => { st.status = ['COMPLETE', 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETE', 'ARRIVED'][i]; });
+    const a = C.selectBagTargets([base], {}).targets.map((t) => t.referenceId).sort().join(',');
+    const b = C.selectBagTargets([withStatus], {}).targets.map((t) => t.referenceId).sort().join(',');
+    assert(a === b && a === 'tr-a,tr-b,tr-d', 'v3.6-14: same 13:00 targets (' + k + '): ' + a + ' / ' + b);
+  });
+  console.log('ok: v3.6 13:00 target set unchanged');
+})();
+
+// runner wiring v3.6: close retry kept, null never falls back, click only when dispatched, state separation
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(/if \(n === 0\) \{ retry\(ad\); return; \}/.test(leave) && leave.indexOf('var usable = routeDetailUsable();') >= 0, 'v3.6-10: v3.5 close retry kept');
+  assert(bag.indexOf("waitCortexTr('present', cb)") >= 0 && bag.indexOf("waitCortexTr('already_open', cb)") >= 0, 'v3.6: already-open Stops wait too');
+  assert(bag.indexOf('clicked: !!res.dispatched') >= 0 && bag.indexOf('dispatched: true') >= 0, 'v3.6-9: dispatch reported');
+  ['stopStatusCategory', 'trDetailsReceived', 'receivedAfterStopOpen', 'elapsedAfterStopOpenMs', 'stopOpenResult', 'packageFallback'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'v3.6 target diag ' + k);
+  });
+  const fin = bag.slice(bag.indexOf('  function finishUnfinishedTest('), bag.indexOf('  function startUnfinishedBagTest('));
+  assert(fin.indexOf('bagStatusByReferenceId') < 0 && fin.indexOf('bagRun = unfinishedTest.previousBagRun;') >= 0, 'v3.6-18: test never mixes into the normal Bag state');
+  console.log('ok: v3.6 runner wiring');
 })();

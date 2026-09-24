@@ -916,6 +916,25 @@
     return /^(COMPLETE|COMPLETED|DELIVERED|DONE)$/i.test(String(status || '').trim());
   }
 
+  // Bag v3.6: diagnostics category of a Stop status (the target set never depends on it).
+  function stopStatusCategory(status) {
+    var s = String(status == null ? '' : status).trim().toUpperCase();
+    if (!s) return 'UNKNOWN';
+    if (s === 'NOT_STARTED') return 'NOT_STARTED';
+    if (s === 'IN_PROGRESS') return 'IN_PROGRESS';
+    if (isCompleteStopStatus(s)) return 'COMPLETE';
+    return 'OTHER';
+  }
+
+  // Visit order inside a Route: NOT_STARTED, IN_PROGRESS, other not-completed, COMPLETE.
+  function stopStatusPriority(status) {
+    var c = stopStatusCategory(status);
+    if (c === 'NOT_STARTED') return 0;
+    if (c === 'IN_PROGRESS') return 1;
+    if (c === 'COMPLETE') return 3;
+    return 2;
+  }
+
   function compareBagTargets(a, b) {
     var rc = String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
     if (rc) return rc;
@@ -953,7 +972,7 @@
             routeCode: String(rd.routeCode || ''),
             stop: stop.sequenceNumber,
             stopStatus: stopStatus,
-            stopPriority: isCompleteStopStatus(stopStatus) ? 1 : 0,
+            stopPriority: stopStatusPriority(stopStatus),
             scannableId: scannableId,
             referenceId: referenceId
           });
@@ -1060,10 +1079,44 @@
     Object.keys(BAG_SUMMARY_GROUPS).forEach(function (g) {
       groups[g] = BAG_SUMMARY_GROUPS[g].reduce(function (n, st) { return n + (counts[st] || 0); }, 0);
     });
+    var so = (run && run.stopOpen) || {};
+    var clickedRefs = (run && run.clickedRefs) || {};
+    var fallbackRefs = (run && run.fallbackRefs) || {};
+    var stopOpen = {
+      stopOpenTrDetailsReceived: 0, stopOpenBagCaptured: 0, stopOpenBagNull: 0, stopOpenNoTrDetails: 0,
+      packageFallbackTargets: 0, packageFallbackAttempted: 0, actualPackageClicks: (run && run.clicks) || 0,
+      capturedByStopOpen: 0, capturedByPackageClick: 0, capturedOther: 0
+    };
+    var byStopStatus = {};
+    ((run && run.targets) || []).forEach(function (t) {
+      var ref = t.referenceId;
+      var o = so[ref];
+      if (o === BAG_STATUS.CAPTURED || o === BAG_STATUS.CAPTURED_NULL) {
+        stopOpen.stopOpenTrDetailsReceived += 1;
+        if (o === BAG_STATUS.CAPTURED) stopOpen.stopOpenBagCaptured += 1; else stopOpen.stopOpenBagNull += 1;
+      } else if (o === 'no_trdetails') {
+        stopOpen.stopOpenNoTrDetails += 1;
+        stopOpen.packageFallbackTargets += 1;
+      }
+      if (fallbackRefs[ref]) stopOpen.packageFallbackAttempted += 1;
+      var st = byReferenceId[ref];
+      if (st === BAG_STATUS.CAPTURED) {
+        if (clickedRefs[ref]) stopOpen.capturedByPackageClick += 1;
+        else if (o === BAG_STATUS.CAPTURED) stopOpen.capturedByStopOpen += 1;
+        else stopOpen.capturedOther += 1;
+      }
+      var cat = stopStatusCategory(t.stopStatus);
+      byStopStatus[cat] = byStopStatus[cat] || { targets: 0, captured: 0, captured_null: 0, other: 0 };
+      byStopStatus[cat].targets += 1;
+      if (st === BAG_STATUS.CAPTURED || st === BAG_STATUS.CAPTURED_NULL) byStopStatus[cat][st] += 1;
+      else byStopStatus[cat].other += 1;
+    });
     return {
       targetCount: targetCount,
       attempted: targetCount - (counts.not_attempted || 0),
       groups: groups,
+      stopOpen: stopOpen,
+      byStopStatus: byStopStatus,
       clicks: (run && run.clicks) || 0,
       stopClicks: (run && run.stopClicks) || 0,
       routeResults: ((run && run.routeResults) || []).slice(),
@@ -1115,6 +1168,13 @@
     var detail = BAG_DETAIL_LABELS.filter(function (pair) { return c[pair[0]]; })
       .map(function (pair) { return pair[1] + ' ' + c[pair[0]]; });
     if (detail.length) lines.push('内訳: ' + detail.join(' / '));
+    var so = summary.stopOpen;
+    if (so) {
+      lines.push('Stop-open取得 ' + (so.stopOpenBagCaptured || 0) + ' / Stop-open null ' + (so.stopOpenBagNull || 0) +
+        ' / trDetailsなし ' + (so.stopOpenNoTrDetails || 0));
+      lines.push('package fallback ' + (so.packageFallbackTargets || 0) + ' / package click ' + (so.actualPackageClicks || 0) +
+        ' / click取得 ' + (so.capturedByPackageClick || 0));
+    }
     lines.push('click ' + (summary.clicks || 0) + ' / Stop click ' + (summary.stopClicks || 0));
     var leftOpen = (summary.routeResults || []).reduce(function (n, r) { return n + ((r.leaveFailures || []).length); }, 0);
     if (leftOpen) lines.push('Stop閉じ失敗（Route継続） ' + leftOpen);
@@ -1242,7 +1302,7 @@
       bySeq[key].targets.push(t);
     });
     stops.forEach(function (s) {
-      s.priority = s.targets.reduce(function (m, t) { return Math.min(m, Number(t.stopPriority || 0)); }, 1);
+      s.priority = s.targets.reduce(function (m, t) { return Math.min(m, Number(t.stopPriority || 0)); }, 3);
       if (!s.targets.some(function (t) { return t.stopPriority != null; })) s.priority = 0;
     });
     stops.sort(function (a, b) {
@@ -1474,6 +1534,15 @@
               nextStop(j + 1);
               return;
             }
+            // Bag v3.6: the Stop open itself is the first capture path. Targets whose trDetails
+            // arrived (bagName or null) are done; only those without any trDetails row may fall
+            // back to the package lookup / click below.
+            run.stopOpen = run.stopOpen || {};
+            list.forEach(function (t) {
+              var got = capturedBagStatus(trMap(), t.referenceId);
+              run.stopOpen[t.referenceId] = got || 'no_trdetails';
+              if (got) recordBagResult(run, t.referenceId, got, 'stop_open');
+            });
             nextPackage(stop, function () {
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
@@ -1506,12 +1575,18 @@
               return;
             }
             markBagAttempted(run, t.referenceId);
-            run.clicks += 1;
-            run.clickedRefs = run.clickedRefs || {};
-            run.clickedRefs[t.referenceId] = true;
+            run.fallbackRefs = run.fallbackRefs || {};
+            run.fallbackRefs[t.referenceId] = true;
             emit({ state: '荷物番号クリック' });
             call(function () {
               driver.clickPackage(t, res.handle, live(function (cres) {
+                // Counted only when a click was really dispatched (not when covered / element lost).
+                if (cres && (cres.ok || cres.clicked)) {
+                  run.clicks += 1;
+                  run.clickedRefs = run.clickedRefs || {};
+                  run.clickedRefs[t.referenceId] = true;
+                  emit({});
+                }
                 if (!cres || !cres.ok) {
                   recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
                   if (cres && cres.blocked) { abortRoute(cres.detail, BAG_STATUS.UI_BLOCKED); return; }
@@ -2520,6 +2595,8 @@
     STOP_MARKER_KIND: STOP_MARKER_KIND,
     STOP_LIST_KIND: STOP_LIST_KIND,
     isCompleteStopStatus: isCompleteStopStatus,
+    stopStatusCategory: stopStatusCategory,
+    stopStatusPriority: stopStatusPriority,
     UNFINISHED_BAG_TEST_VERSION: UNFINISHED_BAG_TEST_VERSION,
     selectUnfinishedBagTargets: selectUnfinishedBagTargets,
     summarizeUnfinishedBagTest: summarizeUnfinishedBagTest,

@@ -1182,10 +1182,10 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.5';
+  var BAG_BUILD = 'Bag v3.6';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
-  var BAG_STOP_OPEN_TR_WAIT_MS = 1200;
+  var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
   var BAG_ROUTE_RETRY_WAIT_MS = 15000;
   var bagRun = null;
   var bagTimer = 0;
@@ -1946,7 +1946,7 @@
       requestCdpClick(point, function (res) {
         setPanelClickable(true);
         if (!bagIsCurrent(runId)) return;
-        done(res && res.ok ? { ok: true } : { ok: false, detail: (res && (res.message || res.error)) || 'CDP' });
+        done(res && res.ok ? { ok: true } : { ok: false, dispatched: true, detail: (res && (res.message || res.error)) || 'CDP' });
       });
     });
   }
@@ -2194,16 +2194,16 @@
       },
 
       ensureStop: function (stop, pending, onState, cb) {
-        // Test mode only: a row already open / already showing the DAs still gets the same bounded
-        // wait for Cortex's own trDetails (the normal Bag phase returns immediately as before).
-        function waitCortexTrIfTest(kind, done) {
-          if (ctx.mode !== 'unfinished_test') { done({ ok: true, clicked: false }); return; }
+        // Bag v3.6: a row already open / already showing the DAs gets the same bounded wait for
+        // Cortex's own trDetails as a freshly opened one (returns at once when all rows are there).
+        function waitCortexTr(kind, done) {
           var started = Date.now();
           waitBag(function () {
             noteTrSeen(pending, started);
             return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
           }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function () {
             var t0 = freshListTarget(stop.stop);
+            ctx.testStopDiags = ctx.testStopDiags || {};
             ctx.testStopDiags[(ctx.route && ctx.route.routeCode) + '#' + stop.stop] = {
               opened: kind, waitMs: Date.now() - started,
               ariaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
@@ -2261,7 +2261,7 @@
               detail: 'Stop #' + stop.stop + ' label未発見（探索中のStop label候補 最大' + maxCandidates + '件）' });
             return;
           }
-          if (found.present) { waitCortexTrIfTest('present', cb); return; }
+          if (found.present) { waitCortexTr('present', cb); return; }
           if (found.ambiguous) {
             cb({ ok: false, status: Core.BAG_STATUS.STOP_AMBIGUOUS, detail: 'Stop #' + stop.stop + ' label ' + found.ambiguous + '件' });
             return;
@@ -2271,7 +2271,7 @@
           ctx.stopBlock = listTarget ? listTarget.row : stopBlockOf(label);
           if (listTarget && listTarget.button.getAttribute('aria-expanded') === 'true') {
             // Row already open: clicking would collapse it; the package search scrolls to the DAs.
-            waitCortexTrIfTest('already_open', cb);
+            waitCortexTr('already_open', cb);
             return;
           }
           onState('Stop #' + stop.stop + '展開中');
@@ -2339,6 +2339,8 @@
                   noteTrSeen(pending, openStarted);
                   return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
                 }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function (allArrived) {
+                  // The full wait (some rows never came) is added to this Route's budget, capped.
+                  if (!allArrived && bagEngine) bagEngine.extendRoute(Date.now() - trStarted);
                   clickDiag.cortexTrDetails = {
                     waitedMs: Date.now() - trStarted,
                     arrived: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length,
@@ -2455,7 +2457,7 @@
           return el ? { el: el, container: card } : null;
         }, runId, function (res) {
           if (res.ok) { cb({ ok: true }); return; }
-          if (!res.covered) { cb({ ok: false, detail: res.detail }); return; }
+          if (!res.covered) { cb({ ok: false, clicked: !!res.dispatched, detail: res.detail }); return; }
           // Covered: close a native dialog left open (own close UI only) and retry once.
           closeNewDialogs(ctx.routeDialogs || [], runId, function () {
             bagLater(function () {
@@ -2467,7 +2469,7 @@
                 return el ? { el: el, container: card } : null;
               }, runId, function (res2) {
                 if (res2.ok) { cb({ ok: true }); return; }
-                cb({ ok: false, detail: res2.detail, blocked: !!res2.covered });
+                cb({ ok: false, clicked: !!res2.dispatched, detail: res2.detail, blocked: !!res2.covered });
               });
             }, 500);
           });
@@ -2847,7 +2849,14 @@
         priorFailureDetail: prior ? prior.detail || '' : null,
         bagName: tr ? tr.bagName : undefined,
         stopStatus: st ? st.status || null : (t.stopStatus || null),
-        stopPriority: t.stopPriority
+        stopStatusCategory: Core.stopStatusCategory(st ? st.status : t.stopStatus),
+        stopPriority: t.stopPriority,
+        routeId: t.routeId, stopNumber: t.stop, referenceId: t.referenceId,
+        trDetailsReceived: !!tr,
+        receivedAfterStopOpen: !!tr && !preexisting,
+        stopOpenResult: (bagRun.stopOpen && bagRun.stopOpen[t.referenceId]) || null,
+        packageFallback: !!(bagRun.fallbackRefs && bagRun.fallbackRefs[t.referenceId]),
+        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null
       };
     });
   }
