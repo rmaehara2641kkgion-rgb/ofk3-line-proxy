@@ -930,7 +930,7 @@ v35Suite('phase1-core');
     'v3.5 short bounded wait for Cortex own trDetails after a Stop opens');
   assert(bag.indexOf("BAG_BUILD = 'Bag v3.5'") >= 0, 'v3.5 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.9', 'manifest 1.6.9');
+  assert(manifest.version === '1.6.10', 'manifest 1.6.10');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -954,4 +954,154 @@ v35Suite('phase1-core');
   assert(bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v2 no persistent watchers');
   assert(runner.indexOf("mk('Bag診断保存'") >= 0, 'v2 diagnostics download button');
   console.log('ok: v2 runner isolation');
+})();
+
+// ---------------- Unfinished Bag Test v1 (diagnostic mode, Stop open only) ----------------
+function ubtDetails(code, stops) {
+  return {
+    rmsRouteDetails: {
+      routeId: 'R-' + code, routeCode: code,
+      stops: stops.map((st) => ({
+        sequenceNumber: st.seq, status: st.status,
+        tasks: st.pk.map(([da, ref]) => ({ taskType: 'DROP_OFF', referenceId: ref, domainMap: { scannableId: da } }))
+      }))
+    }
+  };
+}
+
+// Same override as the runner: Stop open only, the package path can never click.
+function ubtRun(C, detailsList, world, preTr) {
+  const sel = C.selectUnfinishedBagTargets(detailsList, preTr || {}, { maxRoutes: 3, maxStops: 5, maxPackages: 20 });
+  const w = fakeWorld(world);
+  Object.assign(w.trMap, preTr || {});
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  let violations = 0;
+  let finished = null;
+  const driver = Object.assign({}, w.driver, {
+    findPackage(target, stop, cb) { cb({ ok: false, status: 'no_trdetails_after_stop_open', detail: 'no trDetails' }); },
+    clickPackage(target, handle, cb) { violations += 1; cb({ ok: false, detail: 'disabled' }); }
+  });
+  C.runBagEngine({ run, routes, driver, getTrMap: () => w.trMap, schedule: () => 1, cancel: () => {}, done: (a) => { finished = a; } });
+  const res = C.summarizeUnfinishedBagTest({
+    targets: sel.targets, trMap: w.trMap, results: run.results, clickedRefs: run.clickedRefs || {},
+    preexisting: {}, trSeenAt: {}, stopDiags: {}, selection: sel, selectedDay: '2026-09-24',
+    responses: [{ path: '/operations/execution/api/tasks/trDetails', status: 200, topKeys: ['trDetails'], rowKeys: ['trId', 'bagName'],
+      bagLikeFields: { bagName: [null] }, trIds: ['tr-null'] }],
+    packageClicks: (run.clicks || 0) + violations, aborted: finished || ''
+  });
+  return { sel, res, log: w.log, violations, run, finished };
+}
+
+function ubtSuite(label) {
+  const C = Core2;
+  // 1. NOT_STARTED + 2. IN_PROGRESS + 3. three packages in one Stop + 4. null bag + 5. no trDetails + 7. COMPLETE excluded
+  (function () {
+    const details = [
+      ubtDetails('DCX10', [
+        { seq: 1, status: 'COMPLETE', pk: [['DA1', 'tr-done']] },
+        { seq: 2, status: 'NOT_STARTED', pk: [['DA2', 'tr-2a'], ['DA3', 'tr-2b'], ['DA4', 'tr-2c']] },
+        { seq: 3, status: 'IN_PROGRESS', pk: [['DA5', 'tr-null']] },
+        { seq: 4, status: 'NOT_STARTED', pk: [['DA6', 'tr-none']] }
+      ])
+    ];
+    const world = { routes: { DCX10: { stops: {
+      1: { packages: [{ da: 'DA1', ref: 'tr-done' }] },
+      2: { packages: [{ da: 'DA2', ref: 'tr-2a' }, { da: 'DA3', ref: 'tr-2b' }, { da: 'DA4', ref: 'tr-2c' }],
+        onOpenTr: [['tr-2a', 'JP_OB-AT-0001_NVY'], ['tr-2b', 'JP_OB-AT-0001_NVY'], ['tr-2c', 'JP_OB-AM-0002_YLO']] },
+      3: { packages: [{ da: 'DA5', ref: 'tr-null' }], onOpenTr: [['tr-null', null]] },
+      4: { packages: [{ da: 'DA6', ref: 'tr-none' }] }
+    } } } };
+    const r = ubtRun(C, details, world);
+    assert(r.sel.completeStopsSkipped === 1 && r.sel.unfinishedStopsFound === 3, label + ' ubt-7: COMPLETE excluded');
+    assert(r.sel.targets.every((t) => t.referenceId !== 'tr-done'), label + ' ubt-7: no COMPLETE target');
+    assert(r.log.stopClicks.indexOf(1) < 0, label + ' ubt-7: COMPLETE Stop never opened');
+    const s2 = r.res.stops.find((s) => s.stopNumber === 2);
+    assert(s2.stopStatus === 'NOT_STARTED' && s2.packagesExpected === 3 && s2.trDetailsReceivedCount === 3 &&
+      s2.bagNonNullCount === 3 && s2.bagNullCount === 0 && s2.referenceIds.length === 3 &&
+      s2.bagNames.join(',') === 'JP_OB-AT-0001_NVY,JP_OB-AT-0001_NVY,JP_OB-AM-0002_YLO', label + ' ubt-1/3: NOT_STARTED 3 packages aggregated');
+    const p2 = r.res.packages.find((p) => p.referenceId === 'tr-2a');
+    assert(p2.captureSource === 'cortex_stop_open' && p2.actualPackageClick === false && p2.receivedAfterStopOpen === true &&
+      p2.trDetailsReceived === true && p2.status === 'captured' && p2.scannableId === 'DA2' && p2.stopStatus === 'NOT_STARTED',
+    label + ' ubt-1: package record');
+    const s3 = r.res.stops.find((s) => s.stopNumber === 3);
+    assert(s3.stopStatus === 'IN_PROGRESS' && s3.bagNullCount === 1 && s3.status === 'bag_null', label + ' ubt-2/4: IN_PROGRESS null');
+    const pn = r.res.packages.find((p) => p.referenceId === 'tr-null');
+    assert(pn.status === 'captured_null' && pn.nullDiagnostics.length === 1 && pn.nullDiagnostics[0].rowKeys.indexOf('bagName') >= 0,
+      label + ' ubt-4: null diagnostics');
+    const p4 = r.res.packages.find((p) => p.referenceId === 'tr-none');
+    assert(p4.status === 'no_trdetails_after_stop_open' && !p4.trDetailsReceived, label + ' ubt-5: no trDetails');
+    assert(r.res.stops.find((s) => s.stopNumber === 4).status === 'no_trdetails_after_stop_open', label + ' ubt-5: stop status');
+    assert(r.res.stopOpenOnlyBagConfirmed === true && r.res.testStatus === 'confirmed' &&
+      r.res.confirmed[0].confirmedRouteCode === 'DCX10' && r.res.confirmed[0].confirmedBagName, label + ' ubt: confirmed fields');
+    assert(r.res.packageClicks === 0 && r.violations === 0 && r.log.packageClicks.length === 0, label + ' ubt-10: package click 0');
+    assert(r.res.bagCaptured === 3 && r.res.bagNull === 1 && r.res.noTrDetails === 1 && r.res.unfinishedStopsTested === 3,
+      label + ' ubt: counts');
+    const text = C.formatUnfinishedBagTest(r.res);
+    assert(text.indexOf('未完了Bagテスト') === 0 && text.indexOf('Unfinished Bag Test v1') >= 0 && text.indexOf('Bag取得完了') < 0,
+      label + ' ubt: own summary text');
+  })();
+
+  // 6. zero unfinished Stops
+  (function () {
+    const r = ubtRun(C, [ubtDetails('DCX20', [{ seq: 1, status: 'COMPLETE', pk: [['DA1', 'tr-1']] }])], { routes: {} });
+    assert(r.sel.targets.length === 0 && r.res.testStatus === 'no_unfinished_stops' && !r.res.stopOpenOnlyBagConfirmed,
+      label + ' ubt-6: no_unfinished_stops');
+    assert(C.formatUnfinishedBagTest(r.res).indexOf('未完了Stop 0 — Bag検証未実施') >= 0, label + ' ubt-6: UI text');
+  })();
+
+  // 8. a Stop open failure continues with the next unfinished Stop
+  (function () {
+    const details = [ubtDetails('DCX30', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA1', 'tr-f1'], ['DA2', 'tr-f2']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA3', 'tr-ok']] }
+    ])];
+    const world = { routes: { DCX30: { stops: {
+      1: { expandFails: true, packages: [{ da: 'DA1', ref: 'tr-f1' }, { da: 'DA2', ref: 'tr-f2' }] },
+      2: { packages: [{ da: 'DA3', ref: 'tr-ok' }], onOpenTr: [['tr-ok', 'JP_OB-AT-0003_RED']] }
+    } } } };
+    const r = ubtRun(C, details, world);
+    assert(r.log.stopClicks.join(',') === '1,2', label + ' ubt-8: next Stop tried, got ' + r.log.stopClicks);
+    assert(r.res.packages.find((p) => p.referenceId === 'tr-f1').status === 'stop_expand_failed', label + ' ubt-8: failure recorded');
+    assert(r.res.packages.find((p) => p.referenceId === 'tr-ok').status === 'captured' && r.res.packageClicks === 0, label + ' ubt-8: continued');
+  })();
+
+  // caps: 3 routes / 5 stops / 20 packages
+  (function () {
+    const many = [];
+    for (let i = 1; i <= 5; i++) {
+      many.push(ubtDetails('DCX5' + i, [1, 2, 3, 4].map((seq) => ({ seq, status: 'NOT_STARTED',
+        pk: [0, 1, 2].map((k) => ['DA' + i + seq + k, 'tr-' + i + '-' + seq + '-' + k]) }))));
+    }
+    const sel = C.selectUnfinishedBagTargets(many, {}, { maxRoutes: 3, maxStops: 5, maxPackages: 20 });
+    const routes = new Set(sel.targets.map((t) => t.routeCode));
+    const stops = new Set(sel.targets.map((t) => t.routeCode + '#' + t.stop));
+    assert(routes.size <= 3 && stops.size <= 5 && sel.targets.length <= 20 && sel.targets.length > 0, label + ' ubt: caps');
+    assert(C.selectUnfinishedBagTargets(many, {}).limits.maxPackages === 20, label + ' ubt: default caps');
+  })();
+  console.log('ok: Unfinished Bag Test v1 (' + label + ')');
+}
+Core2 = RootCore;
+ubtSuite('root core');
+Core2 = PhaseCore;
+ubtSuite('phase1-core');
+
+// 9/10. runner wiring: separate button; normal Bag v3.5 unchanged; the test driver cannot click packages.
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.5'") >= 0, 'ubt: normal Bag stays v3.5');
+  const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
+  const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
+  assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
+    findPkg.indexOf('base.') < 0, 'ubt-10: findPackage never reaches the package DOM');
+  const clickPkg = t.slice(t.indexOf('clickPackage: function'), t.indexOf('setBagStatus(', t.indexOf('clickPackage: function')));
+  assert(clickPkg.indexOf('packageClickViolations') >= 0 && clickPkg.indexOf('Cdp') < 0 && clickPkg.indexOf('base.') < 0,
+    'ubt-10: clickPackage disabled');
+  assert(t.indexOf('UNFINISHED_TEST_TR_WAIT_MS') >= 0 && runner.indexOf('UNFINISHED_TEST_TR_WAIT_MS = 3000') >= 0, 'ubt: 3 s wait');
+  const start = runner.slice(runner.indexOf('  function startBagPhase()'), runner.indexOf('  function onReady('));
+  assert(start.indexOf('unfinished') < 0 && start.indexOf('driver: createBagDriver(ctx, runId)') >= 0, 'ubt-9: startBagPhase unchanged');
+  assert(runner.indexOf('unfinishedBagTest: lastUnfinishedTest') >= 0, 'ubt: diagnostics JSON block');
+  assert(t.indexOf('fetch(') < 0 && t.indexOf('XMLHttpRequest') < 0, 'ubt: no request creation');
+  console.log('ok: Unfinished Bag Test v1 runner wiring');
 })();

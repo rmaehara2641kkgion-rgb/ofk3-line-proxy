@@ -1617,6 +1617,212 @@
     };
   }
 
+  // ---- Unfinished Bag Test v1 (diagnostic mode; the normal 13:00 Bag phase is unchanged) ----
+  // Picks not-yet-completed Stops from route-details (any DROP_OFF, not only 13:00), capped,
+  // so the Stop-open-only hypothesis can be checked on live data.
+  var UNFINISHED_BAG_TEST_VERSION = 'Unfinished Bag Test v1';
+
+  function selectUnfinishedBagTargets(detailsList, trDetailsByTrId, limits) {
+    limits = limits || {};
+    var maxRoutes = limits.maxRoutes > 0 ? limits.maxRoutes : 3;
+    var maxStops = limits.maxStops > 0 ? limits.maxStops : 5;
+    var maxPackages = limits.maxPackages > 0 ? limits.maxPackages : 20;
+    var perRoute = limits.maxStopsPerRoute > 0 ? limits.maxStopsPerRoute : 3;
+    var out = {
+      targets: [], routesScanned: 0, routesWithUnfinished: 0, unfinishedStopsFound: 0,
+      completeStopsSkipped: 0, statusUnknownStops: 0, routesSelected: 0, stopsSelected: 0,
+      limits: { maxRoutes: maxRoutes, maxStops: maxStops, maxPackages: maxPackages, maxStopsPerRoute: perRoute }
+    };
+    var candidates = [];
+    (detailsList || []).filter(function (d) {
+      return d && d.rmsRouteDetails && Array.isArray(d.rmsRouteDetails.stops);
+    }).sort(function (a, b) {
+      return String(a.rmsRouteDetails.routeCode || '').localeCompare(String(b.rmsRouteDetails.routeCode || ''), 'en', { numeric: true });
+    }).forEach(function (d) {
+      var rd = d.rmsRouteDetails;
+      out.routesScanned += 1;
+      var stops = [];
+      rd.stops.forEach(function (stop) {
+        if (!stop) return;
+        var seen = {};
+        var pk = (stop.tasks || []).filter(function (t) { return t && t.taskType === 'DROP_OFF'; }).map(function (t) {
+          return { ref: String(t.referenceId || '').trim(), scan: String((t.domainMap || {}).scannableId || '').trim() };
+        }).filter(function (p) {
+          if (!p.ref || !p.scan || seen[p.ref]) return false;
+          seen[p.ref] = true;
+          return true;
+        });
+        if (!pk.length) return;
+        var st = stop.status == null ? '' : String(stop.status).trim();
+        if (!st) { out.statusUnknownStops += 1; return; }
+        if (isCompleteStopStatus(st)) { out.completeStopsSkipped += 1; return; }
+        out.unfinishedStopsFound += 1;
+        stops.push({ stop: stop.sequenceNumber, status: st, packages: pk });
+      });
+      if (stops.length) {
+        out.routesWithUnfinished += 1;
+        candidates.push({ rd: rd, stops: stops });
+      }
+    });
+    var used = {};
+    candidates.forEach(function (c) {
+      if (out.routesSelected >= maxRoutes || out.stopsSelected >= maxStops) return;
+      var ordered = c.stops.slice().sort(function (a, b) { return Number(a.stop) - Number(b.stop); });
+      var multi = null;
+      ordered.forEach(function (s) { if (!multi && s.packages.length > 1) multi = s; });
+      var pick = multi ? [multi].concat(ordered.filter(function (s) { return s !== multi; })) : ordered;
+      var took = 0;
+      pick.forEach(function (s) {
+        if (took >= perRoute || out.stopsSelected >= maxStops) return;
+        var fresh = s.packages.filter(function (p) { return !used[p.ref]; });
+        if (!fresh.length || out.targets.length + fresh.length > maxPackages) return;
+        fresh.forEach(function (p) {
+          used[p.ref] = true;
+          out.targets.push({
+            routeId: String(c.rd.routeId || ''), routeCode: String(c.rd.routeCode || ''),
+            stop: s.stop, stopStatus: s.status, stopPriority: 0,
+            scannableId: p.scan, referenceId: p.ref,
+            trDetailsBefore: hasTrDetails(trDetailsByTrId, p.ref)
+          });
+        });
+        took += 1;
+        out.stopsSelected += 1;
+      });
+      if (took) out.routesSelected += 1;
+    });
+    return out;
+  }
+
+  /**
+   * o: { targets, trMap, results, clickedRefs, preexisting, trSeenAt, stopDiags, responses,
+   *      selection, selectedDay, packageClicks, aborted }
+   * Per package + per Stop outcome of the Stop-open-only test.
+   */
+  function summarizeUnfinishedBagTest(o) {
+    o = o || {};
+    var targets = o.targets || [];
+    var trMap = o.trMap || {};
+    var results = o.results || {};
+    var clicked = o.clickedRefs || {};
+    var pre = o.preexisting || {};
+    var seenAt = o.trSeenAt || {};
+    var stopDiags = o.stopDiags || {};
+    var responses = o.responses || [];
+    var sel = o.selection || {};
+    var stops = [];
+    var byKey = {};
+    var packages = [];
+    targets.forEach(function (t) {
+      var key = t.routeCode + '#' + t.stop;
+      if (!byKey[key]) {
+        byKey[key] = {
+          routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus,
+          packagesExpected: 0, trDetailsReceivedCount: 0, bagNonNullCount: 0, bagNullCount: 0,
+          actualPackageClicks: 0, referenceIds: [], bagNames: [], packages: []
+        };
+        stops.push(byKey[key]);
+      }
+      var s = byKey[key];
+      var ref = t.referenceId;
+      var tr = hasTrDetails(trMap, ref) ? trMap[ref] : null;
+      var isClicked = !!clicked[ref];
+      var r = results[ref];
+      var preexisting = !!(pre[ref] || t.trDetailsBefore);
+      var prior = !isClicked && r && ['captured', 'captured_null'].indexOf(r.status) < 0 ? r.status : null;
+      var status = tr ? (tr.bagName ? 'captured' : 'captured_null') : (r && r.status ? r.status : 'not_attempted');
+      var pkg = {
+        routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus,
+        scannableId: t.scannableId, referenceId: ref,
+        bagName: tr ? tr.bagName : null,
+        bagScannableId: tr ? tr.bagScannableId : null,
+        trDetailsReceived: !!tr,
+        receivedAfterStopOpen: !!tr && !preexisting,
+        receivedAtMs: seenAt[ref] == null ? null : seenAt[ref],
+        actualPackageClick: isClicked,
+        captureSource: classifyCaptureSource({ hasTr: !!tr, clicked: isClicked, preexisting: preexisting, priorFailureStatus: prior }),
+        status: status
+      };
+      if (status === 'captured_null') {
+        pkg.nullDiagnostics = responses.filter(function (x) { return (x.trIds || []).indexOf(ref) >= 0; }).slice(0, 2);
+      }
+      s.packagesExpected += 1;
+      s.referenceIds.push(ref);
+      if (isClicked) s.actualPackageClicks += 1;
+      if (tr) {
+        s.trDetailsReceivedCount += 1;
+        if (tr.bagName) { s.bagNonNullCount += 1; s.bagNames.push(tr.bagName); } else s.bagNullCount += 1;
+      }
+      s.packages.push(pkg);
+      packages.push(pkg);
+    });
+    var tested = 0;
+    stops.forEach(function (s) {
+      var statuses = s.packages.map(function (p) { return p.status; });
+      if (s.bagNonNullCount) s.status = 'bag_captured';
+      else if (s.trDetailsReceivedCount) s.status = 'bag_null';
+      else if (statuses.indexOf('no_trdetails_after_stop_open') >= 0) s.status = 'no_trdetails_after_stop_open';
+      else s.status = statuses[0] || 'not_attempted';
+      var reached = s.trDetailsReceivedCount > 0 || statuses.some(function (x) {
+        return x === 'no_trdetails_after_stop_open';
+      });
+      if (reached) tested += 1;
+      var d = stopDiags[s.routeCode + '#' + s.stopNumber];
+      if (d) s.stopOpen = d;
+    });
+    var confirmed = packages.filter(function (p) {
+      return p.status === 'captured' && p.bagName && !p.actualPackageClick &&
+        p.captureSource === 'cortex_stop_open' && !isCompleteStopStatus(p.stopStatus);
+    });
+    function count(st) { return packages.filter(function (p) { return p.status === st; }).length; }
+    return {
+      mode: 'stop_open_only',
+      version: UNFINISHED_BAG_TEST_VERSION,
+      selectedDay: o.selectedDay || '',
+      testStatus: !targets.length ? 'no_unfinished_stops' : (confirmed.length ? 'confirmed' : 'not_confirmed'),
+      routesScanned: sel.routesScanned || 0,
+      routesWithUnfinished: sel.routesWithUnfinished || 0,
+      unfinishedStopsFound: sel.unfinishedStopsFound || 0,
+      completeStopsSkipped: sel.completeStopsSkipped || 0,
+      unfinishedStopsSelected: stops.length,
+      unfinishedStopsTested: tested,
+      limits: sel.limits || null,
+      packagesExpected: packages.length,
+      trDetailsReceived: packages.filter(function (p) { return p.trDetailsReceived; }).length,
+      bagCaptured: count('captured'),
+      bagNull: count('captured_null'),
+      noTrDetails: count('no_trdetails_after_stop_open'),
+      packageClicks: Number(o.packageClicks) || 0,
+      stopOpenOnlyBagConfirmed: confirmed.length > 0,
+      confirmed: confirmed.map(function (p) {
+        return {
+          confirmedRouteCode: p.routeCode, confirmedStopNumber: p.stopNumber, confirmedReferenceId: p.referenceId,
+          confirmedScannableId: p.scannableId, confirmedBagName: p.bagName, stopStatus: p.stopStatus
+        };
+      }),
+      aborted: o.aborted || '',
+      stops: stops,
+      packages: packages
+    };
+  }
+
+  function formatUnfinishedBagTest(s) {
+    s = s || {};
+    if (s.testStatus === 'no_unfinished_stops') {
+      return '未完了Bagテスト完了\n未完了Stop 0 — Bag検証未実施\n（Route ' + (s.routesScanned || 0) + ' / COMPLETE除外 ' + (s.completeStopsSkipped || 0) + '）\n(' + UNFINISHED_BAG_TEST_VERSION + ')';
+    }
+    var lines = [
+      '未完了Bagテスト完了',
+      '未完了Stop発見 ' + (s.unfinishedStopsFound || 0) + ' / 選択 ' + (s.unfinishedStopsSelected || 0) + ' / テスト ' + (s.unfinishedStopsTested || 0),
+      '対象荷物 ' + (s.packagesExpected || 0) + ' / trDetails取得 ' + (s.trDetailsReceived || 0) +
+        ' / Bag実値 ' + (s.bagCaptured || 0) + ' / Bag null ' + (s.bagNull || 0) + ' / trDetailsなし ' + (s.noTrDetails || 0),
+      'package click ' + (s.packageClicks || 0),
+      'Stop-open only確認 ' + (s.stopOpenOnlyBagConfirmed ? 'YES' : 'NO')
+    ];
+    if (s.aborted) lines.push('中断: ' + s.aborted);
+    lines.push('(' + UNFINISHED_BAG_TEST_VERSION + ')');
+    return lines.join('\n');
+  }
+
   function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {
     var diagnostics = emptyPackageAssistDiagnostics();
     trDetailsByTrId = trDetailsByTrId || {};
@@ -2360,6 +2566,10 @@
     STOP_MARKER_KIND: STOP_MARKER_KIND,
     STOP_LIST_KIND: STOP_LIST_KIND,
     isCompleteStopStatus: isCompleteStopStatus,
+    UNFINISHED_BAG_TEST_VERSION: UNFINISHED_BAG_TEST_VERSION,
+    selectUnfinishedBagTargets: selectUnfinishedBagTargets,
+    summarizeUnfinishedBagTest: summarizeUnfinishedBagTest,
+    formatUnfinishedBagTest: formatUnfinishedBagTest,
     classifyCaptureSource: classifyCaptureSource,
     stopListRowNumber: stopListRowNumber,
     isStopMarkerSvgClass: isStopMarkerSvgClass,

@@ -94,6 +94,9 @@
   }
 
   function note(url, status, body) {
+    if (unfinishedTest && unfinishedTest.active && /\/tasks\/trDetails(?:[/?#]|$)/.test(String(url || ''))) {
+      recordTrDetailsShape(url, status, body);
+    }
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
     if (pocRun && !pocRun.ended && pocRun.route && pocRun.route.routeId && store.detailsByRouteId[pocRun.route.routeId]) {
       pocRun.diagnostics.details = 'success';
@@ -433,6 +436,7 @@
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
       row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('未完了Bagテスト', function () { startUnfinishedBagTest(); }));
       row.appendChild(mk('Bag診断保存', function () { saveBagDiagnostics(); }));
       row.appendChild(mk('停止', function () {
         if (bagActive()) stopBagPhase();
@@ -2015,6 +2019,17 @@
     return m ? decodeURIComponent(m[1]) : null;
   }
 
+  // First time each target's trDetails row is seen, in ms after the Stop open started.
+  function noteTrSeen(targets, since) {
+    if (!bagRun) return;
+    bagRun.trSeenAt = bagRun.trSeenAt || {};
+    (targets || []).forEach(function (t) {
+      if (bagRun.trSeenAt[t.referenceId] == null && Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) {
+        bagRun.trSeenAt[t.referenceId] = Date.now() - since;
+      }
+    });
+  }
+
   function pushStopLeaveDiag(entry) {
     if (!bagRun) return;
     bagRun.stopLeaveDiagnostics = bagRun.stopLeaveDiagnostics || [];
@@ -2179,6 +2194,26 @@
       },
 
       ensureStop: function (stop, pending, onState, cb) {
+        // Test mode only: a row already open / already showing the DAs still gets the same bounded
+        // wait for Cortex's own trDetails (the normal Bag phase returns immediately as before).
+        function waitCortexTrIfTest(kind, done) {
+          if (ctx.mode !== 'unfinished_test') { done({ ok: true, clicked: false }); return; }
+          var started = Date.now();
+          waitBag(function () {
+            noteTrSeen(pending, started);
+            return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
+          }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function () {
+            var t0 = freshListTarget(stop.stop);
+            ctx.testStopDiags[(ctx.route && ctx.route.routeCode) + '#' + stop.stop] = {
+              opened: kind, waitMs: Date.now() - started,
+              ariaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              selectedStopId: selectedStopIdOf(hrefNow()),
+              expected: pending.length,
+              received: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length
+            };
+            done({ ok: true, clicked: false });
+          });
+        }
         if (ctx.routeNoStopLabels) {
           // A full sweep of this Route already found no Stop label of any number: check the
           // current view once (no scrolling) instead of sweeping again for every Stop.
@@ -2226,7 +2261,7 @@
               detail: 'Stop #' + stop.stop + ' label未発見（探索中のStop label候補 最大' + maxCandidates + '件）' });
             return;
           }
-          if (found.present) { cb({ ok: true, clicked: false }); return; }
+          if (found.present) { waitCortexTrIfTest('present', cb); return; }
           if (found.ambiguous) {
             cb({ ok: false, status: Core.BAG_STATUS.STOP_AMBIGUOUS, detail: 'Stop #' + stop.stop + ' label ' + found.ambiguous + '件' });
             return;
@@ -2236,7 +2271,7 @@
           ctx.stopBlock = listTarget ? listTarget.row : stopBlockOf(label);
           if (listTarget && listTarget.button.getAttribute('aria-expanded') === 'true') {
             // Row already open: clicking would collapse it; the package search scrolls to the DAs.
-            cb({ ok: true, clicked: false });
+            waitCortexTrIfTest('already_open', cb);
             return;
           }
           onState('Stop #' + stop.stop + '展開中');
@@ -2301,8 +2336,9 @@
                 // package lookup/click is only used for packages that did not arrive that way.
                 var trStarted = Date.now();
                 waitBag(function () {
+                  noteTrSeen(pending, openStarted);
                   return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
-                }, BAG_STOP_OPEN_TR_WAIT_MS, runId, function (allArrived) {
+                }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function (allArrived) {
                   clickDiag.cortexTrDetails = {
                     waitedMs: Date.now() - trStarted,
                     arrived: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length,
@@ -2601,9 +2637,176 @@
     paint();
   }
 
+  // ---- Unfinished Bag Test v1 (diagnostic mode; separate button, normal Bag v3.5 untouched) ----
+  // Opens only not-yet-completed Stops (capped) with the same Stop list click / close /
+  // Route recovery as Bag v3.5, waits up to 3 s for Cortex's own trDetails and NEVER clicks a
+  // package: findPackage / clickPackage are replaced so the package click path cannot run.
+  var UNFINISHED_TEST_LIMITS = { maxRoutes: 3, maxStops: 5, maxPackages: 20, maxStopsPerRoute: 3 };
+  var UNFINISHED_TEST_TR_WAIT_MS = 3000;
+  var unfinishedTest = null;
+  var lastUnfinishedTest = null;
+
+  function selectedDayNow() {
+    var m = hrefNow().match(/[?&]selectedDay=([^&#]*)/);
+    return m ? decodeURIComponent(m[1]) : currentLocalDate();
+  }
+
+  // Shape of a trDetails response (keys, bag-like field values, trIds); no addresses / notes.
+  function recordTrDetailsShape(url, status, body) {
+    if (!unfinishedTest || unfinishedTest.responses.length >= 50) return;
+    var rows = body && Array.isArray(body.trDetails) ? body.trDetails : [];
+    var rowKeys = {};
+    var bagLike = {};
+    rows.forEach(function (r) {
+      if (!r || typeof r !== 'object') return;
+      Object.keys(r).forEach(function (k) {
+        rowKeys[k] = true;
+        if (/bag|tote|container|sort|cart|pallet/i.test(k)) {
+          var v = r[k];
+          if (!bagLike[k]) bagLike[k] = [];
+          if (bagLike[k].length < 10) bagLike[k].push(v == null ? null : (typeof v === 'object' ? '[' + (Array.isArray(v) ? 'array' : 'object') + ']' : String(v).slice(0, 40)));
+        }
+      });
+    });
+    unfinishedTest.responses.push({
+      atMs: Date.now() - unfinishedTest.startedAt,
+      path: String(url || '').replace(/^https?:\/\/[^/]+/, '').split('?')[0],
+      status: status,
+      topKeys: body && typeof body === 'object' ? Object.keys(body).slice(0, 20) : [],
+      rowCount: rows.length,
+      rowKeys: Object.keys(rowKeys),
+      bagLikeFields: bagLike,
+      trIds: rows.map(function (r) { return r && r.trId; }).filter(Boolean).slice(0, 50)
+    });
+  }
+
+  function finishUnfinishedTest(aborted) {
+    if (!bagRun || bagRun.ended) return;
+    if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    setPanelClickable(true);
+    bagRun.aborted = aborted || '';
+    bagRun.ended = true;
+    Core.restoreNormalCapture(store, bagSnapshot);
+    bagSnapshot = null;
+    var testRun = bagRun;
+    var stopDiags = {};
+    (testRun.stopClickDiagnostics || []).forEach(function (d) {
+      stopDiags[d.routeCode + '#' + d.stop] = {
+        opened: d.result, expandedBy: d.expandedBy || '',
+        ariaExpanded: d.stopList ? d.stopList.ariaExpandedAfter : null,
+        selectedStopId: d.stopList ? d.stopList.selectedStopIdAfter : null,
+        waitMs: d.cortexTrDetails ? d.cortexTrDetails.waitedMs : null,
+        expected: d.cortexTrDetails ? d.cortexTrDetails.pending : null,
+        received: d.cortexTrDetails ? d.cortexTrDetails.arrived : null,
+        clicked: d.clicked || null
+      };
+    });
+    Object.keys(unfinishedTest.ctx.testStopDiags || {}).forEach(function (k) { stopDiags[k] = unfinishedTest.ctx.testStopDiags[k]; });
+    var summary = Core.summarizeUnfinishedBagTest({
+      targets: testRun.targets, trMap: store.trDetailsByTrId, results: testRun.results,
+      clickedRefs: testRun.clickedRefs || {}, preexisting: testRun.preexisting || {}, trSeenAt: testRun.trSeenAt || {},
+      stopDiags: stopDiags, responses: unfinishedTest.responses, selection: unfinishedTest.selection,
+      selectedDay: unfinishedTest.selectedDay,
+      packageClicks: (testRun.clicks || 0) + (testRun.packageClickViolations || 0),
+      aborted: aborted || ''
+    });
+    summary.routeResults = testRun.routeResults || [];
+    summary.stopLeaveDiagnostics = testRun.stopLeaveDiagnostics || [];
+    summary.stopClickDiagnostics = testRun.stopClickDiagnostics || [];
+    summary.responses = unfinishedTest.responses;
+    summary.log = testRun.log || [];
+    unfinishedTest.active = false;
+    lastUnfinishedTest = summary;
+    bagRun = unfinishedTest.previousBagRun;
+    bagEngine = null;
+    setBagStatus(Core.formatUnfinishedBagTest(summary));
+    bagLog('[Bag] 未完了Bagテスト完了: 未完了Stop ' + summary.unfinishedStopsFound + ' / trDetails ' + summary.trDetailsReceived +
+      ' / Bag実値 ' + summary.bagCaptured + ' / package click ' + summary.packageClicks);
+    paint();
+  }
+
+  function startUnfinishedBagTest() {
+    show();
+    setPanelCollapsed(false);
+    if (bagActive()) return;
+    if (sessionBusy || (tour && tour.status === 'running')) {
+      alert('通常取得の完了後に「未完了Bagテスト」を押してください。');
+      return;
+    }
+    var detailsList = Object.keys(store.detailsByRouteId || {}).map(function (id) { return store.detailsByRouteId[id]; });
+    if (!detailsList.length) {
+      alert('先に「取得開始」で通常取得を完了してください。');
+      return;
+    }
+    var selection = Core.selectUnfinishedBagTargets(detailsList, store.trDetailsByTrId, UNFINISHED_TEST_LIMITS);
+    unfinishedTest = {
+      version: Core.UNFINISHED_BAG_TEST_VERSION, startedAt: Date.now(), selectedDay: selectedDayNow(),
+      selection: selection, responses: [], active: false, previousBagRun: bagRun, ctx: null
+    };
+    if (!selection.targets.length) {
+      lastUnfinishedTest = Core.summarizeUnfinishedBagTest({ targets: [], selection: selection, selectedDay: unfinishedTest.selectedDay, packageClicks: 0 });
+      setBagStatus(Core.formatUnfinishedBagTest(lastUnfinishedTest));
+      return;
+    }
+    var routes = Core.groupBagTargetsByRoute(selection.targets);
+    var currentPage = !anyRouteCardShown();
+    if (currentPage) {
+      var only = routeFromHref(routes);
+      if (!only) {
+        alert('表示中のRouteを特定できません。Route一覧で「未完了Bagテスト」を押してください。');
+        return;
+      }
+      routes = [only];
+    }
+    bagSnapshot = Core.snapshotNormalCapture(store);
+    bagRun = Core.createBagRun(selection.targets);
+    bagRun.mode = 'unfinished_test';
+    bagRun.selection = selection;
+    bagRun.stopOpenedFor = {};
+    bagRun.preexisting = {};
+    bagRun.trSeenAt = {};
+    bagRun.packageClickViolations = 0;
+    var runId = bagRun.id;
+    var ctx = {
+      currentPage: currentPage, listHref: hrefNow(), routeHref: hrefNow(), baseDialogs: visibleDialogs(),
+      mode: 'unfinished_test', stopOpenTrWaitMs: UNFINISHED_TEST_TR_WAIT_MS, testStopDiags: {}
+    };
+    unfinishedTest.ctx = ctx;
+    unfinishedTest.active = true;
+    var base = createBagDriver(ctx, runId);
+    var driver = Object.assign({}, base, {
+      // Phase A: Stop open only. No package DOM search, no package click.
+      findPackage: function (target, stop, cb) {
+        cb({ ok: false, status: 'no_trdetails_after_stop_open',
+          detail: 'Stop open後' + UNFINISHED_TEST_TR_WAIT_MS + 'ms以内にtrDetailsなし（package clickは行いません）' });
+      },
+      clickPackage: function (target, handle, cb) {
+        bagRun.packageClickViolations = (bagRun.packageClickViolations || 0) + 1;
+        cb({ ok: false, detail: 'package click is disabled in the unfinished Bag test' });
+      }
+    });
+    setBagStatus('未完了Bagテスト中… (' + Core.UNFINISHED_BAG_TEST_VERSION + ')');
+    bagEngine = Core.runBagEngine({
+      run: bagRun,
+      routes: routes,
+      getTrMap: function () { return store.trDetailsByTrId; },
+      driver: driver,
+      routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      log: bagLog,
+      onProgress: function (p) {
+        if (!bagIsCurrent(runId)) return;
+        setBagStatus('未完了Bagテスト中\n' + Core.formatBagProgress(p).replace(/^Bag取得中\n/, '') + '\n(' + Core.UNFINISHED_BAG_TEST_VERSION + ')');
+      },
+      done: function (aborted) {
+        if (bagRun && bagRun.id === runId) finishUnfinishedTest(aborted);
+      }
+    });
+  }
+
   function stopBagPhase() {
     if (!bagActive()) return;
     bagRun.stopRequested = true;
+    if (bagRun.mode === 'unfinished_test') { finishUnfinishedTest('手動停止'); return; }
     finishBagPhase('手動停止');
   }
 
@@ -2650,7 +2853,7 @@
   }
 
   function buildBagDiagnostics() {
-    if (!bagRun) return null;
+    if (!bagRun) return lastUnfinishedTest ? { build: BAG_BUILD, unfinishedBagTest: lastUnfinishedTest } : null;
     var results = {};
     Object.keys(bagRun.results || {}).forEach(function (ref) { results[ref] = bagRun.results[ref]; });
     var payload = {
@@ -2663,6 +2866,7 @@
       routeDiagnostics: bagRun.routeDiagnostics || [],
       stopClickDiagnostics: bagRun.stopClickDiagnostics || [],
       stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics || [],
+      unfinishedBagTest: lastUnfinishedTest,
       targetDiagnostics: targetDiagnostics(),
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
@@ -2763,6 +2967,7 @@
     save: saveBundle,
     bag: startBagPhase,
     bagDiagnostics: buildBagDiagnostics,
+    unfinishedBagTest: startUnfinishedBagTest,
     _store: store
   };
 })(typeof window !== 'undefined' ? window : global);
