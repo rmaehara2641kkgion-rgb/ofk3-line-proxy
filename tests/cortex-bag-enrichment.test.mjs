@@ -708,7 +708,7 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
   assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
-  assert(/BAG_BUILD = 'Bag v3\.[23]/.test(bag), 'v3.x build label');
+  assert(/BAG_BUILD = 'Bag v3\.[234]/.test(bag), 'v3.x build label');
   console.log('ok: v3.2 runner marker wiring');
 })();
 
@@ -771,10 +771,51 @@ v33Suite(PhaseCore, 'phase1-core');
     'v3.3 aria-expanded recorded and used for expansion');
   assert(bag.indexOf('ariaExpandedBefore') >= 0 && bag.indexOf('ariaExpandedAfter') >= 0 && bag.indexOf('rowElementsAfter') >= 0, 'v3.3 list diagnostics');
   assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.3 hit-test safety kept');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.3'") >= 0, 'v3.3 build label');
-  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.7', 'manifest 1.6.7');
+  // (build label / manifest version are checked by the v3.4 block)
   console.log('ok: v3.3 runner Stop list click wiring');
+})();
+
+// ---------------- v3.4: close the opened Stop row; undo history only when an entry was added ----------------
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(leave.indexOf('ctx.openedListTarget') >= 0 && leave.indexOf("return { el: target.button, container: target.button };") >= 0,
+    'v3.4 leaveStop clicks the same row button (strict hit-test container)');
+  assert(leave.indexOf("target.button.getAttribute('aria-expanded') === 'false'") >= 0, 'v3.4 close confirmed by aria-expanded=false');
+  assert(leave.indexOf('historyBackTo(') < 0 && leave.indexOf('restoreHistory(ctx.stopHref, ctx.stopHistoryLen') >= 0,
+    'v3.4 no blind history.back on leave');
+  ['ariaExpandedBeforeLeave', 'ariaExpandedAfterLeave', 'urlBefore', 'urlAfter', 'selectedStopIdBefore', 'selectedStopIdAfter',
+    'targetDaVisibleBefore', 'targetDaVisibleAfter', 'leaveMethod'].forEach((k) => assert(leave.indexOf(k) >= 0, 'v3.4 leave diag ' + k));
+  const restore = bag.slice(bag.indexOf('  function restoreHistory('), bag.indexOf('  function selectedStopIdOf('));
+  assert(restore.indexOf('if (historyLength() > beforeLen)') >= 0 && restore.indexOf("method: 'url_replaced'") >= 0,
+    'v3.4 history.back only when the click pushed an entry');
+  assert(bag.indexOf('restoreHistory(ctx.packageHref, ctx.packageHistoryLen') >= 0, 'v3.4 package restore uses the same rule');
+  assert(bag.indexOf("captureSource: tr ? (Core.bagTargetAttempted(bagRun, t.referenceId) ? 'package_click' : 'without_package_click') : null") >= 0 &&
+    bag.indexOf('stopStatus: st ? st.status || null : null') >= 0, 'v3.4 per-target capture source + stop status');
+  assert(bag.indexOf('stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics') >= 0 && bag.indexOf('targetDiagnostics: targetDiagnostics()') >= 0, 'v3.4 diag JSON');
+  // Stop list click path from v3.3 unchanged
+  assert(bag.indexOf('return { el: listTarget.button, container: listTarget.button };') >= 0 && bag.indexOf('{ excludeMarkers: true }') >= 0,
+    'v3.4 keeps the v3.3 Stop list click');
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.4 hit-test safety kept');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.4'") >= 0, 'v3.4 build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.8', 'manifest 1.6.8');
+  console.log('ok: v3.4 Stop leave + history rules');
+})();
+
+// v3.4 engine: several Stops in one Route are opened and left one after another (fake driver)
+(function () {
+  Core2 = RootCore;
+  const r = runEngine({ routes: { DCX30: { stops: {
+    3: { packages: [{ da: 'DA0000000303', ref: 'tr-303', tr: [['tr-303', 'JP_OB-AT-0303_NVY']] }] },
+    6: { packages: [{ da: 'DA0000000306', ref: 'tr-306', tr: [['tr-306', null]] }] },
+    11: { packages: [{ da: 'DA0000000311', ref: 'tr-311', tr: [['tr-311', 'JP_OB-AT-0311_RED']] }] }
+  } } } });
+  assert(r.log.stopClicks.join(',') === '3,6,11', 'v3.4 Stops 3 -> 6 -> 11 in one Route');
+  assert(r.summary.counts.route_aborted === 0 && r.summary.counts.not_attempted === 0, 'v3.4 no route_aborted / 未試行');
+  assert(r.summary.counts.captured === 2 && r.summary.counts.captured_null === 1 && r.summary.clicks === 3, 'v3.4 package clicks + captured');
+  console.log('ok: v3.4 engine multi-Stop Route');
 })();
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.

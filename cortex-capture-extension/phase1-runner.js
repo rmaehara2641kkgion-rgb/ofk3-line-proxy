@@ -1178,7 +1178,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.3';
+  var BAG_BUILD = 'Bag v3.4';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1861,6 +1861,35 @@
     waitBag(function () { return hrefNow() === href; }, BAG_HISTORY_TIMEOUT_MS, runId, done);
   }
 
+  function historyLength() {
+    return global.history ? global.history.length : 0;
+  }
+
+  // Undo navigation caused by a click only when the click added a history entry.
+  // Real Cortex rewrites the URL in place (e.g. &selectedStopId=N via replaceState); a
+  // history.back() then leaves the Route detail, so a rewritten URL is accepted as is.
+  function restoreHistory(beforeHref, beforeLen, runId, done) {
+    if (hrefNow() === beforeHref) { done({ ok: true, method: 'unchanged' }); return; }
+    if (historyLength() > beforeLen) {
+      historyBackTo(beforeHref, runId, function (back) {
+        done(back ? { ok: true, method: 'history_back' } : { ok: false, method: 'history_back', detail: 'history.back後もURLが戻りません' });
+      });
+      return;
+    }
+    done({ ok: true, method: 'url_replaced' });
+  }
+
+  function selectedStopIdOf(href) {
+    var m = String(href || '').match(/[?&]selectedStopId=([^&#]*)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  function pushStopLeaveDiag(entry) {
+    if (!bagRun) return;
+    bagRun.stopLeaveDiagnostics = bagRun.stopLeaveDiagnostics || [];
+    if (bagRun.stopLeaveDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX) bagRun.stopLeaveDiagnostics.push(entry);
+  }
+
   function anyRouteCardShown() {
     var cards = visibleRouteCards();
     for (var i = 0; i < cards.length; i++) {
@@ -1940,6 +1969,7 @@
               findBagRouteCard(route, runId, function (card) {
                 if (!card) { cb({ ok: false, code: 'route_card_not_found', detail: 'Route一覧にRoute cardが見つかりません' }); return; }
                 var beforeDetails = store.detailsByRouteId[route.routeId] || null;
+                ctx.listHistoryLen = historyLength();
                 safeCdpClick(function () {
                   var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
                   return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
@@ -1991,6 +2021,8 @@
         }
         ctx.stopBlock = null;
         ctx.stopHref = hrefNow();
+        ctx.stopHistoryLen = historyLength();
+        ctx.openedListTarget = null;
         var das = pending.map(function (t) { return t.scannableId; });
         var outcome = null;
         var maxCandidates = 0;
@@ -2051,6 +2083,7 @@
             }
             if (listTarget) {
               ctx.stopBlock = listTarget.row;
+              ctx.openedListTarget = listTarget;
               return { el: listTarget.button, container: listTarget.button };
             }
             ctx.stopBlock = stopBlockOf(label);
@@ -2093,14 +2126,14 @@
               }
               pushStopClickDiag(clickDiag);
               if (opened) { cb({ ok: true, clicked: true }); return; }
-              // Stop click did not render the targets; undo any navigation it caused.
-              historyBackTo(ctx.stopHref, runId, function (back) {
+              // Stop click did not render the targets; undo navigation only if it added history.
+              restoreHistory(ctx.stopHref, ctx.stopHistoryLen, runId, function (back) {
                 cb({
                   ok: false,
                   clicked: true,
                   status: Core.BAG_STATUS.STOP_EXPAND_FAILED,
                   detail: 'Stop #' + stop.stop + ' click後に対象DAが表示されません',
-                  abortRoute: !back,
+                  abortRoute: !back.ok,
                   code: 'stop_click_navigation_not_restored'
                 });
               });
@@ -2154,6 +2187,7 @@
 
       clickPackage: function (target, handle, cb) {
         ctx.packageHref = hrefNow();
+        ctx.packageHistoryLen = historyLength();
         ctx.packageDialogs = visibleDialogs();
         safeCdpClick(function () {
           var m = collectExactDaElements([handle.scannableId])[handle.scannableId] || [];
@@ -2190,8 +2224,8 @@
 
       restoreAfterPackage: function (target, cb) {
         bagLater(function () {
-          historyBackTo(ctx.packageHref, runId, function (back) {
-            if (!back) { cb({ ok: false, detail: 'Package detail後にURLが戻りません' }); return; }
+          restoreHistory(ctx.packageHref, ctx.packageHistoryLen, runId, function (back) {
+            if (!back.ok) { cb({ ok: false, detail: 'Package detail後にURLが戻りません' }); return; }
             closeNewDialogs(ctx.packageDialogs, runId, function (closed) {
               cb(closed.ok ? { ok: true } : { ok: false, detail: closed.detail });
             });
@@ -2199,9 +2233,73 @@
         }, 300);
       },
 
+      // Close the Stop row this phase opened (same header button, aria-expanded true -> false),
+      // then undo history only if the Stop added an entry. Rows that were already open stay open.
       leaveStop: function (stop, cb) {
-        historyBackTo(ctx.stopHref, runId, function (back) {
-          cb(back ? { ok: true } : { ok: false, detail: 'Stop表示からRoute詳細へ戻れません' });
+        var das = stop.targets.map(function (t) { return t.scannableId; });
+        var diag = {
+          routeCode: ctx.route && ctx.route.routeCode, stop: stop.stop,
+          urlBefore: hrefNow(), selectedStopIdBefore: selectedStopIdOf(hrefNow()),
+          targetDaVisibleBefore: Object.keys(collectExactDaElements(das)).length,
+          historyLenBefore: historyLength()
+        };
+        function finish(res, method) {
+          diag.leaveMethod = method;
+          diag.urlAfter = hrefNow();
+          diag.selectedStopIdAfter = selectedStopIdOf(hrefNow());
+          diag.targetDaVisibleAfter = Object.keys(collectExactDaElements(das)).length;
+          diag.historyLenAfter = historyLength();
+          diag.result = res.ok ? 'left' : 'failed';
+          if (res.detail) diag.detail = res.detail;
+          pushStopLeaveDiag(diag);
+          ctx.openedListTarget = null;
+          cb(res);
+        }
+        function thenHistory(method) {
+          restoreHistory(ctx.stopHref, ctx.stopHistoryLen, runId, function (back) {
+            diag.historyRestore = back.method;
+            finish(back.ok ? { ok: true } : { ok: false, detail: 'Stop表示からRoute詳細へ戻れません（' + back.detail + '）' }, method);
+          });
+        }
+        var target = ctx.openedListTarget;
+        if (!target) { thenHistory('history_only'); return; }
+        if (!target.button.isConnected) {
+          var again = findStopLabels(stop.stop);
+          target = again.length === 1 ? stopListTargetOf(again[0]) : null;
+        }
+        if (!target) { finish({ ok: false, detail: 'Stop #' + stop.stop + ' の行ボタンが見つかりません' }, 'close_button'); return; }
+        diag.ariaExpandedBeforeLeave = target.button.getAttribute('aria-expanded');
+        if (diag.ariaExpandedBeforeLeave !== 'true') {
+          diag.ariaExpandedAfterLeave = diag.ariaExpandedBeforeLeave;
+          thenHistory('already_closed');
+          return;
+        }
+        safeCdpClick(function () {
+          if (!target.button.isConnected) {
+            var re = findStopLabels(stop.stop);
+            var t2 = re.length === 1 ? stopListTargetOf(re[0]) : null;
+            if (!t2) return null;
+            target = t2;
+          }
+          return { el: target.button, container: target.button };
+        }, runId, function (res) {
+          if (!res.ok) {
+            diag.ariaExpandedAfterLeave = target.button.getAttribute('aria-expanded');
+            finish({ ok: false, detail: 'Stop close click: ' + res.detail }, 'close_button');
+            return;
+          }
+          waitBag(function () {
+            if (!target.button.isConnected) {
+              var re = findStopLabels(stop.stop);
+              var t2 = re.length === 1 ? stopListTargetOf(re[0]) : null;
+              if (t2) target = t2;
+            }
+            return target.button.getAttribute('aria-expanded') === 'false';
+          }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (closed) {
+            diag.ariaExpandedAfterLeave = target.button.getAttribute('aria-expanded');
+            if (!closed) { finish({ ok: false, detail: 'Stop #' + stop.stop + ' が閉じません（aria-expanded=' + diag.ariaExpandedAfterLeave + '）' }, 'close_button'); return; }
+            thenHistory('close_button');
+          });
         });
       },
 
@@ -2219,7 +2317,8 @@
               });
               return;
             }
-            if (backs >= 3) { cb({ ok: false, detail: 'history.back 3回でも一覧URLに戻りません' }); return; }
+            var maxBacks = Math.min(40, Math.max(3, historyLength() - (ctx.listHistoryLen || historyLength()) + 1));
+            if (backs >= maxBacks) { cb({ ok: false, detail: 'history.back ' + backs + '回でも一覧URLに戻りません' }); return; }
             backs += 1;
             try { global.history.back(); } catch (e1) { cb({ ok: false, detail: 'history.back失敗' }); return; }
             waitBag(function () { return hrefNow() === ctx.listHref; }, BAG_HISTORY_TIMEOUT_MS, runId, function () {
@@ -2267,6 +2366,28 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
+  // Per target: how the trDetails row arrived (our package click, or Cortex itself while the
+  // Stop was open) and the Stop status in route-details, to judge whether a null bag is genuine.
+  function targetDiagnostics() {
+    var details = (bagSnapshot && bagSnapshot.detailsByRouteId) || store.detailsByRouteId || {};
+    return (bagRun.targets || []).map(function (t) {
+      var d = details[t.routeId];
+      var st = null;
+      ((d && d.rmsRouteDetails && d.rmsRouteDetails.stops) || []).forEach(function (s) {
+        if (s && s.sequenceNumber === t.stop) st = s;
+      });
+      var tr = Core.hasTrDetails(store.trDetailsByTrId, t.referenceId) ? store.trDetailsByTrId[t.referenceId] : null;
+      var r = bagRun.results[t.referenceId];
+      return {
+        routeCode: t.routeCode, stop: t.stop, scannableId: t.scannableId,
+        status: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
+        captureSource: tr ? (Core.bagTargetAttempted(bagRun, t.referenceId) ? 'package_click' : 'without_package_click') : null,
+        bagName: tr ? tr.bagName : undefined,
+        stopStatus: st ? st.status || null : null
+      };
+    });
+  }
+
   function buildBagDiagnostics() {
     if (!bagRun) return null;
     var results = {};
@@ -2280,6 +2401,8 @@
       log: bagRun.log || [],
       routeDiagnostics: bagRun.routeDiagnostics || [],
       stopClickDiagnostics: bagRun.stopClickDiagnostics || [],
+      stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics || [],
+      targetDiagnostics: targetDiagnostics(),
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText
