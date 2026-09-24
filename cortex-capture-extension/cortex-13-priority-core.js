@@ -1156,6 +1156,10 @@
   // <svg class="stop-K"><text>N</text></svg>. K is an index (stop-2 shows 3), so only the
   // visible text N is the Stop number. Plain span/p/div numbers are never Stop labels.
   var STOP_MARKER_KIND = 'svg-stop-marker';
+  // Real Cortex Stop list (diagnostics 2026-09-24, v3.2-diag): the Stop number is
+  // span "N" < p "N" < div "N" < span < div[role=button][aria-expanded] < ... < div.stops-list-item.
+  // The svg.stop-K markers belong to the Mapbox map and never open the package list.
+  var STOP_LIST_KIND = 'stop-list-row';
 
   function isStopMarkerSvgClass(className) {
     return String(className == null ? '' : className).split(/\s+/).some(function (c) {
@@ -1170,22 +1174,44 @@
 
   function stopNumberOfEntry(e) {
     if (!e) return null;
-    return e.kind === STOP_MARKER_KIND ? parseStopMarkerText(e.text) : parseStopLabel(e.text);
+    if (e.kind === STOP_MARKER_KIND || e.kind === STOP_LIST_KIND) return parseStopMarkerText(e.text);
+    return parseStopLabel(e.text);
+  }
+
+  // Candidates inside one stops-list-item header button: [{ text, chain: [parentText, grandParentText] }].
+  // A candidate counts only when its text is digits and the two wrappers show exactly the same digits
+  // (the diagnosed span < p < div nesting). Exactly one candidate -> that Stop number; else null.
+  function stopListRowNumber(candidates) {
+    var hits = [];
+    (candidates || []).forEach(function (c) {
+      if (!c) return;
+      var n = parseStopMarkerText(c.text);
+      if (n == null) return;
+      var chain = c.chain || [];
+      if (chain.length < 2) return;
+      var same = chain.slice(0, 2).every(function (t) { return parseStopMarkerText(t) === n; });
+      if (same) hits.push(n);
+    });
+    return hits.length === 1 ? hits[0] : null;
   }
 
   // entries: [{ text, key, kind? }] -> keys that are exactly a label for sequenceNumber.
-  // Text labels ("#16", "Stop 16") win; svg Stop markers are used only when no text label matches.
-  function matchStopLabelEntries(entries, sequenceNumber) {
+  // Priority: Stop list rows > text labels ("#16", "Stop 16") > svg markers.
+  // opts.excludeMarkers: never return svg markers (the Bag click path uses this).
+  function matchStopLabelEntries(entries, sequenceNumber, opts) {
     var want = Number(sequenceNumber);
+    var listKeys = [];
     var textKeys = [];
     var markerKeys = [];
     if (!isFinite(want)) return textKeys;
     (entries || []).forEach(function (e) {
       if (!e || stopNumberOfEntry(e) !== want) return;
-      var bucket = e.kind === STOP_MARKER_KIND ? markerKeys : textKeys;
+      var bucket = e.kind === STOP_LIST_KIND ? listKeys : (e.kind === STOP_MARKER_KIND ? markerKeys : textKeys);
       if (bucket.indexOf(e.key) < 0) bucket.push(e.key);
     });
-    return textKeys.length ? textKeys : markerKeys;
+    if (listKeys.length) return listKeys;
+    if (textKeys.length) return textKeys;
+    return opts && opts.excludeMarkers ? [] : markerKeys;
   }
 
   // Package-number-like token (e.g. DA0012405022); used only to bound a package card.
@@ -2227,6 +2253,8 @@
     parseStopLabel: parseStopLabel,
     matchStopLabelEntries: matchStopLabelEntries,
     STOP_MARKER_KIND: STOP_MARKER_KIND,
+    STOP_LIST_KIND: STOP_LIST_KIND,
+    stopListRowNumber: stopListRowNumber,
     isStopMarkerSvgClass: isStopMarkerSvgClass,
     parseStopMarkerText: parseStopMarkerText,
     isPackageNumberText: isPackageNumberText,

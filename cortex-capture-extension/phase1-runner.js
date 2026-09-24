@@ -1178,7 +1178,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.2-diag';
+  var BAG_BUILD = 'Bag v3.3';
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1300,6 +1300,52 @@
   // Stop label = innermost element (text-node parent or up to 2 ancestors, short text only)
   // whose whole text is an exact label. Ancestors cover labels split over child elements,
   // e.g. <span>Stop</span><span>16</span> or <span>#</span><span>16</span>.
+  // ---- Real Cortex Stop list (v3.3) ----
+  // Clicked: div.stops-list-item > ... > div[role=button][aria-expanded] > span > div > p > span "N".
+  // Never clicked: anything inside the Mapbox map (svg.stop-K markers overlap each other and
+  // do not open the package list).
+  var MAPBOX_SELECTOR = '.mapboxgl-map, .mapboxgl-marker, .mapboxgl-canvas-container';
+
+  function inMapbox(el) {
+    return !!(el && el.closest && el.closest(MAPBOX_SELECTOR));
+  }
+
+  function stopListButtonOf(el, row) {
+    var btn = el && el.closest ? el.closest('[role="button"][aria-expanded]') : null;
+    return btn && row && row.contains(btn) ? btn : null;
+  }
+
+  // One stops-list-item -> { row, button, numberEl, number } or null (no / ambiguous number).
+  function stopListRowInfo(row) {
+    if (!row || inPanel(row) || inMapbox(row)) return null;
+    var els = collectTextElements(row, function (full) { return /^\d{1,4}$/.test(String(full).trim()); })
+      .filter(function (el) { return !!stopListButtonOf(el, row); });
+    var cands = els.map(function (el) {
+      var p1 = el.parentElement;
+      var p2 = p1 && p1.parentElement;
+      return { text: el.textContent, chain: [p1 ? p1.textContent : '', p2 ? p2.textContent : ''] };
+    });
+    var number = Core.stopListRowNumber(cands);
+    if (number == null) return null;
+    var numberEl = null;
+    for (var i = 0; i < els.length; i++) {
+      if (Core.parseStopMarkerText(els[i].textContent) === number &&
+        Core.stopListRowNumber([cands[i]]) === number) { numberEl = els[i]; break; }
+    }
+    if (!numberEl) return null;
+    return { row: row, button: stopListButtonOf(numberEl, row), numberEl: numberEl, number: number };
+  }
+
+  function stopListRows(root) {
+    var out = [];
+    var base = root || document;
+    var nodes = base.querySelectorAll ? base.querySelectorAll('div.stops-list-item') : [];
+    for (var i = 0; i < nodes.length; i++) out.push(nodes[i]);
+    var up = root && root.closest ? root.closest('div.stops-list-item') : null;
+    if (up && out.indexOf(up) < 0) out.push(up);
+    return out.filter(function (r) { return !inPanel(r) && !inMapbox(r); });
+  }
+
   // Real Cortex Stop marker: text inside <svg class="stop-K"> whose whole text is only digits.
   // Returns the element holding the digits (SVG <text>/<tspan>) or null.
   function stopMarkerLabelOf(node) {
@@ -1319,10 +1365,17 @@
     els.kinds = [];
     var base = root || document.body || document.documentElement;
     if (!base) return els;
+    stopListRows(root).forEach(function (row) {
+      var info = stopListRowInfo(row);
+      if (!info || (root && !root.contains(info.numberEl)) || els.indexOf(info.numberEl) >= 0) return;
+      els.push(info.numberEl);
+      els.kinds.push(Core.STOP_LIST_KIND);
+    });
     var walker = document.createTreeWalker(base, 4 /* NodeFilter.SHOW_TEXT */, null);
     var node;
     while ((node = walker.nextNode())) {
       if (!String(node.nodeValue || '').trim()) continue;
+      if (els.indexOf(node.parentElement) >= 0) continue;
       var marker = stopMarkerLabelOf(node);
       if (marker) {
         if ((!root || root.contains(marker)) && els.indexOf(marker) < 0) {
@@ -1332,6 +1385,7 @@
         continue;
       }
       var el = node.parentElement;
+      if (inMapbox(el)) continue;
       for (var d = 0; el && d < 3; d += 1, el = el.parentElement) {
         if (inPanel(el) || (root && !root.contains(el))) break;
         var t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -1348,10 +1402,19 @@
     return els;
   }
 
+  // Click candidates: Stop list rows first, then text labels. Mapbox svg markers are excluded.
   function stopLabelsFor(els, seq) {
     var kinds = els.kinds || [];
     var entries = els.map(function (el, i) { return { text: el.textContent, key: i, kind: kinds[i] }; });
-    return Core.matchStopLabelEntries(entries, seq).map(function (i) { return els[i]; });
+    return Core.matchStopLabelEntries(entries, seq, { excludeMarkers: true }).map(function (i) { return els[i]; });
+  }
+
+  // Stop list row + its header button for a label element, or null for other label kinds.
+  function stopListTargetOf(label) {
+    var row = label && label.closest ? label.closest('div.stops-list-item') : null;
+    if (!row || inMapbox(row)) return null;
+    var btn = stopListButtonOf(label, row);
+    return btn ? { row: row, button: btn } : null;
   }
 
   function findStopLabels(seq) {
@@ -1534,6 +1597,11 @@
 
   // Main scroller of the Route detail: scrollable ancestor of any Stop label, else the largest one.
   function bagMainScroller() {
+    var rows = stopListRows(null);
+    for (var r = 0; r < rows.length; r++) {
+      var rowAnc = scrollableAncestors(rows[r]);
+      if (rowAnc.length) return rowAnc[0];
+    }
     var labels = collectStopLabelElements(null);
     for (var i = 0; i < labels.length; i++) {
       var anc = scrollableAncestors(labels[i]);
@@ -1954,17 +2022,37 @@
             return;
           }
           var label = found.label;
-          ctx.stopBlock = stopBlockOf(label);
+          var listTarget = stopListTargetOf(label);
+          ctx.stopBlock = listTarget ? listTarget.row : stopBlockOf(label);
+          if (listTarget && listTarget.button.getAttribute('aria-expanded') === 'true') {
+            // Row already open: clicking would collapse it; the package search scrolls to the DAs.
+            cb({ ok: true, clicked: false });
+            return;
+          }
           onState('Stop #' + stop.stop + '展開中');
           var clickDiag = {
             routeCode: ctx.route && ctx.route.routeCode, stop: stop.stop,
-            targetDas: das.length, before: stopClickState(das), plainNumber: plainNumberContext(stop.stop)
+            targetDas: das.length, before: stopClickState(das), plainNumber: plainNumberContext(stop.stop),
+            clickKind: listTarget ? 'stop-list-button' : 'text-label'
           };
+          if (listTarget) {
+            clickDiag.stopList = {
+              row: diagEl(listTarget.row), button: diagEl(listTarget.button),
+              ariaExpandedBefore: listTarget.button.getAttribute('aria-expanded'),
+              rowElementsBefore: listTarget.row.querySelectorAll('*').length
+            };
+          }
           safeCdpClick(function () {
-            if (label.isConnected) return { el: label, container: ctx.stopBlock };
-            var again = findStopLabels(stop.stop);
-            if (again.length !== 1) return null;
-            label = again[0];
+            if (!label.isConnected) {
+              var again = findStopLabels(stop.stop);
+              if (again.length !== 1) return null;
+              label = again[0];
+              listTarget = stopListTargetOf(label);
+            }
+            if (listTarget) {
+              ctx.stopBlock = listTarget.row;
+              return { el: listTarget.button, container: listTarget.button };
+            }
             ctx.stopBlock = stopBlockOf(label);
             return { el: label, container: ctx.stopBlock };
           }, runId, function (res) {
@@ -1976,11 +2064,28 @@
               return;
             }
             clickDiag.afterClick = stopClickState(das);
+            var expandedBy = '';
+            function listExpanded() {
+              if (!listTarget) return false;
+              if (!listTarget.button.isConnected) {
+                var again = findStopLabels(stop.stop);
+                var t = again.length === 1 ? stopListTargetOf(again[0]) : null;
+                if (!t) return false;
+                listTarget = t;
+              }
+              return listTarget.button.getAttribute('aria-expanded') === 'true';
+            }
             waitBag(function () {
-              var present = collectExactDaElements(das);
-              return !Core.stopNeedsExpand(pending, present);
+              if (!Core.stopNeedsExpand(pending, collectExactDaElements(das))) { expandedBy = 'target_da'; return true; }
+              if (listExpanded()) { expandedBy = 'aria_expanded'; return true; }
+              return false;
             }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
               clickDiag.result = opened ? 'expanded' : 'target_da_not_shown';
+              clickDiag.expandedBy = expandedBy;
+              if (listTarget) {
+                clickDiag.stopList.ariaExpandedAfter = listTarget.button.getAttribute('aria-expanded');
+                clickDiag.stopList.rowElementsAfter = listTarget.row.isConnected ? listTarget.row.querySelectorAll('*').length : null;
+              }
               clickDiag.afterWait = stopClickState(das);
               if (!opened) {
                 var scroller = bagMainScroller();

@@ -708,7 +708,7 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
   assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
-  assert(/BAG_BUILD = 'Bag v3\.2/.test(bag), 'v3.2 build label');
+  assert(/BAG_BUILD = 'Bag v3\.[23]/.test(bag), 'v3.x build label');
   console.log('ok: v3.2 runner marker wiring');
 })();
 
@@ -725,10 +725,56 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'hit-test decision unchanged');
   assert(/function hitAllowed\(hit, el, container\) \{\n    if \(!hit \|\| inPanel\(hit\)\) return false;\n    if \(hit === el \|\| el\.contains\(hit\)\) return true;\n    if \(container && \(hit === container \|\| container\.contains\(hit\)\)\) return true;/.test(bag),
     'hitAllowed unchanged');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.2-diag'") >= 0, 'diag build label');
-  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.6.1', 'manifest 1.6.6.1');
+  // (build label / manifest version are checked by the v3.3 block)
   console.log('ok: v3.2-diag Stop click diagnostics');
+})();
+
+// ---------------- v3.3: click the Stop list button, never the Mapbox markers ----------------
+function v33Suite(C, label) {
+  const L = C.STOP_LIST_KIND, K = C.STOP_MARKER_KIND;
+  // Stop number of a stops-list-item header: span "N" < p "N" < div "N" only
+  assert(C.stopListRowNumber([{ text: '5', chain: ['5', '5'] }]) === 5, label + ' v3.3: row number');
+  assert(C.stopListRowNumber([{ text: '11', chain: ['11', '11'] }, { text: '2', chain: ['2/2', '2/2 配達'] }]) === 11,
+    label + ' v3.3: package count "2/2" is not the Stop number');
+  assert(C.stopListRowNumber([{ text: '998', chain: ['998', '/998'] }]) === null, label + ' v3.3: Driver Aid ignored');
+  assert(C.stopListRowNumber([{ text: '5', chain: ['5', '5'] }, { text: '7', chain: ['7', '7'] }]) === null,
+    label + ' v3.3: two candidates in one row -> no guess');
+  assert(C.stopListRowNumber([{ text: '5a', chain: ['5a', '5a'] }, { text: '', chain: [] }]) === null, label + ' v3.3: digits only');
+  // Stop 1 vs 11 and priority list > text > marker; markers excluded on the click path
+  const entries = [
+    { text: '1', key: 'row1', kind: L }, { text: '11', key: 'row11', kind: L },
+    { text: '1', key: 'map1', kind: K }, { text: '11', key: 'map11', kind: K }, { text: '#1', key: 'txt1' }
+  ];
+  assert(C.matchStopLabelEntries(entries, 1).join() === 'row1', label + ' v3.3: list row wins, 1 != 11');
+  assert(C.matchStopLabelEntries(entries, 11).join() === 'row11', label + ' v3.3: 11 row');
+  assert(C.matchStopLabelEntries([{ text: '4', key: 'map4', kind: K }], 4, { excludeMarkers: true }).length === 0,
+    label + ' v3.3: Mapbox marker never a click target');
+  assert(C.matchStopLabelEntries([{ text: '#4', key: 't4' }, { text: '4', key: 'm4', kind: K }], 4, { excludeMarkers: true }).join() === 't4',
+    label + ' v3.3: text label still usable');
+  // summary bar / general numbers are not Stop list rows (plain entries never parse as bare digits)
+  assert(C.matchStopLabelEntries([{ text: '3', key: 'summary' }], 3, { excludeMarkers: true }).length === 0, label + ' v3.3: summary number ignored');
+  console.log('ok: v3.3 Stop list rows (' + label + ')');
+}
+v33Suite(RootCore, 'root core');
+v33Suite(PhaseCore, 'phase1-core');
+
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("var MAPBOX_SELECTOR = '.mapboxgl-map, .mapboxgl-marker, .mapboxgl-canvas-container';") >= 0, 'v3.3 Mapbox selector');
+  assert(bag.indexOf("base.querySelectorAll('div.stops-list-item')") >= 0, 'v3.3 rows are div.stops-list-item');
+  assert(bag.indexOf("el.closest('[role=\"button\"][aria-expanded]')") >= 0, 'v3.3 number must sit inside the row header button');
+  assert(bag.indexOf('{ excludeMarkers: true }') >= 0, 'v3.3 markers excluded from click candidates');
+  assert(bag.indexOf("if (inMapbox(el)) continue;") >= 0 && bag.indexOf('!inMapbox(r)') >= 0, 'v3.3 nothing inside Mapbox is a label');
+  assert(bag.indexOf('return { el: listTarget.button, container: listTarget.button };') >= 0, 'v3.3 clicks the row button with a strict hit-test container');
+  assert(bag.indexOf("listTarget.button.getAttribute('aria-expanded') === 'true'") >= 0 && bag.indexOf("expandedBy = 'aria_expanded'") >= 0,
+    'v3.3 aria-expanded recorded and used for expansion');
+  assert(bag.indexOf('ariaExpandedBefore') >= 0 && bag.indexOf('ariaExpandedAfter') >= 0 && bag.indexOf('rowElementsAfter') >= 0, 'v3.3 list diagnostics');
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.3 hit-test safety kept');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.3'") >= 0, 'v3.3 build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.7', 'manifest 1.6.7');
+  console.log('ok: v3.3 runner Stop list click wiring');
 })();
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
