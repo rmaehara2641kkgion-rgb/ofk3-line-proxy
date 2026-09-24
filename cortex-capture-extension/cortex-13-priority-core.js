@@ -910,6 +910,12 @@
     return isOnOrBeforeCutoff(plannedEndMs);
   }
 
+  // Completed Stops return bagName:null (real runs 2026-09-24: 102/102 COMPLETE -> null),
+  // so within a Route the Bag phase visits not-yet-completed Stops first. Order only.
+  function isCompleteStopStatus(status) {
+    return /^(COMPLETE|COMPLETED|DELIVERED|DONE)$/i.test(String(status || '').trim());
+  }
+
   function compareBagTargets(a, b) {
     var rc = String(a.routeCode || '').localeCompare(String(b.routeCode || ''), 'en', { numeric: true });
     if (rc) return rc;
@@ -941,10 +947,13 @@
           if (!scannableId) { out.skipped.missingScannableId += 1; return; }
           if (seen[referenceId]) { out.skipped.duplicateReferenceId += 1; return; }
           seen[referenceId] = true;
+          var stopStatus = stop.status == null ? null : String(stop.status);
           out.targets.push({
             routeId: String(rd.routeId || ''),
             routeCode: String(rd.routeCode || ''),
             stop: stop.sequenceNumber,
+            stopStatus: stopStatus,
+            stopPriority: isCompleteStopStatus(stopStatus) ? 1 : 0,
             scannableId: scannableId,
             referenceId: referenceId
           });
@@ -1107,6 +1116,8 @@
       .map(function (pair) { return pair[1] + ' ' + c[pair[0]]; });
     if (detail.length) lines.push('内訳: ' + detail.join(' / '));
     lines.push('click ' + (summary.clicks || 0) + ' / Stop click ' + (summary.stopClicks || 0));
+    var leftOpen = (summary.routeResults || []).reduce(function (n, r) { return n + ((r.leaveFailures || []).length); }, 0);
+    if (leftOpen) lines.push('Stop閉じ失敗（Route継続） ' + leftOpen);
     var failed = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
       .map(function (r) {
         return r.routeCode + ' ' + (r.status === 'ui_blocked' ? 'UI blocked' : r.status) + (r.reasonCode ? '(' + r.reasonCode + ')' : '');
@@ -1230,8 +1241,25 @@
       }
       bySeq[key].targets.push(t);
     });
-    stops.sort(function (a, b) { return Number(a.stop || 0) - Number(b.stop || 0); });
+    stops.forEach(function (s) {
+      s.priority = s.targets.reduce(function (m, t) { return Math.min(m, Number(t.stopPriority || 0)); }, 1);
+      if (!s.targets.some(function (t) { return t.stopPriority != null; })) s.priority = 0;
+    });
+    stops.sort(function (a, b) {
+      return (a.priority - b.priority) || (Number(a.stop || 0) - Number(b.stop || 0));
+    });
     return stops;
+  }
+
+  // How a target's trDetails row came to exist (diagnostics only).
+  // info: { hasTr, clicked, priorFailureStatus, preexisting }
+  function classifyCaptureSource(info) {
+    info = info || {};
+    if (!info.hasTr) return null;
+    if (info.clicked) return 'package_click';
+    if (info.preexisting) return 'preexisting';
+    if (info.priorFailureStatus) return 'after_failed_package_lookup';
+    return 'cortex_stop_open';
   }
 
   // Any pending DA of the Stop already rendered -> the Stop is open; do not click (would collapse).
@@ -1287,6 +1315,8 @@
     run.log = run.log || [];
     var finished = false;
     var failCurrent = null;
+    var extendCurrent = null;
+    var extensionCapMs = opts.routeExtensionCapMs > 0 ? opts.routeExtensionCapMs : 60000;
 
     function log(line) {
       run.log.push(line);
@@ -1318,9 +1348,28 @@
       if (!pend(route.targets).length) { nextRoute(i + 1); return; }
       var stops = groupBagTargetsByStop(route.targets);
       var deadline = now() + budget;
-      var result = { routeCode: route.routeCode, status: 'done', detail: '', reasonCode: '', stopClicks: 0, startedAt: now() };
+      var result = { routeCode: route.routeCode, status: 'done', detail: '', reasonCode: '', stopClicks: 0, startedAt: now(),
+        leaveFailures: [], extendedMs: 0 };
       var closed = false;
       var watchdog = null;
+      var watchdogAt = 0;
+      function fireWatchdog() {
+        watchdog = null;
+        abortRoute('watchdog: Route処理が上限時間内に終わりません', null, 'watchdog');
+      }
+      // Retries (Stop close / Route click / slow Stop open) may add time to this Route only, capped.
+      extendCurrent = function (ms) {
+        var add = Math.max(0, Math.min(Number(ms) || 0, extensionCapMs - result.extendedMs));
+        if (!add || closed) return 0;
+        result.extendedMs += add;
+        deadline += add;
+        watchdogAt += add;
+        if (watchdog != null) {
+          cancel(watchdog);
+          watchdog = schedule(fireWatchdog, Math.max(0, watchdogAt - now()));
+        }
+        return add;
+      };
       run.routeResults.push(result);
 
       // Callbacks from a Route that already ended (abort / watchdog) are ignored.
@@ -1362,6 +1411,7 @@
         if (closed) return;
         closed = true;
         failCurrent = null;
+        extendCurrent = null;
         if (watchdog != null) cancel(watchdog);
         emit({ state: 'Route一覧へ復帰中' });
         var attempts = 0;
@@ -1428,6 +1478,11 @@
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
                   if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません', null, 'stop_leave_failed'); return; }
+                  if (lres.leftOpen) {
+                    // The Stop stayed open but the Route detail was verified usable: record and go on.
+                    result.leaveFailures.push({ stop: stop.stop, detail: lres.detail || '' });
+                    log('[Bag] ' + route.routeCode + ' Stop #' + stop.stop + ' could not be closed (' + (lres.detail || '') + ') -> Route detail OK, continue');
+                  }
                   nextStop(j + 1);
                 }));
               });
@@ -1452,6 +1507,8 @@
             }
             markBagAttempted(run, t.referenceId);
             run.clicks += 1;
+            run.clickedRefs = run.clickedRefs || {};
+            run.clickedRefs[t.referenceId] = true;
             emit({ state: '荷物番号クリック' });
             call(function () {
               driver.clickPackage(t, res.handle, live(function (cres) {
@@ -1483,10 +1540,8 @@
       }
 
       failCurrent = function (detail) { abortRoute(detail, null, 'exception'); };
-      watchdog = schedule(function () {
-        watchdog = null;
-        abortRoute('watchdog: Route処理が' + Math.round(watchdogMs / 1000) + '秒以内に終わりません', null, 'watchdog');
-      }, watchdogMs);
+      watchdogAt = now() + watchdogMs;
+      watchdog = schedule(fireWatchdog, watchdogMs);
       emit({
         routeIndex: i + 1, routeCode: route.routeCode,
         stopIndex: 0, stopTotal: stops.length, stopSeq: null,
@@ -1509,6 +1564,10 @@
       // Runner-side exceptions (timers) end only the current Route.
       failRoute: function (detail) {
         if (typeof failCurrent === 'function') failCurrent(detail);
+      },
+      // Extra time for the current Route only (capped by routeExtensionCapMs). Returns ms granted.
+      extendRoute: function (ms) {
+        return typeof extendCurrent === 'function' ? extendCurrent(ms) : 0;
       }
     };
   }
@@ -2254,6 +2313,8 @@
     matchStopLabelEntries: matchStopLabelEntries,
     STOP_MARKER_KIND: STOP_MARKER_KIND,
     STOP_LIST_KIND: STOP_LIST_KIND,
+    isCompleteStopStatus: isCompleteStopStatus,
+    classifyCaptureSource: classifyCaptureSource,
     stopListRowNumber: stopListRowNumber,
     isStopMarkerSvgClass: isStopMarkerSvgClass,
     parseStopMarkerText: parseStopMarkerText,

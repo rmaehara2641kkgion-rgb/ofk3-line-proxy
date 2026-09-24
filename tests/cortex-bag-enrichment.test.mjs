@@ -329,6 +329,9 @@ function fakeWorld(spec) {
       log.stopClicks.push(stop.stop);
       if (st.expandFails) { cb({ ok: false, clicked: true, status: 'stop_expand_failed' }); return; }
       st.expanded = true;
+      (st.onOpenTr || []).forEach(([trId, bagName]) => {
+        Core2.mergeTrDetailsMaps(trMap, { [trId]: { trId, bagName, bagScannableId: bagName ? 's' : null } });
+      });
       cb({ ok: true, clicked: true });
     },
     findPackage(target, stop, cb) {
@@ -349,7 +352,13 @@ function fakeWorld(spec) {
     },
     waitTrDetails(target, cb) { cb(Core2.hasTrDetails(trMap, target.referenceId)); },
     restoreAfterPackage(target, cb) { cb({ ok: true }); },
-    leaveStop(stop, cb) { cb({ ok: true }); },
+    leaveStop(stop, cb) {
+      const st = stopOf(stop);
+      log.leaves = (log.leaves || []).concat(stop.stop);
+      if (st && st.leave === 'leftOpen') { cb({ ok: true, leftOpen: true, detail: 'aria-expanded=true' }); return; }
+      if (st && st.leave === 'fail') { cb({ ok: false, detail: 'Route detail lost' }); return; }
+      cb({ ok: true });
+    },
     returnToList(cb) {
       log.back += 1;
       if (current && current.backFailsOnce) { current.backFailsOnce = false; cb({ ok: false, detail: 'flaky' }); return; }
@@ -365,7 +374,9 @@ function routeTargets(spec) {
     const stops = spec.routes[code].stops;
     Object.keys(stops).forEach((seq) => {
       stops[seq].packages.filter((p) => !p.noise).forEach((p) => {
-        out.push({ routeId: 'R-' + code, routeCode: code, stop: Number(seq), scannableId: p.da, referenceId: p.ref });
+        const status = stops[seq].status;
+        out.push({ routeId: 'R-' + code, routeCode: code, stop: Number(seq), scannableId: p.da, referenceId: p.ref,
+          stopStatus: status || null, stopPriority: status ? (Core2.isCompleteStopStatus(status) ? 1 : 0) : undefined });
       });
     });
   });
@@ -708,7 +719,7 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
   assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
-  assert(/BAG_BUILD = 'Bag v3\.[234]/.test(bag), 'v3.x build label');
+  assert(/BAG_BUILD = 'Bag v3\.[2-9]/.test(bag), 'v3.x build label');
   console.log('ok: v3.2 runner marker wiring');
 })();
 
@@ -766,7 +777,8 @@ v33Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("el.closest('[role=\"button\"][aria-expanded]')") >= 0, 'v3.3 number must sit inside the row header button');
   assert(bag.indexOf('{ excludeMarkers: true }') >= 0, 'v3.3 markers excluded from click candidates');
   assert(bag.indexOf("if (inMapbox(el)) continue;") >= 0 && bag.indexOf('!inMapbox(r)') >= 0, 'v3.3 nothing inside Mapbox is a label');
-  assert(bag.indexOf('return { el: listTarget.button, container: listTarget.button };') >= 0, 'v3.3 clicks the row button with a strict hit-test container');
+  assert(bag.indexOf('clickListButton(function () {') >= 0 && bag.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0,
+    'v3.3/v3.5 clicks the row button only at points inside it (self / non-interactive child)');
   assert(bag.indexOf("listTarget.button.getAttribute('aria-expanded') === 'true'") >= 0 && bag.indexOf("expandedBy = 'aria_expanded'") >= 0,
     'v3.3 aria-expanded recorded and used for expansion');
   assert(bag.indexOf('ariaExpandedBefore') >= 0 && bag.indexOf('ariaExpandedAfter') >= 0 && bag.indexOf('rowElementsAfter') >= 0, 'v3.3 list diagnostics');
@@ -780,9 +792,9 @@ v33Suite(PhaseCore, 'phase1-core');
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
-  assert(leave.indexOf('ctx.openedListTarget') >= 0 && leave.indexOf("return { el: target.button, container: target.button };") >= 0,
-    'v3.4 leaveStop clicks the same row button (strict hit-test container)');
-  assert(leave.indexOf("target.button.getAttribute('aria-expanded') === 'false'") >= 0, 'v3.4 close confirmed by aria-expanded=false');
+  assert(leave.indexOf('ctx.openedListTarget') >= 0 && leave.indexOf('clickListButton(currentTarget') >= 0,
+    'v3.4/v3.5 leaveStop clicks the row button re-read from the current DOM');
+  assert(leave.indexOf("t.button.getAttribute('aria-expanded') === 'false'") >= 0, 'v3.4 close confirmed by aria-expanded=false');
   assert(leave.indexOf('historyBackTo(') < 0 && leave.indexOf('restoreHistory(ctx.stopHref, ctx.stopHistoryLen') >= 0,
     'v3.4 no blind history.back on leave');
   ['ariaExpandedBeforeLeave', 'ariaExpandedAfterLeave', 'urlBefore', 'urlAfter', 'selectedStopIdBefore', 'selectedStopIdAfter',
@@ -791,16 +803,14 @@ v33Suite(PhaseCore, 'phase1-core');
   assert(restore.indexOf('if (historyLength() > beforeLen)') >= 0 && restore.indexOf("method: 'url_replaced'") >= 0,
     'v3.4 history.back only when the click pushed an entry');
   assert(bag.indexOf('restoreHistory(ctx.packageHref, ctx.packageHistoryLen') >= 0, 'v3.4 package restore uses the same rule');
-  assert(bag.indexOf("captureSource: tr ? (Core.bagTargetAttempted(bagRun, t.referenceId) ? 'package_click' : 'without_package_click') : null") >= 0 &&
-    bag.indexOf('stopStatus: st ? st.status || null : null') >= 0, 'v3.4 per-target capture source + stop status');
+  assert(bag.indexOf('captureSource: Core.classifyCaptureSource({') >= 0 && bag.indexOf('stopStatus: st ? st.status || null') >= 0,
+    'v3.4/v3.5 per-target capture source + stop status');
   assert(bag.indexOf('stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics') >= 0 && bag.indexOf('targetDiagnostics: targetDiagnostics()') >= 0, 'v3.4 diag JSON');
   // Stop list click path from v3.3 unchanged
-  assert(bag.indexOf('return { el: listTarget.button, container: listTarget.button };') >= 0 && bag.indexOf('{ excludeMarkers: true }') >= 0,
+  assert(bag.indexOf('clickListButton(function () {') >= 0 && bag.indexOf('{ excludeMarkers: true }') >= 0,
     'v3.4 keeps the v3.3 Stop list click');
   assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.4 hit-test safety kept');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.4'") >= 0, 'v3.4 build label');
-  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.8', 'manifest 1.6.8');
+  // (build label / manifest version are checked by the v3.5 block)
   console.log('ok: v3.4 Stop leave + history rules');
 })();
 
@@ -816,6 +826,112 @@ v33Suite(PhaseCore, 'phase1-core');
   assert(r.summary.counts.route_aborted === 0 && r.summary.counts.not_attempted === 0, 'v3.4 no route_aborted / 未試行');
   assert(r.summary.counts.captured === 2 && r.summary.counts.captured_null === 1 && r.summary.clicks === 3, 'v3.4 package clicks + captured');
   console.log('ok: v3.4 engine multi-Stop Route');
+})();
+
+// ---------------- v3.5: recoverable Stop close failures, incomplete Stops first, capture source ----------------
+function v35Suite(label) {
+  // recoverable leave failure -> that Stop recorded, next Stops still processed; incomplete Stops first
+  (function () {
+    const r = runEngine({ routes: { DCX29: { stops: {
+      2: { status: 'COMPLETE', leave: 'leftOpen', packages: [{ da: 'DA0000002902', ref: 'tr-2902' }], onOpenTr: [['tr-2902', null]] },
+      7: { status: 'COMPLETE', packages: [{ da: 'DA0000002907', ref: 'tr-2907' }], onOpenTr: [['tr-2907', null]] },
+      15: { status: 'NOT_STARTED', leave: 'leftOpen', packages: [{ da: 'DA0000002915', ref: 'tr-2915' }, { da: 'DA0000002916', ref: 'tr-2916' }],
+        onOpenTr: [['tr-2915', 'JP_OB-AT-2915_NVY'], ['tr-2916', 'JP_OB-AT-2916_RED']] },
+      20: { status: 'IN_PROGRESS', packages: [{ da: 'DA0000002920', ref: 'tr-2920', tr: [['tr-2920', 'JP_OB-AT-2920_YLO']] }] }
+    } } } });
+    assert(r.log.stopClicks.join(',') === '15,20,2,7', label + ' v3.5: incomplete Stops (15,20) first, got ' + r.log.stopClicks);
+    assert(r.summary.counts.route_aborted === 0 && r.summary.counts.not_attempted === 0, label + ' v3.5: no route_aborted / 未試行');
+    assert(r.summary.byReferenceId['tr-2915'] === 'captured' && r.summary.byReferenceId['tr-2916'] === 'captured',
+      label + ' v3.5: Stop open alone captured both packages of the incomplete Stop');
+    assert(r.summary.byReferenceId['tr-2920'] === 'captured' && r.summary.clicks === 1, label + ' v3.5: one real package click');
+    assert(r.run.clickedRefs['tr-2920'] && !r.run.clickedRefs['tr-2915'], label + ' v3.5: clickedRefs only for real clicks');
+    assert(r.summary.byReferenceId['tr-2902'] === 'captured_null' && r.summary.byReferenceId['tr-2907'] === 'captured_null',
+      label + ' v3.5: completed Stops stay captured_null');
+    const rr = r.summary.routeResults[0];
+    assert(rr.status === 'done' && rr.leaveFailures.map((x) => x.stop).join(',') === '15,2', label + ' v3.5: leave failures recorded, Route done');
+    assert(/Stop閉じ失敗（Route継続） 2/.test(Core2.formatBagSummary(r.summary)), label + ' v3.5: summary shows left-open Stops');
+    assert(r.log.lines.some((l) => /Stop #15 could not be closed .*-> Route detail OK, continue/.test(l)), label + ' v3.5: leave log');
+  })();
+
+  // unrecoverable leave failure -> route_aborted (stop_leave_failed), next Route continues
+  (function () {
+    const r = runEngine({ routes: {
+      DCX44: { stops: {
+        4: { leave: 'fail', packages: [{ da: 'DA0000004404', ref: 'tr-4404', tr: [['tr-4404', null]] }] },
+        9: { packages: [{ da: 'DA0000004409', ref: 'tr-4409' }] }
+      } },
+      DCX46: { stops: { 2: { packages: [{ da: 'DA0000004602', ref: 'tr-4602', tr: [['tr-4602', 'JP_OB-AT-4602_NVY']] }] } } }
+    } });
+    const byCode = {};
+    r.summary.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX44.status === 'route_aborted' && byCode.DCX44.reasonCode === 'stop_leave_failed', label + ' v3.5: unrecoverable -> route_aborted');
+    assert(r.summary.byReferenceId['tr-4409'] === 'route_aborted' && r.summary.byReferenceId['tr-4602'] === 'captured',
+      label + ' v3.5: next Route still processed');
+  })();
+
+  // route time extension: only on request, capped, and pushes the watchdog
+  (function () {
+    const w = fakeWorld({ routes: { DCX45: { stops: { 1: { packages: [{ da: 'DA0000004501', ref: 'tr-4501', tr: [['tr-4501', null]] }] } } } } });
+    const routes = routeTargets({ routes: { DCX45: { stops: { 1: { packages: [{ da: 'DA0000004501', ref: 'tr-4501' }] } } } } });
+    const granted = [];
+    // extendRoute is called asynchronously by the runner (after waits), so the handle exists by then.
+    const run2 = Core2.createBagRun([].concat(...routes.map((x) => x.targets)));
+    let h2 = null;
+    const drv2 = Object.assign({}, w.driver, {
+      openRoute(route, cb) { setImmediate(() => { granted.length = 0; granted.push(h2.extendRoute(30000), h2.extendRoute(40000), h2.extendRoute(5000)); w.driver.openRoute(route, cb); }); }
+    });
+    h2 = Core2.runBagEngine({ run: run2, routes, driver: drv2, getTrMap: () => ({}), routeExtensionCapMs: 60000,
+      schedule: () => 1, cancel: () => {}, done: () => {
+        assert(granted.join(',') === '30000,30000,0', label + ' v3.5: extension capped at 60 s, got ' + granted);
+        assert(run2.routeResults[0].extendedMs === 60000, label + ' v3.5: extendedMs recorded');
+        console.log('ok: v3.5 route extension cap (' + label + ')');
+      } });
+  })();
+
+  // capture source classification (diagnostics)
+  (function () {
+    const C = Core2;
+    assert(C.classifyCaptureSource({ hasTr: false }) === null, label + ' cs: none');
+    assert(C.classifyCaptureSource({ hasTr: true, clicked: true, priorFailureStatus: 'timeout' }) === 'package_click', label + ' cs: real click');
+    assert(C.classifyCaptureSource({ hasTr: true, preexisting: true }) === 'preexisting', label + ' cs: preexisting');
+    assert(C.classifyCaptureSource({ hasTr: true, priorFailureStatus: 'package_click_target_not_found' }) === 'after_failed_package_lookup',
+      label + ' cs: after failed lookup');
+    assert(C.classifyCaptureSource({ hasTr: true }) === 'cortex_stop_open', label + ' cs: Stop open');
+    assert(C.isCompleteStopStatus('COMPLETE') && !C.isCompleteStopStatus('NOT_STARTED') && !C.isCompleteStopStatus(null), label + ' cs: status');
+  })();
+  console.log('ok: v3.5 engine (' + label + ')');
+}
+Core2 = RootCore;
+v35Suite('root core');
+Core2 = PhaseCore;
+v35Suite('phase1-core');
+
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(leave.indexOf('var t = freshListTarget(stop.stop);') >= 0, 'v3.5 close re-reads the row from the current DOM');
+  assert(leave.indexOf('BAG_STOP_CLOSE_TIMEOUT_MS') >= 0 && /if \(n === 0\) \{ retry\(ad\); return; \}/.test(leave), 'v3.5 one retry only');
+  assert(leave.indexOf('var usable = routeDetailUsable();') >= 0 && leave.indexOf("thenHistory('left_open'") >= 0, 'v3.5 continue only when Route detail usable');
+  ['routeCode', 'stop: stop.stop', 'ariaExpandedBeforeLeave', 'ariaExpandedAfterLeave', 'selectedStopIdBefore', 'selectedStopIdAfter',
+    'urlBefore', 'urlAfter', 'buttonConnected', 'retryCount', 'leaveMethod', 'leaveResult', 'elapsedMs'].forEach((k) => {
+    assert(leave.indexOf(k) >= 0, 'v3.5 leave diag ' + k);
+  });
+  const click = bag.slice(bag.indexOf('  function clickListButton('), bag.indexOf('  function pageBrief()'));
+  assert(click.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0, 'v3.5 clicks only self / non-interactive child');
+  assert(click.indexOf('diag.buttonRect') >= 0 && click.indexOf('diag.clicked') >= 0 && click.indexOf("interactive: rel === 'interactive_child'") >= 0,
+    'v3.5 click diag: rect, point, elementFromPoint, interactive child');
+  assert(bag.indexOf("if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId))") >= 0, 'v3.5 Route retry only by exact routeId');
+  assert(bag.indexOf('clickRec.routeDetailsObserved') >= 0 && bag.indexOf('clickRec.domChanged') >= 0 && bag.indexOf('cardAria') >= 0, 'v3.5 Route click diag');
+  assert(bag.indexOf('clickDiag.extendedWait = true;') >= 0 && bag.indexOf('selectedStopIdAfter') >= 0, 'v3.5 Stop open diag + conditional wait');
+  assert(bag.indexOf('actualPackageClick: clicked') >= 0 && bag.indexOf('priorFailureDetail') >= 0, 'v3.5 target diag');
+  assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
+  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 1200') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
+    'v3.5 short bounded wait for Cortex own trDetails after a Stop opens');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.5'") >= 0, 'v3.5 build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.9', 'manifest 1.6.9');
+  console.log('ok: v3.5 runner wiring');
 })();
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
