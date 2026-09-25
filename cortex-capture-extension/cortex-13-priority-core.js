@@ -1114,6 +1114,11 @@
     // Bag v3.7: Stop-level counts next to the v3.6 package-level ones (all v3.6 keys kept).
     var stopLevel = summarizeStopProcessing(run, trDetailsByTrId, byReferenceId);
     Object.keys(stopLevel).forEach(function (k) { stopOpen[k] = stopLevel[k]; });
+    // Bag v3.8: normal (<= 3 s) vs extended (3-6 s) trDetails wait outcome.
+    if (run && run.trWait) {
+      var tw = summarizeTrWait(run, trDetailsByTrId);
+      Object.keys(tw).forEach(function (k) { stopOpen[k] = tw[k]; });
+    }
     return {
       targetCount: targetCount,
       attempted: targetCount - (counts.not_attempted || 0),
@@ -1175,6 +1180,11 @@
     if (so) {
       lines.push('Stop-open取得 ' + (so.stopOpenBagCaptured || 0) + ' / Stop-open null ' + (so.stopOpenBagNull || 0) +
         ' / trDetailsなし ' + (so.stopOpenNoTrDetails || 0));
+      if (so.trWaitNormalReceived != null) {
+        lines.push('通常待機取得 ' + (so.trWaitNormalReceived || 0) + ' / 追加待機救済 ' + (so.trWaitExtendedRescued || 0) +
+          ' (Bag ' + (so.trWaitExtendedCaptured || 0) + ' / null ' + (so.trWaitExtendedNull || 0) + ')' +
+          ' / 6秒待機後trDetailsなし ' + (so.trWaitNoTrDetailsAfterExtended || 0));
+      }
       if (so.processedStops != null) {
         lines.push('Stop成功 ' + (so.successfulStopOpens || 0) + '/' + (so.processedStops || 0) +
           ' / retry救済 ' + (so.stopOpenRetryRescued || 0) +
@@ -1493,6 +1503,97 @@
       bagNameRaw: Object.prototype.hasOwnProperty.call(row, 'bagName') ? (row.bagName === undefined ? 'undefined' : row.bagName) : 'missing',
       bagFields: bagFields
     };
+  }
+
+  // ---- Bag v3.8: two-phase wait for Cortex's own trDetails after a Stop open ----
+  // Normal wait (3 s) ends the moment every pending target of THIS Stop has its trDetails row;
+  // only when some are still missing does an extra wait (3 s) follow. Stop open / retry are unchanged.
+  var TR_WAIT_NORMAL_MS = 3000;
+  var TR_WAIT_EXTENDED_MS = 3000;
+
+  /**
+   * o: { pending, trMap() -> trDetailsByTrId, baseline {ref:true} (rows present before the open),
+   *      startedAt, now(), receivedAtOf(ref) -> epoch ms | null, normalMs, extendedMs,
+   *      wait(check, ms, cb(ok)), done(result) }
+   * result: { records: {ref: record}, extendedUsed, allArrived, waitedMs }
+   * record: { stopOpenedAt, targetTrDetailsReceivedAt, trDetailsLatencyMs, waitPhase, delayedRescue }
+   *   waitPhase: 'normal' (<= normalMs) | 'extended' (later) | 'preexisting' (row existed before the open)
+   *   no row after the whole wait -> targetTrDetailsReceivedAt null, noTrDetailsAfterWait true.
+   * Only the pending targets' referenceIds end the wait; any other trDetails row is ignored.
+   */
+  function runTargetTrWait(o) {
+    var pending = (o.pending || []).filter(function (t) { return t && t.referenceId; });
+    var baseline = o.baseline || {};
+    var normalMs = o.normalMs >= 0 ? o.normalMs : TR_WAIT_NORMAL_MS;
+    var extendedMs = o.extendedMs >= 0 ? o.extendedMs : TR_WAIT_EXTENDED_MS;
+    var now = o.now || function () { return Date.now(); };
+    var startedAt = o.startedAt != null ? o.startedAt : now();
+    var extendedUsed = false;
+    function has(ref) { return hasTrDetails(o.trMap(), ref); }
+    function allArrived() { return pending.every(function (t) { return has(t.referenceId); }); }
+    function finish(ok) {
+      var records = {};
+      pending.forEach(function (t) {
+        var ref = t.referenceId;
+        if (baseline[ref]) {
+          records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: null, trDetailsLatencyMs: null,
+            waitPhase: 'preexisting', delayedRescue: false };
+          return;
+        }
+        if (!has(ref)) {
+          records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: null, trDetailsLatencyMs: null,
+            waitPhase: extendedUsed ? 'extended' : 'normal', delayedRescue: false, noTrDetailsAfterWait: true };
+          return;
+        }
+        var at = typeof o.receivedAtOf === 'function' ? o.receivedAtOf(ref) : null;
+        if (at == null) at = now();
+        var latency = Math.max(0, at - startedAt);
+        var phase = latency <= normalMs ? 'normal' : 'extended';
+        records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: at, trDetailsLatencyMs: latency,
+          waitPhase: phase, delayedRescue: phase === 'extended' };
+      });
+      o.done({ records: records, extendedUsed: extendedUsed, allArrived: ok, waitedMs: now() - startedAt });
+    }
+    o.wait(allArrived, normalMs, function (ok) {
+      if (ok || extendedMs <= 0) { finish(!!ok); return; }
+      extendedUsed = true;
+      o.wait(allArrived, extendedMs, function (ok2) { finish(!!ok2); });
+    });
+  }
+
+  function recordTrWait(run, result) {
+    if (!run || !result) return;
+    run.trWait = run.trWait || {};
+    Object.keys(result.records || {}).forEach(function (ref) {
+      if (!run.trWait[ref]) run.trWait[ref] = result.records[ref];
+    });
+  }
+
+  // summary.stopOpen additions: how many targets the normal / extended wait delivered.
+  function summarizeTrWait(run, trDetailsByTrId) {
+    var out = { trWaitNormalReceived: 0, trWaitNormalCaptured: 0, trWaitNormalNull: 0,
+      trWaitExtendedRescued: 0, trWaitExtendedCaptured: 0, trWaitExtendedNull: 0,
+      trWaitNoTrDetailsAfterExtended: 0, trWaitNoTrDetailsNormalOnly: 0 };
+    var w = (run && run.trWait) || {};
+    ((run && run.targets) || []).forEach(function (t) {
+      var r = w[t.referenceId];
+      if (!r || r.waitPhase === 'preexisting') return;
+      if (r.noTrDetailsAfterWait) {
+        if (r.waitPhase === 'extended') out.trWaitNoTrDetailsAfterExtended += 1;
+        else out.trWaitNoTrDetailsNormalOnly += 1;
+        return;
+      }
+      var tr = trDetailsByTrId && trDetailsByTrId[t.referenceId];
+      var bag = !!(tr && tr.bagName);
+      if (r.delayedRescue) {
+        out.trWaitExtendedRescued += 1;
+        if (bag) out.trWaitExtendedCaptured += 1; else out.trWaitExtendedNull += 1;
+      } else {
+        out.trWaitNormalReceived += 1;
+        if (bag) out.trWaitNormalCaptured += 1; else out.trWaitNormalNull += 1;
+      }
+    });
+    return out;
   }
 
   // Normal tour results are frozen before the Bag phase and restored after it,
@@ -2941,7 +3042,12 @@
     summarizeStopProcessing: summarizeStopProcessing,
     recordPackageFallback: recordPackageFallback,
     packageLookupFallbackPatch: packageLookupFallbackPatch,
-    trDetailsRowShape: trDetailsRowShape
+    trDetailsRowShape: trDetailsRowShape,
+    TR_WAIT_NORMAL_MS: TR_WAIT_NORMAL_MS,
+    TR_WAIT_EXTENDED_MS: TR_WAIT_EXTENDED_MS,
+    runTargetTrWait: runTargetTrWait,
+    recordTrWait: recordTrWait,
+    summarizeTrWait: summarizeTrWait
   };
 
   if (typeof module !== 'undefined' && module.exports) {

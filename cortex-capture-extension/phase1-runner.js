@@ -1185,10 +1185,13 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.7';
+  var BAG_BUILD = 'Bag v3.8';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
+  // Bag v3.8: extra wait only while a pending target's trDetails is still missing after the 3 s.
+  var BAG_STOP_OPEN_TR_EXTRA_MS = 3000;
+  var BAG_ROUTE_EXTENSION_CAP_MS = 120000;
   var BAG_ROUTE_RETRY_WAIT_MS = 15000;
   var bagRun = null;
   var bagTimer = 0;
@@ -2050,6 +2053,39 @@
     });
   }
 
+  // Bag v3.8: wait for this Stop's pending targets (normal 3 s, then up to 3 s more only if some are
+  // missing); ends the moment all of them have trDetails. Arrival times come from the trDetails hook.
+  // seenSince: base of the v3.6 elapsedAfterStopOpenMs (the click start for a fresh open).
+  // noExtra: package-fallback reopen (the target already had the full 6 s wait) -> normal wait only.
+  function waitStopTrDetails(ctx, runId, pending, seenSince, noExtra, done) {
+    var startedAt = Date.now();
+    var baseline = {};
+    pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) baseline[t.referenceId] = true; });
+    Core.runTargetTrWait({
+      pending: pending,
+      trMap: function () { return store.trDetailsByTrId; },
+      baseline: baseline,
+      startedAt: startedAt,
+      normalMs: ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,
+      // Unfinished Bag Test v1 keeps its single 3 s wait.
+      extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS,
+      receivedAtOf: function (ref) {
+        var shape = bagRun && bagRun.trRowShapes && bagRun.trRowShapes[ref];
+        return shape && shape.receivedAtMs ? shape.receivedAtMs : null;
+      },
+      wait: function (check, ms, cb) {
+        waitBag(function () {
+          noteTrSeen(pending, seenSince);
+          return check();
+        }, ms, runId, cb);
+      },
+      done: function (result) {
+        if (bagRun) Core.recordTrWait(bagRun, result);
+        done(result);
+      }
+    });
+  }
+
   function pushStopLeaveDiag(entry) {
     if (!bagRun) return;
     bagRun.stopLeaveDiagnostics = bagRun.stopLeaveDiagnostics || [];
@@ -2217,12 +2253,11 @@
       ensureStop: function (stop, pending, onState, cb, openOpts) {
         // Bag v3.6: a row already open / already showing the DAs gets the same bounded wait for
         // Cortex's own trDetails as a freshly opened one (returns at once when all rows are there).
+        var noExtraWait = !!(openOpts && openOpts.noExtendedWait);
         function waitCortexTr(kind, done) {
           var started = Date.now();
-          waitBag(function () {
-            noteTrSeen(pending, started);
-            return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
-          }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function () {
+          waitStopTrDetails(ctx, runId, pending, started, noExtraWait, function (tw) {
+            if (!tw.allArrived && tw.extendedUsed && bagEngine) bagEngine.extendRoute(tw.waitedMs);
             var t0 = freshListTarget(stop.stop);
             ctx.testStopDiags = ctx.testStopDiags || {};
             ctx.testStopDiags[(ctx.route && ctx.route.routeCode) + '#' + stop.stop] = {
@@ -2528,17 +2563,17 @@
                 }
                 // Cortex itself requests trDetails when a Stop is selected: give it a moment so the
                 // package lookup/click is only used for packages that did not arrive that way.
-                var trStarted = Date.now();
-                waitBag(function () {
-                  noteTrSeen(pending, openStarted);
-                  return pending.every(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); });
-                }, ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS, runId, function (allArrived) {
+                // Bag v3.8: normal 3 s, extra 3 s only while a target is still missing.
+                noteTrSeen(pending, openStarted);
+                waitStopTrDetails(ctx, runId, pending, openStarted, noExtraWait, function (tw) {
+                  var allArrived = tw.allArrived;
                   // The full wait (some rows never came) is added to this Route's budget, capped.
-                  if (!allArrived && bagEngine) bagEngine.extendRoute(Date.now() - trStarted);
+                  if (!allArrived && bagEngine) bagEngine.extendRoute(tw.waitedMs);
                   clickDiag.cortexTrDetails = {
-                    waitedMs: Date.now() - trStarted,
+                    waitedMs: tw.waitedMs,
                     arrived: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length,
-                    pending: pending.length, all: allArrived
+                    pending: pending.length, all: allArrived, extendedWait: tw.extendedUsed,
+                    delayedRescue: Object.keys(tw.records).filter(function (k) { return tw.records[k].delayedRescue; }).length
                   };
                   pushStopClickDiag(clickDiag);
                   cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, stopDiag: stopDiagOf(final, 'opened') });
@@ -2584,7 +2619,7 @@
             if (sres && sres.clicked) bagRun.stopClicks = (bagRun.stopClicks || 0) + 1;
             if (!sres || !sres.ok) { cb(res); return; }
             driver.searchPackage(target, cb);
-          }, { maxAttempts: 1 });
+          }, { maxAttempts: 1, noExtendedWait: true });
         });
       },
 
@@ -2995,6 +3030,10 @@
 
   // Per target: how the trDetails row arrived (our package click, or Cortex itself while the
   // Stop was open) and the Stop status in route-details, to judge whether a null bag is genuine.
+  function isoOrNull(ms) {
+    return ms == null ? null : new Date(ms).toISOString();
+  }
+
   function targetDiagnostics() {
     var details = (bagSnapshot && bagSnapshot.detailsByRouteId) || store.detailsByRouteId || {};
     return (bagRun.targets || []).map(function (t) {
@@ -3008,6 +3047,7 @@
       var clicked = !!(bagRun.clickedRefs && bagRun.clickedRefs[t.referenceId]);
       var preexisting = !!(bagRun.preexisting && bagRun.preexisting[t.referenceId]);
       var prior = !clicked && r && ['captured', 'captured_null'].indexOf(r.status) < 0 ? r : null;
+      var tw = bagRun.trWait && bagRun.trWait[t.referenceId];
       return {
         routeCode: t.routeCode, stop: t.stop, scannableId: t.scannableId,
         status: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
@@ -3027,7 +3067,15 @@
         receivedAfterStopOpen: !!tr && !preexisting,
         stopOpenResult: (bagRun.stopOpen && bagRun.stopOpen[t.referenceId]) || null,
         packageFallback: !!(bagRun.fallbackRefs && bagRun.fallbackRefs[t.referenceId]),
-        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null
+        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null,
+        // Bag v3.8: wait phase evidence (null when the Stop was never opened for this target).
+        stopOpenedAt: tw ? isoOrNull(tw.stopOpenedAt) : null,
+        targetTrDetailsReceivedAt: tw ? isoOrNull(tw.targetTrDetailsReceivedAt) : null,
+        trDetailsLatencyMs: tw ? tw.trDetailsLatencyMs : null,
+        waitPhase: tw ? tw.waitPhase : null,
+        delayedRescue: tw ? !!tw.delayedRescue : false,
+        noTrDetailsAfterWait: tw ? !!tw.noTrDetailsAfterWait : false,
+        finalStatus: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted'
       };
     });
   }
@@ -3050,6 +3098,7 @@
       var shape = Core.trDetailsRowShape(r);
       if (!shape) return;
       shape.receivedAt = at;
+      shape.receivedAtMs = Date.parse(at);
       shape.rowsInResponse = rows.length;
       bagRun.trRowShapes[id] = shape;
     });
@@ -3162,6 +3211,8 @@
       getTrMap: function () { return store.trDetailsByTrId; },
       driver: createBagDriver(ctx, runId),
       routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      // Bag v3.8: the extra trDetails wait (up to 3 s per Stop) needs more room than the v3.5 60 s cap.
+      routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
       log: bagLog,
       onProgress: function (p) {
         if (!bagIsCurrent(runId)) return;

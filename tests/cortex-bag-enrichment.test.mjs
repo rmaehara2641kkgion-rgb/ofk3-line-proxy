@@ -929,9 +929,9 @@ v35Suite('phase1-core');
   assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
   assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
     'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.7'") >= 0, 'v3.7 build label');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.8'") >= 0, 'v3.8 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.12', 'manifest 1.6.12');
+  assert(manifest.version === '1.6.13', 'manifest 1.6.13');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -1091,7 +1091,7 @@ ubtSuite('phase1-core');
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
-  assert(runner.indexOf("BAG_BUILD = 'Bag v3.7'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.7 + test v1');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.8'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.8 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
   const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
   assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
@@ -1590,13 +1590,14 @@ v37Suite('phase1-core');
   assert(ensure.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") < 0 && bag.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0,
     'v3.7-19: safe hit-test shared, unchanged');
   // package-fallback reopen stays a single v3.6 click
-  assert(bag.indexOf('driver.searchPackage(target, cb);\n          }, { maxAttempts: 1 });') >= 0, 'v3.7: fallback reopen single click');
+  assert(bag.indexOf('driver.searchPackage(target, cb);\n          }, { maxAttempts: 1, noExtendedWait: true });') >= 0, 'v3.7: fallback reopen single click');
   ['stopProcessingDiagnostics', 'packageFallbackDiagnostics', 'bagNullDiagnostics', 'recordBagTrRows', 'BAG_STOP_CLICK_FAIL_DIAG_MAX'].forEach((k) => {
     assert(bag.indexOf(k) >= 0 || runner.indexOf(k) >= 0, 'v3.7 diag ' + k);
   });
   // v3.6 Stop-open capture path intact: trDetails wait after an open, then the engine records stop_open
-  assert(ensure.indexOf('ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS') >= 0 && ensure.indexOf("waitCortexTr('already_open', cb)") >= 0,
-    'v3.7: v3.6 Cortex trDetails wait kept');
+  // (v3.8: the wait moved into waitStopTrDetails; normal 3 s still ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS)
+  assert(ensure.indexOf('waitStopTrDetails(ctx, runId, pending, openStarted, noExtraWait, function (tw) {') >= 0 && ensure.indexOf("waitCortexTr('already_open', cb)") >= 0 &&
+    bag.indexOf('normalMs: ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,') >= 0, 'v3.7: v3.6 Cortex trDetails wait kept');
   // 21: UBT v1 still reads the same click-diag keys
   const fin = bag.slice(bag.indexOf('  function finishUnfinishedTest('), bag.indexOf('  function startUnfinishedBagTest('));
   ['d.result', 'd.expandedBy', 'd.stopList.ariaExpandedAfter', 'd.stopList.selectedStopIdAfter', 'd.cortexTrDetails', 'd.clicked'].forEach((k) => {
@@ -1606,4 +1607,197 @@ v37Suite('phase1-core');
     assert(ensure.indexOf(k) >= 0, 'v3.7-21: ensureStop still writes ' + k);
   });
   console.log('ok: v3.7 runner wiring');
+})();
+
+// ---------------- Bag v3.8: normal 3 s + extended 3 s trDetails wait ----------------
+// Fake clock: wait() polls every 150 ms like waitBag; trDetails rows arrive at fixed times.
+function trClock(C, events) {
+  let t = 0;
+  const trMap = {};
+  const arrival = {};
+  const evs = (events || []).map((e) => Object.assign({}, e));
+  function apply() {
+    evs.forEach((e) => {
+      if (e.done || e.at > t) return;
+      e.done = true;
+      C.mergeTrDetailsMaps(trMap, { [e.ref]: { trId: e.ref, bagName: e.bag || null, bagScannableId: e.bag ? 's' : null } });
+      arrival[e.ref] = e.at;
+    });
+  }
+  return {
+    trMap,
+    now: () => t,
+    advance: (ms) => { t += ms; apply(); },
+    receivedAtOf: (ref) => (arrival[ref] == null ? null : arrival[ref]),
+    wait(check, ms, cb) {
+      const end = t + ms;
+      apply();
+      while (!check() && t < end) { t = Math.min(end, t + 150); apply(); }
+      cb(check());
+    }
+  };
+}
+
+function trWaitDirect(C, pending, events, opts) {
+  const clk = trClock(C, events);
+  const baseline = {};
+  (opts && opts.pre || []).forEach((ref) => {
+    C.mergeTrDetailsMaps(clk.trMap, { [ref]: { trId: ref, bagName: 'PRE', bagScannableId: 's' } });
+    baseline[ref] = true;
+  });
+  let res = null;
+  C.runTargetTrWait({
+    pending, trMap: () => clk.trMap, baseline, startedAt: clk.now(), now: clk.now, receivedAtOf: clk.receivedAtOf,
+    normalMs: 3000, extendedMs: opts && opts.extendedMs != null ? opts.extendedMs : 3000, wait: clk.wait, done: (r) => { res = r; }
+  });
+  return { res, clk };
+}
+
+// Engine run where every Stop opens on the first click and then uses Core.runTargetTrWait.
+function v38Run(C, detailsList, eventsByStop, extra) {
+  const sel = C.selectBagTargets(detailsList, {});
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  const log = { ensure: [], stopClicks: 0, find: [], clicks: [] };
+  let clk = trClock(C, []);
+  const trMap = {};
+  (extra && extra.pre || []).forEach(([ref, bag]) => C.mergeTrDetailsMaps(trMap, { [ref]: { trId: ref, bagName: bag, bagScannableId: 's' } }));
+  const driver = {
+    openRoute: (route, cb) => cb({ ok: true }),
+    ensureStop(stop, pending, onState, cb) {
+      log.ensure.push(stop.stop);
+      log.stopClicks += 1;
+      clk = trClock(C, eventsByStop[stop.stop] || []);
+      Object.keys(trMap).forEach((k) => { clk.trMap[k] = trMap[k]; });
+      const baseline = {};
+      pending.forEach((t) => { if (C.hasTrDetails(clk.trMap, t.referenceId)) baseline[t.referenceId] = true; });
+      C.runTargetTrWait({
+        pending, trMap: () => clk.trMap, baseline, startedAt: clk.now(), now: clk.now, receivedAtOf: clk.receivedAtOf,
+        normalMs: 3000, extendedMs: 3000, wait: clk.wait,
+        done: (r) => {
+          C.recordTrWait(run, r);
+          Object.keys(clk.trMap).forEach((k) => { trMap[k] = clk.trMap[k]; });
+          log.waited = (log.waited || []).concat(r.waitedMs);
+          cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+        }
+      });
+    },
+    findPackage(t, stop, cb) { log.find.push(t.referenceId); cb({ ok: false, status: 'package_dom_not_found', candidateCount: 0 }); },
+    clickPackage(t, h, cb) { log.clicks.push(t.referenceId); cb({ ok: true }); },
+    waitTrDetails: (t, cb) => cb(false),
+    restoreAfterPackage: (t, cb) => cb({ ok: true }),
+    leaveStop: (stop, cb) => cb({ ok: true }),
+    returnToList: (cb) => cb({ ok: true })
+  };
+  C.runBagEngine({ run, routes, driver, getTrMap: () => trMap, schedule: () => 1, cancel: () => {}, done: () => {} });
+  return { run, log, trMap, summary: C.summarizeBagRun(run, trMap) };
+}
+
+function v38Suite(label) {
+  const C = Core2;
+  assert(C.TR_WAIT_NORMAL_MS === 3000 && C.TR_WAIT_EXTENDED_MS === 3000, label + ' v3.8: 3 s + 3 s');
+  const one = (seq, ref, da) => [v36Details('DCX80', [{ seq, status: 'NOT_STARTED', pk: [[da, ref]] }])];
+
+  // A. arrives at 1 s -> normal, captured, no extended wait, wait ends right away
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-a' }], [{ at: 1000, ref: 'tr-a', bag: 'BAG_A' }]);
+    const r = d.res.records['tr-a'];
+    assert(r.waitPhase === 'normal' && !r.delayedRescue && r.trDetailsLatencyMs === 1000 && !d.res.extendedUsed && d.res.allArrived &&
+      d.res.waitedMs < 1200, label + ' v3.8-A: ' + JSON.stringify(d.res));
+    const e = v38Run(C, one(1, 'tr-a', 'DA0000008001'), { 1: [{ at: 1000, ref: 'tr-a', bag: 'BAG_A' }] });
+    assert(e.summary.byReferenceId['tr-a'] === 'captured' && e.log.find.length === 0 && e.summary.stopOpen.trWaitNormalReceived === 1 &&
+      e.summary.stopOpen.trWaitExtendedRescued === 0, label + ' v3.8-A engine');
+  })();
+
+  // B. arrives at 4.5 s -> extended, delayedRescue, captured, no package fallback
+  (function () {
+    const e = v38Run(C, one(2, 'tr-b', 'DA0000008002'), { 2: [{ at: 4500, ref: 'tr-b', bag: 'BAG_B' }] });
+    const r = e.run.trWait['tr-b'];
+    assert(r.waitPhase === 'extended' && r.delayedRescue === true && r.trDetailsLatencyMs === 4500 && r.targetTrDetailsReceivedAt === 4500,
+      label + ' v3.8-B record ' + JSON.stringify(r));
+    assert(e.summary.byReferenceId['tr-b'] === 'captured' && e.log.find.length === 0 && e.log.clicks.length === 0 &&
+      e.summary.stopOpen.stopOpenBagCaptured === 1 && e.summary.stopOpen.trWaitExtendedRescued === 1 && e.summary.stopOpen.trWaitExtendedCaptured === 1 &&
+      e.log.waited[0] < 4700, label + ' v3.8-B: rescued by the extended wait, ends on arrival');
+  })();
+
+  // C. arrives at 5 s with bagName null -> captured_null, no fallback
+  (function () {
+    const e = v38Run(C, one(3, 'tr-c', 'DA0000008003'), { 3: [{ at: 5000, ref: 'tr-c', bag: null }] });
+    assert(e.summary.byReferenceId['tr-c'] === 'captured_null' && e.log.find.length === 0 && e.run.trWait['tr-c'].delayedRescue === true &&
+      e.summary.stopOpen.stopOpenBagNull === 1 && e.summary.stopOpen.trWaitExtendedNull === 1, label + ' v3.8-C: null kept, no fallback');
+  })();
+
+  // D. nothing after 6 s -> package fallback
+  (function () {
+    const e = v38Run(C, one(4, 'tr-d', 'DA0000008004'), {});
+    const r = e.run.trWait['tr-d'];
+    assert(r.noTrDetailsAfterWait && r.targetTrDetailsReceivedAt === null && r.trDetailsLatencyMs === null && r.waitPhase === 'extended' &&
+      !r.delayedRescue && e.log.waited[0] === 6000, label + ' v3.8-D record ' + JSON.stringify(r));
+    assert(e.log.find.join(',') === 'tr-d' && e.summary.byReferenceId['tr-d'] === 'package_dom_not_found' &&
+      e.summary.stopOpen.stopOpenNoTrDetails === 1 && e.summary.stopOpen.trWaitNoTrDetailsAfterExtended === 1, label + ' v3.8-D: fallback after 6 s only');
+  })();
+
+  // E. one Stop, 3 targets arriving at 0.5 / 2 / 4 s -> one open, 2 normal + 1 extended
+  (function () {
+    const d = [v36Details('DCX81', [{ seq: 7, status: 'NOT_STARTED', pk: [['DA0000008101', 'tr-e1'], ['DA0000008102', 'tr-e2'], ['DA0000008103', 'tr-e3']] }])];
+    const e = v38Run(C, d, { 7: [{ at: 500, ref: 'tr-e1', bag: 'B1' }, { at: 2000, ref: 'tr-e2', bag: 'B1' }, { at: 4000, ref: 'tr-e3', bag: null }] });
+    assert(e.log.ensure.join(',') === '7' && e.log.stopClicks === 1 && e.log.find.length === 0, label + ' v3.8-E: one open for 3 targets');
+    const w = e.run.trWait;
+    assert(w['tr-e1'].waitPhase === 'normal' && w['tr-e2'].waitPhase === 'normal' && w['tr-e3'].delayedRescue &&
+      e.summary.counts.captured === 2 && e.summary.counts.captured_null === 1 && e.log.waited[0] < 4200, label + ' v3.8-E ' + JSON.stringify(w));
+  })();
+
+  // F. unrelated referenceId arriving never ends the wait nor counts as the target
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-f' }], [{ at: 500, ref: 'tr-other', bag: 'X' }]);
+    assert(!d.res.allArrived && d.res.records['tr-f'].noTrDetailsAfterWait && d.res.waitedMs === 6000 && !d.res.records['tr-other'],
+      label + ' v3.8-F: unrelated trDetails ignored ' + JSON.stringify(d.res));
+  })();
+
+  // G. preexisting trDetails is not a Stop-open arrival
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-g' }, { referenceId: 'tr-g2' }], [{ at: 800, ref: 'tr-g2', bag: 'B' }], { pre: ['tr-g'] });
+    assert(d.res.records['tr-g'].waitPhase === 'preexisting' && d.res.records['tr-g'].delayedRescue === false &&
+      d.res.records['tr-g'].trDetailsLatencyMs === null && d.res.records['tr-g2'].waitPhase === 'normal', label + ' v3.8-G ' + JSON.stringify(d.res.records));
+    const s = C.summarizeTrWait({ targets: [{ referenceId: 'tr-g' }, { referenceId: 'tr-g2' }], trWait: d.res.records }, d.clk.trMap);
+    assert(s.trWaitNormalReceived === 1 && s.trWaitExtendedRescued === 0, label + ' v3.8-G: preexisting not counted');
+    // Unfinished Bag Test v1: extendedMs 0 keeps the single 3 s wait
+    const u = trWaitDirect(C, [{ referenceId: 'tr-u' }], [{ at: 4500, ref: 'tr-u', bag: 'B' }], { extendedMs: 0 });
+    assert(!u.res.extendedUsed && u.res.waitedMs === 3000 && u.res.records['tr-u'].noTrDetailsAfterWait, label + ' v3.8: UBT v1 single wait');
+  })();
+
+  // panel line + mixed day
+  (function () {
+    const d = [v36Details('DCX82', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA0000008201', 'tr-p1']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA0000008202', 'tr-p2']] },
+      { seq: 3, status: 'NOT_STARTED', pk: [['DA0000008203', 'tr-p3']] }
+    ])];
+    const e = v38Run(C, d, { 1: [{ at: 300, ref: 'tr-p1', bag: 'B' }], 2: [{ at: 3600, ref: 'tr-p2', bag: 'B' }] });
+    const text = C.formatBagSummary(e.summary);
+    assert(text.indexOf('通常待機取得 1 / 追加待機救済 1 (Bag 1 / null 0) / 6秒待機後trDetailsなし 1') >= 0 &&
+      text.indexOf('Stop-open取得 2 / Stop-open null 0 / trDetailsなし 1') >= 0 && text.indexOf('package fallback 1 / package click 0') >= 0,
+    label + ' v3.8: panel ' + text);
+  })();
+  console.log('ok: Bag v3.8 trDetails wait (' + label + ')');
+}
+Core2 = RootCore;
+v38Suite('root core');
+Core2 = PhaseCore;
+v38Suite('phase1-core');
+
+// H + runner wiring v3.8: Stop retry untouched, both wait paths use the two-phase wait, UBT keeps 3 s
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("BAG_STOP_OPEN_TR_EXTRA_MS = 3000") >= 0 && bag.indexOf("extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS") >= 0 && bag.indexOf("{ maxAttempts: 1, noExtendedWait: true }") >= 0 && bag.indexOf("routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS") >= 0,
+    'v3.8: extra 3 s, UBT keeps its single wait');
+  assert((bag.match(/waitStopTrDetails\(ctx, runId, pending, (started|openStarted), noExtraWait, function \(tw\)/g) || []).length === 2, 'v3.8: both Stop-open wait paths');
+  assert(bag.indexOf('shape.receivedAtMs = Date.parse(at);') >= 0, 'v3.8: arrival time from the trDetails hook');
+  ['stopOpenedAt', 'targetTrDetailsReceivedAt', 'trDetailsLatencyMs', 'waitPhase', 'delayedRescue', 'finalStatus'].forEach((k) => {
+    assert(bag.indexOf(k + ':') >= 0, 'v3.8 target diag ' + k);
+  });
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.8-H: v3.7 retry kept');
+  console.log('ok: v3.8 runner wiring');
 })();
