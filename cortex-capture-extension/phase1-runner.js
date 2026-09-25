@@ -1185,13 +1185,16 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.9';
+  var BAG_BUILD = 'Bag v3.10';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
   // Bag v3.8: extra wait only while a pending target's trDetails is still missing after the 3 s.
   var BAG_STOP_OPEN_TR_EXTRA_MS = 3000;
   var BAG_ROUTE_EXTENSION_CAP_MS = 120000;
+  // Bag v3.10: a Route is aborted only after 90 s without any progress, or at the 15 min hard maximum.
+  var BAG_ROUTE_IDLE_MS = 90000;
+  var BAG_ROUTE_HARD_MAX_MS = 900000;
   var BAG_ROUTE_RETRY_WAIT_MS = 15000;
   var bagRun = null;
   var bagTimer = 0;
@@ -2053,6 +2056,114 @@
     });
   }
 
+  // Bag v3.10: element description without free text (tag, non-generated classes, role, aria / data
+  // attribute NAMES, boolean-ish aria values). Text is masked except package / order numbers and Bag labels.
+  function safeElInfo(el) {
+    if (!el || !el.tagName) return null;
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 4);
+    var aria = [];
+    var data = [];
+    var attrs = el.attributes || [];
+    for (var i = 0; i < attrs.length; i++) {
+      var n = attrs[i].name;
+      if (/^aria-/.test(n)) aria.push(/^aria-(expanded|selected|level|hidden|checked|current|disabled)$/.test(n) ? n + '=' + attrs[i].value : n);
+      else if (/^data-/.test(n)) data.push(n);
+    }
+    var own = '';
+    var kids = el.childNodes || [];
+    for (var j = 0; j < kids.length; j++) if (kids[j].nodeType === 3) own += ' ' + kids[j].nodeValue;
+    return {
+      tag: String(el.tagName).toLowerCase(), classes: cls, role: el.getAttribute ? el.getAttribute('role') : null,
+      aria: aria.slice(0, 8), data: data.slice(0, 8), directText: Core.safeContainerExcerpt([own]),
+      inMapbox: inMapbox(el), inStopRow: !!(el.closest && el.closest('div.stops-list-item'))
+    };
+  }
+
+  function safeChain(el, depth) {
+    var out = [];
+    for (var cur = el, d = 0; cur && d < depth; d += 1, cur = cur.parentElement) {
+      if (cur === document.documentElement) break;
+      var x = safeElInfo(cur);
+      out.push(x.tag + (x.classes.length ? '.' + x.classes.join('.') : '') + (x.role ? '[role=' + x.role + ']' : '') +
+        (x.aria.length ? '[' + x.aria.join(',') + ']' : ''));
+    }
+    return out;
+  }
+
+  // Bag v3.10: why the Stop-DOM reader did not find the target DA (no names / addresses kept).
+  function stopDomMissDiag(ctx, target, stop, domRes) {
+    var da = String(target.scannableId || '');
+    var tail = da.slice(-6);
+    var lt = freshListTarget(stop.stop) || (ctx.openedListTarget && ctx.openedListTarget.row.isConnected ? ctx.openedListTarget : null);
+    var row = lt ? lt.row : null;
+    var existing = collectExactDaElements([da])[da] || [];
+    var sub = 0;
+    var suffix = 0;
+    collectTextElements(null, function (full, own) {
+      if (own.indexOf(da) >= 0) sub += 1;
+      else if (tail && own.indexOf(tail) >= 0) suffix += 1;
+      return false;
+    });
+    var scope = row || bagMainScroller() || document.body;
+    var tokens = {};
+    var blocks = 0;
+    collectTextElements(scope, function (full, own) {
+      (own.match(/\b[A-Z]{2,4}\d{8,14}\b/g) || []).forEach(function (x) { tokens[x] = true; });
+      if (Core.isPackageNumberText(own)) blocks += 1;
+      return false;
+    });
+    var tagCounts = {};
+    var roleCounts = {};
+    var classCounts = {};
+    var dataNames = {};
+    var ariaNames = {};
+    var nodes = scope.querySelectorAll ? scope.querySelectorAll('*') : [];
+    for (var i = 0; i < nodes.length && i < 4000; i++) {
+      var el = nodes[i];
+      var tag = String(el.tagName).toLowerCase();
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      var role = el.getAttribute('role');
+      if (role) roleCounts[role] = (roleCounts[role] || 0) + 1;
+      String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || '')).split(/\s+/).forEach(function (c) {
+        if (c && !/^css-/.test(c)) classCounts[c] = (classCounts[c] || 0) + 1;
+      });
+      for (var k = 0; k < el.attributes.length; k++) {
+        var an = el.attributes[k].name;
+        if (/^data-/.test(an)) dataNames[an] = (dataNames[an] || 0) + 1;
+        else if (/^aria-/.test(an)) ariaNames[an] = (ariaNames[an] || 0) + 1;
+      }
+    }
+    function top(m, n) {
+      return Object.keys(m).sort(function (a, b) { return m[b] - m[a]; }).slice(0, n).map(function (k) { return k + ':' + m[k]; });
+    }
+    return {
+      routeCode: ctx.route && ctx.route.routeCode, stopNumber: stop.stop,
+      targetReferenceId: target.referenceId, targetScannableId: da,
+      stopOpenState: {
+        rowFound: !!row, ariaExpanded: lt ? lt.button.getAttribute('aria-expanded') : null,
+        selectedStopId: selectedStopIdOf(hrefNow()), pass: domRes.pass || ''
+      },
+      targetDaVisibleByExistingDetector: existing.length > 0,
+      detectorMismatch: existing.length > 0 && !domRes.daFound,
+      existingDetectorEvidence: existing.slice(0, 3).map(function (el) {
+        return { el: safeElInfo(el), ancestors: safeChain(el, 10), insideOpenedRow: row ? row.contains(el) : null, visible: elementVisible(el) };
+      }),
+      stopDomReason: domRes.reason || '',
+      exactDirectTextMatchCount: domRes.candidateCount || 0,
+      substringMatchCount: sub,
+      suffixMatchCount: suffix,
+      scope: row ? 'opened_stop_row' : 'main_scroller',
+      daTokensInScope: Object.keys(tokens).slice(0, 40),
+      packageLikeBlockCount: blocks,
+      structure: {
+        elements: nodes.length, tags: top(tagCounts, 12), roles: top(roleCounts, 10), classes: top(classCounts, 20),
+        dataAttributes: top(dataNames, 12), ariaAttributes: top(ariaNames, 12),
+        rowChain: row ? safeChain(row, 6) : []
+      }
+    };
+  }
+
   // Bag v3.9: live-DOM accessor for Core.readStopDomBag (panel, Mapbox and svg/script never read).
   function stopDomAccessor() {
     return {
@@ -2085,6 +2196,7 @@
     var startedAt = Date.now();
     var baseline = {};
     pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) baseline[t.referenceId] = true; });
+    var arrivedSeen = Object.keys(baseline).length;
     Core.runTargetTrWait({
       pending: pending,
       trMap: function () { return store.trDetailsByTrId; },
@@ -2100,6 +2212,11 @@
       wait: function (check, ms, cb) {
         waitBag(function () {
           noteTrSeen(pending, seenSince);
+          var n = pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length;
+          if (n > arrivedSeen) {
+            arrivedSeen = n;
+            if (bagEngine) bagEngine.noteProgress('tr_details');
+          }
           return check();
         }, ms, runId, cb);
       },
@@ -2291,7 +2408,7 @@
               expected: pending.length,
               received: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length
             };
-            done({ ok: true, clicked: false, stopDiag: {
+            done({ ok: true, clicked: false, trWaitMs: tw.waitedMs, trWaitExtended: tw.extendedUsed, stopDiag: {
               openResult: kind, initialAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
               initialSelectedStopId: selectedStopIdOf(hrefNow()), clickAttempts: [],
               finalAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
@@ -2600,7 +2717,8 @@
                     delayedRescue: Object.keys(tw.records).filter(function (k) { return tw.records[k].delayedRescue; }).length
                   };
                   pushStopClickDiag(clickDiag);
-                  cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, stopDiag: stopDiagOf(final, 'opened') });
+                  cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, trWaitMs: tw.waitedMs,
+                    trWaitExtended: tw.extendedUsed, stopDiag: stopDiagOf(final, 'opened') });
                 });
                 return;
               }
@@ -2649,27 +2767,35 @@
 
       // Bag v3.9: the target's trDetails never came. Read the Bag label from the opened Stop's DOM,
       // inside the target DA's own package block only (Core.readStopDomBag). No click.
+      // Bag v3.10: no scroll sweep (v3.9 scrolled up to 12 steps and walked the whole DOM each step).
+      // Read the current DOM once; if the target DA is not there, bring the opened Stop row into view
+      // and read once more. The matching rules (Core.readStopDomBag) are unchanged.
       readStopDomBag: function (target, stop, cb) {
-        var last = null;
-        scrollSearch(function () {
-          last = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
-          return last.daFound ? last : null;
-        }, BAG_PACKAGE_SCROLL_MAX_STEPS, runId, function (found) {
-          var res = found || last || { ok: false, reason: 'target_not_found', daFound: false, candidateCount: 0 };
+        function finish(res) {
           res.routeCode = ctx.route && ctx.route.routeCode;
           res.stopNumber = stop.stop;
-          if (!res.daFound) {
-            res.pageHint = {
-              packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
-              selectedStopId: selectedStopIdOf(hrefNow())
-            };
+          if (!res.daFound || res.reason === 'target_not_found' || res.reason === 'target_other_stop') {
+            res.missDiag = stopDomMissDiag(ctx, target, stop, res);
           }
           if (res.ok && res.bag && !Core.hasTrDetails(store.trDetailsByTrId, target.referenceId)) {
             store.bagDomByReferenceId = store.bagDomByReferenceId || {};
             store.bagDomByReferenceId[target.referenceId] = { text: res.bag.text, color: res.bag.color, number: res.bag.number };
           }
           cb(res);
-        });
+        }
+        var first = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
+        first.pass = 'current_view';
+        if (first.daFound) { finish(first); return; }
+        var lt = ctx.openedListTarget && ctx.openedListTarget.row && ctx.openedListTarget.row.isConnected
+          ? ctx.openedListTarget : freshListTarget(stop.stop);
+        if (!lt) { finish(first); return; }
+        try { lt.row.scrollIntoView({ block: 'start', inline: 'nearest' }); } catch (e1) {}
+        bagLater(function () {
+          if (!bagIsCurrent(runId)) return;
+          var second = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
+          second.pass = 'row_into_view';
+          finish(second);
+        }, 250);
       },
 
       searchPackage: function (target, cb) {
@@ -3136,6 +3262,8 @@
         stopDomCandidateCount: dom ? dom.candidateCount : null,
         stopDomScope: dom ? dom.scope || null : null,
         stopDomReason: dom ? dom.reason || null : null,
+        targetDaVisibleByExistingDetector: dom && dom.missDiag ? dom.missDiag.targetDaVisibleByExistingDetector : null,
+        detectorMismatch: dom && dom.missDiag ? dom.missDiag.detectorMismatch : null,
         stopDomPackageContainerText: dom ? dom.containerExcerpt || '' : null,
         bagSource: Core.bagSourceOf(bagRun, store.trDetailsByTrId, t.referenceId),
         fallbackReason: bagRun.fallbackDiagnostics && bagRun.fallbackDiagnostics[t.referenceId]
@@ -3210,7 +3338,7 @@
         var x = bagRun.stopDom[ref];
         return { referenceId: ref, routeCode: x.routeCode, stopNumber: x.stopNumber, ok: !!x.ok, reason: x.reason || '',
           daFound: !!x.daFound, candidateCount: x.candidateCount, scope: x.scope || '', bagText: x.bag ? x.bag.text : null,
-          labels: x.labels || [], containerExcerpt: x.containerExcerpt || '', pageHint: x.pageHint || null };
+          labels: x.labels || [], containerExcerpt: x.containerExcerpt || '', pass: x.pass || '', missDiag: x.missDiag || null };
       }),
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
@@ -3283,6 +3411,8 @@
       routeBudgetMs: BAG_ROUTE_BUDGET_MS,
       // Bag v3.8: the extra trDetails wait (up to 3 s per Stop) needs more room than the v3.5 60 s cap.
       routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
+      routeIdleMs: BAG_ROUTE_IDLE_MS,
+      routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS,
       log: bagLog,
       onProgress: function (p) {
         if (!bagIsCurrent(runId)) return;

@@ -1126,10 +1126,27 @@
       var tw = summarizeTrWait(run, trDetailsByTrId);
       Object.keys(tw).forEach(function (k) { stopOpen[k] = tw[k]; });
     }
+    var routeList = (run && run.routeResults) || [];
+    var routeStats = { total: routeList.length, done: 0, aborted: 0, byReason: {} };
+    var timing = { totalMs: 0, avgRouteMs: 0, maxRouteMs: 0, maxRouteCode: '' };
+    routeList.forEach(function (r) {
+      if (r.status === 'done') routeStats.done += 1;
+      else {
+        routeStats.aborted += 1;
+        var rc = r.reasonCode || r.status;
+        routeStats.byReason[rc] = (routeStats.byReason[rc] || 0) + 1;
+      }
+      var ms = r.routeElapsedMs != null ? r.routeElapsedMs : (r.durationMs || 0);
+      timing.totalMs += ms;
+      if (ms > timing.maxRouteMs) { timing.maxRouteMs = ms; timing.maxRouteCode = r.routeCode; }
+    });
+    timing.avgRouteMs = routeList.length ? Math.round(timing.totalMs / routeList.length) : 0;
     return {
       targetCount: targetCount,
       attempted: targetCount - (counts.not_attempted || 0),
       groups: groups,
+      routeStats: routeStats,
+      bagTiming: timing,
       stopOpen: stopOpen,
       byStopStatus: byStopStatus,
       clicks: (run && run.clicks) || 0,
@@ -1180,6 +1197,13 @@
         ' / timeout ' + (g.timeout || 0) + ' / UI blocked ' + (g.uiBlocked || 0) +
         ' / その他エラー ' + (g.otherError || 0)
     ];
+    var rs = summary.routeStats;
+    if (rs && rs.total) {
+      lines.push('Route完了 ' + rs.done + '/' + rs.total + ' / Route中断 ' + rs.aborted);
+      if (rs.aborted) {
+        lines.push('中断内訳: ' + Object.keys(rs.byReason).map(function (k) { return k + ' ' + rs.byReason[k]; }).join(' / '));
+      }
+    }
     var detail = BAG_DETAIL_LABELS.filter(function (pair) { return c[pair[0]]; })
       .map(function (pair) { return pair[1] + ' ' + c[pair[0]]; });
     if (detail.length) lines.push('内訳: ' + detail.join(' / '));
@@ -1940,8 +1964,11 @@
     var now = opts.now || function () { return Date.now(); };
     var schedule = opts.schedule || function (fn, ms) { return setTimeout(fn, ms); };
     var cancel = opts.cancel || function (id) { clearTimeout(id); };
+    // Bag v3.10: routeBudgetMs is a soft budget (diagnostics only). A Route is aborted only when
+    // nothing progressed for routeIdleMs (watchdog), or at the hard maximum routeHardMaxMs.
     var budget = opts.routeBudgetMs > 0 ? opts.routeBudgetMs : 90000;
-    var watchdogMs = budget + (opts.watchdogGraceMs > 0 ? opts.watchdogGraceMs : 60000);
+    var idleMs = opts.routeIdleMs > 0 ? opts.routeIdleMs : 90000;
+    var hardMaxMs = opts.routeHardMaxMs > 0 ? opts.routeHardMaxMs : 900000;
     var progress = {
       routeIndex: 0, routeTotal: routes.length, routeCode: '',
       stopIndex: 0, stopTotal: 0, stopSeq: null,
@@ -1953,6 +1980,7 @@
     var finished = false;
     var failCurrent = null;
     var extendCurrent = null;
+    var progressCurrent = null;
     var extensionCapMs = opts.routeExtensionCapMs > 0 ? opts.routeExtensionCapMs : 60000;
 
     function log(line) {
@@ -1986,33 +2014,81 @@
       var stops = groupBagTargetsByStop(route.targets);
       var deadline = now() + budget;
       var result = { routeCode: route.routeCode, status: 'done', detail: '', reasonCode: '', stopClicks: 0, startedAt: now(),
-        leaveFailures: [], extendedMs: 0 };
+        leaveFailures: [], extendedMs: 0,
+        // Bag v3.10 timing / counts (diagnostics)
+        routeStartedAt: null, routeFinishedAt: null, routeElapsedMs: null,
+        targetPackageCount: route.targets.length, targetStopCount: stops.length,
+        stopOpenCount: 0, stopRetryCount: 0, normalWaitCount: 0, extendedWaitCount: 0,
+        stopDomAttemptCount: 0, packageFallbackCount: 0, progressEvents: 0, lastProgressKind: '',
+        softBudgetExceededAtMs: null, maxIdleMs: 0,
+        timing: { routeOpenMs: 0, stopOpenTotalMs: 0, trDetailsWaitTotalMs: 0, stopDomTotalMs: 0,
+          stopCloseTotalMs: 0, fallbackTotalMs: 0, returnToListMs: 0 } };
+      result.routeStartedAt = result.startedAt;
+      var hardDeadline = result.startedAt + hardMaxMs;
       var closed = false;
       var watchdog = null;
-      var watchdogAt = 0;
-      function fireWatchdog() {
-        watchdog = null;
-        abortRoute('watchdog: Route処理が上限時間内に終わりません', null, 'watchdog');
+      var progressSeq = 0;
+      var lastProgressAt = result.startedAt;
+      function noteProgress(kind) {
+        if (closed) return;
+        var t = now();
+        if (t - lastProgressAt > result.maxIdleMs) result.maxIdleMs = t - lastProgressAt;
+        progressSeq += 1;
+        lastProgressAt = t;
+        result.progressEvents += 1;
+        result.lastProgressKind = kind || '';
       }
+      function armWatchdog(delay) {
+        if (watchdog != null) cancel(watchdog);
+        var seq = progressSeq;
+        watchdog = schedule(function () { fireWatchdog(seq); }, Math.max(1, delay));
+      }
+      // Fires every idle window: aborts only when nothing progressed since it was armed, or at the
+      // hard maximum (so a Route that keeps progressing can never run forever).
+      function fireWatchdog(seqAtArm) {
+        watchdog = null;
+        if (closed || stopped()) return;
+        var t = now();
+        if (t >= hardDeadline) {
+          abortRoute('Route上限時間(hard max ' + Math.round(hardMaxMs / 1000) + '秒)を超過', null, 'route_budget_exceeded');
+          return;
+        }
+        if (progressSeq === seqAtArm) {
+          result.idleMsAtAbort = t - lastProgressAt;
+          abortRoute('watchdog: ' + Math.round(idleMs / 1000) + '秒間progressなし（最後: ' + (result.lastProgressKind || '-') + '）', null, 'watchdog');
+          return;
+        }
+        armWatchdog(Math.min(lastProgressAt + idleMs - t, hardDeadline - t));
+      }
+      function timed(key, t0) { result.timing[key] += Math.max(0, now() - t0); }
       // Retries (Stop close / Route click / slow Stop open) may add time to this Route only, capped.
+      // v3.10: only moves the soft budget (diagnostics); aborts come from the watchdog / hard max.
       extendCurrent = function (ms) {
         var add = Math.max(0, Math.min(Number(ms) || 0, extensionCapMs - result.extendedMs));
         if (!add || closed) return 0;
         result.extendedMs += add;
         deadline += add;
-        watchdogAt += add;
-        if (watchdog != null) {
-          cancel(watchdog);
-          watchdog = schedule(fireWatchdog, Math.max(0, watchdogAt - now()));
-        }
         return add;
       };
+      progressCurrent = noteProgress;
+      // Soft budget: recorded, never aborts. Hard maximum: aborts.
+      function overBudget() {
+        var t = now();
+        if (t > deadline && result.softBudgetExceededAtMs == null) result.softBudgetExceededAtMs = t - result.startedAt;
+        if (t > hardDeadline) {
+          abortRoute('Route上限時間(hard max ' + Math.round(hardMaxMs / 1000) + '秒)を超過', null, 'route_budget_exceeded');
+          return true;
+        }
+        return false;
+      }
       run.routeResults.push(result);
 
       // Callbacks from a Route that already ended (abort / watchdog) are ignored.
-      function live(fn) {
+      // Every driver callback that arrives while the Route is live counts as progress.
+      function live(fn, kind) {
         return function () {
           if (stopped() || closed) return;
+          noteProgress(kind || 'driver');
           fn.apply(null, arguments);
         };
       }
@@ -2049,7 +2125,9 @@
         closed = true;
         failCurrent = null;
         extendCurrent = null;
+        progressCurrent = null;
         if (watchdog != null) cancel(watchdog);
+        var backStarted = now();
         emit({ state: 'Route一覧へ復帰中' });
         var attempts = 0;
         function tryBack() {
@@ -2063,7 +2141,10 @@
         function onBack(res) {
           if (stopped()) return;
           if (res && res.ok) {
+            result.timing.returnToListMs = Math.max(0, now() - backStarted);
             result.durationMs = now() - result.startedAt;
+            result.routeFinishedAt = now();
+            result.routeElapsedMs = result.durationMs;
             var label = result.status === 'done' ? 'done' : (result.status === BAG_STATUS.UI_BLOCKED ? 'UI blocked' :
               result.status + '(' + result.reasonCode + ')');
             log('[Bag] ' + route.routeCode + ' ' + label + (result.detail ? ' (' + result.detail + ')' : '') +
@@ -2079,6 +2160,8 @@
             result.reasonCode = 'list_return_failed';
           }
           result.durationMs = now() - result.startedAt;
+          result.routeFinishedAt = now();
+          result.routeElapsedMs = result.durationMs;
           var reason = 'Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : '');
           log('[Bag] ' + route.routeCode + ' ' + reason + ' -> abort (以後のRouteを開けません)');
           finish(reason);
@@ -2092,7 +2175,7 @@
         var stop = stops[j];
         var list = pend(stop.targets);
         if (!list.length) { nextStop(j + 1); return; }
-        if (now() > deadline) { abortRoute('Route上限時間を超過', null, 'route_budget_exceeded'); return; }
+        if (overBudget()) return;
         emit({
           stopIndex: j + 1, stopSeq: stop.stop,
           packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
@@ -2100,8 +2183,19 @@
         });
         // Bag v3.7: one record per Route + Stop; the Stop is opened once for all its targets.
         var stopRec = beginStopRecord(run, route, stop, list, now());
+        var openT0 = now();
         call(function () {
           driver.ensureStop(stop, list, function (state) { if (!closed) emit({ state: state }); }, live(function (res) {
+            var trWaitMs = res && res.trWaitMs > 0 ? res.trWaitMs : 0;
+            result.timing.trDetailsWaitTotalMs += trWaitMs;
+            result.timing.stopOpenTotalMs += Math.max(0, now() - openT0 - trWaitMs);
+            if (res && res.ok) {
+              result.stopOpenCount += 1;
+              if (res.trWaitExtended) result.extendedWaitCount += 1; else result.normalWaitCount += 1;
+            }
+            if (res && res.stopDiag && Array.isArray(res.stopDiag.clickAttempts)) {
+              result.stopRetryCount += res.stopDiag.clickAttempts.filter(function (a) { return a && a.attempt > 1; }).length;
+            }
             if (res && res.clicked) {
               // Retries click more than once; each dispatched click is counted.
               var n = res.clickCount > 0 ? res.clickCount : 1;
@@ -2127,8 +2221,10 @@
               if (got) recordBagResult(run, t.referenceId, got, 'stop_open');
             });
             nextPackage(stop, function () {
+              var closeT0 = now();
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
+                  timed('stopCloseTotalMs', closeT0);
                   stopRec.closeResult = !lres || !lres.ok ? 'failed' : (lres.leftOpen ? 'left_open' : 'closed');
                   stopRec.elapsedMs = now() - stopRec.startedAt;
                   if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません', null, 'stop_leave_failed'); return; }
@@ -2149,14 +2245,17 @@
         if (stopped() || closed) return;
         var list = pend(stop.targets);
         if (!list.length) { doneStop(); return; }
-        if (now() > deadline) { abortRoute('Route上限時間を超過', null, 'route_budget_exceeded'); return; }
+        if (overBudget()) return;
         var t = list[0];
         emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
         // Bag v3.9: no trDetails for this target -> read its Bag label from the opened Stop's DOM
         // (its own package block only) before any package lookup / click.
         if (typeof driver.readStopDomBag === 'function' && !(run.stopDom && run.stopDom[t.referenceId])) {
+          var domT0 = now();
+          result.stopDomAttemptCount += 1;
           call(function () {
             driver.readStopDomBag(t, stop, live(function (dres) {
+              timed('stopDomTotalMs', domT0);
               run.stopDom = run.stopDom || {};
               run.stopDom[t.referenceId] = dres || { ok: false, reason: 'no_result' };
               if (dres && dres.ok && dres.bag && !hasTrDetails(trMap(), t.referenceId)) {
@@ -2168,8 +2267,11 @@
           });
           return;
         }
+        var fbT0 = now();
+        result.packageFallbackCount += 1;
         call(function () {
           driver.findPackage(t, stop, live(function (res) {
+            timed('fallbackTotalMs', fbT0);
             recordPackageFallback(run, t, packageLookupFallbackPatch(res));
             if (!res || !res.ok) {
               recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
@@ -2206,7 +2308,9 @@
                     recordPackageFallback(run, t, { result: status || BAG_STATUS.TIMEOUT, failureReason: status ? '' : 'timeout' });
                     emit({ state: status || BAG_STATUS.TIMEOUT });
                     call(function () {
+                      var restoreT0 = now();
                       driver.restoreAfterPackage(t, live(function (rres) {
+                        timed('fallbackTotalMs', restoreT0);
                         if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません', null, 'package_restore_failed'); return; }
                         nextPackage(stop, doneStop);
                       }));
@@ -2220,15 +2324,16 @@
       }
 
       failCurrent = function (detail) { abortRoute(detail, null, 'exception'); };
-      watchdogAt = now() + watchdogMs;
-      watchdog = schedule(fireWatchdog, watchdogMs);
+      armWatchdog(idleMs);
       emit({
         routeIndex: i + 1, routeCode: route.routeCode,
         stopIndex: 0, stopTotal: stops.length, stopSeq: null,
         packageIndex: 0, packageTotal: 0, scannableId: '', state: 'Routeを開いています'
       });
+      var routeT0 = now();
       call(function () {
         driver.openRoute(route, live(function (res) {
+          timed('routeOpenMs', routeT0);
           if (!res || !res.ok) {
             abortRoute((res && res.detail) || 'Routeを開けません', res && res.blocked ? BAG_STATUS.UI_BLOCKED : null,
               (res && res.code) || (res && res.blocked ? 'ui_blocked' : 'route_open_failed'));
@@ -2248,6 +2353,10 @@
       // Extra time for the current Route only (capped by routeExtensionCapMs). Returns ms granted.
       extendRoute: function (ms) {
         return typeof extendCurrent === 'function' ? extendCurrent(ms) : 0;
+      },
+      // Bag v3.10: runner-side progress inside a long driver step (e.g. a target trDetails arrived).
+      noteProgress: function (kind) {
+        if (typeof progressCurrent === 'function') progressCurrent(kind);
       }
     };
   }

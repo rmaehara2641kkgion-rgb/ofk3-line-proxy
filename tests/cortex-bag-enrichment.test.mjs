@@ -719,7 +719,7 @@ v32Suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
   assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
-  assert(/BAG_BUILD = 'Bag v3\.[2-9]/.test(bag), 'v3.x build label');
+  assert(/BAG_BUILD = 'Bag v3\.([2-9]|1[0-9])'/.test(bag), 'v3.x build label');
   console.log('ok: v3.2 runner marker wiring');
 })();
 
@@ -929,9 +929,9 @@ v35Suite('phase1-core');
   assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
   assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
     'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.9'") >= 0, 'v3.9 build label');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.10'") >= 0, 'v3.10 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.14', 'manifest 1.6.14');
+  assert(manifest.version === '1.6.15', 'manifest 1.6.15');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -1091,7 +1091,7 @@ ubtSuite('phase1-core');
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
-  assert(runner.indexOf("BAG_BUILD = 'Bag v3.9'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.9 + test v1');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.10'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.10 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
   const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
   assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
@@ -1992,4 +1992,140 @@ v39Suite('phase1-core');
   const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
   assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.9-9: v3.7 retry kept');
   console.log('ok: v3.9 runner wiring');
+})();
+
+// ---------------- Bag v3.10: progress-based watchdog, hard maximum, Route timing ----------------
+function v310Suite(label) {
+  const C = Core2;
+  const mk = (code, n) => [v36Details(code, Array.from({ length: n }, (_, i) => ({ seq: i + 1, status: 'NOT_STARTED', pk: [['DA00000091' + String(i).padStart(2, '0'), 'tr-' + code + '-' + i]] })))];
+  function world(clockStep, hangAtStop) {
+    const trMap = {};
+    let clock = 0;
+    const pendingCb = [];
+    const driver = {
+      openRoute: (r, cb) => { clock += clockStep; cb({ ok: true }); },
+      ensureStop(stop, pending, onState, cb) {
+        clock += clockStep;
+        if (hangAtStop && stop.stop === hangAtStop) { pendingCb.push(cb); return; }
+        pending.forEach((t) => C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'B', bagScannableId: 's' } }));
+        cb({ ok: true, clicked: true, clickCount: 1, trWaitMs: 1000, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+      },
+      findPackage: (t, s, cb) => cb({ ok: false, status: 'package_dom_not_found' }),
+      clickPackage: (t, x, cb) => cb({ ok: false }), waitTrDetails: (t, cb) => cb(false), restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => { clock += clockStep; cb({ ok: true }); }, returnToList: (cb) => cb({ ok: true })
+    };
+    return { trMap, driver, now: () => clock, pendingCb, advance: (ms) => { clock += ms; } };
+  }
+  function runIt(details, w, extra) {
+    const sel = C.selectBagTargets(details, {});
+    const run = C.createBagRun(sel.targets);
+    const timers = [];
+    let aborted = null;
+    const h = C.runBagEngine(Object.assign({ run, routes: C.groupBagTargetsByRoute(sel.targets), driver: w.driver, getTrMap: () => w.trMap, now: w.now,
+      schedule: (fn) => { timers.push(fn); return timers.length - 1; }, cancel: (id) => { timers[id] = null; }, done: (a) => { aborted = a; } }, extra || {}));
+    return { run, timers, h, get aborted() { return aborted; }, summary: () => C.summarizeBagRun(run, w.trMap) };
+  }
+  function flush(r, max) {
+    for (let k = 0, n = 0; k < r.timers.length && n < (max || 50); k++) { const fn = r.timers[k]; if (fn) { r.timers[k] = null; n += 1; fn(); } }
+  }
+
+  // A. 30 Stops, 20 s per step (well over the 120 s soft budget) but progressing -> completes
+  (function () {
+    const w = world(20000);
+    const r = runIt(mk('DCX90', 30), w, { routeBudgetMs: 120000, routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    flush(r);
+    const rr = r.run.routeResults[0];
+    const s = r.summary();
+    assert(rr.status === 'done' && s.counts.captured === 30 && rr.softBudgetExceededAtMs != null && rr.routeElapsedMs > 120000,
+      label + ' v3.10-A: progressing Route not cut by the soft budget ' + JSON.stringify({ st: rr.status, el: rr.routeElapsedMs, sb: rr.softBudgetExceededAtMs }));
+    assert(s.routeStats.done === 1 && s.routeStats.aborted === 0 && s.bagTiming.maxRouteMs === rr.routeElapsedMs && s.bagTiming.maxRouteCode === 'DCX90',
+      label + ' v3.10: route stats / timing');
+    assert(rr.stopOpenCount === 30 && rr.targetStopCount === 30 && rr.targetPackageCount === 30 && rr.normalWaitCount === 30 &&
+      rr.timing.trDetailsWaitTotalMs === 30000 && rr.timing.stopOpenTotalMs === 30 * 20000 - 30000 && rr.timing.stopCloseTotalMs === 30 * 20000 &&
+      rr.progressEvents > 60, label + ' v3.10: timing breakdown ' + JSON.stringify(rr.timing));
+    assert(C.formatBagSummary(s).indexOf('Route完了 1/1 / Route中断 0') >= 0, label + ' v3.10: panel Route line');
+  })();
+
+  // B. Route stalls (a driver callback never comes) -> watchdog after an idle window; next Route continues
+  (function () {
+    const w = world(1000, 3);
+    const details = mk('DCX91', 5).concat(mk('DCX92', 2));
+    const r = runIt(details, w, { routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    // the armed watchdog fires with no progress since it was armed
+    w.advance(90000);
+    flush(r);
+    const byCode = {};
+    r.run.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX91.status === 'route_aborted' && byCode.DCX91.reasonCode === 'watchdog' && byCode.DCX91.idleMsAtAbort >= 90000,
+      label + ' v3.10-B: stalled Route -> watchdog ' + JSON.stringify(byCode.DCX91 && { s: byCode.DCX91.status, r: byCode.DCX91.reasonCode }));
+    assert(byCode.DCX92.status === 'done', label + ' v3.10-B: next Route continues');
+    const s = r.summary();
+    assert(s.counts.captured === 2 + 2 && s.routeStats.byReason.watchdog === 1 && C.formatBagSummary(s).indexOf('中断内訳: watchdog 1') >= 0,
+      label + ' v3.10-B: summary ' + JSON.stringify(s.routeStats));
+    // a late callback of the aborted Route is ignored
+    w.pendingCb.forEach((cb) => cb({ ok: true, clicked: true }));
+    assert(r.run.routeResults.filter((x) => x.routeCode === 'DCX91').length === 1, label + ' v3.10-B: late callback ignored');
+  })();
+
+  // watchdog re-arms while progress continues (no abort although its first window elapsed)
+  (function () {
+    const w = world(1000, 2);
+    const r = runIt(mk('DCX93', 3), w, { routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    w.advance(60000);
+    const cb = w.pendingCb.shift();
+    cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [] } });
+    flush(r);
+    assert(r.run.routeResults[0].status === 'done', label + ' v3.10: progress re-arms the watchdog ' + r.run.routeResults[0].reasonCode);
+  })();
+
+  // C. hard maximum: progressing but endless -> aborted at the hard max
+  (function () {
+    const w = world(60000);
+    const r = runIt(mk('DCX94', 40), w, { routeIdleMs: 90000, routeHardMaxMs: 600000 });
+    flush(r);
+    const rr = r.run.routeResults[0];
+    assert(rr.status === 'route_aborted' && rr.reasonCode === 'route_budget_exceeded' && /hard max/.test(rr.detail) &&
+      r.summary().counts.captured < 40, label + ' v3.10-C: hard max ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, d: rr.detail }));
+    // hard max also fires from the watchdog timer when a step itself runs past it
+    const w2 = world(1000, 2);
+    const r2 = runIt(mk('DCX95', 3), w2, { routeIdleMs: 90000, routeHardMaxMs: 100000 });
+    // one very long step (progress arrives, but past the hard max) -> the next boundary aborts
+    w2.advance(150000);
+    w2.pendingCb.shift()({ ok: true, clicked: true, stopDiag: { openResult: 'opened', clickAttempts: [] } });
+    const rr2 = r2.run.routeResults[0];
+    assert(rr2.status === 'route_aborted' && rr2.reasonCode === 'route_budget_exceeded', label + ' v3.10-C: hard max at the next boundary ' + rr2.reasonCode);
+    // and the watchdog timer itself enforces it while a step is still running
+    const w3 = world(1000, 2);
+    const r3 = runIt(mk('DCX96', 3), w3, { routeIdleMs: 90000, routeHardMaxMs: 100000 });
+    w3.advance(40000);
+    w3.pendingCb.shift()({ ok: true, clicked: true, stopDiag: { openResult: 'opened', clickAttempts: [] } });
+    assert(r3.run.routeResults[0].status === 'done', label + ' v3.10-C: under the hard max -> done');
+  })();
+  console.log('ok: Bag v3.10 watchdog / hard max (' + label + ')');
+}
+Core2 = RootCore;
+v310Suite('root core');
+Core2 = PhaseCore;
+v310Suite('phase1-core');
+
+// runner wiring v3.10: DOM read without scroll sweep, miss diagnostics, no click, waits unchanged
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
+  assert(dom.indexOf('scrollSearch') < 0 && dom.indexOf("first.pass = 'current_view'") >= 0 && dom.indexOf("second.pass = 'row_into_view'") >= 0,
+    'v3.10: DOM read = current view + opened row only');
+  assert(dom.indexOf('Cdp') < 0 && dom.indexOf('click') < 0 && dom.indexOf('res.missDiag = stopDomMissDiag(ctx, target, stop, res)') >= 0, 'v3.10-H: miss diag, no click');
+  const miss = bag.slice(bag.indexOf('  function stopDomMissDiag('), bag.indexOf('  // Bag v3.9: live-DOM accessor'));
+  ['targetDaVisibleByExistingDetector', 'detectorMismatch', 'existingDetectorEvidence', 'exactDirectTextMatchCount', 'substringMatchCount',
+    'suffixMatchCount', 'daTokensInScope', 'packageLikeBlockCount', 'ariaExpanded', 'selectedStopId', 'dataAttributes', 'ariaAttributes', 'roles', 'classes', 'tags']
+    .forEach((k) => assert(miss.indexOf(k) >= 0, 'v3.10-H/I miss diag ' + k));
+  assert(miss.indexOf('collectExactDaElements([da])') >= 0, 'v3.10-I: compared with the existing target-DA detector');
+  assert(miss.indexOf('.textContent') < 0 && miss.indexOf('aria-label') < 0, 'v3.10: no free text / aria-label values stored');
+  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('BAG_STOP_OPEN_TR_EXTRA_MS = 3000') >= 0, 'v3.10: trDetails wait unchanged (3 s + 3 s)');
+  assert(bag.indexOf('routeIdleMs: BAG_ROUTE_IDLE_MS') >= 0 && bag.indexOf('routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS') >= 0 && bag.indexOf("bagEngine.noteProgress('tr_details')") >= 0,
+    'v3.10: idle / hard max wired, trDetails arrival is progress');
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.10-D: v3.7 retry kept');
+  console.log('ok: v3.10 runner wiring');
 })();
