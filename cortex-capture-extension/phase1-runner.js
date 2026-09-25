@@ -1185,7 +1185,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.8';
+  var BAG_BUILD = 'Bag v3.9';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
@@ -2053,6 +2053,30 @@
     });
   }
 
+  // Bag v3.9: live-DOM accessor for Core.readStopDomBag (panel, Mapbox and svg/script never read).
+  function stopDomAccessor() {
+    return {
+      root: document.body || document.documentElement,
+      children: function (n) { return n && n.children ? Array.prototype.slice.call(n.children) : []; },
+      parent: function (n) { return n ? n.parentElement : null; },
+      text: function (n) { return n ? String(n.textContent || '') : ''; },
+      ownText: function (n) {
+        var out = '';
+        var kids = n ? n.childNodes : null;
+        for (var i = 0; kids && i < kids.length; i++) if (kids[i].nodeType === 3) out += ' ' + kids[i].nodeValue;
+        return out;
+      },
+      skip: function (n) {
+        if (!n || !n.tagName) return true;
+        var tag = String(n.tagName).toLowerCase();
+        return tag === 'script' || tag === 'style' || tag === 'svg' || tag === 'noscript' || inPanel(n) || inMapbox(n);
+      },
+      isStopRow: function (n) { return !!(n && n.matches && n.matches('div.stops-list-item')); },
+      stopRowNumber: function (n) { var info = stopListRowInfo(n); return info ? info.number : null; },
+      visible: elementVisible
+    };
+  }
+
   // Bag v3.8: wait for this Stop's pending targets (normal 3 s, then up to 3 s more only if some are
   // missing); ends the moment all of them have trDetails. Arrival times come from the trDetails hook.
   // seenSince: base of the v3.6 elapsedAfterStopOpenMs (the click start for a fresh open).
@@ -2623,6 +2647,31 @@
         });
       },
 
+      // Bag v3.9: the target's trDetails never came. Read the Bag label from the opened Stop's DOM,
+      // inside the target DA's own package block only (Core.readStopDomBag). No click.
+      readStopDomBag: function (target, stop, cb) {
+        var last = null;
+        scrollSearch(function () {
+          last = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
+          return last.daFound ? last : null;
+        }, BAG_PACKAGE_SCROLL_MAX_STEPS, runId, function (found) {
+          var res = found || last || { ok: false, reason: 'target_not_found', daFound: false, candidateCount: 0 };
+          res.routeCode = ctx.route && ctx.route.routeCode;
+          res.stopNumber = stop.stop;
+          if (!res.daFound) {
+            res.pageHint = {
+              packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
+              selectedStopId: selectedStopIdOf(hrefNow())
+            };
+          }
+          if (res.ok && res.bag && !Core.hasTrDetails(store.trDetailsByTrId, target.referenceId)) {
+            store.bagDomByReferenceId = store.bagDomByReferenceId || {};
+            store.bagDomByReferenceId[target.referenceId] = { text: res.bag.text, color: res.bag.color, number: res.bag.number };
+          }
+          cb(res);
+        });
+      },
+
       searchPackage: function (target, cb) {
         var lastCount = 0;
         scrollSearch(function () {
@@ -2983,7 +3032,8 @@
     unfinishedTest.active = true;
     var base = createBagDriver(ctx, runId);
     var driver = Object.assign({}, base, {
-      // Phase A: Stop open only. No package DOM search, no package click.
+      // Phase A: Stop open only. No package DOM search / Stop-DOM Bag read, no package click.
+      readStopDomBag: null,
       findPackage: function (target, stop, cb) {
         cb({ ok: false, status: 'no_trdetails_after_stop_open',
           detail: 'Stop open後' + UNFINISHED_TEST_TR_WAIT_MS + 'ms以内にtrDetailsなし（package clickは行いません）' });
@@ -3048,6 +3098,7 @@
       var preexisting = !!(bagRun.preexisting && bagRun.preexisting[t.referenceId]);
       var prior = !clicked && r && ['captured', 'captured_null'].indexOf(r.status) < 0 ? r : null;
       var tw = bagRun.trWait && bagRun.trWait[t.referenceId];
+      var dom = bagRun.stopDom && bagRun.stopDom[t.referenceId];
       return {
         routeCode: t.routeCode, stop: t.stop, scannableId: t.scannableId,
         status: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
@@ -3075,7 +3126,20 @@
         waitPhase: tw ? tw.waitPhase : null,
         delayedRescue: tw ? !!tw.delayedRescue : false,
         noTrDetailsAfterWait: tw ? !!tw.noTrDetailsAfterWait : false,
-        finalStatus: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted'
+        finalStatus: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
+        // Bag v3.9: Stop-DOM Bag evidence
+        trDetailsBagName: tr ? tr.bagName : null,
+        stopDomAttempted: !!dom,
+        stopDomTargetDaFound: dom ? !!dom.daFound : null,
+        stopDomBagFound: dom ? !!dom.ok : null,
+        stopDomBagText: dom && dom.bag ? dom.bag.text : null,
+        stopDomCandidateCount: dom ? dom.candidateCount : null,
+        stopDomScope: dom ? dom.scope || null : null,
+        stopDomReason: dom ? dom.reason || null : null,
+        stopDomPackageContainerText: dom ? dom.containerExcerpt || '' : null,
+        bagSource: Core.bagSourceOf(bagRun, store.trDetailsByTrId, t.referenceId),
+        fallbackReason: bagRun.fallbackDiagnostics && bagRun.fallbackDiagnostics[t.referenceId]
+          ? 'no_trdetails' + (dom ? ' / stop_dom:' + (dom.reason || 'failed') : '') : null
       };
     });
   }
@@ -3142,6 +3206,12 @@
       stopProcessingDiagnostics: Core.buildStopProcessingDiagnostics(bagRun, store.trDetailsByTrId),
       packageFallbackDiagnostics: Object.keys(bagRun.fallbackDiagnostics || {}).map(function (k) { return bagRun.fallbackDiagnostics[k]; }),
       bagNullDiagnostics: bagNullDiagnostics(),
+      stopDomDiagnostics: Object.keys(bagRun.stopDom || {}).map(function (ref) {
+        var x = bagRun.stopDom[ref];
+        return { referenceId: ref, routeCode: x.routeCode, stopNumber: x.stopNumber, ok: !!x.ok, reason: x.reason || '',
+          daFound: !!x.daFound, candidateCount: x.candidateCount, scope: x.scope || '', bagText: x.bag ? x.bag.text : null,
+          labels: x.labels || [], containerExcerpt: x.containerExcerpt || '', pageHint: x.pageHint || null };
+      }),
       build: BAG_BUILD,
       selection: bagRun.selection ? bagRun.selection.skipped : null,
       progress: bagProgressText

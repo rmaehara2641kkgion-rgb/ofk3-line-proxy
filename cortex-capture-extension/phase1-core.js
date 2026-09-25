@@ -1130,8 +1130,9 @@
     var stopOpen = {
       stopOpenTrDetailsReceived: 0, stopOpenBagCaptured: 0, stopOpenBagNull: 0, stopOpenNoTrDetails: 0,
       packageFallbackTargets: 0, packageFallbackAttempted: 0, actualPackageClicks: (run && run.clicks) || 0,
-      capturedByStopOpen: 0, capturedByPackageClick: 0, capturedOther: 0
+      capturedByStopOpen: 0, capturedByPackageClick: 0, capturedOther: 0, capturedByStopDom: 0
     };
+    var stopDomRuns = (run && run.stopDom) || {};
     var byStopStatus = {};
     ((run && run.targets) || []).forEach(function (t) {
       var ref = t.referenceId;
@@ -1141,13 +1142,15 @@
         if (o === BAG_STATUS.CAPTURED) stopOpen.stopOpenBagCaptured += 1; else stopOpen.stopOpenBagNull += 1;
       } else if (o === 'no_trdetails') {
         stopOpen.stopOpenNoTrDetails += 1;
-        stopOpen.packageFallbackTargets += 1;
+        // Bag v3.9: a Bag read from the opened Stop's DOM never reaches the package fallback.
+        if (!(stopDomRuns[ref] && stopDomRuns[ref].ok)) stopOpen.packageFallbackTargets += 1;
       }
       if (fallbackRefs[ref]) stopOpen.packageFallbackAttempted += 1;
       var st = byReferenceId[ref];
       if (st === BAG_STATUS.CAPTURED) {
         if (clickedRefs[ref]) stopOpen.capturedByPackageClick += 1;
         else if (o === BAG_STATUS.CAPTURED) stopOpen.capturedByStopOpen += 1;
+        else if (!hasTrDetails(trDetailsByTrId, ref) && stopDomRuns[ref] && stopDomRuns[ref].ok) stopOpen.capturedByStopDom += 1;
         else stopOpen.capturedOther += 1;
       }
       var cat = stopStatusCategory(t.stopStatus);
@@ -1160,6 +1163,10 @@
     var stopLevel = summarizeStopProcessing(run, trDetailsByTrId, byReferenceId);
     Object.keys(stopLevel).forEach(function (k) { stopOpen[k] = stopLevel[k]; });
     // Bag v3.8: normal (<= 3 s) vs extended (3-6 s) trDetails wait outcome.
+    if (run && run.stopDom) {
+      var sd = summarizeStopDom(run, trDetailsByTrId);
+      Object.keys(sd).forEach(function (k) { stopOpen[k] = sd[k]; });
+    }
     if (run && run.trWait) {
       var tw = summarizeTrWait(run, trDetailsByTrId);
       Object.keys(tw).forEach(function (k) { stopOpen[k] = tw[k]; });
@@ -1238,6 +1245,10 @@
         if (so.stopExpandFailedPackages) {
           lines.push('Stop展開失敗 ' + so.stopExpandFailedPackages + ' package / ' + (so.stopExpandFailedStops || 0) + ' Stop');
         }
+      }
+      if (so.stopDomAttempts != null) {
+        lines.push('Stop-DOM取得 ' + (so.stopDomCaptured || 0) + ' / DOM対象なし ' + (so.stopDomTargetNotFound || 0) +
+          ' / DOM Bagなし ' + (so.stopDomBagNotFound || 0) + (so.stopDomOtherFailure ? ' / DOM重複 ' + so.stopDomOtherFailure : ''));
       }
       lines.push('package fallback ' + (so.packageFallbackTargets || 0) + ' / package click ' + (so.actualPackageClicks || 0) +
         ' / click取得 ' + (so.capturedByPackageClick || 0));
@@ -1641,6 +1652,163 @@
     return out;
   }
 
+  // ---- Bag v3.9: read the Bag label shown inside the opened Stop (package block of the target DA) ----
+  // Used only when the target's own trDetails row never came. Never copies another package's Bag:
+  // the label must sit in the smallest-safe block that contains the target DA and no other package number.
+  var BAG_COLOR_WORDS = [
+    '黄色', '黄', 'イエロー', 'yellow', '紺色', '紺', 'ネイビー', 'navy', 'オレンジ', '橙', '橙色', 'orange',
+    '赤色', '赤', 'レッド', 'red', '黒色', '黒', 'ブラック', 'black', '緑色', '緑', 'グリーン', 'green',
+    '灰色', 'グレー', 'グレイ', 'gray', 'grey', '白色', '白', 'ホワイト', 'white', '茶色', '茶', 'ブラウン', 'brown',
+    '紫色', '紫', 'パープル', 'purple', 'ピンク', '桃色', 'pink', '青色', '青', 'ブルー', 'blue', '水色'
+  ];
+  var BAG_LABEL_RE = new RegExp('^(' + BAG_COLOR_WORDS.slice().sort(function (a, b) { return b.length - a.length; })
+    .join('|') + ')\\s?(\\d{3,5})$', 'i');
+  var PACKAGE_TOKEN_RE = /\b[A-Z]{2,4}\d{8,14}\b/g;
+
+  function normalizeDomText(text) {
+    return String(text == null ? '' : text)
+      .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[\s　]+/g, ' ').trim();
+  }
+
+  // "黄色 5838" / "オレンジ1395" -> { text, color, number }; the Cortex bagName form
+  // (JP_OB-AT-4635_GRN) is accepted too. Anything else (addresses, order numbers, times) -> null.
+  function parseBagLabelText(text) {
+    var t = normalizeDomText(text);
+    if (!t || t.length > 24) return null;
+    var m = t.match(BAG_LABEL_RE);
+    if (m) return { text: m[1] + ' ' + m[2], color: m[1], number: m[2], raw: null };
+    if (/^[A-Z]{2}_[A-Z]{2}-[A-Z]{2}-\d{3,5}_[A-Z]{3}$/.test(t)) {
+      var p = parseBagName(t);
+      if (p.bagNumber) return { text: p.bagDisplay || t, color: p.bagColor, number: p.bagNumber, raw: t };
+    }
+    return null;
+  }
+
+  function packageTokensOf(text) {
+    var seen = {};
+    (normalizeDomText(text).match(PACKAGE_TOKEN_RE) || []).forEach(function (x) { seen[x] = true; });
+    return Object.keys(seen);
+  }
+
+  // Short diagnostic excerpt of a package block: only package numbers, order numbers and Bag labels
+  // are kept verbatim; every other text (names, addresses) becomes [text:N].
+  function safeContainerExcerpt(leafTexts) {
+    return (leafTexts || []).map(function (x) {
+      var t = normalizeDomText(x);
+      if (!t) return '';
+      if (/^[A-Z]{2,4}\d{8,14}$/.test(t) || /^\d{3}-\d{7}-\d{7}$/.test(t) || parseBagLabelText(t)) return t;
+      return '[text:' + t.length + ']';
+    }).filter(Boolean).slice(0, 12).join(' | ');
+  }
+
+  /**
+   * DOM-free search. acc: { root, children(n), parent(n), ownText(n) (the element's own text nodes),
+   *   text(n) (full textContent, used only for short Bag labels), skip(n), isStopRow(n),
+   *   stopRowNumber(n), visible(n) }.
+   * Package numbers are read per own-text node: a parent's textContent glues children together
+   * ("DA0012555685249-3490061-...") and is never tokenised.
+   * Returns { ok, reason, daFound, candidateCount, scope, bag, containerExcerpt, labels }.
+   *   reason: target_not_found | target_other_stop | target_ambiguous | bag_not_found | bag_ambiguous
+   */
+  function readStopDomBag(acc, targetDa, stopNumber) {
+    var da = String(targetDa || '').trim();
+    var out = { ok: false, reason: 'target_not_found', daFound: false, candidateCount: 0, scope: '', bag: null,
+      containerExcerpt: '', labels: [] };
+    if (!da || !acc || !acc.root) return out;
+    function skip(n) { return !!(acc.skip && acc.skip(n)); }
+    function ownTokens(n) { return packageTokensOf(acc.ownText(n)); }
+    function each(n, fn) {
+      if (skip(n)) return;
+      if (fn(n) === false) return;
+      (acc.children(n) || []).forEach(function (c) { each(c, fn); });
+    }
+    // Elements whose own text holds the target DA as a whole token.
+    var hits = [];
+    each(acc.root, function (n) { if (ownTokens(n).indexOf(da) >= 0) hits.push(n); });
+    function rowOf(n) {
+      for (var cur = n; cur; cur = acc.parent(cur)) if (acc.isStopRow(cur)) return cur;
+      return null;
+    }
+    var other = 0;
+    var mine = hits.filter(function (n) {
+      var row = rowOf(n);
+      if (!row) return true;
+      var num = acc.stopRowNumber(row);
+      if (num != null && Number(num) !== Number(stopNumber)) { other += 1; return false; }
+      return true;
+    });
+    out.candidateCount = hits.length;
+    if (!mine.length) { out.reason = other ? 'target_other_stop' : 'target_not_found'; return out; }
+    if (mine.length > 1 && acc.visible) {
+      var vis = mine.filter(function (n) { return acc.visible(n); });
+      if (vis.length) mine = vis;
+    }
+    if (mine.length > 1) { out.daFound = true; out.reason = 'target_ambiguous'; return out; }
+    var daEl = mine[0];
+    out.daFound = true;
+    out.scope = rowOf(daEl) ? 'stop_row' : 'detail_panel';
+    function subtreeTokens(n) {
+      var seen = {};
+      each(n, function (x) { ownTokens(x).forEach(function (t) { seen[t] = true; }); });
+      return Object.keys(seen);
+    }
+    // Package block: grow while the ancestor still holds no other package number; never past a Stop row.
+    var block = daEl;
+    for (var cur = acc.parent(daEl), depth = 0; cur && depth < 12; cur = acc.parent(cur), depth += 1) {
+      if (acc.isStopRow(cur) || cur === acc.root) break;
+      var tokens = subtreeTokens(cur);
+      if (tokens.length !== 1 || tokens[0] !== da) break;
+      block = cur;
+    }
+    var labels = [];
+    var leaves = [];
+    each(block, function (n) {
+      var lab = parseBagLabelText(acc.text(n));
+      if (lab && !(acc.children(n) || []).some(function (c) { return !skip(c) && !!parseBagLabelText(acc.text(c)); })) {
+        labels.push(lab);
+        leaves.push(acc.text(n));
+        return false;
+      }
+      var own = normalizeDomText(acc.ownText(n));
+      if (own) leaves.push(own);
+      return true;
+    });
+    out.containerExcerpt = safeContainerExcerpt(leaves);
+    var distinct = {};
+    labels.forEach(function (l) { distinct[l.text] = l; });
+    out.labels = Object.keys(distinct);
+    if (!out.labels.length) { out.reason = 'bag_not_found'; return out; }
+    if (out.labels.length > 1) { out.reason = 'bag_ambiguous'; return out; }
+    out.ok = true;
+    out.reason = '';
+    out.bag = distinct[out.labels[0]];
+    return out;
+  }
+
+  // summary.stopOpen additions for the Stop-DOM path.
+  function summarizeStopDom(run, trDetailsByTrId) {
+    var out = { stopDomAttempts: 0, stopDomCaptured: 0, stopDomTargetNotFound: 0, stopDomBagNotFound: 0, stopDomOtherFailure: 0 };
+    var d = (run && run.stopDom) || {};
+    Object.keys(d).forEach(function (ref) {
+      var r = d[ref];
+      out.stopDomAttempts += 1;
+      if (r.ok) out.stopDomCaptured += 1;
+      else if (r.reason === 'target_not_found' || r.reason === 'target_other_stop') out.stopDomTargetNotFound += 1;
+      else if (r.reason === 'bag_not_found') out.stopDomBagNotFound += 1;
+      else out.stopDomOtherFailure += 1;
+    });
+    return out;
+  }
+
+  // Where a captured target's Bag came from (diagnostics / export).
+  function bagSourceOf(run, trDetailsByTrId, referenceId) {
+    if (run && run.clickedRefs && run.clickedRefs[referenceId] && hasTrDetails(trDetailsByTrId, referenceId)) return 'package_click';
+    if (hasTrDetails(trDetailsByTrId, referenceId)) return 'cortex_stop_open';
+    if (run && run.stopDom && run.stopDom[referenceId] && run.stopDom[referenceId].ok) return 'stop_dom';
+    return null;
+  }
+
   // Normal tour results are frozen before the Bag phase and restored after it,
   // so Cortex re-fetches while re-opening Routes can neither change them nor add failures.
   function snapshotNormalCapture(store) {
@@ -2029,6 +2197,22 @@
         if (now() > deadline) { abortRoute('Route上限時間を超過', null, 'route_budget_exceeded'); return; }
         var t = list[0];
         emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
+        // Bag v3.9: no trDetails for this target -> read its Bag label from the opened Stop's DOM
+        // (its own package block only) before any package lookup / click.
+        if (typeof driver.readStopDomBag === 'function' && !(run.stopDom && run.stopDom[t.referenceId])) {
+          call(function () {
+            driver.readStopDomBag(t, stop, live(function (dres) {
+              run.stopDom = run.stopDom || {};
+              run.stopDom[t.referenceId] = dres || { ok: false, reason: 'no_result' };
+              if (dres && dres.ok && dres.bag && !hasTrDetails(trMap(), t.referenceId)) {
+                recordBagResult(run, t.referenceId, BAG_STATUS.CAPTURED, 'stop_dom');
+                emit({ state: 'Stop DOM Bag ' + dres.bag.text });
+              }
+              nextPackage(stop, doneStop);
+            }));
+          });
+          return;
+        }
         call(function () {
           driver.findPackage(t, stop, live(function (res) {
             recordPackageFallback(run, t, packageLookupFallbackPatch(res));
@@ -2319,7 +2503,9 @@
     return lines.join('\n');
   }
 
-  function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {
+  // bagDomByReferenceId (Bag v3.9, optional): Bag labels read from the opened Stop's own package block,
+  // used only when that package has no trDetails row. { ref: { text, color, number } }
+  function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId, bagDomByReferenceId) {
     var diagnostics = emptyPackageAssistDiagnostics();
     trDetailsByTrId = trDetailsByTrId || {};
     diagnostics.trDetailsCaptured = Object.keys(trDetailsByTrId).length;
@@ -2356,6 +2542,7 @@
         var bagName = tr && tr.bagName ? String(tr.bagName) : null;
         var bagScannableId = tr && tr.bagScannableId ? String(tr.bagScannableId) : null;
         var parsed = parseBagName(bagName);
+        var domBag = !tr && bagDomByReferenceId && referenceId && bagDomByReferenceId[referenceId] ? bagDomByReferenceId[referenceId] : null;
         if (referenceId && tr) diagnostics.assistMatched += 1;
         else if (referenceId) {
           diagnostics.assistUnmatched += 1;
@@ -2370,12 +2557,13 @@
           bagScannableId: bagScannableId,
           bagColorCode: parsed.bagColorCode,
           bagColor: parsed.bagColor,
-          bagNumber: parsed.bagNumber,
-          bagDisplay: parsed.bagDisplay,
+          bagNumber: domBag ? (domBag.number || null) : parsed.bagNumber,
+          bagDisplay: domBag ? (domBag.text || null) : parsed.bagDisplay,
           bagStatus: tr
             ? capturedBagStatus(trDetailsByTrId, referenceId)
-            : ((bagStatusByReferenceId && referenceId && bagStatusByReferenceId[referenceId]) || BAG_STATUS.NOT_ATTEMPTED),
-          bagSource: tr ? 'trDetails' : null
+            : (domBag ? BAG_STATUS.CAPTURED
+              : ((bagStatusByReferenceId && referenceId && bagStatusByReferenceId[referenceId]) || BAG_STATUS.NOT_ATTEMPTED)),
+          bagSource: tr ? 'trDetails' : (domBag ? 'stop_dom' : null)
         });
       });
     });
@@ -2503,6 +2691,7 @@
       details: details,
       trDetails: trDetails,
       bagStatusByReferenceId: store.bagStatusByReferenceId ? Object.assign({}, store.bagStatusByReferenceId) : undefined,
+      bagDomByReferenceId: store.bagDomByReferenceId ? Object.assign({}, store.bagDomByReferenceId) : undefined,
       failures: (store.failures || []).slice(),
       totalRouteCount: total,
       selectedRouteCount: eleven.ok ? eleven.routes.length : details.length
@@ -2930,7 +3119,8 @@
       extracted.packageSequenceIndex = pkgIndex.index || [];
       extracted.packageSequenceDiagnostics = pkgIndex.diagnostics || emptyPackageSequenceDiagnostics();
       var assist = extractPackageAssistIndex(d, trDetailsByTrId,
-        bundle.bagStatusByReferenceId && typeof bundle.bagStatusByReferenceId === 'object' ? bundle.bagStatusByReferenceId : null);
+        bundle.bagStatusByReferenceId && typeof bundle.bagStatusByReferenceId === 'object' ? bundle.bagStatusByReferenceId : null,
+        bundle.bagDomByReferenceId && typeof bundle.bagDomByReferenceId === 'object' ? bundle.bagDomByReferenceId : null);
       extracted.packageAssistIndex = assist.index || [];
       extracted.packageAssistDiagnostics = assist.diagnostics || emptyPackageAssistDiagnostics();
       results.push(extracted);
@@ -3093,7 +3283,14 @@
     TR_WAIT_EXTENDED_MS: TR_WAIT_EXTENDED_MS,
     runTargetTrWait: runTargetTrWait,
     recordTrWait: recordTrWait,
-    summarizeTrWait: summarizeTrWait
+    summarizeTrWait: summarizeTrWait,
+    BAG_COLOR_WORDS: BAG_COLOR_WORDS,
+    parseBagLabelText: parseBagLabelText,
+    packageTokensOf: packageTokensOf,
+    safeContainerExcerpt: safeContainerExcerpt,
+    readStopDomBag: readStopDomBag,
+    summarizeStopDom: summarizeStopDom,
+    bagSourceOf: bagSourceOf
   };
 
   if (typeof module !== 'undefined' && module.exports) {

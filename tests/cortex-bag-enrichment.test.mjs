@@ -929,9 +929,9 @@ v35Suite('phase1-core');
   assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
   assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
     'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.8'") >= 0, 'v3.8 build label');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.9'") >= 0, 'v3.9 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.13', 'manifest 1.6.13');
+  assert(manifest.version === '1.6.14', 'manifest 1.6.14');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -1091,7 +1091,7 @@ ubtSuite('phase1-core');
 (function () {
   const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
-  assert(runner.indexOf("BAG_BUILD = 'Bag v3.8'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.8 + test v1');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.9'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.9 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
   const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
   assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
@@ -1800,4 +1800,196 @@ v38Suite('phase1-core');
   const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
   assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.8-H: v3.7 retry kept');
   console.log('ok: v3.8 runner wiring');
+})();
+
+// ---------------- Bag v3.9: Bag label read from the opened Stop's DOM (target package block only) ----------------
+// Fake DOM: textContent glues children with no separator, exactly like the browser.
+function h(tag, opts, kids) {
+  const n = { tag, cls: (opts && opts.cls) || '', own: (opts && opts.text) || '', children: kids || [], parent: null, hidden: !!(opts && opts.hidden),
+    stopNo: opts && opts.stopNo };
+  n.children.forEach((c) => { c.parent = n; });
+  return n;
+}
+const fullText = (n) => n.own + n.children.map(fullText).join('');
+function fakeAcc(root) {
+  return {
+    root, children: (n) => n.children, parent: (n) => n.parent, ownText: (n) => n.own, text: fullText,
+    skip: (n) => n.cls.indexOf('mapboxgl') >= 0 || n.tag === 'svg',
+    isStopRow: (n) => n.cls === 'stops-list-item', stopRowNumber: (n) => (n.stopNo == null ? null : n.stopNo),
+    visible: (n) => { for (let c = n; c; c = c.parent) if (c.hidden) return false; return true; }
+  };
+}
+// package card: DA / order number / bag label as sibling spans
+function pkg(da, order, bag, extra) {
+  const kids = [h('span', { text: da }), h('span', { text: order })];
+  if (bag) kids.push(h('div', {}, [h('span', { text: bag.split(' ')[0] }), h('span', { text: bag.split(' ')[1] })]));
+  (extra || []).forEach((e) => kids.push(e));
+  return h('div', { cls: 'pkg' }, kids);
+}
+function stopRow(no, content) {
+  return h('div', { cls: 'stops-list-item', stopNo: no }, [h('div', { cls: 'hdr' }, [h('span', { text: String(no) }), h('span', { text: '岐阜県岐阜市1-2-3 ハイツ 203' })])].concat(content));
+}
+function page(rows, extra) {
+  return h('body', {}, [h('div', { cls: 'mapboxgl-map' }, [h('svg', {}, [h('text', { text: '9' })]), h('div', { text: 'DA5045998642' })])].concat(rows).concat(extra || []));
+}
+
+function v39Suite(label) {
+  const C = Core2;
+  // label recognition: color + number; no address / order / time / DA / Stop numbers
+  (function () {
+    ['黄色 5838', '紺色 5316', 'オレンジ 1395', 'オレンジ6392', 'Navy 4635', 'グリーン 0237'].forEach((t) => {
+      assert(C.parseBagLabelText(t), label + ' v3.9 label ' + t);
+    });
+    assert(C.parseBagLabelText('JP_OB-AT-4635_GRN').number === '4635', label + ' v3.9: raw bagName form');
+    ['503-8532329-1049464', 'DA5045998642', '10:00-13:00', '#9', '9', '岐阜県岐阜市1-2-3', 'ハイツ 203', '黄色 58', '黄色 583812', '123 5838', '黄色マンション 101']
+      .forEach((t) => { assert(!C.parseBagLabelText(t), label + ' v3.9 not a label: ' + t); });
+    assert(C.packageTokensOf('DA0012555685249-3490061-0492649').join() === 'DA0012555685249', label + ' v3.9: glued text is never tokenised by readStopDomBag (own text only)');
+  })();
+
+  // 1. normal Stop, 1 package, DA + Bag in the DOM
+  (function () {
+    const r = C.readStopDomBag(fakeAcc(page([stopRow(24, [pkg('DA0012561627', '249-8068041-3177440', '紺色 5316')])])), 'DA0012561627', 24);
+    assert(r.ok && r.bag.text === '紺色 5316' && r.bag.number === '5316' && r.scope === 'stop_row' && r.candidateCount === 1 &&
+      r.containerExcerpt.indexOf('DA0012561627') >= 0 && r.containerExcerpt.indexOf('ハイツ') < 0, label + ' v3.9-1: ' + JSON.stringify(r));
+  })();
+
+  // 2. same Stop, 2 packages with the same Bag -> each read from its own block
+  // 4. multi-destination Stop: two destination groups inside one Stop row
+  (function () {
+    const dom = page([stopRow(9, [
+      h('div', { cls: 'dest' }, [h('div', { text: '宛先A 様' }), pkg('DA5045998642', '503-8532329-1049464', '黄色 5838')]),
+      h('div', { cls: 'dest' }, [h('div', { text: '宛先B 様' }), pkg('DA0012555685', '249-3490061-0492649', '黄色 5838')])
+    ])]);
+    const a = C.readStopDomBag(fakeAcc(dom), 'DA5045998642', 9);
+    const b = C.readStopDomBag(fakeAcc(dom), 'DA0012555685', 9);
+    assert(a.ok && b.ok && a.bag.text === '黄色 5838' && b.bag.text === '黄色 5838' && a.candidateCount === 1,
+      label + ' v3.9-2/4: DA1/DA2 each from own block (Mapbox copy of the DA ignored) ' + JSON.stringify([a, b]));
+    assert(a.containerExcerpt.indexOf('DA0012555685') < 0 && b.containerExcerpt.indexOf('DA5045998642') < 0, label + ' v3.9-4: blocks never mix destinations');
+  })();
+
+  // 3. same Stop, different Bags -> never swapped
+  (function () {
+    const dom = page([stopRow(15, [pkg('DA0012565181', '249-1111111-1111111', 'オレンジ 1395'), pkg('DA0012565182', '249-2222222-2222222', 'オレンジ 6392')])]);
+    const a = C.readStopDomBag(fakeAcc(dom), 'DA0012565181', 15);
+    const b = C.readStopDomBag(fakeAcc(dom), 'DA0012565182', 15);
+    assert(a.bag.text === 'オレンジ 1395' && b.bag.text === 'オレンジ 6392', label + ' v3.9-3: ' + a.bag.text + ' / ' + b.bag.text);
+  })();
+
+  // 5. target DA not in the DOM; DA of another Stop row is rejected
+  (function () {
+    const dom = page([stopRow(3, [pkg('DA0012500001', '249-1-1', '黄色 1111')]), stopRow(4, [pkg('DA0012500002', '249-2-2', '黄色 2222')])]);
+    const r = C.readStopDomBag(fakeAcc(dom), 'DA0012599999', 3);
+    assert(!r.ok && r.reason === 'target_not_found' && !r.daFound, label + ' v3.9-5: not found');
+    const o = C.readStopDomBag(fakeAcc(dom), 'DA0012500002', 3);
+    assert(!o.ok && o.reason === 'target_other_stop', label + ' v3.9-5: DA under another Stop row never used');
+  })();
+
+  // 6. DA present, no Bag label in its block -> other packages' Bags are never used
+  (function () {
+    const dom = page([stopRow(21, [pkg('DA0012550496', '249-3-3', '緑 4635'), pkg('DA0012563201', '249-4-4', null), pkg('DA2422197169', '249-5-5', '緑 4635')])]);
+    const r = C.readStopDomBag(fakeAcc(dom), 'DA0012563201', 21);
+    assert(!r.ok && r.reason === 'bag_not_found' && r.daFound && r.labels.length === 0, label + ' v3.9-6: ' + JSON.stringify(r));
+    // Bag shown only once for a group of two packages -> not attributed to either
+    const grp = page([stopRow(5, [h('div', {}, [h('span', { text: '黄色 7777' }), pkg('DA0012570001', '249-6-6', null), pkg('DA0012570002', '249-7-7', null)])])]);
+    assert(C.readStopDomBag(fakeAcc(grp), 'DA0012570001', 5).reason === 'bag_not_found', label + ' v3.9-6: shared header never attributed');
+    // two different labels inside one block -> ambiguous, not captured
+    const two = page([stopRow(6, [pkg('DA0012580001', '249-8-8', '黄色 1000', [h('div', {}, [h('span', { text: '赤 2000' })])])])]);
+    assert(C.readStopDomBag(fakeAcc(two), 'DA0012580001', 6).reason === 'bag_ambiguous', label + ' v3.9: two labels -> ambiguous');
+  })();
+
+  // engine: trDetails -> Stop DOM -> package fallback
+  function v39Run(eventsTr, domBags) {
+    const d = [v36Details('DCX50', [
+      { seq: 9, status: 'NOT_STARTED', pk: [['DA5045998642', 'tr-1'], ['DA0012555685', 'tr-2']] },
+      { seq: 24, status: 'NOT_STARTED', pk: [['DA0012561627', 'tr-3'], ['DA0012561628', 'tr-4']] }
+    ])];
+    const sel = C.selectBagTargets(d, {});
+    const run = C.createBagRun(sel.targets);
+    const trMap = {};
+    const log = { dom: [], find: [], clicks: 0 };
+    const driver = {
+      openRoute: (r, cb) => cb({ ok: true }),
+      ensureStop(stop, pending, onState, cb) {
+        (eventsTr[stop.stop] || []).forEach(([ref, bag]) => C.mergeTrDetailsMaps(trMap, { [ref]: { trId: ref, bagName: bag, bagScannableId: bag ? 's' : null } }));
+        cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+      },
+      readStopDomBag(t, stop, cb) {
+        log.dom.push(t.referenceId);
+        const b = domBags[t.scannableId];
+        cb(b ? { ok: true, daFound: true, bag: { text: b, number: b.split(' ')[1] }, candidateCount: 1 } : { ok: false, reason: b === null ? 'bag_not_found' : 'target_not_found', daFound: b === null });
+      },
+      findPackage(t, stop, cb) { log.find.push(t.referenceId); cb({ ok: true, handle: t, candidateCount: 1 }); },
+      clickPackage(t, hd, cb) { log.clicks += 1; C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'JP_OB-AT-9999_RED', bagScannableId: 's' } }); cb({ ok: true }); },
+      waitTrDetails: (t, cb) => cb(C.hasTrDetails(trMap, t.referenceId)),
+      restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => cb({ ok: true }),
+      returnToList: (cb) => cb({ ok: true })
+    };
+    C.runBagEngine({ run, routes: C.groupBagTargetsByRoute(sel.targets), driver, getTrMap: () => trMap, schedule: () => 1, cancel: () => {}, done: () => {} });
+    return { run, log, trMap, summary: C.summarizeBagRun(run, trMap) };
+  }
+  // 1/2/5/6/7/8/10 via the engine
+  (function () {
+    // Stop 9: no trDetails, both DAs in the DOM with 黄色 5838. Stop 24: tr-3 trDetails bag; tr-4 no trDetails, DA shown without Bag.
+    const r = v39Run({ 24: [['tr-3', 'JP_OB-AT-5316_NVY']] }, { DA5045998642: '黄色 5838', DA0012555685: '黄色 5838', DA0012561628: null });
+    const b = r.summary.byReferenceId;
+    assert(b['tr-1'] === 'captured' && b['tr-2'] === 'captured' && r.log.dom.join(',') === 'tr-1,tr-2,tr-4', label + ' v3.9-1/2: stop_dom captured ' + r.log.dom);
+    assert(r.log.dom.indexOf('tr-3') < 0 && C.bagSourceOf(r.run, r.trMap, 'tr-3') === 'cortex_stop_open', label + ' v3.9-7: trDetails bag -> no DOM read');
+    assert(C.bagSourceOf(r.run, r.trMap, 'tr-1') === 'stop_dom' && !r.trMap['tr-1'], label + ' v3.9: bagSource stop_dom, no fake trDetails row');
+    assert(r.log.find.join(',') === 'tr-4' && r.log.clicks === 1 && C.bagSourceOf(r.run, r.trMap, 'tr-4') === 'package_click', label + ' v3.9-6: DOM Bag missing -> package fallback');
+    const so = r.summary.stopOpen;
+    assert(so.capturedByStopDom === 2 && so.capturedByStopOpen === 1 && so.capturedByPackageClick === 1 && so.stopDomAttempts === 3 &&
+      so.stopDomCaptured === 2 && so.stopDomBagNotFound === 1 && so.stopDomTargetNotFound === 0 && so.packageFallbackTargets === 1 &&
+      so.actualPackageClicks === 1, label + ' v3.9: summary ' + JSON.stringify(so));
+    const text = C.formatBagSummary(r.summary);
+    assert(text.indexOf('Stop-DOM取得 2 / DOM対象なし 0 / DOM Bagなし 1') >= 0 && text.indexOf('package fallback 1 / package click 1') >= 0, label + ' v3.9: panel ' + text);
+  })();
+  (function () {
+    // 8. trDetails bagName null -> captured_null, no DOM read even if the DOM shows a Bag nearby
+    const r = v39Run({ 9: [['tr-1', null], ['tr-2', 'JP_OB-AO-5838_YLO']], 24: [['tr-3', 'B'], ['tr-4', 'B']] }, { DA5045998642: '黄色 5838' });
+    assert(r.summary.byReferenceId['tr-1'] === 'captured_null' && r.log.dom.length === 0 && r.log.find.length === 0 && r.log.clicks === 0,
+      label + ' v3.9-8: null kept, no DOM / fallback');
+    // 10. DOM captures everything -> package click 0
+    const all = v39Run({}, { DA5045998642: '黄色 5838', DA0012555685: '黄色 5838', DA0012561627: '紺色 5316', DA0012561628: '紺色 5316' });
+    assert(all.summary.counts.captured === 4 && all.log.clicks === 0 && all.summary.stopOpen.actualPackageClicks === 0 && all.log.find.length === 0 &&
+      all.summary.stopOpen.packageFallbackTargets === 0, label + ' v3.9-10: package click 0');
+    // 5. DA not in DOM -> fallback
+    const nf = v39Run({}, {});
+    assert(nf.log.find.length === 4 && nf.summary.stopOpen.stopDomTargetNotFound === 4, label + ' v3.9-5 engine: fallback when DA not in DOM');
+  })();
+  // export: DOM Bag only for packages without trDetails
+  (function () {
+    const dd = details('DCX50', [stop(9, [task({ scannableId: 'DA5045998642', referenceId: 'tr-1' }), task({ scannableId: 'DA0012555685', referenceId: 'tr-2' })])]);
+    const tr = { 'tr-2': { trId: 'tr-2', bagName: null, bagScannableId: null } };
+    const ix = C.extractPackageAssistIndex(dd, tr, null, { 'tr-1': { text: '黄色 5838', number: '5838' }, 'tr-2': { text: '黄色 5838', number: '5838' } }).index;
+    const r1 = ix.find((x) => x.referenceId === 'tr-1');
+    const r2 = ix.find((x) => x.referenceId === 'tr-2');
+    assert(r1.bagDisplay === '黄色 5838' && r1.bagSource === 'stop_dom' && r1.bagName === null && r1.bagStatus === 'captured', label + ' v3.9: export stop_dom');
+    assert(r2.bagDisplay === null && r2.bagStatus === 'captured_null' && r2.bagSource === 'trDetails', label + ' v3.9: trDetails null never replaced by DOM');
+  })();
+  console.log('ok: Bag v3.9 Stop-DOM Bag (' + label + ')');
+}
+Core2 = RootCore;
+v39Suite('root core');
+Core2 = PhaseCore;
+v39Suite('phase1-core');
+
+// runner wiring v3.9
+(function () {
+  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
+  assert(dom.indexOf('Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop)') >= 0 && dom.indexOf('Cdp') < 0 && dom.indexOf('click') < 0,
+    'v3.9: DOM read only, no click');
+  const acc = bag.slice(bag.indexOf('  function stopDomAccessor() {'), bag.indexOf('  // Bag v3.8: wait for this Stop'));
+  assert(acc.indexOf('inMapbox(n)') >= 0 && acc.indexOf("tag === 'svg'") >= 0 && acc.indexOf('inPanel(n)') >= 0 && acc.indexOf('nodeType === 3') >= 0,
+    'v3.9-16: Mapbox / svg / panel never read; own text nodes only');
+  assert(bag.indexOf('readStopDomBag: null,') >= 0, 'v3.9: Unfinished Bag Test v1 keeps Stop-open only');
+  ['trDetailsBagName', 'stopDomAttempted', 'stopDomTargetDaFound', 'stopDomBagFound', 'stopDomBagText', 'stopDomCandidateCount',
+    'stopDomPackageContainerText', 'bagSource', 'fallbackReason', 'stopDomDiagnostics'].forEach((k) => {
+    assert(bag.indexOf(k + ':') >= 0, 'v3.9 diag ' + k);
+  });
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.9-9: v3.7 retry kept');
+  console.log('ok: v3.9 runner wiring');
 })();
