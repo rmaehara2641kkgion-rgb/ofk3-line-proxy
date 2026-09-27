@@ -11,6 +11,11 @@ function assert(cond, msg) {
   if (!cond) throw new Error('FAIL: ' + msg);
 }
 
+// Source-structure checks match '\n'; a core.autocrlf=true checkout yields CRLF.
+function readSource(...parts) {
+  return readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
+}
+
 // 2026-09-18 13:00 JST = 04:00Z
 const W_END_1300 = Date.UTC(2026, 8, 18, 4, 0, 0) / 1000;
 const W_START_1000 = Date.UTC(2026, 8, 18, 1, 0, 0) / 1000;
@@ -268,16 +273,42 @@ suite(PhaseCore, 'phase1-core');
 
 // Runner: separate phase, native click only, tour untouched.
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   function body(name) {
     const start = runner.indexOf('  function ' + name + '(');
     assert(start >= 0, 'runner has ' + name);
     const end = runner.indexOf('\n  }\n', start);
-    return runner.slice(start, end);
+    assert(end > start, 'runner ' + name + ' body end found');
+    const text = runner.slice(start, end);
+    assert(text.indexOf('\n  function ', 1) < 0, 'runner ' + name + ' body is a single function');
+    return text;
   }
   ['runNextRoute', 'waitForCurrentRoute', 'restoreRouteListThenContinue', 'finishCurrentAndContinue',
     'clickRoute', 'beginPoc', 'visibleTargetRoute'].forEach(function (name) {
     assert(!/bag/i.test(body(name)), 'tour function ' + name + ' has no Bag logic');
+  });
+  // Bag is reached through its own entry: button -> startBagPhase -> Core.runBagEngine(createBagDriver).
+  assert(runner.indexOf("mk('Bag取得', function () { startBagPhase(); })") >= 0, 'Bag取得 button calls startBagPhase');
+  const startBag = body('startBagPhase');
+  assert(/if \(sessionBusy \|\| \(tour && tour\.status === 'running'\)\)[\s\S]{0,120}return;/.test(startBag),
+    'startBagPhase refuses while the tour runs');
+  assert(startBag.indexOf('Core.selectBagTargets(detailsList, store.trDetailsByTrId)') >= 0, 'startBagPhase selects Bag targets');
+  assert(startBag.indexOf('Core.snapshotNormalCapture(store)') >= 0, 'startBagPhase freezes normal capture');
+  assert(startBag.indexOf('Core.runBagEngine({') >= 0 && startBag.indexOf('driver: createBagDriver(ctx, runId)') >= 0,
+    'startBagPhase runs the Bag engine with the DOM driver');
+  assert(startBag.indexOf('routeIdleMs: BAG_ROUTE_IDLE_MS') >= 0 && startBag.indexOf('routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS') >= 0,
+    'Bag engine receives the progress watchdog and hard max');
+  assert(startBag.indexOf('finishBagPhase(aborted)') >= 0, 'Bag engine completion finishes the Bag phase');
+  const driverSrc = runner.slice(runner.indexOf('  function createBagDriver('), runner.indexOf('  function finishBagPhase('));
+  ['ensureStop: function', 'Core.runStopOpenAttempts(', 'waitStopTrDetails(', 'Core.readStopDomBag('].forEach(function (s) {
+    assert(driverSrc.indexOf(s) >= 0, 'Bag driver has ' + s);
+  });
+  [[RootCore, 'root core'], [PhaseCore, 'phase1-core']].forEach(function (pair) {
+    const engine = pair[0].runBagEngine.toString();
+    ['driver.openRoute(', 'driver.ensureStop(', 'driver.readStopDomBag(', 'driver.findPackage(', 'driver.clickPackage(',
+      'driver.waitTrDetails(', 'driver.leaveStop('].forEach(function (s) {
+      assert(engine.indexOf(s) >= 0, pair[1] + ' runBagEngine calls ' + s);
+    });
   });
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.length > 1000, 'bag block present');
@@ -292,7 +323,7 @@ suite(PhaseCore, 'phase1-core');
   assert((runner.match(/setInterval\(/g) || []).length === 1, 'no new setInterval');
   assert(runner.indexOf("mk('Bag取得'") >= 0, 'panel has Bag取得 button');
   assert(runner.indexOf('startBagPhase();') >= 0 && !/function beginPoc[\s\S]{0,4000}startBagPhase/.test(runner.slice(runner.indexOf('function beginPoc'), runner.indexOf('function start()'))), 'bag not auto-started by the tour');
-  const all = runner + readFileSync(join(root, 'cortex-capture-extension', 'phase1-core.js'), 'utf8');
+  const all = runner + readSource('cortex-capture-extension', 'phase1-core.js');
   assert(!/fetch\s*\(\s*['"`][^'"`]*trDetails/.test(all), 'no direct trDetails fetch');
   assert(all.indexOf('document.cookie') < 0 && all.indexOf('setRequestHeader') < 0, 'no auth reuse');
   console.log('ok: runner bag phase isolated from tour');
@@ -656,7 +687,7 @@ v31Suite('phase1-core');
 
 // v3.1 runner: split Stop labels, bounded Stop wait, route diagnostics JSON
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(/for \(var d = 0; el && d < 3; d \+= 1, el = el\.parentElement\)/.test(bag), 'v3.1 label may span child elements (bounded ancestors)');
   assert(bag.indexOf('if (t.length > 20) break;') >= 0, 'v3.1 only short texts can be labels');
@@ -714,7 +745,7 @@ v32Suite(RootCore, 'root core');
 v32Suite(PhaseCore, 'phase1-core');
 
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
     'v3.2 marker requires an enclosing svg with a stop-K class token');
@@ -725,7 +756,7 @@ v32Suite(PhaseCore, 'phase1-core');
 
 // v3.2-diag: Stop click evidence (hit-test relation, marker ancestry, state after click); decision unchanged
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   ["'same-stop-marker'", "'other-stop-marker:'", "'same-stop-block'", "'dialog'", 'centerStack', 'hitAncestors', 'svgRect',
     'plainNumberContext(stop.stop)', 'clickDiag.afterClick = stopClickState(das)', 'clickDiag.afterWait = stopClickState(das)',
@@ -770,7 +801,7 @@ v33Suite(RootCore, 'root core');
 v33Suite(PhaseCore, 'phase1-core');
 
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.indexOf("var MAPBOX_SELECTOR = '.mapboxgl-map, .mapboxgl-marker, .mapboxgl-canvas-container';") >= 0, 'v3.3 Mapbox selector');
   assert(bag.indexOf("base.querySelectorAll('div.stops-list-item')") >= 0, 'v3.3 rows are div.stops-list-item');
@@ -790,7 +821,7 @@ v33Suite(PhaseCore, 'phase1-core');
 
 // ---------------- v3.4: close the opened Stop row; undo history only when an entry was added ----------------
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
   assert(leave.indexOf('ctx.openedListTarget') >= 0 && leave.indexOf('clickListButton(currentTarget') >= 0,
@@ -908,7 +939,7 @@ Core2 = PhaseCore;
 v35Suite('phase1-core');
 
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
   assert(leave.indexOf('var t = freshListTarget(stop.stop);') >= 0, 'v3.5 close re-reads the row from the current DOM');
@@ -937,7 +968,7 @@ v35Suite('phase1-core');
 
 // v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.indexOf('BAG_ROUTE_OPEN_ATTEMPTS = 3') >= 0 && bag.indexOf('attempt < BAG_ROUTE_OPEN_ATTEMPTS') >= 0,
     'v3 bounded Route open retries');
@@ -1089,7 +1120,7 @@ ubtSuite('phase1-core');
 
 // 9/10. runner wiring: separate button; normal Bag v3.5 unchanged; the test driver cannot click packages.
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
   assert(runner.indexOf("BAG_BUILD = 'Bag v3.10'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.10 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
@@ -1235,7 +1266,7 @@ v36Suite('phase1-core');
 
 // runner wiring v3.6: close retry kept, null never falls back, click only when dispatched, state separation
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
   assert(/if \(n === 0\) \{ retry\(ad\); return; \}/.test(leave) && leave.indexOf('var usable = routeDetailUsable();') >= 0, 'v3.6-10: v3.5 close retry kept');
@@ -1571,7 +1602,7 @@ v37Suite('phase1-core');
 
 // runner wiring v3.7
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
   assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf('Core.STOP_OPEN_MAX_ATTEMPTS') >= 0, 'v3.7: retry via Core');
@@ -1788,7 +1819,7 @@ v38Suite('phase1-core');
 
 // H + runner wiring v3.8: Stop retry untouched, both wait paths use the two-phase wait, UBT keeps 3 s
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.indexOf("BAG_STOP_OPEN_TR_EXTRA_MS = 3000") >= 0 && bag.indexOf("extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS") >= 0 && bag.indexOf("{ maxAttempts: 1, noExtendedWait: true }") >= 0 && bag.indexOf("routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS") >= 0,
     'v3.8: extra 3 s, UBT keeps its single wait');
@@ -1976,7 +2007,7 @@ v39Suite('phase1-core');
 
 // runner wiring v3.9
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
   assert(dom.indexOf('Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop)') >= 0 && dom.indexOf('Cdp') < 0 && dom.indexOf('click') < 0,
@@ -2110,7 +2141,7 @@ v310Suite('phase1-core');
 
 // runner wiring v3.10: DOM read without scroll sweep, miss diagnostics, no click, waits unchanged
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
   assert(dom.indexOf('scrollSearch') < 0 && dom.indexOf("first.pass = 'current_view'") >= 0 && dom.indexOf("second.pass = 'row_into_view'") >= 0,
