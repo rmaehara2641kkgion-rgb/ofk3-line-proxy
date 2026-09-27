@@ -276,6 +276,9 @@
       renderCortexPriorityDashboard();
       renderTimeWindowPanel();
     } catch (e) {}
+    try {
+      if (window.OFK3MapCortexOverlay && window.OFK3Cortex13) window.OFK3MapCortexOverlay.getMapCortexIndex(window.OFK3Cortex13);
+    } catch (e) {}
   }
 
   function csvCell(v) {
