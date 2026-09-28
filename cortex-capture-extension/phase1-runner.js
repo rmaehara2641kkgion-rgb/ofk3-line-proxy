@@ -1185,7 +1185,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.10';
+  var BAG_BUILD = 'Bag v3.11';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
@@ -2192,7 +2192,8 @@
   // missing); ends the moment all of them have trDetails. Arrival times come from the trDetails hook.
   // seenSince: base of the v3.6 elapsedAfterStopOpenMs (the click start for a fresh open).
   // noExtra: package-fallback reopen (the target already had the full 6 s wait) -> normal wait only.
-  function waitStopTrDetails(ctx, runId, pending, seenSince, noExtra, done) {
+  // note: progress of the Route this wait belongs to (Bag v3.11).
+  function waitStopTrDetails(ctx, runId, pending, seenSince, noExtra, done, note) {
     var startedAt = Date.now();
     var baseline = {};
     pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) baseline[t.referenceId] = true; });
@@ -2215,7 +2216,7 @@
           var n = pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length;
           if (n > arrivedSeen) {
             arrivedSeen = n;
-            if (bagEngine) bagEngine.noteProgress('tr_details');
+            if (note) note('tr_details');
           }
           return check();
         }, ms, runId, cb);
@@ -2267,6 +2268,15 @@
 
   function createBagDriver(ctx, runId) {
     ctx.reopenedStops = {};
+    ctx.routeProgress = null;
+
+    // Bag v3.11: bound when a step starts, so a step outliving its Route reports to that Route
+    // (closed, ignored) and never feeds the next Route's watchdog. Only completed, bounded
+    // sub-steps are reported (no timer-driven heartbeat).
+    function routeNote() {
+      var fn = ctx.routeProgress;
+      return function (kind) { if (typeof fn === 'function') fn(kind); };
+    }
 
     // Route detail reached: wait (condition, bounded) for Stop labels or target DAs, then
     // record what the page shows so a Stop-detection mismatch is visible in the diagnostics.
@@ -2304,9 +2314,14 @@
     }
 
     var driver = {
+      beginRoute: function (api) {
+        ctx.routeProgress = api && typeof api.noteProgress === 'function' ? api.noteProgress : null;
+      },
+
       // Up to BAG_ROUTE_OPEN_ATTEMPTS tries: close new dialogs, wait for the list, re-find the
       // card, scrollIntoView + hit test (inside safeCdpClick). Still covered -> UI blocked.
       openRoute: function (route, cb) {
+        var note = routeNote();
         ctx.routeNoStopLabels = false;
         ctx.stopMissLogged = false;
         if (ctx.currentPage) {
@@ -2325,6 +2340,7 @@
             waitBag(function () { return routeListShown(ctx); }, 2000, runId, function () {
               findBagRouteCard(route, runId, function (card) {
                 if (!card) { cb({ ok: false, code: 'route_card_not_found', detail: 'Route一覧にRoute cardが見つかりません' }); return; }
+                note('route_card_found');
                 var beforeDetails = store.detailsByRouteId[route.routeId] || null;
                 ctx.listHistoryLen = historyLength();
                 var clickRec = {
@@ -2344,11 +2360,12 @@
                     lastDetail = 'Route click: ' + res.detail;
                     bagLog('[Bag] ' + route.routeCode + ' ' + (res.covered ? 'Route一覧が覆われています' : 'Route click失敗') +
                       ' (' + attempt + '/' + BAG_ROUTE_OPEN_ATTEMPTS + '): ' + res.detail);
-                    if (attempt < BAG_ROUTE_OPEN_ATTEMPTS) { bagLater(tryOpen, 700); return; }
+                    if (attempt < BAG_ROUTE_OPEN_ATTEMPTS) { note('route_click_retry'); bagLater(tryOpen, 700); return; }
                     cb({ ok: false, blocked: !!res.covered, code: res.covered ? 'ui_blocked' : 'route_click_failed',
                       detail: lastDetail + '（' + attempt + '回試行）' });
                     return;
                   }
+                  note('route_click');
                   var basis = '';
                   var detailsSeen = false;
                   waitBag(function () {
@@ -2367,6 +2384,7 @@
                         routeRetried = true;
                         routeClick.retries = 1;
                         if (bagEngine) bagEngine.extendRoute(BAG_ROUTE_RETRY_WAIT_MS + 2000);
+                        note('route_retry');
                         bagLog('[Bag] ' + route.routeCode + ' Route詳細が開かないため1回だけ再クリック');
                         bagLater(tryOpen, 600);
                         return;
@@ -2379,6 +2397,7 @@
                       return;
                     }
                     if (routeRetried) pushRouteDiag({ phase: 'route_opened_after_retry', routeCode: route.routeCode, routeClick: routeClick });
+                    note('route_detail');
                     ctx.routeHref = hrefNow();
                     afterRouteOpened(route, basis, cb);
                   });
@@ -2395,6 +2414,7 @@
         // Bag v3.6: a row already open / already showing the DAs gets the same bounded wait for
         // Cortex's own trDetails as a freshly opened one (returns at once when all rows are there).
         var noExtraWait = !!(openOpts && openOpts.noExtendedWait);
+        var note = (openOpts && openOpts.note) || routeNote();
         function waitCortexTr(kind, done) {
           var started = Date.now();
           waitStopTrDetails(ctx, runId, pending, started, noExtraWait, function (tw) {
@@ -2416,7 +2436,7 @@
               targetDaVisible: Object.keys(collectExactDaElements(pending.map(function (t) { return t.scannableId; }))).length,
               openedBy: kind, openedAttempt: 0
             } });
-          });
+          }, note);
         }
         if (ctx.routeNoStopLabels) {
           // A full sweep of this Route already found no Stop label of any number: check the
@@ -2465,6 +2485,7 @@
               detail: 'Stop #' + stop.stop + ' label未発見（探索中のStop label候補 最大' + maxCandidates + '件）' });
             return;
           }
+          note('stop_found');
           if (found.present) { waitCortexTr('present', cb); return; }
           if (found.ambiguous) {
             cb({ ok: false, status: Core.BAG_STATUS.STOP_AMBIGUOUS, detail: 'Stop #' + stop.stop + ' label ' + found.ambiguous + '件' });
@@ -2539,6 +2560,7 @@
             return t;
           }
           function resolveAttempt(n, strategy, done) {
+            if (n > 1) note('stop_retry');
             if (!listTarget) {
               // Text label (not a Stop list row): v3.6 single attempt.
               if (!label.isConnected) {
@@ -2596,6 +2618,7 @@
               rec.pointsTried = (ad.points || []).length;
               if (ad.clicked && ad.clicked.label) usedLabels.push(ad.clicked.label);
               if (res.ok && n === 1) clickDiag.afterClick = stopClickState(das);
+              if (res.ok) note('stop_click');
               done(res.ok ? { ok: true } : { ok: false, covered: !!res.covered, dispatched: !!res.dispatched, detail: res.detail });
             }
             if (!target.list) {
@@ -2705,6 +2728,7 @@
                 // Cortex itself requests trDetails when a Stop is selected: give it a moment so the
                 // package lookup/click is only used for packages that did not arrive that way.
                 // Bag v3.8: normal 3 s, extra 3 s only while a target is still missing.
+                note('stop_opened');
                 noteTrSeen(pending, openStarted);
                 waitStopTrDetails(ctx, runId, pending, openStarted, noExtraWait, function (tw) {
                   var allArrived = tw.allArrived;
@@ -2719,7 +2743,7 @@
                   pushStopClickDiag(clickDiag);
                   cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, trWaitMs: tw.waitedMs,
                     trWaitExtended: tw.extendedUsed, stopDiag: stopDiagOf(final, 'opened') });
-                });
+                }, note);
                 return;
               }
               if (final.clickCount === 0 && !(final.attempts || []).some(function (a) { return a.result === 'not_opened'; })) {
@@ -2750,6 +2774,7 @@
       },
 
       findPackage: function (target, stop, cb) {
+        var note = routeNote();
         driver.searchPackage(target, function (res) {
           if (res.ok || res.status !== Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND || ctx.reopenedStops[stop.stop]) {
             cb(res);
@@ -2757,11 +2782,13 @@
           }
           // The Stop may have collapsed after returning from a package detail: reopen it once.
           ctx.reopenedStops[stop.stop] = true;
+          note('package_search_miss');
           driver.ensureStop(stop, [target], function () {}, function (sres) {
             if (sres && sres.clicked) bagRun.stopClicks = (bagRun.stopClicks || 0) + 1;
             if (!sres || !sres.ok) { cb(res); return; }
+            note('package_reopen');
             driver.searchPackage(target, cb);
-          }, { maxAttempts: 1, noExtendedWait: true });
+          }, { maxAttempts: 1, noExtendedWait: true, note: note });
         });
       },
 
@@ -2864,9 +2891,11 @@
       },
 
       restoreAfterPackage: function (target, cb) {
+        var note = routeNote();
         bagLater(function () {
           restoreHistory(ctx.packageHref, ctx.packageHistoryLen, runId, function (back) {
             if (!back.ok) { cb({ ok: false, detail: 'Package detail後にURLが戻りません' }); return; }
+            note('package_history_restored');
             closeNewDialogs(ctx.packageDialogs, runId, function (closed) {
               cb(closed.ok ? { ok: true } : { ok: false, detail: closed.detail });
             });
@@ -2879,6 +2908,7 @@
       // selectedStopId cleared with the targets hidden), retry once at another point. If it still
       // will not close, continue only when the Route detail is verified usable; else stop_leave_failed.
       leaveStop: function (stop, cb) {
+        var note = routeNote();
         var das = stop.targets.map(function (t) { return t.scannableId; });
         var started = Date.now();
         var diag = {
@@ -2955,6 +2985,7 @@
               recover(res.detail);
               return;
             }
+            note('stop_close_click');
             waitBag(function () { return isClosed(); }, BAG_STOP_CLOSE_TIMEOUT_MS, runId, function (closed) {
               var t = currentTarget();
               diag.ariaExpandedAfterLeave = t ? t.button.getAttribute('aria-expanded') : null;
@@ -2968,6 +2999,7 @@
         function retry(prev) {
           diag.retryCount = 1;
           if (bagEngine) bagEngine.extendRoute(BAG_STOP_CLOSE_TIMEOUT_MS + 1000);
+          note('stop_close_retry');
           var skip = prev && prev.clicked ? [prev.clicked.label] : [];
           bagLater(function () { attempt(1, skip); }, 400);
         }
@@ -3016,6 +3048,7 @@
     setBagStatus(Core.formatBagSummary(summary) + '\n(' + BAG_BUILD + ')');
     bagLog('[Bag] 完了: 対象 ' + summary.targetCount + ' / 試行済み ' + summary.attempted +
       ' / 未試行 ' + (summary.counts.not_attempted || 0) + (summary.aborted ? ' / 中断: ' + summary.aborted : ''));
+    if (bagEngine && typeof bagEngine.dispose === 'function') bagEngine.dispose();
     bagEngine = null;
     paint();
   }
@@ -3101,6 +3134,7 @@
     unfinishedTest.active = false;
     lastUnfinishedTest = summary;
     bagRun = unfinishedTest.previousBagRun;
+    if (bagEngine && typeof bagEngine.dispose === 'function') bagEngine.dispose();
     bagEngine = null;
     setBagStatus(Core.formatUnfinishedBagTest(summary));
     bagLog('[Bag] 未完了Bagテスト完了: 未完了Stop ' + summary.unfinishedStopsFound + ' / trDetails ' + summary.trDetailsReceived +
@@ -3176,6 +3210,7 @@
       getTrMap: function () { return store.trDetailsByTrId; },
       driver: driver,
       routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      pageContext: bagPageContext,
       log: bagLog,
       onProgress: function (p) {
         if (!bagIsCurrent(runId)) return;
@@ -3185,6 +3220,15 @@
         if (bagRun && bagRun.id === runId) finishUnfinishedTest(aborted);
       }
     });
+  }
+
+  // Bag v3.11: page state at a Route abort (background tabs throttle timers and pause rAF).
+  function bagPageContext() {
+    return {
+      visibilityState: document.visibilityState || null,
+      hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null,
+      href: hrefNow()
+    };
   }
 
   function stopBagPhase() {
@@ -3413,6 +3457,7 @@
       routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
       routeIdleMs: BAG_ROUTE_IDLE_MS,
       routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS,
+      pageContext: bagPageContext,
       log: bagLog,
       onProgress: function (p) {
         if (!bagIsCurrent(runId)) return;

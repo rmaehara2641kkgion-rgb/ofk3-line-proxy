@@ -2000,6 +2000,8 @@
    *   restoreAfterPackage(target, cb({ok, detail}))
    *   leaveStop(stop, cb({ok, detail}))
    *   returnToList(cb({ok, detail}))
+   *   beginRoute({routeCode, noteProgress(kind)})   optional: sub-step progress of this Route
+   * opts.pageContext(): optional page state recorded with a Route abort.
    * One Route failing marks that Route route_aborted and continues when the list is back.
    */
   function runBagEngine(opts) {
@@ -2026,6 +2028,7 @@
     var failCurrent = null;
     var extendCurrent = null;
     var progressCurrent = null;
+    var disposeCurrent = null;
     var extensionCapMs = opts.routeExtensionCapMs > 0 ? opts.routeExtensionCapMs : 60000;
 
     function log(line) {
@@ -2066,6 +2069,8 @@
         stopOpenCount: 0, stopRetryCount: 0, normalWaitCount: 0, extendedWaitCount: 0,
         stopDomAttemptCount: 0, packageFallbackCount: 0, progressEvents: 0, lastProgressKind: '',
         softBudgetExceededAtMs: null, maxIdleMs: 0,
+        // Bag v3.11: where the longest gap between progress events was, and why the Route ended
+        maxIdlePhase: '', maxIdleEndKind: '', progressKinds: {}, abortContext: null,
         timing: { routeOpenMs: 0, stopOpenTotalMs: 0, trDetailsWaitTotalMs: 0, stopDomTotalMs: 0,
           stopCloseTotalMs: 0, fallbackTotalMs: 0, returnToListMs: 0 } };
       result.routeStartedAt = result.startedAt;
@@ -2074,14 +2079,25 @@
       var watchdog = null;
       var progressSeq = 0;
       var lastProgressAt = result.startedAt;
+      // The driver step now running (diagnostics only; never counts as progress).
+      var phase = { name: 'openRoute', stop: null, scannableId: '', startedAt: result.startedAt };
+      function setPhase(name, stop, target) {
+        phase = { name: name, stop: stop ? stop.stop : null, scannableId: target ? target.scannableId : '', startedAt: now() };
+      }
       function noteProgress(kind) {
         if (closed) return;
         var t = now();
-        if (t - lastProgressAt > result.maxIdleMs) result.maxIdleMs = t - lastProgressAt;
+        kind = kind || 'driver';
+        if (t - lastProgressAt > result.maxIdleMs) {
+          result.maxIdleMs = t - lastProgressAt;
+          result.maxIdlePhase = phase.name;
+          result.maxIdleEndKind = kind;
+        }
         progressSeq += 1;
         lastProgressAt = t;
         result.progressEvents += 1;
-        result.lastProgressKind = kind || '';
+        result.lastProgressKind = kind;
+        result.progressKinds[kind] = (result.progressKinds[kind] || 0) + 1;
       }
       function armWatchdog(delay) {
         if (watchdog != null) cancel(watchdog);
@@ -2100,11 +2116,17 @@
         }
         if (progressSeq === seqAtArm) {
           result.idleMsAtAbort = t - lastProgressAt;
-          abortRoute('watchdog: ' + Math.round(idleMs / 1000) + '秒間progressなし（最後: ' + (result.lastProgressKind || '-') + '）', null, 'watchdog');
+          abortRoute('watchdog: ' + Math.round(idleMs / 1000) + '秒間progressなし（最後: ' + (result.lastProgressKind || '-') +
+            ' / 実行中: ' + phase.name + (phase.stop != null ? ' Stop #' + phase.stop : '') +
+            (phase.scannableId ? ' ' + phase.scannableId : '') + '）', null, 'watchdog');
           return;
         }
         armWatchdog(Math.min(lastProgressAt + idleMs - t, hardDeadline - t));
       }
+      disposeCurrent = function () {
+        if (watchdog != null) cancel(watchdog);
+        watchdog = null;
+      };
       function timed(key, t0) { result.timing[key] += Math.max(0, now() - t0); }
       // Retries (Stop close / Route click / slow Stop open) may add time to this Route only, capped.
       // v3.10: only moves the soft budget (diagnostics); aborts come from the watchdog / hard max.
@@ -2133,7 +2155,7 @@
       function live(fn, kind) {
         return function () {
           if (stopped() || closed) return;
-          noteProgress(kind || 'driver');
+          noteProgress(kind || phase.name + '_done');
           fn.apply(null, arguments);
         };
       }
@@ -2161,6 +2183,19 @@
         result.status = status;
         result.detail = detail || '';
         result.reasonCode = code || (status === BAG_STATUS.UI_BLOCKED ? 'ui_blocked' : 'route_aborted');
+        var t = now();
+        var remaining = pend(route.targets);
+        result.abortContext = {
+          reasonCode: result.reasonCode, phase: phase.name, stop: phase.stop, scannableId: phase.scannableId,
+          phaseElapsedMs: t - phase.startedAt, lastProgressKind: result.lastProgressKind,
+          sinceLastProgressMs: t - lastProgressAt, routeElapsedMs: t - result.startedAt,
+          progressEvents: result.progressEvents,
+          capturedBeforeAbort: route.targets.filter(function (x) { return !!capturedBagStatus(trMap(), x.referenceId); }).length,
+          markedRemaining: remaining.length
+        };
+        if (typeof opts.pageContext === 'function') {
+          try { result.abortContext.page = opts.pageContext(); } catch (e) { result.abortContext.page = null; }
+        }
         markAll(route.targets, status, detail);
         back();
       }
@@ -2171,7 +2206,10 @@
         failCurrent = null;
         extendCurrent = null;
         progressCurrent = null;
+        disposeCurrent = null;
         if (watchdog != null) cancel(watchdog);
+        watchdog = null;
+        setPhase('returnToList');
         var backStarted = now();
         emit({ state: 'Route一覧へ復帰中' });
         var attempts = 0;
@@ -2229,6 +2267,7 @@
         // Bag v3.7: one record per Route + Stop; the Stop is opened once for all its targets.
         var stopRec = beginStopRecord(run, route, stop, list, now());
         var openT0 = now();
+        setPhase('ensureStop', stop);
         call(function () {
           driver.ensureStop(stop, list, function (state) { if (!closed) emit({ state: state }); }, live(function (res) {
             var trWaitMs = res && res.trWaitMs > 0 ? res.trWaitMs : 0;
@@ -2267,6 +2306,7 @@
             });
             nextPackage(stop, function () {
               var closeT0 = now();
+              setPhase('leaveStop', stop);
               call(function () {
                 driver.leaveStop(stop, live(function (lres) {
                   timed('stopCloseTotalMs', closeT0);
@@ -2298,6 +2338,7 @@
         if (typeof driver.readStopDomBag === 'function' && !(run.stopDom && run.stopDom[t.referenceId])) {
           var domT0 = now();
           result.stopDomAttemptCount += 1;
+          setPhase('readStopDomBag', stop, t);
           call(function () {
             driver.readStopDomBag(t, stop, live(function (dres) {
               timed('stopDomTotalMs', domT0);
@@ -2314,6 +2355,7 @@
         }
         var fbT0 = now();
         result.packageFallbackCount += 1;
+        setPhase('findPackage', stop, t);
         call(function () {
           driver.findPackage(t, stop, live(function (res) {
             timed('fallbackTotalMs', fbT0);
@@ -2327,6 +2369,7 @@
             run.fallbackRefs = run.fallbackRefs || {};
             run.fallbackRefs[t.referenceId] = true;
             emit({ state: '荷物番号クリック' });
+            setPhase('clickPackage', stop, t);
             call(function () {
               driver.clickPackage(t, res.handle, live(function (cres) {
                 // Counted only when a click was really dispatched (not when covered / element lost).
@@ -2346,6 +2389,7 @@
                   return;
                 }
                 emit({ state: 'trDetails待機中' });
+                setPhase('waitTrDetails', stop, t);
                 call(function () {
                   driver.waitTrDetails(t, live(function (got) {
                     var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
@@ -2354,6 +2398,7 @@
                     emit({ state: status || BAG_STATUS.TIMEOUT });
                     call(function () {
                       var restoreT0 = now();
+                      setPhase('restoreAfterPackage', stop, t);
                       driver.restoreAfterPackage(t, live(function (rres) {
                         timed('fallbackTotalMs', restoreT0);
                         if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません', null, 'package_restore_failed'); return; }
@@ -2369,6 +2414,13 @@
       }
 
       failCurrent = function (detail) { abortRoute(detail, null, 'exception'); };
+      // Bag v3.11: sub-step progress inside long driver steps is reported to this Route only; a step
+      // still running after its Route ended reports to a closed Route and is ignored.
+      if (typeof driver.beginRoute === 'function') {
+        try {
+          driver.beginRoute({ routeCode: route.routeCode, noteProgress: function (kind) { noteProgress(kind || 'driver_progress'); } });
+        } catch (e) { log('[Bag] beginRoute failed: ' + (e && e.message ? e.message : String(e))); }
+      }
       armWatchdog(idleMs);
       emit({
         routeIndex: i + 1, routeCode: route.routeCode,
@@ -2402,6 +2454,11 @@
       // Bag v3.10: runner-side progress inside a long driver step (e.g. a target trDetails arrived).
       noteProgress: function (kind) {
         if (typeof progressCurrent === 'function') progressCurrent(kind);
+      },
+      // Bag v3.11: manual stop / phase end -> no watchdog timer left behind.
+      dispose: function () {
+        if (typeof disposeCurrent === 'function') disposeCurrent();
+        disposeCurrent = null;
       }
     };
   }
