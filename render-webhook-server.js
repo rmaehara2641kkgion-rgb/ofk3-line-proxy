@@ -165,6 +165,21 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (gdsUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, gdsUiBodyPos) + '  <script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>\n' + html.slice(gdsUiBodyPos);
     }
+    if (html.indexOf('/harvest-core.js') < 0) {
+      var hvCoreBodyPos = html.lastIndexOf('</body>');
+      if (hvCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, hvCoreBodyPos) + '  <script src="/harvest-core.js?v=20261002-1"></script>\n' + html.slice(hvCoreBodyPos);
+    }
+    if (html.indexOf('/harvest-collectors-cortex.js') < 0) {
+      var hvColBodyPos = html.lastIndexOf('</body>');
+      if (hvColBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, hvColBodyPos) + '  <script src="/harvest-collectors-cortex.js?v=20261002-1"></script>\n' + html.slice(hvColBodyPos);
+    }
+    if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
+      var hvUiBodyPos = html.lastIndexOf('</body>');
+      if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, hvUiBodyPos) + '  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>\n' + html.slice(hvUiBodyPos);
+    }
     res.type('html').send(html);
   } catch (e) {
     next(e);
@@ -472,6 +487,8 @@ function sanitizeCortexPackageAssistIndexRow(row) {
   var bagColor = row.bagColor == null || row.bagColor === '' ? null : String(row.bagColor);
   var bagNumber = row.bagNumber == null || row.bagNumber === '' ? null : String(row.bagNumber);
   var bagDisplay = row.bagDisplay == null || row.bagDisplay === '' ? null : String(row.bagDisplay);
+  var bagStatus = row.bagStatus == null || row.bagStatus === '' ? null : String(row.bagStatus);
+  var bagSource = row.bagSource == null || row.bagSource === '' ? null : String(row.bagSource);
   return {
     routeCode: routeCode,
     trackingId: trackingId,
@@ -482,7 +499,9 @@ function sanitizeCortexPackageAssistIndexRow(row) {
     bagColorCode: bagColorCode,
     bagColor: bagColor,
     bagNumber: bagNumber,
-    bagDisplay: bagDisplay
+    bagDisplay: bagDisplay,
+    bagStatus: bagStatus,
+    bagSource: bagSource
   };
 }
 function sanitizeCortexPackageAssistDiagnostics(d) {
