@@ -94,6 +94,12 @@
   }
 
   function note(url, status, body) {
+    if (unfinishedTest && unfinishedTest.active && /\/tasks\/trDetails(?:[/?#]|$)/.test(String(url || ''))) {
+      recordTrDetailsShape(url, status, body);
+    }
+    if (bagRun && !bagRun.ended && /\/tasks\/trDetails(?:[/?#]|$)/.test(String(url || ''))) {
+      recordBagTrRows(body);
+    }
     Core.applyCapturedCortexResponse(store, { url: url, status: status, body: body });
     if (pocRun && !pocRun.ended && pocRun.route && pocRun.route.routeId && store.detailsByRouteId[pocRun.route.routeId]) {
       pocRun.diagnostics.details = 'success';
@@ -433,6 +439,8 @@
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
       row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('未完了Bagテスト', function () { startUnfinishedBagTest(); }));
+      row.appendChild(mk('Bag診断保存', function () { saveBagDiagnostics(); }));
       row.appendChild(mk('停止', function () {
         if (bagActive()) stopBagPhase();
         else stopPoc();
@@ -1163,17 +1171,38 @@
 
   // ---- Bag enrichment phase ----
   // Separate from the Route tour above: started only by the「Bag取得」button after the
-  // normal capture is complete. Clicks the 13:00 package number (native Cortex UI) so
-  // Cortex itself POSTs /tasks/trDetails; the existing fetch/XHR hook stores the Response.
-  // Normal results are frozen before and restored after; nothing is added to store.failures.
+  // normal capture is complete. Route -> Stop -> Package order comes from Core.runBagEngine;
+  // this block is only the DOM driver. Stops are opened and package numbers clicked via the
+  // existing CDP click so Cortex itself POSTs /tasks/trDetails; the existing fetch/XHR hook
+  // stores the Response. Normal results are frozen before and restored after; nothing is
+  // added to store.failures.
   var BAG_PACKAGE_TIMEOUT_MS = 4500;
-  var BAG_ROUTE_BUDGET_MS = 90000;
+  var BAG_ROUTE_BUDGET_MS = 120000;
   var BAG_HISTORY_TIMEOUT_MS = 4000;
-  var BAG_SCROLL_MAX_STEPS = 100;
-  var BAG_MAX_SCROLLERS = 3;
+  var BAG_STOP_EXPAND_TIMEOUT_MS = 3000;
+  var BAG_DIALOG_CLOSE_TIMEOUT_MS = 2000;
+  var BAG_STOP_SCROLL_MAX_STEPS = 80;
+  var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
+  var BAG_ROUTE_OPEN_ATTEMPTS = 3;
+  var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
+  var BAG_BUILD = 'Bag v3.12';
+  var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
+  var BAG_STOP_EXPAND_EXTRA_MS = 3000;
+  var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
+  // Bag v3.8: extra wait only while a pending target's trDetails is still missing after the 3 s.
+  var BAG_STOP_OPEN_TR_EXTRA_MS = 3000;
+  var BAG_ROUTE_EXTENSION_CAP_MS = 120000;
+  // Bag v3.10: a Route is aborted only after 90 s without any progress, or at the 15 min hard maximum.
+  var BAG_ROUTE_IDLE_MS = 90000;
+  var BAG_ROUTE_HARD_MAX_MS = 900000;
+  var BAG_ROUTE_RETRY_WAIT_MS = 15000;
+  // Bag v3.12: a visible tab normally gets its two frames within ~35 ms; the timer only covers a stalled rAF.
+  var BAG_LAYOUT_FALLBACK_MS = 1000;
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
+  var bagProgressText = '';
+  var bagEngine = null;
 
   function bagActive() {
     return !!(bagRun && !bagRun.ended);
@@ -1183,87 +1212,147 @@
     return !!(bagRun && bagRun.id === runId && !bagRun.ended && !bagRun.stopRequested);
   }
 
-  function bagLater(fn, ms) {
-    bagTimer = setTimeout(function () {
-      bagTimer = 0;
-      fn();
-    }, ms);
+  // Bag v3.12: every Route (and the return to the list after it) runs under one operation. Timers,
+  // layout waits and CDP requests started under an operation that has been cancelled (Route ended /
+  // aborted, phase ended) never run their continuation, so a stale step cannot click or scroll
+  // while a later Route is being processed.
+  var bagRouteOp = null;
+  var bagRouteOpSeq = 0;
+
+  function bagOpAlive(op) {
+    return !op || !op.cancellationRequested;
   }
 
-  function setBagStatus(text) {
-    setText('ofk3-bag-status', text);
+  function bagOpEnter(op) {
+    if (op) op.inflight += 1;
   }
 
-  function afterBagLayout(fn) {
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(function () { requestAnimationFrame(fn); });
-    } else {
-      bagLater(fn, 50);
+  function bagOpLeave(op, ran) {
+    if (!op) return;
+    op.inflight = Math.max(0, op.inflight - 1);
+    if (!ran) op.staleCallbacksSkipped += 1;
+    if (op.cancellationRequested && !op.cancellationCompleted && op.inflight === 0) {
+      op.cancellationCompleted = true;
+      op.cancellationCompletedAt = Date.now() - op.startedAt;
     }
   }
 
-  // Exact textContent.trim() === scannableId, innermost element per text node, panel excluded.
-  function collectExactDaElements(scannableIds) {
-    var entries = [];
-    var els = [];
-    var root = document.body || document.documentElement;
-    if (!root || !scannableIds.length) return {};
-    var want = {};
-    scannableIds.forEach(function (id) { want[id] = true; });
-    var walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null);
-    var node;
-    while ((node = walker.nextNode())) {
-      var value = String(node.nodeValue || '').trim();
-      if (!value || !want[value]) continue;
-      var el = node.parentElement;
-      if (!el || inPanel(el)) continue;
-      if (els.indexOf(el) >= 0) continue;
-      els.push(el);
-      entries.push({ text: el.textContent, key: els.length - 1 });
+  function bagOpDom(op, name) {
+    if (op) op.lastSuccessfulDomOperation = { name: name, at: Date.now() - op.startedAt };
+  }
+
+  function bagCancelRouteOp(reason) {
+    var op = bagRouteOp;
+    if (op && !op.cancellationRequested) {
+      op.cancellationRequested = true;
+      op.cancellationRequestedAt = Date.now() - op.startedAt;
+      op.cancellationReason = reason || '';
+      if (op.inflight === 0) {
+        op.cancellationCompleted = true;
+        op.cancellationCompletedAt = op.cancellationRequestedAt;
+      }
     }
-    var byText = Core.indexExactDomTextMatches(entries, scannableIds);
+    return op;
+  }
+
+  function bagStartRouteOp(routeCode, kind) {
+    var prev = bagCancelRouteOp(kind === 'route' ? 'next_route' : 'route_end');
+    var op = {
+      id: ++bagRouteOpSeq, kind: kind, routeCode: routeCode, startedAt: Date.now(), startedAtIso: new Date().toISOString(),
+      timesAreMsFromStart: true, subPhase: '', lastSuccessfulDomOperation: null, inflight: 0, staleCallbacksSkipped: 0,
+      maxTimerLagMs: 0, layoutVia: {}, cancellationRequested: false, cancellationRequestedAt: null, cancellationReason: '',
+      cancellationCompleted: false, cancellationCompletedAt: null,
+      previousRouteOperationStillAlive: !!(prev && prev.inflight > 0), previousRouteOperationInflight: prev ? prev.inflight : 0,
+      previousRouteOperation: prev ? prev.routeCode + '#' + prev.id : null
+    };
+    if (kind === 'route') {
+      op.routeCardFoundAt = null;
+      op.routeClickAttemptAt = [];
+      op.routeClickAttemptCount = 0;
+      op.routeClickAttempts = [];
+      op.routeDetailDetectedAt = null;
+      op.routeRetryCount = 0;
+    }
+    bagRouteOp = op;
+    if (bagRun) {
+      bagRun.routeOperations = bagRun.routeOperations || [];
+      if (bagRun.routeOperations.length < 400) bagRun.routeOperations.push(op);
+    }
+    return op;
+  }
+
+  function bagOpSnapshot(op) {
+    if (!op) return null;
     var out = {};
-    Object.keys(byText).forEach(function (text) {
-      out[text] = byText[text].map(function (idx) { return els[idx]; });
-    });
+    Object.keys(op).forEach(function (k) { out[k] = op[k]; });
+    out.layoutVia = Object.assign({}, op.layoutVia);
+    out.routeClickAttempts = op.routeClickAttempts ? op.routeClickAttempts.slice() : undefined;
+    out.routeClickAttemptAt = op.routeClickAttemptAt ? op.routeClickAttemptAt.slice() : undefined;
     return out;
   }
 
-  function bagScrollers(els) {
-    var out = [];
-    function add(el) {
-      if (!el || inPanel(el) || out.indexOf(el) >= 0) return;
-      if ((el.scrollHeight || 0) - (el.clientHeight || 0) < 40) return;
-      out.push(el);
-    }
-    (els || []).forEach(function (el) {
-      for (var cur = el && el.parentElement, depth = 0; cur && depth < 16; depth += 1, cur = cur.parentElement) {
-        var overflowY = '';
-        try { overflowY = global.getComputedStyle(cur).overflowY; } catch (e1) {}
-        if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') add(cur);
+  // An exception inside a Bag timer ends only the current Route (never the tour or the page).
+  function bagLater(fn, ms) {
+    var op = bagRouteOp;
+    var due = Date.now() + (ms || 0);
+    bagOpEnter(op);
+    bagTimer = setTimeout(function () {
+      bagTimer = 0;
+      if (op) op.maxTimerLagMs = Math.max(op.maxTimerLagMs, Date.now() - due);
+      if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }
+      bagOpLeave(op, true);
+      try {
+        fn();
+      } catch (e) {
+        if (bagEngine && bagActive()) bagEngine.failRoute('exception: ' + (e && e.message ? e.message : String(e)));
       }
-    });
-    var nodes = document.querySelectorAll('div, section, main, ul, tbody, [role="list"], [role="grid"], [role="table"]');
-    var generic = [];
-    for (var i = 0; i < nodes.length; i++) {
-      var overflow = '';
-      try { overflow = global.getComputedStyle(nodes[i]).overflowY; } catch (e2) {}
-      if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') generic.push(nodes[i]);
-    }
-    generic.sort(function (a, b) {
-      return ((b.scrollHeight || 0) - (b.clientHeight || 0)) - ((a.scrollHeight || 0) - (a.clientHeight || 0));
-    });
-    generic.forEach(add);
-    add(document.scrollingElement || document.documentElement);
-    return out.slice(0, BAG_MAX_SCROLLERS);
+    }, ms);
   }
 
-  function hitTestAllows(el, point) {
-    var hit = null;
-    try { hit = document.elementFromPoint(point.x, point.y); } catch (e1) {}
-    if (!hit || inPanel(hit)) return false;
-    if (hit === el || el.contains(hit)) return true;
-    return hit !== document.body && hit !== document.documentElement && hit.contains(el);
+  function bagLog(line) {
+    try { console.info(line); } catch (e1) {}
+  }
+
+  function setBagStatus(text) {
+    bagProgressText = String(text || '');
+    var el = document.getElementById('ofk3-bag-status');
+    if (el) {
+      el.style.whiteSpace = 'pre-line';
+      el.textContent = bagProgressText;
+    }
+  }
+
+  // Two animation frames after a scroll, so a virtualized list has re-rendered. Chrome runs no
+  // requestAnimationFrame callback in a hidden tab (and may stall it in an occluded window): the
+  // v3.11 click then never happened and the Route waited for the watchdog. Bag v3.12: hidden ->
+  // timer only; visible -> rAF as before, with a timer fallback. fn runs at most once.
+  function afterBagLayout(fn) {
+    var op = bagRouteOp;
+    var settled = false;
+    var hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    bagOpEnter(op);
+    function run(via) {
+      if (settled) return;
+      settled = true;
+      if (op) op.layoutVia[via] = (op.layoutVia[via] || 0) + 1;
+      if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }
+      bagOpLeave(op, true);
+      try {
+        fn();
+      } catch (e) {
+        if (bagEngine && bagActive()) bagEngine.failRoute('exception: ' + (e && e.message ? e.message : String(e)));
+      }
+    }
+    if (typeof requestAnimationFrame === 'function' && !hidden) {
+      requestAnimationFrame(function () { requestAnimationFrame(function () { run('raf'); }); });
+    }
+    setTimeout(function () {
+      run(hidden ? 'timer_hidden' : (typeof requestAnimationFrame === 'function' ? 'timer_fallback' : 'timer'));
+    }, hidden || typeof requestAnimationFrame !== 'function' ? 50 : BAG_LAYOUT_FALLBACK_MS);
+  }
+
+  function hrefNow() {
+    return String(global.location.href || '');
   }
 
   function waitBag(check, timeoutMs, runId, done) {
@@ -1277,173 +1366,1021 @@
     poll();
   }
 
-  // Package detail close: only history is restored (Cortex close UI is not confirmed).
-  // If the click changed the URL and history.back() cannot restore it, the Route is aborted.
-  function restoreRouteView(ctx, runId, done) {
-    if (String(global.location.href || '') === ctx.routeHref) { done(true); return; }
-    try { global.history.back(); } catch (e1) { done(false); return; }
-    waitBag(function () {
-      return String(global.location.href || '') === ctx.routeHref;
-    }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+  // Short, non-secret description of an element for diagnostics (generated css-* classes dropped).
+  function describeEl(el) {
+    if (!el || !el.tagName) return '-';
+    var out = String(el.tagName).toLowerCase();
+    if (el.id) out += '#' + el.id;
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 2);
+    if (cls.length) out += '.' + cls.join('.');
+    var role = el.getAttribute && el.getAttribute('role');
+    if (role) out += '[role=' + role + ']';
+    var aria = el.getAttribute && el.getAttribute('aria-label');
+    if (aria) out += '[aria-label=' + String(aria).slice(0, 20) + ']';
+    var text = String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (text) out += ' "' + text + '"';
+    return out;
   }
 
-  function clickBagPackage(target, el, ctx, runId, done) {
-    Core.markBagAttempted(bagRun, target.referenceId);
-    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
+  function elementVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    var r = null;
+    try { r = el.getBoundingClientRect(); } catch (e1) {}
+    return !!(r && r.width > 0 && r.height > 0);
+  }
+
+  // Text-node walk: innermost element whose textContent passes accept(text). Panel excluded.
+  function collectTextElements(root, acceptText) {
+    var els = [];
+    root = root || document.body || document.documentElement;
+    if (!root) return els;
+    var walker = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var value = String(node.nodeValue || '').trim();
+      if (!value) continue;
+      var el = node.parentElement;
+      if (!el || inPanel(el) || els.indexOf(el) >= 0) continue;
+      if (!acceptText(String(el.textContent || ''), value)) continue;
+      els.push(el);
+    }
+    return els;
+  }
+
+  // Exact textContent.trim() === scannableId, across the whole document (uniqueness is global).
+  function collectExactDaElements(scannableIds) {
+    var want = {};
+    scannableIds.forEach(function (id) { want[id] = true; });
+    var els = collectTextElements(null, function (full, own) { return !!want[own]; });
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i }; });
+    var byText = Core.indexExactDomTextMatches(entries, scannableIds);
+    var out = {};
+    Object.keys(byText).forEach(function (text) {
+      out[text] = byText[text].map(function (idx) { return els[idx]; });
+    });
+    return out;
+  }
+
+  // Stop label = innermost element (text-node parent or up to 2 ancestors, short text only)
+  // whose whole text is an exact label. Ancestors cover labels split over child elements,
+  // e.g. <span>Stop</span><span>16</span> or <span>#</span><span>16</span>.
+  // ---- Real Cortex Stop list (v3.3) ----
+  // Clicked: div.stops-list-item > ... > div[role=button][aria-expanded] > span > div > p > span "N".
+  // Never clicked: anything inside the Mapbox map (svg.stop-K markers overlap each other and
+  // do not open the package list).
+  var MAPBOX_SELECTOR = '.mapboxgl-map, .mapboxgl-marker, .mapboxgl-canvas-container';
+
+  function inMapbox(el) {
+    return !!(el && el.closest && el.closest(MAPBOX_SELECTOR));
+  }
+
+  function stopListButtonOf(el, row) {
+    var btn = el && el.closest ? el.closest('[role="button"][aria-expanded]') : null;
+    return btn && row && row.contains(btn) ? btn : null;
+  }
+
+  // One stops-list-item -> { row, button, numberEl, number } or null (no / ambiguous number).
+  function stopListRowInfo(row) {
+    if (!row || inPanel(row) || inMapbox(row)) return null;
+    var els = collectTextElements(row, function (full) { return /^\d{1,4}$/.test(String(full).trim()); })
+      .filter(function (el) { return !!stopListButtonOf(el, row); });
+    var cands = els.map(function (el) {
+      var p1 = el.parentElement;
+      var p2 = p1 && p1.parentElement;
+      return { text: el.textContent, chain: [p1 ? p1.textContent : '', p2 ? p2.textContent : ''] };
+    });
+    var number = Core.stopListRowNumber(cands);
+    if (number == null) return null;
+    var numberEl = null;
+    for (var i = 0; i < els.length; i++) {
+      if (Core.parseStopMarkerText(els[i].textContent) === number &&
+        Core.stopListRowNumber([cands[i]]) === number) { numberEl = els[i]; break; }
+    }
+    if (!numberEl) return null;
+    return { row: row, button: stopListButtonOf(numberEl, row), numberEl: numberEl, number: number };
+  }
+
+  function stopListRows(root) {
+    var out = [];
+    var base = root || document;
+    var nodes = base.querySelectorAll ? base.querySelectorAll('div.stops-list-item') : [];
+    for (var i = 0; i < nodes.length; i++) out.push(nodes[i]);
+    var up = root && root.closest ? root.closest('div.stops-list-item') : null;
+    if (up && out.indexOf(up) < 0) out.push(up);
+    return out.filter(function (r) { return !inPanel(r) && !inMapbox(r); });
+  }
+
+  // Real Cortex Stop marker: text inside <svg class="stop-K"> whose whole text is only digits.
+  // Returns the element holding the digits (SVG <text>/<tspan>) or null.
+  function stopMarkerLabelOf(node) {
+    var own = node.parentElement;
+    if (!own || !own.closest) return null;
+    var svg = own.closest('svg');
+    if (!svg || inPanel(svg)) return null;
+    if (!Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))) return null;
+    if (Core.parseStopMarkerText(svg.textContent) == null) return null;
+    if (Core.parseStopMarkerText(own.textContent) == null) return null;
+    return own;
+  }
+
+  // Returns labels with a parallel .kinds array ('text' | Core.STOP_MARKER_KIND).
+  function collectStopLabelElements(root) {
+    var els = [];
+    els.kinds = [];
+    var base = root || document.body || document.documentElement;
+    if (!base) return els;
+    stopListRows(root).forEach(function (row) {
+      var info = stopListRowInfo(row);
+      if (!info || (root && !root.contains(info.numberEl)) || els.indexOf(info.numberEl) >= 0) return;
+      els.push(info.numberEl);
+      els.kinds.push(Core.STOP_LIST_KIND);
+    });
+    var walker = document.createTreeWalker(base, 4 /* NodeFilter.SHOW_TEXT */, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      if (!String(node.nodeValue || '').trim()) continue;
+      if (els.indexOf(node.parentElement) >= 0) continue;
+      var marker = stopMarkerLabelOf(node);
+      if (marker) {
+        if ((!root || root.contains(marker)) && els.indexOf(marker) < 0) {
+          els.push(marker);
+          els.kinds.push(Core.STOP_MARKER_KIND);
+        }
+        continue;
+      }
+      var el = node.parentElement;
+      if (inMapbox(el)) continue;
+      for (var d = 0; el && d < 3; d += 1, el = el.parentElement) {
+        if (inPanel(el) || (root && !root.contains(el))) break;
+        var t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length > 20) break;
+        if (Core.parseStopLabel(t) != null) {
+          if (els.indexOf(el) < 0) {
+            els.push(el);
+            els.kinds.push('text');
+          }
+          break;
+        }
+      }
+    }
+    return els;
+  }
+
+  // Click candidates: Stop list rows first, then text labels. Mapbox svg markers are excluded.
+  function stopLabelsFor(els, seq) {
+    var kinds = els.kinds || [];
+    var entries = els.map(function (el, i) { return { text: el.textContent, key: i, kind: kinds[i] }; });
+    return Core.matchStopLabelEntries(entries, seq, { excludeMarkers: true }).map(function (i) { return els[i]; });
+  }
+
+  // Stop list row + its header button for a label element, or null for other label kinds.
+  function stopListTargetOf(label) {
+    var row = label && label.closest ? label.closest('div.stops-list-item') : null;
+    if (!row || inMapbox(row)) return null;
+    var btn = stopListButtonOf(label, row);
+    return btn ? { row: row, button: btn, numberEl: label } : null;
+  }
+
+  // Current DOM (not a saved node): the one Stop list row for this Stop number, or null.
+  function freshListTarget(seq) {
+    var labels = findStopLabels(seq);
+    return labels.length === 1 ? stopListTargetOf(labels[0]) : null;
+  }
+
+  // Package-number texts rendered inside one Stop list row (v3.7 open evidence; row-scoped only).
+  function rowPackageCount(row) {
+    if (!row || !row.isConnected) return 0;
+    return collectTextElements(row, function (full) { return Core.isPackageNumberText(full); }).length;
+  }
+
+  // ---- v3.5: safe click points inside a Stop list header button ----
+  var INTERACTIVE_ROLES = ['button', 'link', 'checkbox', 'menuitem', 'switch', 'tab', 'option', 'radio', 'combobox'];
+
+  function isInteractiveEl(el) {
+    if (!el || !el.tagName) return false;
+    var tag = String(el.tagName).toLowerCase();
+    if (tag === 'a' || tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'summary') return true;
+    var role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    if (INTERACTIVE_ROLES.indexOf(role) >= 0) return true;
+    if (el.hasAttribute && el.hasAttribute('onclick')) return true;
+    var ti = el.getAttribute && el.getAttribute('tabindex');
+    return ti != null && ti !== '' && Number(ti) >= 0;
+  }
+
+  // First interactive element from hit (inclusive) up to button (exclusive), e.g. phone/navi icons.
+  function interactiveBetween(hit, button) {
+    for (var cur = hit; cur && cur !== button; cur = cur.parentElement) {
+      if (isInteractiveEl(cur)) return cur;
+    }
+    return null;
+  }
+
+  function buttonHitRelation(hit, button) {
+    if (!hit) return 'none';
+    if (inPanel(hit)) return 'panel';
+    if (hit === button) return 'self';
+    if (!button.contains(hit)) return 'outside';
+    return interactiveBetween(hit, button) ? 'interactive_child' : 'child';
+  }
+
+  // Candidate points: the Stop number itself first, then points on the header line.
+  function listButtonPoints(button, numberEl) {
+    var r = button.getBoundingClientRect();
+    var pts = [];
+    function add(x, y, label) {
+      if (x > r.left && x < r.right && y > r.top && y < r.bottom && x > 0 && y > 0 &&
+        x < global.innerWidth && y < global.innerHeight) pts.push({ x: x, y: y, label: label });
+    }
+    if (numberEl && numberEl.isConnected && button.contains(numberEl)) {
+      var nr = numberEl.getBoundingClientRect();
+      if (nr.width > 0 && nr.height > 0) add(nr.left + nr.width / 2, nr.top + nr.height / 2, 'stop-number');
+    }
+    var headY = r.top + Math.min(r.height / 2, 24);
+    [['left', 0.06], ['center', 0.5], ['quarter', 0.25], ['three-quarter', 0.75]].forEach(function (f) {
+      add(r.left + r.width * f[1], headY, f[0]);
+    });
+    add(r.left + r.width / 2, r.top + r.height / 2, 'middle');
+    return pts;
+  }
+
+  // Click a Stop list header button at a point whose elementFromPoint is the button itself or a
+  // non-interactive child. All points outside the button -> covered (ui_blocked, as before);
+  // only interactive children -> no safe point (no click). getTarget() re-reads the current DOM.
+  // preferLater (v3.7 retry): labels clicked by an earlier attempt are tried last, so a different safe
+  // point is used when one exists; the same point is still allowed when it is the only safe one.
+  function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater) {
+    var op = bagRouteOp;
+    var t = getTarget();
+    if (!t) { done({ ok: false, detail: 'Stop行ボタンが見つかりません' }); return; }
+    try { t.button.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e1) {}
     afterBagLayout(function () {
       if (!bagIsCurrent(runId)) return;
-      // Virtualized lists may re-render on scroll: re-resolve by exact DA after layout.
-      var fresh = collectExactDaElements([target.scannableId])[target.scannableId] || [];
-      if (Core.domMatchStatus(fresh) !== 'unique') {
-        Core.recordBagResult(bagRun, target.referenceId,
-          fresh.length ? Core.BAG_STATUS.DOM_AMBIGUOUS : Core.BAG_STATUS.DOM_NOT_FOUND, 'after scroll');
-        done();
-        return;
-      }
-      el = fresh[0];
+      t = getTarget();
+      if (!t) { done({ ok: false, detail: 'Stop行ボタンがscroll後に見つかりません' }); return; }
       var rect = null;
-      try { rect = el.getBoundingClientRect(); } catch (e2) {}
-      var point = Core.viewportClickPoint(rect);
-      if (!point) {
-        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'no coords');
-        done();
-        return;
+      try { rect = t.button.getBoundingClientRect(); } catch (e2) {}
+      var pts = listButtonPoints(t.button, t.numberEl).filter(function (p) {
+        return !skipLabels || skipLabels.indexOf(p.label) < 0;
+      });
+      if (preferLater && preferLater.length) {
+        pts = pts.filter(function (p) { return preferLater.indexOf(p.label) < 0; })
+          .concat(pts.filter(function (p) { return preferLater.indexOf(p.label) >= 0; }));
       }
       setPanelClickable(false);
-      if (!hitTestAllows(el, point)) {
+      var tried = [];
+      var chosen = null;
+      var outside = 0;
+      pts.forEach(function (p) {
+        if (chosen) return;
+        var hit = null;
+        try { hit = document.elementFromPoint(p.x, p.y); } catch (e3) {}
+        var rel = buttonHitRelation(hit, t.button);
+        tried.push({
+          label: p.label, x: Math.round(p.x), y: Math.round(p.y), hit: diagEl(hit), relation: rel,
+          interactive: rel === 'interactive_child' ? diagEl(interactiveBetween(hit, t.button)) : null
+        });
+        if (rel === 'self' || rel === 'child') chosen = p;
+        else if (rel === 'outside' || rel === 'panel' || rel === 'none') outside += 1;
+      });
+      if (diag) {
+        diag.buttonConnected = !!t.button.isConnected;
+        diag.buttonRect = diagRect(rect);
+        diag.points = tried;
+      }
+      if (!chosen) {
         setPanelClickable(true);
-        Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED, 'covered');
-        ctx.abort = 'Package番号が他要素に覆われています（detailの閉じ方不明）';
-        done();
+        var covered = tried.length > 0 && outside === tried.length;
+        done({ ok: false, covered: covered, detail: (covered ? 'covered by ' : 'no safe point: ') + (tried[0] ? tried[0].hit : '-') });
         return;
       }
-      bagRun.clicks += 1;
-      requestCdpClick(point, function (res) {
+      if (diag) diag.clicked = { x: Math.round(chosen.x), y: Math.round(chosen.y), label: chosen.label };
+      bagOpEnter(op);
+      requestCdpClick(chosen, function (res) {
         setPanelClickable(true);
-        if (!bagIsCurrent(runId)) return;
-        if (!res || !res.ok) {
-          Core.recordBagResult(bagRun, target.referenceId, Core.BAG_STATUS.CLICK_FAILED,
-            (res && (res.message || res.error)) || 'CDP');
-          done();
-          return;
-        }
-        waitBag(function () {
-          return Core.hasTrDetails(store.trDetailsByTrId, target.referenceId);
-        }, BAG_PACKAGE_TIMEOUT_MS, runId, function (got) {
-          Core.recordBagResult(bagRun, target.referenceId,
-            got ? Core.capturedBagStatus(store.trDetailsByTrId, target.referenceId) : Core.BAG_STATUS.TIMEOUT,
-            got ? '' : 'trDetails not observed');
-          restoreRouteView(ctx, runId, function (ok) {
-            if (!ok) ctx.abort = 'Package detail後にRoute詳細へ戻れませんでした';
-            bagLater(done, 300);
-          });
-        });
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
+        if (res && res.ok) bagOpDom(op, 'cdp_click');
+        done(res && res.ok ? { ok: true, label: chosen.label } : { ok: false, detail: (res && (res.message || res.error)) || 'CDP' });
       });
     });
   }
 
-  // One top-to-bottom sweep per scroller; at each position click the first pending
-  // target whose DA is exactly and uniquely present, then re-check without scrolling.
-  function sweepBagTargets(targets, ctx, runId, done) {
-    var scrollers = null;
-    var scrollerIndex = 0;
+  // Short page summary for Route click diagnostics (short texts only).
+  function pageBrief() {
+    function texts(sel, limit) {
+      var out = [];
+      var nodes = document.querySelectorAll(sel);
+      for (var i = 0; i < nodes.length && out.length < limit; i++) {
+        if (!inPanel(nodes[i]) && elementVisible(nodes[i])) out.push(diagText(nodes[i], 20));
+      }
+      return out;
+    }
+    return {
+      url: hrefNow(),
+      tabs: texts('[role="tab"]', 6),
+      headings: texts('h1, h2, h3, h4, [role="heading"]', 6),
+      elementCount: document.querySelectorAll('*').length,
+      stopListRows: stopListRows(null).length
+    };
+  }
+
+  function findStopLabels(seq) {
+    return stopLabelsFor(collectStopLabelElements(null), seq);
+  }
+
+  // ---- Bag diagnostics (Stop detection). Short texts only; long texts become [text:N]. ----
+  function diagText(el, max) {
+    var t = String((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    return t.length <= (max || 12) ? t : '[text:' + t.length + ']';
+  }
+
+  function diagEl(el) {
+    if (!el || !el.tagName) return '-';
+    var out = String(el.tagName).toLowerCase();
+    if (el.id) out += '#' + String(el.id).slice(0, 30);
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 3);
+    if (cls.length) out += '.' + cls.join('.');
+    ['role', 'aria-label', 'aria-expanded', 'data-testid', 'mdn-text'].forEach(function (a) {
+      var v = el.getAttribute && el.getAttribute(a);
+      if (v != null && v !== '') out += '[' + a + '=' + String(v).slice(0, 24) + ']';
+    });
+    var t = diagText(el, 12);
+    if (t) out += ' "' + t + '"';
+    return out;
+  }
+
+  function diagOutline(root, maxNodes) {
+    var lines = [];
+    function walk(el, depth) {
+      if (!el || lines.length >= maxNodes || depth > 4 || inPanel(el)) return;
+      var kids = el.children || [];
+      lines.push(new Array(depth + 1).join('  ') + diagEl(el) + (kids.length ? ' {' + kids.length + '}' : ''));
+      for (var i = 0; i < kids.length && i < 4; i++) walk(kids[i], depth + 1);
+    }
+    walk(root, 0);
+    return lines;
+  }
+
+  function diagExactText(values, limit) {
+    var want = {};
+    values.forEach(function (v) { want[v] = true; });
+    var hits = collectTextElements(null, function (full) {
+      return !!want[String(full).replace(/\s+/g, ' ').trim()];
+    });
+    return {
+      count: hits.length,
+      samples: hits.slice(0, limit || 3).map(function (el) {
+        return diagEl(el) + ' < ' + diagEl(el.parentElement) + ' < ' + diagEl(el.parentElement && el.parentElement.parentElement);
+      })
+    };
+  }
+
+  function routeDomSnapshot(route, extra) {
+    var targets = (route && route.targets) || [];
+    var labels = collectStopLabelElements(null);
+    var all = document.querySelectorAll('*');
+    var shadowHosts = 0;
+    for (var i = 0; i < all.length; i++) { if (all[i].shadowRoot) shadowHosts += 1; }
+    function list(sel, limit, fmt) {
+      var out = [];
+      var nodes = document.querySelectorAll(sel);
+      for (var k = 0; k < nodes.length && out.length < limit; k++) {
+        if (!inPanel(nodes[k]) && elementVisible(nodes[k])) out.push(fmt(nodes[k]));
+      }
+      return { count: nodes.length, samples: out };
+    }
+    var seqs = [];
+    targets.forEach(function (t) { if (seqs.indexOf(t.stop) < 0) seqs.push(t.stop); });
+    var probes = seqs.slice(0, 3).map(function (seq) {
+      return {
+        stop: seq,
+        bareNumber: diagExactText([String(seq)], 3),
+        labelForms: diagExactText(['#' + seq, '# ' + seq, 'Stop ' + seq, 'Stop #' + seq, 'ストップ ' + seq], 3)
+      };
+    });
+    var das = targets.map(function (t) { return t.scannableId; });
+    var visibleDa = collectExactDaElements(das);
+    var scroller = bagMainScroller();
+    var stopWords = collectTextElements(null, function (full) {
+      var t = String(full).replace(/\s+/g, ' ').trim();
+      return t.length <= 30 && /stop|ストップ|停車|配達先|訪問/i.test(t);
+    });
+    return Object.assign({
+      at: new Date().toISOString(),
+      routeCode: route && route.routeCode,
+      url: hrefNow(),
+      title: String(document.title || '').slice(0, 80),
+      headings: list('h1, h2, h3, h4, [role="heading"]', 8, function (el) { return diagText(el, 30); }),
+      tabs: list('[role="tab"]', 10, function (el) { return diagEl(el); }),
+      controls: list('button, a[href], [role="button"], [role="link"], [role="tab"], [aria-expanded]', 25, function (el) { return diagEl(el); }),
+      roles: ['list', 'listitem', 'row', 'grid', 'treeitem', 'region', 'dialog'].reduce(function (m, r) {
+        m[r] = document.querySelectorAll('[role="' + r + '"]').length;
+        return m;
+      }, {}),
+      iframes: document.querySelectorAll('iframe').length,
+      shadowHosts: shadowHosts,
+      elementCount: all.length,
+      stopLabelCandidates: {
+        count: labels.length,
+        svgStopMarkers: (labels.kinds || []).filter(function (k) { return k === Core.STOP_MARKER_KIND; }).length,
+        samples: labels.slice(0, 10).map(function (el) { return diagEl(el) + ' < ' + diagEl(el.parentElement); })
+      },
+      stopWordTexts: stopWords.slice(0, 10).map(diagEl),
+      targetStopProbes: probes,
+      packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
+      targetDaVisible: Object.keys(visibleDa).length,
+      mainScroller: scroller ? {
+        el: diagEl(scroller), scrollHeight: scroller.scrollHeight || 0, clientHeight: scroller.clientHeight || 0,
+        children: (scroller.children || []).length
+      } : null,
+      outline: scroller ? diagOutline(scroller, 40) : []
+    }, extra || {});
+  }
+
+  function pushRouteDiag(entry) {
+    if (!bagRun) return;
+    bagRun.routeDiagnostics = bagRun.routeDiagnostics || [];
+    if (bagRun.routeDiagnostics.length < 60) bagRun.routeDiagnostics.push(entry);
+  }
+
+  // Highest ancestor holding this Stop label and no other Stop label.
+  function stopBlockOf(label) {
+    var block = label;
+    for (var cur = label.parentElement, depth = 0; cur && depth < 10; depth += 1, cur = cur.parentElement) {
+      if (cur === document.body || cur === document.documentElement || inPanel(cur)) break;
+      if (collectStopLabelElements(cur).length > 1) break;
+      block = cur;
+    }
+    return block;
+  }
+
+  // Package card: highest ancestor (<= 8 levels) containing exactly one package-number token.
+  function packageCardOf(daEl) {
+    var card = daEl;
+    for (var cur = daEl.parentElement, depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
+      if (cur === document.body || cur === document.documentElement || inPanel(cur)) break;
+      var numbers = collectTextElements(cur, function (full) { return Core.isPackageNumberText(full); });
+      if (numbers.length !== 1) break;
+      if (collectStopLabelElements(cur).length > 0) break;
+      card = cur;
+    }
+    return card;
+  }
+
+  function isNativeClickable(el) {
+    if (!el || !el.tagName) return false;
+    var tag = String(el.tagName).toLowerCase();
+    if (tag === 'a' || tag === 'button') return true;
+    var role = String((el.getAttribute && el.getAttribute('role')) || '').toLowerCase();
+    if (role === 'button' || role === 'link') return true;
+    if (el.hasAttribute && (el.hasAttribute('tabindex') || el.hasAttribute('onclick'))) return true;
+    var cursor = '';
+    try { cursor = global.getComputedStyle(el).cursor; } catch (e1) {}
+    return cursor === 'pointer';
+  }
+
+  // The package-number element itself or its nearest clickable ancestor inside the same card.
+  function packageClickTarget(daEl, card) {
+    for (var cur = daEl; cur; cur = cur.parentElement) {
+      if (isNativeClickable(cur)) return cur;
+      if (cur === card) break;
+    }
+    return null;
+  }
+
+  function scrollableAncestors(el) {
+    var out = [];
+    for (var cur = el && el.parentElement, depth = 0; cur && depth < 20; depth += 1, cur = cur.parentElement) {
+      if (inPanel(cur)) break;
+      var overflowY = '';
+      try { overflowY = global.getComputedStyle(cur).overflowY; } catch (e1) {}
+      if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+        (cur.scrollHeight || 0) - (cur.clientHeight || 0) > 20) out.push(cur);
+    }
+    return out;
+  }
+
+  // Main scroller of the Route detail: scrollable ancestor of any Stop label, else the largest one.
+  function bagMainScroller() {
+    var rows = stopListRows(null);
+    for (var r = 0; r < rows.length; r++) {
+      var rowAnc = scrollableAncestors(rows[r]);
+      if (rowAnc.length) return rowAnc[0];
+    }
+    var labels = collectStopLabelElements(null);
+    for (var i = 0; i < labels.length; i++) {
+      var anc = scrollableAncestors(labels[i]);
+      if (anc.length) return anc[0];
+    }
+    var best = null;
+    var nodes = document.querySelectorAll('div, section, main, ul, tbody, [role="list"], [role="grid"], [role="table"]');
+    for (var j = 0; j < nodes.length; j++) {
+      if (inPanel(nodes[j])) continue;
+      var overflow = '';
+      try { overflow = global.getComputedStyle(nodes[j]).overflowY; } catch (e2) {}
+      if (overflow !== 'auto' && overflow !== 'scroll' && overflow !== 'overlay') continue;
+      var delta = (nodes[j].scrollHeight || 0) - (nodes[j].clientHeight || 0);
+      if (delta > 40 && (!best || delta > (best.scrollHeight - best.clientHeight))) best = nodes[j];
+    }
+    return best || document.scrollingElement || document.documentElement;
+  }
+
+  // Scroll-search: current position first, then downward, then wrap once from the top.
+  function scrollSearch(find, maxSteps, runId, done) {
+    var scroller = bagMainScroller();
     var steps = 0;
-
-    function pending() {
-      return Core.pendingBagTargets(bagRun, targets, store.trDetailsByTrId);
-    }
-
-    function finish() {
-      pending().forEach(function (t) {
-        if (ctx.abort || Date.now() > ctx.deadline) return; // stay not_attempted
-        Core.recordBagResult(bagRun, t.referenceId, Core.BAG_STATUS.DOM_NOT_FOUND, '');
-      });
-      done();
-    }
-
-    function check() {
-      if (!bagIsCurrent(runId)) return;
-      paint();
-      var list = pending();
-      if (!list.length || ctx.abort) { finish(); return; }
-      if (Date.now() > ctx.deadline) {
-        ctx.abort = 'Route上限時間を超過';
-        finish();
-        return;
-      }
-      var found = collectExactDaElements(list.map(function (t) { return t.scannableId; }));
-      for (var i = 0; i < list.length; i++) {
-        var matches = found[list[i].scannableId] || [];
-        var status = Core.domMatchStatus(matches);
-        if (status === 'ambiguous') {
-          Core.recordBagResult(bagRun, list[i].referenceId, Core.BAG_STATUS.DOM_AMBIGUOUS, matches.length + ' matches');
-          bagLater(check, 0);
-          return;
-        }
-        if (status === 'unique') {
-          clickBagPackage(list[i], matches[0], ctx, runId, check);
-          return;
-        }
-      }
-      if (!scrollers) {
-        scrollers = bagScrollers([]);
-        scrollerIndex = 0;
-        steps = 0;
-        if (scrollers[0]) scrollers[0].scrollTop = 0;
-      }
-      var scroller = scrollers[scrollerIndex];
-      if (!scroller) { finish(); return; }
-      var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
-      if (steps >= BAG_SCROLL_MAX_STEPS || (steps > 0 && scroller.scrollTop >= maxScroll)) {
-        scrollerIndex += 1;
-        steps = 0;
-        if (scrollers[scrollerIndex]) scrollers[scrollerIndex].scrollTop = 0;
-        bagLater(check, 120);
-        return;
-      }
-      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.55));
-      scroller.scrollTop = Math.min((steps === 0 ? 0 : scroller.scrollTop + stepPx), maxScroll);
+    var wrapped = false;
+    function scrollTo(y) {
+      scroller.scrollTop = y;
       try { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); } catch (e1) {}
-      steps += 1;
-      bagLater(check, 150);
     }
-    check();
+    function tick() {
+      if (!bagIsCurrent(runId)) return;
+      var hit = find();
+      if (hit) { done(hit); return; }
+      if (!scroller || steps >= maxSteps) { done(null); return; }
+      var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
+      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.6));
+      steps += 1;
+      if (scroller.scrollTop >= maxScroll - 1) {
+        if (wrapped || maxScroll <= 0) { done(null); return; }
+        wrapped = true;
+        scrollTo(0);
+      } else {
+        scrollTo(Math.min(scroller.scrollTop + stepPx, maxScroll));
+      }
+      bagLater(tick, 160);
+    }
+    tick();
+  }
+
+  function hitAllowed(hit, el, container) {
+    if (!hit || inPanel(hit)) return false;
+    if (hit === el || el.contains(hit)) return true;
+    if (container && (hit === container || container.contains(hit))) return true;
+    return hit !== document.body && hit !== document.documentElement && hit.contains(el);
+  }
+
+  // Points inside the element's own rect (center first). Each is verified with elementFromPoint.
+  function candidatePoints(rect) {
+    var c = Core.viewportClickPoint(rect);
+    if (!c) return [];
+    var pts = [c];
+    [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]].forEach(function (f) {
+      pts.push({ x: rect.left + rect.width * f[0], y: rect.top + rect.height * f[1] });
+    });
+    return pts.filter(function (p) {
+      return p.x > 0 && p.y > 0 && p.x < global.innerWidth && p.y < global.innerHeight;
+    });
+  }
+
+  // ---- Stop click diagnostics (evidence only; the click decision is unchanged) ----
+  var BAG_STOP_CLICK_DIAG_MAX = 40;
+  var BAG_STOP_CLICK_FAIL_DIAG_MAX = 240;
+
+  function diagChain(el, depth) {
+    var out = [];
+    for (var cur = el, d = 0; cur && d < depth; d += 1, cur = cur.parentElement) {
+      if (cur === document.documentElement) break;
+      out.push(diagEl(cur));
+    }
+    return out;
+  }
+
+  function diagRect(r) {
+    if (!r) return null;
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+
+  function markerSvgOf(el) {
+    var svg = el && el.closest ? el.closest('svg') : null;
+    return svg && Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class')) ? svg : null;
+  }
+
+  // How the element returned by elementFromPoint relates to the click target.
+  function hitRelation(hit, el, container) {
+    if (!hit) return 'none';
+    if (inPanel(hit)) return 'ofk3-panel';
+    if (hit === el || el.contains(hit)) return 'target';
+    var svg = markerSvgOf(el);
+    if (svg && (hit === svg || svg.contains(hit))) return 'same-stop-marker';
+    if (container && (hit === container || container.contains(hit))) return 'same-stop-block';
+    if (hit !== document.body && hit !== document.documentElement && hit.contains(el)) return 'ancestor-of-target';
+    var other = markerSvgOf(hit);
+    if (other) return 'other-stop-marker:' + String(other.textContent || '').trim().slice(0, 6);
+    var dlg = hit.closest && hit.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]');
+    if (dlg) return 'dialog';
+    return 'other';
+  }
+
+  function recordClickTarget(diag, cur, rect) {
+    var svg = markerSvgOf(cur.el);
+    diag.target = {
+      el: diagEl(cur.el),
+      stopMarkerSvg: svg ? diagEl(svg) : null,
+      rect: diagRect(rect),
+      svgRect: svg ? diagRect(svg.getBoundingClientRect()) : null,
+      container: diagEl(cur.container),
+      ancestors: diagChain(svg || cur.el, 12)
+    };
+  }
+
+  function recordHitTest(diag, cur, pts) {
+    diag.points = pts.map(function (p) {
+      var hit = null;
+      try { hit = document.elementFromPoint(p.x, p.y); } catch (e1) {}
+      var rel = hitRelation(hit, cur.el, cur.container);
+      return {
+        x: Math.round(p.x), y: Math.round(p.y), hit: diagEl(hit), relation: rel,
+        allowed: hitAllowed(hit, cur.el, cur.container), hitAncestors: rel === 'target' ? [] : diagChain(hit, 5)
+      };
+    });
+    var stack = [];
+    try { stack = document.elementsFromPoint(pts[0].x, pts[0].y) || []; } catch (e2) {}
+    diag.centerStack = stack.slice(0, 8).map(function (h) { return diagEl(h) + ' => ' + hitRelation(h, cur.el, cur.container); });
+  }
+
+  // Page state around a Stop click (short texts only).
+  function stopClickState(das) {
+    var labels = collectStopLabelElements(null);
+    return {
+      atMs: Date.now(),
+      url: hrefNow(),
+      targetDaVisible: Object.keys(collectExactDaElements(das)).length,
+      packageNumbersVisible: collectTextElements(null, function (full) { return Core.isPackageNumberText(full); }).length,
+      stopLabels: labels.length,
+      svgStopMarkers: (labels.kinds || []).filter(function (k) { return k === Core.STOP_MARKER_KIND; }).length,
+      elementCount: document.querySelectorAll('*').length,
+      dialogs: visibleDialogs().length,
+      headings: (function () {
+        var out = [];
+        var nodes = document.querySelectorAll('h1, h2, h3, h4, [role="heading"]');
+        for (var i = 0; i < nodes.length && out.length < 6; i++) {
+          if (!inPanel(nodes[i]) && elementVisible(nodes[i])) out.push(diagText(nodes[i], 30));
+        }
+        return out;
+      })()
+    };
+  }
+
+  // The same Stop number as plain text (the other candidate seen in the 2026-09-24 diagnostics):
+  // where it lives, to tell a Stop-list row from a map/chart marker. Recorded, never clicked.
+  function plainNumberContext(seq) {
+    var want = String(seq);
+    var hits = collectTextElements(null, function (full) {
+      return String(full).replace(/\s+/g, ' ').trim() === want;
+    }).filter(function (el) { return !markerSvgOf(el); });
+    return hits.slice(0, 3).map(function (el) {
+      var r = null;
+      try { r = el.getBoundingClientRect(); } catch (e1) {}
+      return { el: diagEl(el), rect: diagRect(r), ancestors: diagChain(el, 10) };
+    });
+  }
+
+  function pushStopClickDiag(entry) {
+    if (!bagRun) return;
+    bagRun.stopClickDiagnostics = bagRun.stopClickDiagnostics || [];
+    // v3.7: failed / retried opens are always kept (up to BAG_STOP_CLICK_FAIL_DIAG_MAX); 09-25 lost most
+    // failures to the 40-entry cap.
+    var failed = entry && (entry.result !== 'expanded' || (entry.attempts || []).length > 1);
+    if (bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX ||
+      (failed && bagRun.stopClickDiagnostics.length < BAG_STOP_CLICK_FAIL_DIAG_MAX)) bagRun.stopClickDiagnostics.push(entry);
+  }
+
+  // scrollIntoView -> rAF x2 -> rect -> elementFromPoint check -> requestCdpClick.
+  // resolve() re-finds the element after layout (virtualized lists re-render on scroll).
+  // diag (optional): filled with the hit-test evidence; never changes the decision.
+  function safeCdpClick(resolve, runId, done, diag) {
+    var op = bagRouteOp;
+    var first = resolve();
+    if (!first || !first.el) { done({ ok: false, detail: 'element lost' }); return; }
+    try { first.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
+    afterBagLayout(function () {
+      if (!bagIsCurrent(runId)) return;
+      var cur = resolve();
+      if (!cur || !cur.el) { done({ ok: false, detail: 'element lost after scroll' }); return; }
+      var rect = null;
+      try { rect = cur.el.getBoundingClientRect(); } catch (e2) {}
+      var pts = candidatePoints(rect);
+      if (diag) recordClickTarget(diag, cur, rect);
+      if (!pts.length) { done({ ok: false, detail: 'no coords' }); return; }
+      setPanelClickable(false);
+      if (diag) recordHitTest(diag, cur, pts);
+      var point = null;
+      var lastHit = null;
+      for (var i = 0; i < pts.length && !point; i++) {
+        var hit = null;
+        try { hit = document.elementFromPoint(pts[i].x, pts[i].y); } catch (e3) {}
+        if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];
+        else lastHit = hit;
+      }
+      if (!point) {
+        setPanelClickable(true);
+        done({ ok: false, covered: true, detail: 'covered by ' + describeEl(lastHit) });
+        return;
+      }
+      bagOpEnter(op);
+      requestCdpClick(point, function (res) {
+        setPanelClickable(true);
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
+        if (res && res.ok) bagOpDom(op, 'cdp_click');
+        done(res && res.ok ? { ok: true } : { ok: false, dispatched: true, detail: (res && (res.message || res.error)) || 'CDP' });
+      });
+    });
+  }
+
+  function visibleDialogs() {
+    var out = [];
+    var nodes = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]');
+    for (var i = 0; i < nodes.length; i++) {
+      if (!inPanel(nodes[i]) && elementVisible(nodes[i]) && out.indexOf(nodes[i]) < 0) out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  // Native close control inside a Cortex dialog: identified by role/aria-label/text, never by position.
+  function dialogCloseControl(dialog) {
+    var nodes = dialog.querySelectorAll('button, [role="button"], a');
+    for (var i = 0; i < nodes.length; i++) {
+      var aria = String((nodes[i].getAttribute && nodes[i].getAttribute('aria-label')) || '');
+      var text = String(nodes[i].textContent || '').replace(/\s+/g, ' ').trim();
+      if (/^(close|閉じる|キャンセル|cancel|戻る|back)$/i.test(aria) ||
+        /^(×|✕|✖|x|close|閉じる|キャンセル|cancel|戻る|back)$/i.test(text)) {
+        if (elementVisible(nodes[i])) return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  // Close dialogs that were not open before (before = list of dialogs to keep).
+  function closeNewDialogs(before, runId, done) {
+    var fresh = visibleDialogs().filter(function (d) { return (before || []).indexOf(d) < 0; });
+    if (!fresh.length) { done({ ok: true }); return; }
+    var dialog = fresh[0];
+    var control = dialogCloseControl(dialog);
+    if (!control) { done({ ok: false, detail: 'dialogの閉じるUIが見つかりません: ' + describeEl(dialog) }); return; }
+    safeCdpClick(function () { return control.isConnected ? { el: control, container: dialog } : null; }, runId, function (res) {
+      if (!res.ok) { done({ ok: false, detail: 'dialog close click失敗: ' + res.detail }); return; }
+      waitBag(function () { return !dialog.isConnected || !elementVisible(dialog); }, BAG_DIALOG_CLOSE_TIMEOUT_MS, runId, function (gone) {
+        if (!gone) { done({ ok: false, detail: 'dialogが閉じません: ' + describeEl(dialog) }); return; }
+        closeNewDialogs(before, runId, done);
+      });
+    });
+  }
+
+  function historyBackTo(href, runId, done) {
+    if (hrefNow() === href) { done(true); return; }
+    try { global.history.back(); } catch (e1) { done(false); return; }
+    waitBag(function () { return hrefNow() === href; }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+  }
+
+  function historyLength() {
+    return global.history ? global.history.length : 0;
+  }
+
+  // Undo navigation caused by a click only when the click added a history entry.
+  // Real Cortex rewrites the URL in place (e.g. &selectedStopId=N via replaceState); a
+  // history.back() then leaves the Route detail, so a rewritten URL is accepted as is.
+  function restoreHistory(beforeHref, beforeLen, runId, done) {
+    if (hrefNow() === beforeHref) { done({ ok: true, method: 'unchanged' }); return; }
+    if (historyLength() > beforeLen) {
+      historyBackTo(beforeHref, runId, function (back) {
+        done(back ? { ok: true, method: 'history_back' } : { ok: false, method: 'history_back', detail: 'history.back後もURLが戻りません' });
+      });
+      return;
+    }
+    done({ ok: true, method: 'url_replaced' });
+  }
+
+  function selectedStopIdOf(href) {
+    var m = String(href || '').match(/[?&]selectedStopId=([^&#]*)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  // First time each target's trDetails row is seen, in ms after the Stop open started.
+  function noteTrSeen(targets, since) {
+    if (!bagRun) return;
+    bagRun.trSeenAt = bagRun.trSeenAt || {};
+    (targets || []).forEach(function (t) {
+      if (bagRun.trSeenAt[t.referenceId] == null && Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) {
+        bagRun.trSeenAt[t.referenceId] = Date.now() - since;
+      }
+    });
+  }
+
+  // Bag v3.10: element description without free text (tag, non-generated classes, role, aria / data
+  // attribute NAMES, boolean-ish aria values). Text is masked except package / order numbers and Bag labels.
+  function safeElInfo(el) {
+    if (!el || !el.tagName) return null;
+    var cls = String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || ''))
+      .split(/\s+/).filter(function (c) { return c && !/^css-/.test(c); }).slice(0, 4);
+    var aria = [];
+    var data = [];
+    var attrs = el.attributes || [];
+    for (var i = 0; i < attrs.length; i++) {
+      var n = attrs[i].name;
+      if (/^aria-/.test(n)) aria.push(/^aria-(expanded|selected|level|hidden|checked|current|disabled)$/.test(n) ? n + '=' + attrs[i].value : n);
+      else if (/^data-/.test(n)) data.push(n);
+    }
+    var own = '';
+    var kids = el.childNodes || [];
+    for (var j = 0; j < kids.length; j++) if (kids[j].nodeType === 3) own += ' ' + kids[j].nodeValue;
+    return {
+      tag: String(el.tagName).toLowerCase(), classes: cls, role: el.getAttribute ? el.getAttribute('role') : null,
+      aria: aria.slice(0, 8), data: data.slice(0, 8), directText: Core.safeContainerExcerpt([own]),
+      inMapbox: inMapbox(el), inStopRow: !!(el.closest && el.closest('div.stops-list-item'))
+    };
+  }
+
+  function safeChain(el, depth) {
+    var out = [];
+    for (var cur = el, d = 0; cur && d < depth; d += 1, cur = cur.parentElement) {
+      if (cur === document.documentElement) break;
+      var x = safeElInfo(cur);
+      out.push(x.tag + (x.classes.length ? '.' + x.classes.join('.') : '') + (x.role ? '[role=' + x.role + ']' : '') +
+        (x.aria.length ? '[' + x.aria.join(',') + ']' : ''));
+    }
+    return out;
+  }
+
+  // Bag v3.10: why the Stop-DOM reader did not find the target DA (no names / addresses kept).
+  function stopDomMissDiag(ctx, target, stop, domRes) {
+    var da = String(target.scannableId || '');
+    var tail = da.slice(-6);
+    var lt = freshListTarget(stop.stop) || (ctx.openedListTarget && ctx.openedListTarget.row.isConnected ? ctx.openedListTarget : null);
+    var row = lt ? lt.row : null;
+    var existing = collectExactDaElements([da])[da] || [];
+    var sub = 0;
+    var suffix = 0;
+    collectTextElements(null, function (full, own) {
+      if (own.indexOf(da) >= 0) sub += 1;
+      else if (tail && own.indexOf(tail) >= 0) suffix += 1;
+      return false;
+    });
+    var scope = row || bagMainScroller() || document.body;
+    var tokens = {};
+    var blocks = 0;
+    collectTextElements(scope, function (full, own) {
+      (own.match(/\b[A-Z]{2,4}\d{8,14}\b/g) || []).forEach(function (x) { tokens[x] = true; });
+      if (Core.isPackageNumberText(own)) blocks += 1;
+      return false;
+    });
+    var tagCounts = {};
+    var roleCounts = {};
+    var classCounts = {};
+    var dataNames = {};
+    var ariaNames = {};
+    var nodes = scope.querySelectorAll ? scope.querySelectorAll('*') : [];
+    for (var i = 0; i < nodes.length && i < 4000; i++) {
+      var el = nodes[i];
+      var tag = String(el.tagName).toLowerCase();
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      var role = el.getAttribute('role');
+      if (role) roleCounts[role] = (roleCounts[role] || 0) + 1;
+      String(el.className && el.className.baseVal != null ? el.className.baseVal : (el.className || '')).split(/\s+/).forEach(function (c) {
+        if (c && !/^css-/.test(c)) classCounts[c] = (classCounts[c] || 0) + 1;
+      });
+      for (var k = 0; k < el.attributes.length; k++) {
+        var an = el.attributes[k].name;
+        if (/^data-/.test(an)) dataNames[an] = (dataNames[an] || 0) + 1;
+        else if (/^aria-/.test(an)) ariaNames[an] = (ariaNames[an] || 0) + 1;
+      }
+    }
+    function top(m, n) {
+      return Object.keys(m).sort(function (a, b) { return m[b] - m[a]; }).slice(0, n).map(function (k) { return k + ':' + m[k]; });
+    }
+    return {
+      routeCode: ctx.route && ctx.route.routeCode, stopNumber: stop.stop,
+      targetReferenceId: target.referenceId, targetScannableId: da,
+      stopOpenState: {
+        rowFound: !!row, ariaExpanded: lt ? lt.button.getAttribute('aria-expanded') : null,
+        selectedStopId: selectedStopIdOf(hrefNow()), pass: domRes.pass || ''
+      },
+      targetDaVisibleByExistingDetector: existing.length > 0,
+      detectorMismatch: existing.length > 0 && !domRes.daFound,
+      existingDetectorEvidence: existing.slice(0, 3).map(function (el) {
+        return { el: safeElInfo(el), ancestors: safeChain(el, 10), insideOpenedRow: row ? row.contains(el) : null, visible: elementVisible(el) };
+      }),
+      stopDomReason: domRes.reason || '',
+      exactDirectTextMatchCount: domRes.candidateCount || 0,
+      substringMatchCount: sub,
+      suffixMatchCount: suffix,
+      scope: row ? 'opened_stop_row' : 'main_scroller',
+      daTokensInScope: Object.keys(tokens).slice(0, 40),
+      packageLikeBlockCount: blocks,
+      structure: {
+        elements: nodes.length, tags: top(tagCounts, 12), roles: top(roleCounts, 10), classes: top(classCounts, 20),
+        dataAttributes: top(dataNames, 12), ariaAttributes: top(ariaNames, 12),
+        rowChain: row ? safeChain(row, 6) : []
+      }
+    };
+  }
+
+  // Bag v3.9: live-DOM accessor for Core.readStopDomBag (panel, Mapbox and svg/script never read).
+  function stopDomAccessor() {
+    return {
+      root: document.body || document.documentElement,
+      children: function (n) { return n && n.children ? Array.prototype.slice.call(n.children) : []; },
+      parent: function (n) { return n ? n.parentElement : null; },
+      text: function (n) { return n ? String(n.textContent || '') : ''; },
+      ownText: function (n) {
+        var out = '';
+        var kids = n ? n.childNodes : null;
+        for (var i = 0; kids && i < kids.length; i++) if (kids[i].nodeType === 3) out += ' ' + kids[i].nodeValue;
+        return out;
+      },
+      skip: function (n) {
+        if (!n || !n.tagName) return true;
+        var tag = String(n.tagName).toLowerCase();
+        return tag === 'script' || tag === 'style' || tag === 'svg' || tag === 'noscript' || inPanel(n) || inMapbox(n);
+      },
+      isStopRow: function (n) { return !!(n && n.matches && n.matches('div.stops-list-item')); },
+      stopRowNumber: function (n) { var info = stopListRowInfo(n); return info ? info.number : null; },
+      visible: elementVisible
+    };
+  }
+
+  // Bag v3.8: wait for this Stop's pending targets (normal 3 s, then up to 3 s more only if some are
+  // missing); ends the moment all of them have trDetails. Arrival times come from the trDetails hook.
+  // seenSince: base of the v3.6 elapsedAfterStopOpenMs (the click start for a fresh open).
+  // noExtra: package-fallback reopen (the target already had the full 6 s wait) -> normal wait only.
+  // note: progress of the Route this wait belongs to (Bag v3.11).
+  function waitStopTrDetails(ctx, runId, pending, seenSince, noExtra, done, note) {
+    var startedAt = Date.now();
+    var baseline = {};
+    pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) baseline[t.referenceId] = true; });
+    var arrivedSeen = Object.keys(baseline).length;
+    Core.runTargetTrWait({
+      pending: pending,
+      trMap: function () { return store.trDetailsByTrId; },
+      baseline: baseline,
+      startedAt: startedAt,
+      normalMs: ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,
+      // Unfinished Bag Test v1 keeps its single 3 s wait.
+      extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS,
+      receivedAtOf: function (ref) {
+        var shape = bagRun && bagRun.trRowShapes && bagRun.trRowShapes[ref];
+        return shape && shape.receivedAtMs ? shape.receivedAtMs : null;
+      },
+      wait: function (check, ms, cb) {
+        waitBag(function () {
+          noteTrSeen(pending, seenSince);
+          var n = pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length;
+          if (n > arrivedSeen) {
+            arrivedSeen = n;
+            if (note) note('tr_details');
+          }
+          return check();
+        }, ms, runId, cb);
+      },
+      done: function (result) {
+        if (bagRun) Core.recordTrWait(bagRun, result);
+        done(result);
+      }
+    });
+  }
+
+  function pushStopLeaveDiag(entry) {
+    if (!bagRun) return;
+    bagRun.stopLeaveDiagnostics = bagRun.stopLeaveDiagnostics || [];
+    if (bagRun.stopLeaveDiagnostics.length < BAG_STOP_CLICK_DIAG_MAX) bagRun.stopLeaveDiagnostics.push(entry);
   }
 
   function anyRouteCardShown() {
     var cards = visibleRouteCards();
     for (var i = 0; i < cards.length; i++) {
-      var rect = null;
-      try { rect = cards[i].getBoundingClientRect(); } catch (e1) {}
-      if (rect && rect.width > 0 && rect.height > 0) return true;
+      if (elementVisible(cards[i])) return true;
     }
     return false;
   }
 
   function routeListShown(ctx) {
-    return String(global.location.href || '') === ctx.listHref && anyRouteCardShown();
-  }
-
-  function bagReturnToList(ctx, runId, done) {
-    if (routeListShown(ctx)) { done(true); return; }
-    if (String(global.location.href || '') === ctx.listHref) { done(false); return; }
-    try { global.history.back(); } catch (e1) { done(false); return; }
-    waitBag(function () { return routeListShown(ctx); }, BAG_HISTORY_TIMEOUT_MS, runId, done);
+    return hrefNow() === ctx.listHref && anyRouteCardShown();
   }
 
   // Same search order as the tour: exact card, then CDP wheel up 12 / down 30.
   function findBagRouteCard(route, runId, done) {
+    var op = bagRouteOp;
     var direction = 'up';
     var attempts = 0;
     function look() {
-      if (!bagIsCurrent(runId)) return;
+      if (!bagIsCurrent(runId) || !bagOpAlive(op)) return;
       var card = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
       if (card) { done(card); return; }
       attempts += 1;
       if (direction === 'up' && attempts > 12) { direction = 'down'; attempts = 1; }
       else if (direction === 'down' && attempts > 30) { done(null); return; }
+      bagOpEnter(op);
       requestCdpWheel(routeViewportPoint(), direction === 'up' ? -720 : 520, function (res) {
-        if (!bagIsCurrent(runId)) return;
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
         if (!res || !res.ok) { done(null); return; }
         bagLater(look, 220);
       });
@@ -1451,106 +2388,1189 @@
     look();
   }
 
-  function openBagRoute(group, ctx, runId, done) {
-    var route = { routeId: group.routeId, routeCode: group.routeCode };
-    findBagRouteCard(route, runId, function (card) {
-      if (!card) { done(false, 'Route DOM未発見'); return; }
-      clickBagRouteCard(route, card, ctx, runId, done);
-    });
-  }
+  function createBagDriver(ctx, runId) {
+    ctx.reopenedStops = {};
+    ctx.routeProgress = null;
 
-  function clickBagRouteCard(route, card, ctx, runId, done) {
-    var beforeDetails = store.detailsByRouteId[route.routeId] || null;
-    try { card.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
-    afterBagLayout(function () {
-      if (!bagIsCurrent(runId)) return;
-      var target = findInnerClickTarget(card, route) || card;
-      var rect = null;
-      try { rect = target.getBoundingClientRect(); } catch (e2) {}
-      var point = Core.viewportClickPoint(rect);
-      if (!point) { done(false, 'Route座標取得失敗'); return; }
-      setPanelClickable(false);
-      if (!hitTestAllows(target, point)) {
-        setPanelClickable(true);
-        done(false, 'Route一覧が他要素に覆われています', true);
-        return;
-      }
-      requestCdpClick(point, function (res) {
-        setPanelClickable(true);
-        if (!bagIsCurrent(runId)) return;
-        if (!res || !res.ok) { done(false, (res && res.message) || 'Route CDP click失敗'); return; }
-        waitBag(function () {
-          var fresh = store.detailsByRouteId[route.routeId];
-          if (fresh && fresh !== beforeDetails) return true;
-          return String(global.location.href || '') !== ctx.listHref && visibleRouteCards().length === 0;
-        }, tour.timeoutMs || 15000, runId, function (ok) {
-          if (!ok) { done(false, 'Route詳細が開きませんでした'); return; }
-          bagLater(function () {
-            ctx.routeHref = String(global.location.href || '');
-            done(true, '');
-          }, 800);
-        });
-      });
-    });
-  }
-
-  function runBagRoutes(groups, index, ctx, runId) {
-    if (!bagIsCurrent(runId)) return;
-    if (index >= groups.length) { finishBagPhase(''); return; }
-    var group = groups[index];
-    if (!Core.pendingBagTargets(bagRun, group.targets, store.trDetailsByTrId).length) {
-      runBagRoutes(groups, index + 1, ctx, runId);
-      return;
+    // Bag v3.11: bound when a step starts, so a step outliving its Route reports to that Route
+    // (closed, ignored) and never feeds the next Route's watchdog. Only completed, bounded
+    // sub-steps are reported (no timer-driven heartbeat).
+    function routeNote() {
+      var fn = ctx.routeProgress;
+      return function (kind) { if (typeof fn === 'function') fn(kind); };
     }
-    setBagStatus('Bag取得中… ' + group.routeCode + '（' + (index + 1) + '/' + groups.length + ' Route）');
-    ctx.abort = '';
-    ctx.deadline = Date.now() + BAG_ROUTE_BUDGET_MS;
-    openBagRoute(group, ctx, runId, function (opened, message, fatal) {
-      if (!bagIsCurrent(runId)) return;
-      if (fatal) {
-        finishBagPhase(group.routeCode + ': ' + message);
-        return;
-      }
-      function next() {
-        bagReturnToList(ctx, runId, function (back) {
-          if (!back) {
-            finishBagPhase('Route一覧へ戻れませんでした（' + group.routeCode + '）');
+
+    // Route detail reached: wait (condition, bounded) for Stop labels or target DAs, then
+    // record what the page shows so a Stop-detection mismatch is visible in the diagnostics.
+    // The Route detail is still in place for the next Stop: same path, Stop list present,
+    // no new dialog on top.
+    function routeDetailUsable() {
+      var pathNow = hrefNow().split(/[?#]/)[0];
+      var pathRoute = String(ctx.routeHref || '').split(/[?#]/)[0];
+      if (!pathRoute || pathNow !== pathRoute) return { ok: false, detail: 'URL pathがRoute詳細と異なる' };
+      if (!stopListRows(null).length && !collectStopLabelElements(null).length) return { ok: false, detail: 'Stop一覧がありません' };
+      var fresh = visibleDialogs().filter(function (d) { return (ctx.routeDialogs || []).indexOf(d) < 0; });
+      if (fresh.length) return { ok: false, detail: '新しいdialogが開いています' };
+      return { ok: true };
+    }
+
+    function afterRouteOpened(route, basis, cb) {
+      ctx.route = route;
+      var das = (route.targets || []).map(function (t) { return t.scannableId; });
+      var started = Date.now();
+      waitBag(function () {
+        return collectStopLabelElements(null).length > 0 || Object.keys(collectExactDaElements(das)).length > 0;
+      }, BAG_STOP_APPEAR_TIMEOUT_MS, runId, function (appeared) {
+        ctx.routeDialogs = visibleDialogs();
+        var snap = routeDomSnapshot(route, {
+          phase: 'route_opened',
+          routeDetailBasis: basis,
+          stopWaitMs: Date.now() - started,
+          stopCandidatesAppeared: appeared
+        });
+        pushRouteDiag(snap);
+        bagLog('[Bag] ' + route.routeCode + ' opened (' + basis + ') stopLabelCandidates=' + snap.stopLabelCandidates.count +
+          ' packageNumbers=' + snap.packageNumbersVisible + ' wait=' + snap.stopWaitMs + 'ms');
+        cb({ ok: true });
+      });
+    }
+
+    var driver = {
+      beginRoute: function (api) {
+        ctx.routeProgress = api && typeof api.noteProgress === 'function' ? api.noteProgress : null;
+        bagStartRouteOp(api && api.routeCode, 'route');
+      },
+
+      // Bag v3.12: the Route ended (done or aborted). Its operation is cancelled before the return to
+      // the list, which runs under its own operation.
+      endRoute: function (info) {
+        var ended = bagCancelRouteOp((info && (info.reasonCode || info.status)) || 'route_end');
+        if (ended) ended.endStatus = info ? info.status + (info.reasonCode ? '(' + info.reasonCode + ')' : '') : '';
+        bagStartRouteOp((info && info.routeCode) + ' returnToList', 'return');
+      },
+
+      // Up to BAG_ROUTE_OPEN_ATTEMPTS tries: close new dialogs, wait for the list, re-find the
+      // card, scrollIntoView + hit test (inside safeCdpClick). Still covered -> UI blocked.
+      openRoute: function (route, cb) {
+        var note = routeNote();
+        var op = bagRouteOp;
+        function sub(name) { if (op) op.subPhase = name; }
+        function rel() { return op ? Date.now() - op.startedAt : null; }
+        ctx.routeNoStopLabels = false;
+        ctx.stopMissLogged = false;
+        if (ctx.currentPage) {
+          ctx.routeHref = hrefNow();
+          sub('wait_stop_labels');
+          afterRouteOpened(route, 'current page (no navigation)', cb);
+          return;
+        }
+        var attempt = 0;
+        var lastDetail = '';
+        var routeRetried = false;
+        var routeClick = { routeCode: route.routeCode, before: pageBrief(), clicks: [], retries: 0 };
+        function tryOpen() {
+          if (!bagIsCurrent(runId)) return;
+          attempt += 1;
+          sub('close_dialogs');
+          closeNewDialogs(ctx.baseDialogs, runId, function () {
+            sub('wait_route_list');
+            waitBag(function () { return routeListShown(ctx); }, 2000, runId, function () {
+              sub('find_route_card');
+              findBagRouteCard(route, runId, function (card) {
+                if (!card) { cb({ ok: false, code: 'route_card_not_found', detail: 'Route一覧にRoute cardが見つかりません' }); return; }
+                if (op) { op.routeCardFoundAt = rel(); bagOpDom(op, 'route_card_found'); }
+                note('route_card_found');
+                var beforeDetails = store.detailsByRouteId[route.routeId] || null;
+                ctx.listHistoryLen = historyLength();
+                var clickRec = {
+                  attempt: attempt, card: diagEl(card), cardFoundBy: findRouteCardByRouteId(route.routeId) ? 'routeId' : 'routeCode',
+                  cardAria: ['aria-expanded', 'aria-selected', 'aria-disabled', 'aria-current'].reduce(function (m, a) {
+                    var v = card.getAttribute && card.getAttribute(a);
+                    if (v != null) m[a] = v;
+                    return m;
+                  }, {})
+                };
+                routeClick.clicks.push(clickRec);
+                var clickTry = null;
+                if (op) {
+                  clickTry = { attempt: attempt, at: rel(), visibilityState: document.visibilityState || null,
+                    hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null, result: 'pending' };
+                  op.routeClickAttemptCount += 1;
+                  op.routeClickAttemptAt.push(clickTry.at);
+                  op.routeClickAttempts.push(clickTry);
+                }
+                clickRec.visibilityState = document.visibilityState || null;
+                sub('route_click');
+                safeCdpClick(function () {
+                  var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
+                  return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
+                }, runId, function (res) {
+                  if (clickTry) {
+                    clickTry.result = res.ok ? 'clicked' : (res.covered ? 'covered' : 'failed');
+                    clickTry.doneAt = rel();
+                    clickTry.visibilityStateAfter = document.visibilityState || null;
+                  }
+                  if (!res.ok) {
+                    lastDetail = 'Route click: ' + res.detail;
+                    bagLog('[Bag] ' + route.routeCode + ' ' + (res.covered ? 'Route一覧が覆われています' : 'Route click失敗') +
+                      ' (' + attempt + '/' + BAG_ROUTE_OPEN_ATTEMPTS + '): ' + res.detail);
+                    if (attempt < BAG_ROUTE_OPEN_ATTEMPTS) { note('route_click_retry'); bagLater(tryOpen, 700); return; }
+                    cb({ ok: false, blocked: !!res.covered, code: res.covered ? 'ui_blocked' : 'route_click_failed',
+                      detail: lastDetail + '（' + attempt + '回試行）' });
+                    return;
+                  }
+                  note('route_click');
+                  sub('wait_route_detail');
+                  var basis = '';
+                  var detailsSeen = false;
+                  waitBag(function () {
+                    var fresh = store.detailsByRouteId[route.routeId];
+                    if (fresh && fresh !== beforeDetails) { basis = 'route-details response captured'; detailsSeen = true; return true; }
+                    if (hrefNow() !== ctx.listHref && !anyRouteCardShown()) { basis = 'URL changed and Route list hidden'; return true; }
+                    return false;
+                  }, routeRetried ? BAG_ROUTE_RETRY_WAIT_MS : (tour.timeoutMs || 15000), runId, function (ok) {
+                    clickRec.after = pageBrief();
+                    clickRec.domChanged = clickRec.after.elementCount !== routeClick.before.elementCount;
+                    clickRec.routeDetailsObserved = detailsSeen;
+                    if (!ok) {
+                      // One safe retry: only while the Route list is still shown and the card is found by
+                      // its exact routeId (never by a routeCode text match that could hit another Route).
+                      if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId)) {
+                        routeRetried = true;
+                        routeClick.retries = 1;
+                        if (op) op.routeRetryCount += 1;
+                        if (bagEngine) bagEngine.extendRoute(BAG_ROUTE_RETRY_WAIT_MS + 2000);
+                        note('route_retry');
+                        sub('route_retry');
+                        bagLog('[Bag] ' + route.routeCode + ' Route詳細が開かないため1回だけ再クリック');
+                        bagLater(tryOpen, 600);
+                        return;
+                      }
+                      routeClick.retryBlockedReason = routeRetried ? 'retry済み' :
+                        (!routeListShown(ctx) ? 'Route一覧が表示されていない' : 'routeIdでcardを特定できない');
+                      pushRouteDiag(routeDomSnapshot(route, { phase: 'route_detail_not_detected', routeClick: routeClick }));
+                      // The click was dispatched and the full wait passed without any Route transition:
+                      // with the tab hidden this is reported separately (never for hidden alone).
+                      var hiddenNow = document.visibilityState === 'hidden';
+                      cb({ ok: false, code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected',
+                        detail: 'Route click後にroute-details/URL変化なし（retry ' + routeClick.retries + '回' +
+                          (hiddenNow ? '、タブ非表示' : '') + '）' });
+                      return;
+                    }
+                    if (routeRetried) pushRouteDiag({ phase: 'route_opened_after_retry', routeCode: route.routeCode, routeClick: routeClick });
+                    if (op) { op.routeDetailDetectedAt = rel(); op.routeDetailBasis = basis; bagOpDom(op, 'route_detail'); }
+                    sub('wait_stop_labels');
+                    note('route_detail');
+                    ctx.routeHref = hrefNow();
+                    afterRouteOpened(route, basis, cb);
+                  });
+                }, clickRec);
+              });
+            });
+          });
+        }
+        tryOpen();
+      },
+
+      // openOpts.maxAttempts: 1 for the package-fallback reopen (v3.6 behaviour); default 3 (v3.7 retry v2).
+      ensureStop: function (stop, pending, onState, cb, openOpts) {
+        // Bag v3.6: a row already open / already showing the DAs gets the same bounded wait for
+        // Cortex's own trDetails as a freshly opened one (returns at once when all rows are there).
+        var noExtraWait = !!(openOpts && openOpts.noExtendedWait);
+        var note = (openOpts && openOpts.note) || routeNote();
+        function waitCortexTr(kind, done) {
+          var started = Date.now();
+          waitStopTrDetails(ctx, runId, pending, started, noExtraWait, function (tw) {
+            if (!tw.allArrived && tw.extendedUsed && bagEngine) bagEngine.extendRoute(tw.waitedMs);
+            var t0 = freshListTarget(stop.stop);
+            ctx.testStopDiags = ctx.testStopDiags || {};
+            ctx.testStopDiags[(ctx.route && ctx.route.routeCode) + '#' + stop.stop] = {
+              opened: kind, waitMs: Date.now() - started,
+              ariaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              selectedStopId: selectedStopIdOf(hrefNow()),
+              expected: pending.length,
+              received: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length
+            };
+            done({ ok: true, clicked: false, trWaitMs: tw.waitedMs, trWaitExtended: tw.extendedUsed, stopDiag: {
+              openResult: kind, initialAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              initialSelectedStopId: selectedStopIdOf(hrefNow()), clickAttempts: [],
+              finalAriaExpanded: t0 ? t0.button.getAttribute('aria-expanded') : null,
+              finalSelectedStopId: selectedStopIdOf(hrefNow()),
+              targetDaVisible: Object.keys(collectExactDaElements(pending.map(function (t) { return t.scannableId; }))).length,
+              openedBy: kind, openedAttempt: 0
+            } });
+          }, note);
+        }
+        if (ctx.routeNoStopLabels) {
+          // A full sweep of this Route already found no Stop label of any number: check the
+          // current view once (no scrolling) instead of sweeping again for every Stop.
+          var quick = findStopLabels(stop.stop);
+          var visible = !Core.stopNeedsExpand(pending, collectExactDaElements(pending.map(function (t) { return t.scannableId; })));
+          if (!quick.length && !visible) {
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND,
+              detail: 'Stop #' + stop.stop + ' label未発見（このRouteはStop label候補0件）' });
             return;
           }
-          bagLater(function () { runBagRoutes(groups, index + 1, ctx, runId); }, 350);
+        }
+        ctx.stopBlock = null;
+        ctx.stopHref = hrefNow();
+        ctx.stopHistoryLen = historyLength();
+        ctx.openedListTarget = null;
+        bagRun.preexisting = bagRun.preexisting || {};
+        (stop.targets || []).forEach(function (t) {
+          if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId) && !bagRun.stopOpenedFor[t.referenceId]) {
+            bagRun.preexisting[t.referenceId] = true;
+          }
+        });
+        (stop.targets || []).forEach(function (t) { bagRun.stopOpenedFor[t.referenceId] = true; });
+        var das = pending.map(function (t) { return t.scannableId; });
+        var outcome = null;
+        var maxCandidates = 0;
+        scrollSearch(function () {
+          if (!Core.stopNeedsExpand(pending, collectExactDaElements(das))) {
+            outcome = { present: true };
+            return outcome;
+          }
+          var allLabels = collectStopLabelElements(null);
+          if (allLabels.length > maxCandidates) maxCandidates = allLabels.length;
+          var labels = stopLabelsFor(allLabels, stop.stop);
+          if (labels.length > 1) { outcome = { ambiguous: labels.length }; return outcome; }
+          if (labels.length === 1) { outcome = { label: labels[0] }; return outcome; }
+          return null;
+        }, BAG_STOP_SCROLL_MAX_STEPS, runId, function (found) {
+          if (!found) {
+            if (maxCandidates === 0) ctx.routeNoStopLabels = true;
+            if (!ctx.stopMissLogged) {
+              ctx.stopMissLogged = true;
+              pushRouteDiag(routeDomSnapshot(ctx.route, { phase: 'stop_not_found', stop: stop.stop, maxStopLabelCandidates: maxCandidates }));
+            }
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_NOT_FOUND,
+              detail: 'Stop #' + stop.stop + ' label未発見（探索中のStop label候補 最大' + maxCandidates + '件）' });
+            return;
+          }
+          note('stop_found');
+          if (found.present) { waitCortexTr('present', cb); return; }
+          if (found.ambiguous) {
+            cb({ ok: false, status: Core.BAG_STATUS.STOP_AMBIGUOUS, detail: 'Stop #' + stop.stop + ' label ' + found.ambiguous + '件' });
+            return;
+          }
+          var label = found.label;
+          var listTarget = stopListTargetOf(label);
+          ctx.stopBlock = listTarget ? listTarget.row : stopBlockOf(label);
+          if (listTarget && listTarget.button.getAttribute('aria-expanded') === 'true') {
+            // Row already open: clicking would collapse it; the package search scrolls to the DAs.
+            waitCortexTr('already_open', cb);
+            return;
+          }
+          onState('Stop #' + stop.stop + '展開中');
+          var openStarted = Date.now();
+          var clickDiag = {
+            routeCode: ctx.route && ctx.route.routeCode, stop: stop.stop,
+            targetDas: das.length, before: stopClickState(das), plainNumber: plainNumberContext(stop.stop),
+            clickKind: listTarget ? 'stop-list-button' : 'text-label'
+          };
+          var selBefore = selectedStopIdOf(hrefNow());
+          if (listTarget) {
+            clickDiag.stopList = {
+              row: diagEl(listTarget.row), button: diagEl(listTarget.button),
+              ariaExpandedBefore: listTarget.button.getAttribute('aria-expanded'),
+              selectedStopIdBefore: selBefore,
+              rowElementsBefore: listTarget.row.querySelectorAll('*').length
+            };
+          }
+          // Bag v3.7: trDetails rows already present when the open started never count as proof.
+          var trBaseline = {};
+          pending.forEach(function (t) { if (Core.hasTrDetails(store.trDetailsByTrId, t.referenceId)) trBaseline[t.referenceId] = true; });
+          var rowPackagesBefore = listTarget ? rowPackageCount(listTarget.row) : 0;
+          var usedLabels = [];
+          var expandedBy = '';
+          function rowElementsNow() {
+            return listTarget && listTarget.row && listTarget.row.isConnected ? listTarget.row.querySelectorAll('*').length : null;
+          }
+          // Current DOM only: the Stop's list row (re-found when the saved one was re-rendered).
+          function liveListTarget() {
+            if (!listTarget) return null;
+            if (!listTarget.button.isConnected) {
+              var t = freshListTarget(stop.stop);
+              if (!t) return null;
+              listTarget = t;
+            }
+            return listTarget;
+          }
+          function observation() {
+            var t = liveListTarget();
+            return {
+              ariaExpanded: t ? t.button.getAttribute('aria-expanded') === 'true' : false,
+              targetDaVisible: !Core.stopNeedsExpand(pending, collectExactDaElements(das)),
+              targetTrDetailsReceived: Core.targetTrDetailsArrived(store.trDetailsByTrId, pending, trBaseline).length,
+              selectedStopIdBefore: selBefore,
+              selectedStopIdAfter: selectedStopIdOf(hrefNow()),
+              targetPackageDom: !!(t && t.row.isConnected && rowPackageCount(t.row) > rowPackagesBefore)
+            };
+          }
+          function openSignal() {
+            var s = Core.stopOpenSignal(observation());
+            if (s) expandedBy = s;
+            return s;
+          }
+          // The row / button used by one attempt; re-read from the DOM right before the click.
+          function adopt(t) {
+            if (t) {
+              listTarget = t;
+              ctx.stopBlock = t.row;
+              ctx.openedListTarget = t;
+            }
+            return t;
+          }
+          function resolveAttempt(n, strategy, done) {
+            if (n > 1) note('stop_retry');
+            if (!listTarget) {
+              // Text label (not a Stop list row): v3.6 single attempt.
+              if (!label.isConnected) {
+                var again = findStopLabels(stop.stop);
+                label = again.length === 1 ? again[0] : null;
+              }
+              done(label ? { el: label, connected: label.isConnected } : null, { candidateCount: label ? 1 : 0 });
+              return;
+            }
+            if (strategy === 'initial') {
+              var t0 = liveListTarget();
+              done(t0 ? { list: t0, connected: t0.button.isConnected } : null, { candidateCount: findStopLabels(stop.stop).length });
+              return;
+            }
+            if (strategy === 'row_refind') {
+              // Retry 1: the same div.stops-list-item, its current div[role=button][aria-expanded].
+              var row = listTarget.row && listTarget.row.isConnected ? listTarget.row : null;
+              var info = row ? stopListRowInfo(row) : null;
+              var t1 = info && info.number === stop.stop && info.button ? { row: row, button: info.button, numberEl: info.numberEl } : null;
+              if (!t1) t1 = freshListTarget(stop.stop);
+              done(t1 ? { list: t1, connected: t1.button.isConnected } : null, {
+                candidateCount: row ? row.querySelectorAll('[role="button"][aria-expanded]').length : findStopLabels(stop.stop).length,
+                rowReused: !!(t1 && row && t1.row === row)
+              });
+              return;
+            }
+            // Retry 2: search the whole Route detail again; exact Stop number, Stop list rows only
+            // (Mapbox markers are excluded by stopLabelsFor / stopListRows).
+            var cands = 0;
+            scrollSearch(function () {
+              var labels = findStopLabels(stop.stop);
+              cands = labels.length;
+              if (labels.length > 1) return { ambiguous: labels.length };
+              if (labels.length === 1) {
+                var lt = stopListTargetOf(labels[0]);
+                return lt ? { list: lt } : null;
+              }
+              return null;
+            }, BAG_STOP_SCROLL_MAX_STEPS, runId, function (hit) {
+              done(hit && hit.list ? { list: hit.list, connected: hit.list.button.isConnected } : null, { candidateCount: cands, ambiguous: !!(hit && hit.ambiguous) });
+            });
+          }
+          function clickAttempt(n, target, rec, done) {
+            rec.ariaBefore = target.list ? target.list.button.getAttribute('aria-expanded') : null;
+            rec.selectedStopIdBefore = selectedStopIdOf(hrefNow());
+            rec.urlBefore = hrefNow();
+            rec.rowElementsBefore = target.list && target.list.row.isConnected ? target.list.row.querySelectorAll('*').length : null;
+            rec.startedAtMs = Date.now() - openStarted;
+            var ad = {};
+            function finishClick(res) {
+              rec.safePoint = ad.clicked || null;
+              rec.elementFromPoint = (ad.points || []).filter(function (p) {
+                return ad.clicked && p.label === ad.clicked.label;
+              }).map(function (p) { return p.hit + ' => ' + p.relation; })[0] || (ad.points && ad.points[0] ? ad.points[0].hit + ' => ' + ad.points[0].relation : null);
+              rec.pointsTried = (ad.points || []).length;
+              if (ad.clicked && ad.clicked.label) usedLabels.push(ad.clicked.label);
+              if (res.ok && n === 1) clickDiag.afterClick = stopClickState(das);
+              if (res.ok) note('stop_click');
+              done(res.ok ? { ok: true } : { ok: false, covered: !!res.covered, dispatched: !!res.dispatched, detail: res.detail });
+            }
+            if (!target.list) {
+              safeCdpClick(function () {
+                if (!label || !label.isConnected) return null;
+                ctx.stopBlock = stopBlockOf(label);
+                return { el: label, container: ctx.stopBlock };
+              }, runId, function (res) {
+                if (n === 1) clickDiag.clicked = ad.clicked || null;
+                finishClick(res);
+              }, ad);
+              return;
+            }
+            var chosen = target.list;
+            clickListButton(function () {
+              // Never a saved node: the chosen button while connected, else this Stop's row re-found now.
+              if (chosen && chosen.button.isConnected) return adopt(chosen);
+              chosen = freshListTarget(stop.stop);
+              return adopt(chosen);
+            }, runId, function (res) {
+              if (n === 1) {
+                clickDiag.buttonConnected = ad.buttonConnected;
+                clickDiag.buttonRect = ad.buttonRect;
+                clickDiag.points = ad.points;
+                if (ad.clicked) clickDiag.clicked = ad.clicked;
+              }
+              finishClick(res);
+            }, ad, null, n > 1 ? usedLabels : null);
+          }
+          function observeAttempt(n, rec, done) {
+            if (n > 1 && bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_TIMEOUT_MS);
+            function record(signal) {
+              var t = liveListTarget();
+              rec.ariaAfter = t ? t.button.getAttribute('aria-expanded') : null;
+              rec.selectedStopIdAfter = selectedStopIdOf(hrefNow());
+              rec.urlAfter = hrefNow();
+              rec.rowElementsAfter = rowElementsNow();
+              rec.targetDaVisibleAfter = Object.keys(collectExactDaElements(das)).length;
+              rec.targetTrDetailsReceived = Core.targetTrDetailsArrived(store.trDetailsByTrId, pending, trBaseline).length;
+              rec.elapsedMs = Date.now() - openStarted - (rec.startedAtMs || 0);
+              done(signal);
+            }
+            waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
+              if (opened || !listTarget) { record(opened ? expandedBy : ''); return; }
+              // v3.6: the row content grew but nothing proves the open yet -> wait a little longer once.
+              var grew = rowElementsNow() != null && rec.rowElementsBefore != null && rowElementsNow() > rec.rowElementsBefore;
+              if (grew && !rec.extendedWait) {
+                rec.extendedWait = true;
+                clickDiag.extendedWait = true;
+                if (bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_EXTRA_MS);
+                waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_EXTRA_MS, runId, function (ok2) {
+                  record(ok2 ? expandedBy : '');
+                });
+                return;
+              }
+              record('');
+            });
+          }
+          function stopDiagOf(final, kind) {
+            var t = liveListTarget();
+            return {
+              openResult: kind,
+              initialAriaExpanded: clickDiag.stopList ? clickDiag.stopList.ariaExpandedBefore : null,
+              initialSelectedStopId: selBefore,
+              clickAttempts: final.attempts || [],
+              finalAriaExpanded: t ? t.button.getAttribute('aria-expanded') : null,
+              finalSelectedStopId: selectedStopIdOf(hrefNow()),
+              targetDaVisible: Object.keys(collectExactDaElements(das)).length,
+              openedBy: final.openedBy || '',
+              openedAttempt: final.openedAttempt || 0,
+              lateDetected: !!final.lateDetected
+            };
+          }
+          Core.runStopOpenAttempts({
+            // Package-fallback reopen stays a single v3.6 click; text labels too.
+            maxAttempts: listTarget ? ((openOpts && openOpts.maxAttempts) || Core.STOP_OPEN_MAX_ATTEMPTS) : 1,
+            resolve: resolveAttempt,
+            click: clickAttempt,
+            observe: observeAttempt,
+            isOpen: openSignal,
+            done: function (final) {
+              clickDiag.attempts = final.attempts;
+              clickDiag.retryCount = Math.max(0, (final.attempts || []).length - 1);
+              clickDiag.openedAttempt = final.openedAttempt || 0;
+              clickDiag.expandedBy = final.openedBy || '';
+              clickDiag.elapsedMs = Date.now() - openStarted;
+              if (listTarget) {
+                clickDiag.stopList.ariaExpandedAfter = listTarget.button.getAttribute('aria-expanded');
+                clickDiag.stopList.selectedStopIdAfter = selectedStopIdOf(hrefNow());
+                clickDiag.stopList.rowElementsAfter = rowElementsNow();
+              }
+              if (final.blocked) {
+                clickDiag.result = 'covered';
+                clickDiag.detail = final.detail;
+                pushStopClickDiag(clickDiag);
+                cb({ ok: false, status: Core.BAG_STATUS.STOP_EXPAND_FAILED, detail: final.detail, blocked: true, code: 'stop_click_failed',
+                  clicked: final.clickCount > 0, clickCount: final.clickCount, stopDiag: stopDiagOf(final, 'ui_blocked') });
+                return;
+              }
+              clickDiag.result = final.opened ? 'expanded' : 'target_da_not_shown';
+              clickDiag.afterWait = stopClickState(das);
+              if (final.opened) {
+                if (final.openedAttempt > 1) {
+                  bagLog('[Bag] ' + (ctx.route && ctx.route.routeCode) + ' Stop #' + stop.stop + ' retry' + (final.openedAttempt - 1) +
+                    'で展開 (' + final.openedBy + ')');
+                }
+                // Cortex itself requests trDetails when a Stop is selected: give it a moment so the
+                // package lookup/click is only used for packages that did not arrive that way.
+                // Bag v3.8: normal 3 s, extra 3 s only while a target is still missing.
+                note('stop_opened');
+                noteTrSeen(pending, openStarted);
+                waitStopTrDetails(ctx, runId, pending, openStarted, noExtraWait, function (tw) {
+                  var allArrived = tw.allArrived;
+                  // The full wait (some rows never came) is added to this Route's budget, capped.
+                  if (!allArrived && bagEngine) bagEngine.extendRoute(tw.waitedMs);
+                  clickDiag.cortexTrDetails = {
+                    waitedMs: tw.waitedMs,
+                    arrived: pending.filter(function (t) { return Core.hasTrDetails(store.trDetailsByTrId, t.referenceId); }).length,
+                    pending: pending.length, all: allArrived, extendedWait: tw.extendedUsed,
+                    delayedRescue: Object.keys(tw.records).filter(function (k) { return tw.records[k].delayedRescue; }).length
+                  };
+                  pushStopClickDiag(clickDiag);
+                  cb({ ok: true, clicked: final.clickCount > 0, clickCount: final.clickCount, trWaitMs: tw.waitedMs,
+                    trWaitExtended: tw.extendedUsed, stopDiag: stopDiagOf(final, 'opened') });
+                }, note);
+                return;
+              }
+              if (final.clickCount === 0 && !(final.attempts || []).some(function (a) { return a.result === 'not_opened'; })) {
+                clickDiag.result = 'click_failed';
+                clickDiag.detail = final.detail;
+              }
+              var scroller = bagMainScroller();
+              clickDiag.afterWait.outline = scroller ? diagOutline(scroller, 40) : [];
+              noteTrSeen(pending, openStarted);
+              pushStopClickDiag(clickDiag);
+              // Stop click did not render the targets; undo navigation only if it added history.
+              restoreHistory(ctx.stopHref, ctx.stopHistoryLen, runId, function (back) {
+                cb({
+                  ok: false,
+                  clicked: final.clickCount > 0,
+                  clickCount: final.clickCount,
+                  status: Core.BAG_STATUS.STOP_EXPAND_FAILED,
+                  detail: 'Stop #' + stop.stop + ' ' + (final.attempts || []).length + '回試行しても展開を確認できません' +
+                    (final.detail ? '（' + final.detail + '）' : ''),
+                  abortRoute: !back.ok,
+                  code: 'stop_click_navigation_not_restored',
+                  stopDiag: stopDiagOf(final, Core.BAG_STATUS.STOP_EXPAND_FAILED)
+                });
+              });
+            }
+          });
+        });
+      },
+
+      findPackage: function (target, stop, cb) {
+        var note = routeNote();
+        driver.searchPackage(target, function (res) {
+          if (res.ok || res.status !== Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND || ctx.reopenedStops[stop.stop]) {
+            cb(res);
+            return;
+          }
+          // The Stop may have collapsed after returning from a package detail: reopen it once.
+          ctx.reopenedStops[stop.stop] = true;
+          note('package_search_miss');
+          driver.ensureStop(stop, [target], function () {}, function (sres) {
+            if (sres && sres.clicked) bagRun.stopClicks = (bagRun.stopClicks || 0) + 1;
+            if (!sres || !sres.ok) { cb(res); return; }
+            note('package_reopen');
+            driver.searchPackage(target, cb);
+          }, { maxAttempts: 1, noExtendedWait: true, note: note });
+        });
+      },
+
+      // Bag v3.9: the target's trDetails never came. Read the Bag label from the opened Stop's DOM,
+      // inside the target DA's own package block only (Core.readStopDomBag). No click.
+      // Bag v3.10: no scroll sweep (v3.9 scrolled up to 12 steps and walked the whole DOM each step).
+      // Read the current DOM once; if the target DA is not there, bring the opened Stop row into view
+      // and read once more. The matching rules (Core.readStopDomBag) are unchanged.
+      readStopDomBag: function (target, stop, cb) {
+        function finish(res) {
+          res.routeCode = ctx.route && ctx.route.routeCode;
+          res.stopNumber = stop.stop;
+          if (!res.daFound || res.reason === 'target_not_found' || res.reason === 'target_other_stop') {
+            res.missDiag = stopDomMissDiag(ctx, target, stop, res);
+          }
+          if (res.ok && res.bag && !Core.hasTrDetails(store.trDetailsByTrId, target.referenceId)) {
+            store.bagDomByReferenceId = store.bagDomByReferenceId || {};
+            store.bagDomByReferenceId[target.referenceId] = { text: res.bag.text, color: res.bag.color, number: res.bag.number };
+          }
+          cb(res);
+        }
+        var first = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
+        first.pass = 'current_view';
+        if (first.daFound) { finish(first); return; }
+        var lt = ctx.openedListTarget && ctx.openedListTarget.row && ctx.openedListTarget.row.isConnected
+          ? ctx.openedListTarget : freshListTarget(stop.stop);
+        if (!lt) { finish(first); return; }
+        try { lt.row.scrollIntoView({ block: 'start', inline: 'nearest' }); } catch (e1) {}
+        bagLater(function () {
+          if (!bagIsCurrent(runId)) return;
+          var second = Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop);
+          second.pass = 'row_into_view';
+          finish(second);
+        }, 250);
+      },
+
+      searchPackage: function (target, cb) {
+        var lastCount = 0;
+        scrollSearch(function () {
+          var matches = collectExactDaElements([target.scannableId])[target.scannableId] || [];
+          lastCount = matches.length;
+          return matches.length ? matches : null;
+        }, BAG_PACKAGE_SCROLL_MAX_STEPS, runId, function (matches) {
+          var status = Core.domMatchStatus(matches || []);
+          var n = (matches || []).length;
+          if (status === 'none') {
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_DOM_NOT_FOUND, detail: 'DA未表示', candidateCount: 0 });
+            return;
+          }
+          if (status === 'ambiguous') {
+            cb({ ok: false, status: Core.BAG_STATUS.DOM_AMBIGUOUS, detail: lastCount + ' matches', candidateCount: n });
+            return;
+          }
+          var da = matches[0];
+          var card = packageCardOf(da);
+          var clickEl = packageClickTarget(da, card);
+          if (!clickEl) {
+            cb({ ok: false, status: Core.BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND, detail: 'card ' + describeEl(card), candidateCount: n });
+            return;
+          }
+          cb({ ok: true, handle: { scannableId: target.scannableId }, candidateCount: n });
+        });
+      },
+
+      clickPackage: function (target, handle, cb) {
+        ctx.packageHref = hrefNow();
+        ctx.packageHistoryLen = historyLength();
+        ctx.packageDialogs = visibleDialogs();
+        safeCdpClick(function () {
+          var m = collectExactDaElements([handle.scannableId])[handle.scannableId] || [];
+          if (m.length !== 1) return null;
+          var card = packageCardOf(m[0]);
+          var el = packageClickTarget(m[0], card);
+          return el ? { el: el, container: card } : null;
+        }, runId, function (res) {
+          if (res.ok) { cb({ ok: true }); return; }
+          if (!res.covered) { cb({ ok: false, clicked: !!res.dispatched, detail: res.detail }); return; }
+          // Covered: close a native dialog left open (own close UI only) and retry once.
+          closeNewDialogs(ctx.routeDialogs || [], runId, function () {
+            bagLater(function () {
+              safeCdpClick(function () {
+                var m = collectExactDaElements([handle.scannableId])[handle.scannableId] || [];
+                if (m.length !== 1) return null;
+                var card = packageCardOf(m[0]);
+                var el = packageClickTarget(m[0], card);
+                return el ? { el: el, container: card } : null;
+              }, runId, function (res2) {
+                if (res2.ok) { cb({ ok: true }); return; }
+                cb({ ok: false, clicked: !!res2.dispatched, detail: res2.detail, blocked: !!res2.covered });
+              });
+            }, 500);
+          });
+        });
+      },
+
+      waitTrDetails: function (target, cb) {
+        waitBag(function () {
+          return Core.hasTrDetails(store.trDetailsByTrId, target.referenceId);
+        }, BAG_PACKAGE_TIMEOUT_MS, runId, cb);
+      },
+
+      restoreAfterPackage: function (target, cb) {
+        var note = routeNote();
+        bagLater(function () {
+          restoreHistory(ctx.packageHref, ctx.packageHistoryLen, runId, function (back) {
+            if (!back.ok) { cb({ ok: false, detail: 'Package detail後にURLが戻りません' }); return; }
+            note('package_history_restored');
+            closeNewDialogs(ctx.packageDialogs, runId, function (closed) {
+              cb(closed.ok ? { ok: true } : { ok: false, detail: closed.detail });
+            });
+          });
+        }, 300);
+      },
+
+      // Close the Stop row this phase opened: re-read the row from the current DOM, click a safe
+      // point of its header button (not a phone/navi child), wait for aria-expanded=false (or
+      // selectedStopId cleared with the targets hidden), retry once at another point. If it still
+      // will not close, continue only when the Route detail is verified usable; else stop_leave_failed.
+      leaveStop: function (stop, cb) {
+        var note = routeNote();
+        var das = stop.targets.map(function (t) { return t.scannableId; });
+        var started = Date.now();
+        var diag = {
+          routeCode: ctx.route && ctx.route.routeCode, stop: stop.stop,
+          urlBefore: hrefNow(), selectedStopIdBefore: selectedStopIdOf(hrefNow()),
+          targetDaVisibleBefore: Object.keys(collectExactDaElements(das)).length,
+          historyLenBefore: historyLength(), attempts: [], retryCount: 0
+        };
+        function finish(res, method) {
+          diag.leaveMethod = method;
+          diag.urlAfter = hrefNow();
+          diag.selectedStopIdAfter = selectedStopIdOf(hrefNow());
+          diag.targetDaVisibleAfter = Object.keys(collectExactDaElements(das)).length;
+          diag.historyLenAfter = historyLength();
+          diag.leaveResult = !res.ok ? 'failed' : (res.leftOpen ? 'left_open_route_ok' : 'closed');
+          diag.result = res.ok ? 'left' : 'failed';
+          diag.elapsedMs = Date.now() - started;
+          if (res.detail) diag.detail = res.detail;
+          pushStopLeaveDiag(diag);
+          ctx.openedListTarget = null;
+          cb(res);
+        }
+        function thenHistory(method, leftOpenDetail) {
+          restoreHistory(ctx.stopHref, ctx.stopHistoryLen, runId, function (back) {
+            diag.historyRestore = back.method;
+            if (!back.ok) { finish({ ok: false, detail: 'Stop表示からRoute詳細へ戻れません（' + back.detail + '）' }, method); return; }
+            finish(leftOpenDetail ? { ok: true, leftOpen: true, detail: leftOpenDetail } : { ok: true }, method);
+          });
+        }
+        function currentTarget() {
+          var t = freshListTarget(stop.stop);
+          if (!t && ctx.openedListTarget && ctx.openedListTarget.button.isConnected) t = ctx.openedListTarget;
+          return t;
+        }
+        function isClosed(t) {
+          t = t || currentTarget();
+          if (t && t.button.getAttribute('aria-expanded') === 'false') return true;
+          return diag.selectedStopIdBefore != null && selectedStopIdOf(hrefNow()) == null &&
+            Object.keys(collectExactDaElements(das)).length === 0;
+        }
+        function recover(reason) {
+          var usable = routeDetailUsable();
+          diag.routeDetailUsable = usable.ok;
+          diag.recoveryDetail = usable.detail || '';
+          if (usable.ok) {
+            thenHistory('left_open', 'Stop #' + stop.stop + ' が閉じません（' + reason + '）。Route詳細は操作可能');
+            return;
+          }
+          finish({ ok: false, detail: 'Stop #' + stop.stop + ' が閉じず、Route詳細も確認できません（' + usable.detail + '）' }, 'left_open');
+        }
+        if (!ctx.openedListTarget) { thenHistory('history_only'); return; }
+        var first = currentTarget();
+        if (!first) { recover('Stop行ボタンが見つかりません'); return; }
+        diag.ariaExpandedBeforeLeave = first.button.getAttribute('aria-expanded');
+        diag.buttonConnected = !!first.button.isConnected;
+        diag.sameButtonAsOpen = first.button === ctx.openedListTarget.button;
+        if (diag.ariaExpandedBeforeLeave !== 'true') {
+          diag.ariaExpandedAfterLeave = diag.ariaExpandedBeforeLeave;
+          thenHistory('already_closed');
+          return;
+        }
+        function attempt(n, skipLabels) {
+          var ad = { attempt: n + 1 };
+          diag.attempts.push(ad);
+          clickListButton(currentTarget, runId, function (res) {
+            ad.clickResult = res.ok ? 'clicked' : res.detail;
+            if (!res.ok) {
+              if (res.covered) {
+                diag.ariaExpandedAfterLeave = (currentTarget() || first).button.getAttribute('aria-expanded');
+                finish({ ok: false, detail: 'Stop close click: ' + res.detail }, n ? 'close_button_retry' : 'close_button');
+                return;
+              }
+              if (n === 0) { retry(ad); return; }
+              recover(res.detail);
+              return;
+            }
+            note('stop_close_click');
+            waitBag(function () { return isClosed(); }, BAG_STOP_CLOSE_TIMEOUT_MS, runId, function (closed) {
+              var t = currentTarget();
+              diag.ariaExpandedAfterLeave = t ? t.button.getAttribute('aria-expanded') : null;
+              ad.ariaExpandedAfter = diag.ariaExpandedAfterLeave;
+              if (closed) { thenHistory(n ? 'close_button_retry' : 'close_button'); return; }
+              if (n === 0) { retry(ad); return; }
+              recover('aria-expanded=' + diag.ariaExpandedAfterLeave);
+            });
+          }, ad, skipLabels);
+        }
+        function retry(prev) {
+          diag.retryCount = 1;
+          if (bagEngine) bagEngine.extendRoute(BAG_STOP_CLOSE_TIMEOUT_MS + 1000);
+          note('stop_close_retry');
+          var skip = prev && prev.clicked ? [prev.clicked.label] : [];
+          bagLater(function () { attempt(1, skip); }, 400);
+        }
+        attempt(0, null);
+      },
+
+      returnToList: function (cb) {
+        if (ctx.currentPage) { cb({ ok: true }); return; }
+        closeNewDialogs(ctx.baseDialogs, runId, function () {
+          var backs = 0;
+          function step() {
+            if (!bagIsCurrent(runId)) return;
+            if (routeListShown(ctx)) { cb({ ok: true }); return; }
+            if (hrefNow() === ctx.listHref) {
+              waitBag(function () { return anyRouteCardShown(); }, BAG_HISTORY_TIMEOUT_MS, runId, function (shown) {
+                cb(shown ? { ok: true } : { ok: false, detail: 'Route一覧URLだがRoute cardが見えません' });
+              });
+              return;
+            }
+            var maxBacks = Math.min(40, Math.max(3, historyLength() - (ctx.listHistoryLen || historyLength()) + 1));
+            if (backs >= maxBacks) { cb({ ok: false, detail: 'history.back ' + backs + '回でも一覧URLに戻りません' }); return; }
+            backs += 1;
+            try { global.history.back(); } catch (e1) { cb({ ok: false, detail: 'history.back失敗' }); return; }
+            waitBag(function () { return hrefNow() === ctx.listHref; }, BAG_HISTORY_TIMEOUT_MS, runId, function () {
+              step();
+            });
+          }
+          step();
         });
       }
-      if (!opened) {
-        bagRun.routeErrors.push(group.routeCode + ': ' + message);
-        next();
-        return;
-      }
-      sweepBagTargets(group.targets, ctx, runId, function () {
-        if (ctx.abort) bagRun.routeErrors.push(group.routeCode + ': ' + ctx.abort);
-        next();
-      });
-    });
+    };
+    return driver;
   }
 
   function finishBagPhase(aborted) {
     if (!bagRun || bagRun.ended) return;
     if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    bagCancelRouteOp('phase_end');
+    bagRouteOp = null;
     setPanelClickable(true);
-    bagRun.aborted = aborted || (bagRun.routeErrors.length ? bagRun.routeErrors.join(' / ') : '');
+    bagRun.aborted = aborted || '';
     bagRun.ended = true;
     Core.restoreNormalCapture(store, bagSnapshot);
     bagSnapshot = null;
     var summary = Core.summarizeBagRun(bagRun, store.trDetailsByTrId);
     store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
     bagRun.summary = summary;
-    setBagStatus(Core.formatBagSummary(summary));
+    setBagStatus(Core.formatBagSummary(summary) + '\n(' + BAG_BUILD + ')');
+    bagLog('[Bag] 完了: 対象 ' + summary.targetCount + ' / 試行済み ' + summary.attempted +
+      ' / 未試行 ' + (summary.counts.not_attempted || 0) + (summary.aborted ? ' / 中断: ' + summary.aborted : ''));
+    if (bagEngine && typeof bagEngine.dispose === 'function') bagEngine.dispose();
+    bagEngine = null;
     paint();
+  }
+
+  // ---- Unfinished Bag Test v1 (diagnostic mode; separate button, normal Bag v3.5 untouched) ----
+  // Opens only not-yet-completed Stops (capped) with the same Stop list click / close /
+  // Route recovery as Bag v3.5, waits up to 3 s for Cortex's own trDetails and NEVER clicks a
+  // package: findPackage / clickPackage are replaced so the package click path cannot run.
+  var UNFINISHED_TEST_LIMITS = { maxRoutes: 3, maxStops: 5, maxPackages: 20, maxStopsPerRoute: 3 };
+  var UNFINISHED_TEST_TR_WAIT_MS = 3000;
+  var unfinishedTest = null;
+  var lastUnfinishedTest = null;
+
+  function selectedDayNow() {
+    var m = hrefNow().match(/[?&]selectedDay=([^&#]*)/);
+    return m ? decodeURIComponent(m[1]) : currentLocalDate();
+  }
+
+  // Shape of a trDetails response (keys, bag-like field values, trIds); no addresses / notes.
+  function recordTrDetailsShape(url, status, body) {
+    if (!unfinishedTest || unfinishedTest.responses.length >= 50) return;
+    var rows = body && Array.isArray(body.trDetails) ? body.trDetails : [];
+    var rowKeys = {};
+    var bagLike = {};
+    rows.forEach(function (r) {
+      if (!r || typeof r !== 'object') return;
+      Object.keys(r).forEach(function (k) {
+        rowKeys[k] = true;
+        if (/bag|tote|container|sort|cart|pallet/i.test(k)) {
+          var v = r[k];
+          if (!bagLike[k]) bagLike[k] = [];
+          if (bagLike[k].length < 10) bagLike[k].push(v == null ? null : (typeof v === 'object' ? '[' + (Array.isArray(v) ? 'array' : 'object') + ']' : String(v).slice(0, 40)));
+        }
+      });
+    });
+    unfinishedTest.responses.push({
+      atMs: Date.now() - unfinishedTest.startedAt,
+      path: String(url || '').replace(/^https?:\/\/[^/]+/, '').split('?')[0],
+      status: status,
+      topKeys: body && typeof body === 'object' ? Object.keys(body).slice(0, 20) : [],
+      rowCount: rows.length,
+      rowKeys: Object.keys(rowKeys),
+      bagLikeFields: bagLike,
+      trIds: rows.map(function (r) { return r && r.trId; }).filter(Boolean).slice(0, 50)
+    });
+  }
+
+  function finishUnfinishedTest(aborted) {
+    if (!bagRun || bagRun.ended) return;
+    if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    bagCancelRouteOp('phase_end');
+    bagRouteOp = null;
+    setPanelClickable(true);
+    bagRun.aborted = aborted || '';
+    bagRun.ended = true;
+    Core.restoreNormalCapture(store, bagSnapshot);
+    bagSnapshot = null;
+    var testRun = bagRun;
+    var stopDiags = {};
+    (testRun.stopClickDiagnostics || []).forEach(function (d) {
+      stopDiags[d.routeCode + '#' + d.stop] = {
+        opened: d.result, expandedBy: d.expandedBy || '',
+        ariaExpanded: d.stopList ? d.stopList.ariaExpandedAfter : null,
+        selectedStopId: d.stopList ? d.stopList.selectedStopIdAfter : null,
+        waitMs: d.cortexTrDetails ? d.cortexTrDetails.waitedMs : null,
+        expected: d.cortexTrDetails ? d.cortexTrDetails.pending : null,
+        received: d.cortexTrDetails ? d.cortexTrDetails.arrived : null,
+        clicked: d.clicked || null
+      };
+    });
+    Object.keys(unfinishedTest.ctx.testStopDiags || {}).forEach(function (k) { stopDiags[k] = unfinishedTest.ctx.testStopDiags[k]; });
+    var summary = Core.summarizeUnfinishedBagTest({
+      targets: testRun.targets, trMap: store.trDetailsByTrId, results: testRun.results,
+      clickedRefs: testRun.clickedRefs || {}, preexisting: testRun.preexisting || {}, trSeenAt: testRun.trSeenAt || {},
+      stopDiags: stopDiags, responses: unfinishedTest.responses, selection: unfinishedTest.selection,
+      selectedDay: unfinishedTest.selectedDay,
+      packageClicks: (testRun.clicks || 0) + (testRun.packageClickViolations || 0),
+      aborted: aborted || ''
+    });
+    summary.routeResults = testRun.routeResults || [];
+    summary.stopLeaveDiagnostics = testRun.stopLeaveDiagnostics || [];
+    summary.stopClickDiagnostics = testRun.stopClickDiagnostics || [];
+    summary.responses = unfinishedTest.responses;
+    summary.log = testRun.log || [];
+    unfinishedTest.active = false;
+    lastUnfinishedTest = summary;
+    bagRun = unfinishedTest.previousBagRun;
+    if (bagEngine && typeof bagEngine.dispose === 'function') bagEngine.dispose();
+    bagEngine = null;
+    setBagStatus(Core.formatUnfinishedBagTest(summary));
+    bagLog('[Bag] 未完了Bagテスト完了: 未完了Stop ' + summary.unfinishedStopsFound + ' / trDetails ' + summary.trDetailsReceived +
+      ' / Bag実値 ' + summary.bagCaptured + ' / package click ' + summary.packageClicks);
+    paint();
+  }
+
+  function startUnfinishedBagTest() {
+    show();
+    setPanelCollapsed(false);
+    if (bagActive()) return;
+    if (sessionBusy || (tour && tour.status === 'running')) {
+      alert('通常取得の完了後に「未完了Bagテスト」を押してください。');
+      return;
+    }
+    var detailsList = Object.keys(store.detailsByRouteId || {}).map(function (id) { return store.detailsByRouteId[id]; });
+    if (!detailsList.length) {
+      alert('先に「取得開始」で通常取得を完了してください。');
+      return;
+    }
+    var selection = Core.selectUnfinishedBagTargets(detailsList, store.trDetailsByTrId, UNFINISHED_TEST_LIMITS);
+    unfinishedTest = {
+      version: Core.UNFINISHED_BAG_TEST_VERSION, startedAt: Date.now(), selectedDay: selectedDayNow(),
+      selection: selection, responses: [], active: false, previousBagRun: bagRun, ctx: null
+    };
+    if (!selection.targets.length) {
+      lastUnfinishedTest = Core.summarizeUnfinishedBagTest({ targets: [], selection: selection, selectedDay: unfinishedTest.selectedDay, packageClicks: 0 });
+      setBagStatus(Core.formatUnfinishedBagTest(lastUnfinishedTest));
+      return;
+    }
+    var routes = Core.groupBagTargetsByRoute(selection.targets);
+    var currentPage = !anyRouteCardShown();
+    if (currentPage) {
+      var only = routeFromHref(routes);
+      if (!only) {
+        alert('表示中のRouteを特定できません。Route一覧で「未完了Bagテスト」を押してください。');
+        return;
+      }
+      routes = [only];
+    }
+    bagSnapshot = Core.snapshotNormalCapture(store);
+    bagRun = Core.createBagRun(selection.targets);
+    bagRun.mode = 'unfinished_test';
+    bagRun.selection = selection;
+    bagRun.stopOpenedFor = {};
+    bagRun.preexisting = {};
+    bagRun.trSeenAt = {};
+    bagRun.packageClickViolations = 0;
+    var runId = bagRun.id;
+    var ctx = {
+      currentPage: currentPage, listHref: hrefNow(), routeHref: hrefNow(), baseDialogs: visibleDialogs(),
+      mode: 'unfinished_test', stopOpenTrWaitMs: UNFINISHED_TEST_TR_WAIT_MS, testStopDiags: {}
+    };
+    unfinishedTest.ctx = ctx;
+    unfinishedTest.active = true;
+    var base = createBagDriver(ctx, runId);
+    var driver = Object.assign({}, base, {
+      // Phase A: Stop open only. No package DOM search / Stop-DOM Bag read, no package click.
+      readStopDomBag: null,
+      findPackage: function (target, stop, cb) {
+        cb({ ok: false, status: 'no_trdetails_after_stop_open',
+          detail: 'Stop open後' + UNFINISHED_TEST_TR_WAIT_MS + 'ms以内にtrDetailsなし（package clickは行いません）' });
+      },
+      clickPackage: function (target, handle, cb) {
+        bagRun.packageClickViolations = (bagRun.packageClickViolations || 0) + 1;
+        cb({ ok: false, detail: 'package click is disabled in the unfinished Bag test' });
+      }
+    });
+    setBagStatus('未完了Bagテスト中… (' + Core.UNFINISHED_BAG_TEST_VERSION + ')');
+    bagEngine = Core.runBagEngine({
+      run: bagRun,
+      routes: routes,
+      getTrMap: function () { return store.trDetailsByTrId; },
+      driver: driver,
+      routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      pageContext: bagPageContext,
+      log: bagLog,
+      onProgress: function (p) {
+        if (!bagIsCurrent(runId)) return;
+        setBagStatus('未完了Bagテスト中\n' + Core.formatBagProgress(p).replace(/^Bag取得中\n/, '') + '\n(' + Core.UNFINISHED_BAG_TEST_VERSION + ')');
+      },
+      done: function (aborted) {
+        if (bagRun && bagRun.id === runId) finishUnfinishedTest(aborted);
+      }
+    });
+  }
+
+  // Bag v3.11: page state at a Route abort (background tabs throttle timers and pause rAF).
+  function bagPageContext() {
+    return {
+      visibilityState: document.visibilityState || null,
+      hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null,
+      href: hrefNow(),
+      // Bag v3.12: where the Route's own operation stood (openRoute subPhase, clicks, stale work)
+      routeOperation: bagOpSnapshot(bagRouteOp)
+    };
   }
 
   function stopBagPhase() {
     if (!bagActive()) return;
     bagRun.stopRequested = true;
+    if (bagRun.mode === 'unfinished_test') { finishUnfinishedTest('手動停止'); return; }
     finishBagPhase('手動停止');
+  }
+
+  function routeFromHref(routes) {
+    var href = hrefNow();
+    var hits = routes.filter(function (r) {
+      if (!r.routeId) return false;
+      var re = new RegExp('(?:^|[/=?&])' + String(r.routeId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:$|[/?#&])');
+      return re.test(href);
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  // Per target: how the trDetails row arrived (our package click, or Cortex itself while the
+  // Stop was open) and the Stop status in route-details, to judge whether a null bag is genuine.
+  function isoOrNull(ms) {
+    return ms == null ? null : new Date(ms).toISOString();
+  }
+
+  function targetDiagnostics() {
+    var details = (bagSnapshot && bagSnapshot.detailsByRouteId) || store.detailsByRouteId || {};
+    return (bagRun.targets || []).map(function (t) {
+      var d = details[t.routeId];
+      var st = null;
+      ((d && d.rmsRouteDetails && d.rmsRouteDetails.stops) || []).forEach(function (s) {
+        if (s && s.sequenceNumber === t.stop) st = s;
+      });
+      var tr = Core.hasTrDetails(store.trDetailsByTrId, t.referenceId) ? store.trDetailsByTrId[t.referenceId] : null;
+      var r = bagRun.results[t.referenceId];
+      var clicked = !!(bagRun.clickedRefs && bagRun.clickedRefs[t.referenceId]);
+      var preexisting = !!(bagRun.preexisting && bagRun.preexisting[t.referenceId]);
+      var prior = !clicked && r && ['captured', 'captured_null'].indexOf(r.status) < 0 ? r : null;
+      var tw = bagRun.trWait && bagRun.trWait[t.referenceId];
+      var dom = bagRun.stopDom && bagRun.stopDom[t.referenceId];
+      return {
+        routeCode: t.routeCode, stop: t.stop, scannableId: t.scannableId,
+        status: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
+        captureSource: Core.classifyCaptureSource({
+          hasTr: !!tr, clicked: clicked, preexisting: preexisting,
+          priorFailureStatus: prior ? prior.status : null
+        }),
+        actualPackageClick: clicked,
+        priorFailureStatus: prior ? prior.status : null,
+        priorFailureDetail: prior ? prior.detail || '' : null,
+        bagName: tr ? tr.bagName : undefined,
+        stopStatus: st ? st.status || null : (t.stopStatus || null),
+        stopStatusCategory: Core.stopStatusCategory(st ? st.status : t.stopStatus),
+        stopPriority: t.stopPriority,
+        routeId: t.routeId, stopNumber: t.stop, referenceId: t.referenceId,
+        trDetailsReceived: !!tr,
+        receivedAfterStopOpen: !!tr && !preexisting,
+        stopOpenResult: (bagRun.stopOpen && bagRun.stopOpen[t.referenceId]) || null,
+        packageFallback: !!(bagRun.fallbackRefs && bagRun.fallbackRefs[t.referenceId]),
+        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null,
+        // Bag v3.8: wait phase evidence (null when the Stop was never opened for this target).
+        stopOpenedAt: tw ? isoOrNull(tw.stopOpenedAt) : null,
+        targetTrDetailsReceivedAt: tw ? isoOrNull(tw.targetTrDetailsReceivedAt) : null,
+        trDetailsLatencyMs: tw ? tw.trDetailsLatencyMs : null,
+        waitPhase: tw ? tw.waitPhase : null,
+        delayedRescue: tw ? !!tw.delayedRescue : false,
+        noTrDetailsAfterWait: tw ? !!tw.noTrDetailsAfterWait : false,
+        finalStatus: Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) || (r && r.status) || 'not_attempted',
+        // Bag v3.9: Stop-DOM Bag evidence
+        trDetailsBagName: tr ? tr.bagName : null,
+        stopDomAttempted: !!dom,
+        stopDomTargetDaFound: dom ? !!dom.daFound : null,
+        stopDomBagFound: dom ? !!dom.ok : null,
+        stopDomBagText: dom && dom.bag ? dom.bag.text : null,
+        stopDomCandidateCount: dom ? dom.candidateCount : null,
+        stopDomScope: dom ? dom.scope || null : null,
+        stopDomReason: dom ? dom.reason || null : null,
+        targetDaVisibleByExistingDetector: dom && dom.missDiag ? dom.missDiag.targetDaVisibleByExistingDetector : null,
+        detectorMismatch: dom && dom.missDiag ? dom.missDiag.detectorMismatch : null,
+        stopDomPackageContainerText: dom ? dom.containerExcerpt || '' : null,
+        bagSource: Core.bagSourceOf(bagRun, store.trDetailsByTrId, t.referenceId),
+        fallbackReason: bagRun.fallbackDiagnostics && bagRun.fallbackDiagnostics[t.referenceId]
+          ? 'no_trdetails' + (dom ? ' / stop_dom:' + (dom.reason || 'failed') : '') : null
+      };
+    });
+  }
+
+  // Bag v3.7: first trDetails row seen for each Bag target (keys + raw bag fields only), so a
+  // captured_null can be shown to be Cortex's own null. Values are never inferred or filled in.
+  function recordBagTrRows(body) {
+    var rows = body && Array.isArray(body.trDetails) ? body.trDetails : [];
+    if (!rows.length || !bagRun) return;
+    var want = bagRun.targetRefSet;
+    if (!want) {
+      want = bagRun.targetRefSet = {};
+      (bagRun.targets || []).forEach(function (t) { want[t.referenceId] = true; });
+    }
+    bagRun.trRowShapes = bagRun.trRowShapes || {};
+    var at = new Date().toISOString();
+    rows.forEach(function (r) {
+      var id = r && r.trId != null ? String(r.trId).trim() : '';
+      if (!id || !want[id] || bagRun.trRowShapes[id]) return;
+      var shape = Core.trDetailsRowShape(r);
+      if (!shape) return;
+      shape.receivedAt = at;
+      shape.receivedAtMs = Date.parse(at);
+      shape.rowsInResponse = rows.length;
+      bagRun.trRowShapes[id] = shape;
+    });
+  }
+
+  function bagNullDiagnostics() {
+    return (bagRun.targets || []).filter(function (t) {
+      return Core.capturedBagStatus(store.trDetailsByTrId, t.referenceId) === Core.BAG_STATUS.CAPTURED_NULL;
+    }).map(function (t) {
+      var shape = (bagRun.trRowShapes || {})[t.referenceId] || null;
+      return {
+        routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus || null,
+        referenceId: t.referenceId, scannableId: t.scannableId,
+        trDetailsReceivedAt: shape ? shape.receivedAt : null,
+        elapsedAfterStopOpenMs: bagRun.trSeenAt && bagRun.trSeenAt[t.referenceId] != null ? bagRun.trSeenAt[t.referenceId] : null,
+        responseKeys: shape ? shape.keys : null,
+        hasBagNameField: shape ? shape.hasBagName : null,
+        bagNameRaw: shape ? shape.bagNameRaw : null,
+        bagFields: shape ? shape.bagFields : null,
+        actualPackageClick: !!(bagRun.clickedRefs && bagRun.clickedRefs[t.referenceId])
+      };
+    });
+  }
+
+  function buildBagDiagnostics() {
+    if (!bagRun) return lastUnfinishedTest ? { build: BAG_BUILD, unfinishedBagTest: lastUnfinishedTest } : null;
+    var results = {};
+    Object.keys(bagRun.results || {}).forEach(function (ref) { results[ref] = bagRun.results[ref]; });
+    var payload = {
+      localDate: currentLocalDate(),
+      summary: bagRun.summary || Core.summarizeBagRun(bagRun, store.trDetailsByTrId),
+      targets: bagRun.targets,
+      results: results,
+      routeResults: bagRun.routeResults || [],
+      log: bagRun.log || [],
+      routeDiagnostics: bagRun.routeDiagnostics || [],
+      stopClickDiagnostics: bagRun.stopClickDiagnostics || [],
+      stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics || [],
+      routeOperations: (bagRun.routeOperations || []).map(bagOpSnapshot),
+      unfinishedBagTest: lastUnfinishedTest,
+      targetDiagnostics: targetDiagnostics(),
+      stopProcessingDiagnostics: Core.buildStopProcessingDiagnostics(bagRun, store.trDetailsByTrId),
+      packageFallbackDiagnostics: Object.keys(bagRun.fallbackDiagnostics || {}).map(function (k) { return bagRun.fallbackDiagnostics[k]; }),
+      bagNullDiagnostics: bagNullDiagnostics(),
+      stopDomDiagnostics: Object.keys(bagRun.stopDom || {}).map(function (ref) {
+        var x = bagRun.stopDom[ref];
+        return { referenceId: ref, routeCode: x.routeCode, stopNumber: x.stopNumber, ok: !!x.ok, reason: x.reason || '',
+          daFound: !!x.daFound, candidateCount: x.candidateCount, scope: x.scope || '', bagText: x.bag ? x.bag.text : null,
+          labels: x.labels || [], containerExcerpt: x.containerExcerpt || '', pass: x.pass || '', missDiag: x.missDiag || null };
+      }),
+      build: BAG_BUILD,
+      selection: bagRun.selection ? bagRun.selection.skipped : null,
+      progress: bagProgressText
+    };
+    return payload;
+  }
+
+  function saveBagDiagnostics() {
+    var payload = buildBagDiagnostics();
+    if (!payload) { alert('Bag取得はまだ実行されていません。'); return; }
+    try {
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'cortex-bag-diagnostics_' + currentLocalDate() + '.json';
+      a.click();
+    } catch (e) { alert('Bag診断JSONの保存に失敗しました。'); }
   }
 
   function startBagPhase() {
@@ -1569,29 +3589,54 @@
       return;
     }
     var selection = Core.selectBagTargets(detailsList, store.trDetailsByTrId);
+    var routes = Core.groupBagTargetsByRoute(selection.targets);
+    var currentPage = !anyRouteCardShown();
+    if (currentPage && selection.targets.length) {
+      // Not on the Route list: only the Route whose routeId is in the URL, no navigation.
+      var only = routeFromHref(routes);
+      if (!only) {
+        alert('表示中のRouteを特定できません。Route一覧で「Bag取得」を押してください。');
+        return;
+      }
+      routes = [only];
+    }
     bagSnapshot = Core.snapshotNormalCapture(store);
     bagRun = Core.createBagRun(selection.targets);
     bagRun.selection = selection;
-    bagRun.routeErrors = [];
+    bagRun.stopOpenedFor = {};
+    bagRun.preexisting = {};
     var runId = bagRun.id;
     if (!selection.targets.length) {
       finishBagPhase('');
       return;
     }
     var ctx = {
-      listHref: String(global.location.href || ''),
-      routeHref: String(global.location.href || ''),
-      abort: '',
-      deadline: Date.now() + BAG_ROUTE_BUDGET_MS
+      currentPage: currentPage,
+      listHref: hrefNow(),
+      routeHref: hrefNow(),
+      baseDialogs: visibleDialogs()
     };
-    if (anyRouteCardShown()) {
-      runBagRoutes(Core.groupBagTargetsByRoute(selection.targets), 0, ctx, runId);
-      return;
-    }
-    // Not on the Route list: work on the currently open page only (no navigation).
-    setBagStatus('Bag取得中…（表示中の画面）');
-    sweepBagTargets(selection.targets, ctx, runId, function () {
-      finishBagPhase(ctx.abort || '');
+    setBagStatus('Bag取得中… (' + BAG_BUILD + ')');
+    bagEngine = Core.runBagEngine({
+      run: bagRun,
+      routes: routes,
+      getTrMap: function () { return store.trDetailsByTrId; },
+      driver: createBagDriver(ctx, runId),
+      routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      // Bag v3.8: the extra trDetails wait (up to 3 s per Stop) needs more room than the v3.5 60 s cap.
+      routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
+      routeIdleMs: BAG_ROUTE_IDLE_MS,
+      routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS,
+      pageContext: bagPageContext,
+      log: bagLog,
+      onProgress: function (p) {
+        if (!bagIsCurrent(runId)) return;
+        var tail = (bagRun.log || []).slice(-3);
+        setBagStatus(Core.formatBagProgress(p) + (tail.length ? '\n' + tail.join('\n') : '') + '\n(' + BAG_BUILD + ')');
+      },
+      done: function (aborted) {
+        if (bagRun && bagRun.id === runId) finishBagPhase(aborted);
+      }
     });
   }
 
@@ -1612,6 +3657,8 @@
     stop: stopPoc,
     save: saveBundle,
     bag: startBagPhase,
+    bagDiagnostics: buildBagDiagnostics,
+    unfinishedBagTest: startUnfinishedBagTest,
     _store: store
   };
 })(typeof window !== 'undefined' ? window : global);

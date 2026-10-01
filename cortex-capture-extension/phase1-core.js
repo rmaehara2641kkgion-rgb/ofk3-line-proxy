@@ -921,7 +921,14 @@
     DOM_NOT_FOUND: 'dom_not_found',
     DOM_AMBIGUOUS: 'dom_ambiguous',
     CLICK_FAILED: 'click_failed',
-    TIMEOUT: 'timeout'
+    TIMEOUT: 'timeout',
+    STOP_NOT_FOUND: 'stop_not_found',
+    STOP_AMBIGUOUS: 'stop_ambiguous',
+    STOP_EXPAND_FAILED: 'stop_expand_failed',
+    PACKAGE_DOM_NOT_FOUND: 'package_dom_not_found',
+    PACKAGE_CLICK_TARGET_NOT_FOUND: 'package_click_target_not_found',
+    ROUTE_ABORTED: 'route_aborted',
+    UI_BLOCKED: 'ui_blocked'
   };
 
   function hasTrDetails(trDetailsByTrId, referenceId) {
@@ -946,6 +953,31 @@
     if (!isExact1300Clock(windowEndMs)) return false;
     if (!isSameLocalDate(windowEndMs, localDate)) return false;
     return isOnOrBeforeCutoff(plannedEndMs);
+  }
+
+  // Completed Stops return bagName:null (real runs 2026-09-24: 102/102 COMPLETE -> null),
+  // so within a Route the Bag phase visits not-yet-completed Stops first. Order only.
+  function isCompleteStopStatus(status) {
+    return /^(COMPLETE|COMPLETED|DELIVERED|DONE)$/i.test(String(status || '').trim());
+  }
+
+  // Bag v3.6: diagnostics category of a Stop status (the target set never depends on it).
+  function stopStatusCategory(status) {
+    var s = String(status == null ? '' : status).trim().toUpperCase();
+    if (!s) return 'UNKNOWN';
+    if (s === 'NOT_STARTED') return 'NOT_STARTED';
+    if (s === 'IN_PROGRESS') return 'IN_PROGRESS';
+    if (isCompleteStopStatus(s)) return 'COMPLETE';
+    return 'OTHER';
+  }
+
+  // Visit order inside a Route: NOT_STARTED, IN_PROGRESS, other not-completed, COMPLETE.
+  function stopStatusPriority(status) {
+    var c = stopStatusCategory(status);
+    if (c === 'NOT_STARTED') return 0;
+    if (c === 'IN_PROGRESS') return 1;
+    if (c === 'COMPLETE') return 3;
+    return 2;
   }
 
   function compareBagTargets(a, b) {
@@ -979,10 +1011,13 @@
           if (!scannableId) { out.skipped.missingScannableId += 1; return; }
           if (seen[referenceId]) { out.skipped.duplicateReferenceId += 1; return; }
           seen[referenceId] = true;
+          var stopStatus = stop.status == null ? null : String(stop.status);
           out.targets.push({
             routeId: String(rd.routeId || ''),
             routeCode: String(rd.routeCode || ''),
             stop: stop.sequenceNumber,
+            stopStatus: stopStatus,
+            stopPriority: stopStatusPriority(stopStatus),
             scannableId: scannableId,
             referenceId: referenceId
           });
@@ -1084,28 +1119,718 @@
       byReferenceId[t.referenceId] = status;
       counts[status] = (counts[status] || 0) + 1;
     });
+    var targetCount = ((run && run.targets) || []).length;
+    var groups = {};
+    Object.keys(BAG_SUMMARY_GROUPS).forEach(function (g) {
+      groups[g] = BAG_SUMMARY_GROUPS[g].reduce(function (n, st) { return n + (counts[st] || 0); }, 0);
+    });
+    var so = (run && run.stopOpen) || {};
+    var clickedRefs = (run && run.clickedRefs) || {};
+    var fallbackRefs = (run && run.fallbackRefs) || {};
+    var stopOpen = {
+      stopOpenTrDetailsReceived: 0, stopOpenBagCaptured: 0, stopOpenBagNull: 0, stopOpenNoTrDetails: 0,
+      packageFallbackTargets: 0, packageFallbackAttempted: 0, actualPackageClicks: (run && run.clicks) || 0,
+      capturedByStopOpen: 0, capturedByPackageClick: 0, capturedOther: 0, capturedByStopDom: 0
+    };
+    var stopDomRuns = (run && run.stopDom) || {};
+    var byStopStatus = {};
+    ((run && run.targets) || []).forEach(function (t) {
+      var ref = t.referenceId;
+      var o = so[ref];
+      if (o === BAG_STATUS.CAPTURED || o === BAG_STATUS.CAPTURED_NULL) {
+        stopOpen.stopOpenTrDetailsReceived += 1;
+        if (o === BAG_STATUS.CAPTURED) stopOpen.stopOpenBagCaptured += 1; else stopOpen.stopOpenBagNull += 1;
+      } else if (o === 'no_trdetails') {
+        stopOpen.stopOpenNoTrDetails += 1;
+        // Bag v3.9: a Bag read from the opened Stop's DOM never reaches the package fallback.
+        if (!(stopDomRuns[ref] && stopDomRuns[ref].ok)) stopOpen.packageFallbackTargets += 1;
+      }
+      if (fallbackRefs[ref]) stopOpen.packageFallbackAttempted += 1;
+      var st = byReferenceId[ref];
+      if (st === BAG_STATUS.CAPTURED) {
+        if (clickedRefs[ref]) stopOpen.capturedByPackageClick += 1;
+        else if (o === BAG_STATUS.CAPTURED) stopOpen.capturedByStopOpen += 1;
+        else if (!hasTrDetails(trDetailsByTrId, ref) && stopDomRuns[ref] && stopDomRuns[ref].ok) stopOpen.capturedByStopDom += 1;
+        else stopOpen.capturedOther += 1;
+      }
+      var cat = stopStatusCategory(t.stopStatus);
+      byStopStatus[cat] = byStopStatus[cat] || { targets: 0, captured: 0, captured_null: 0, other: 0 };
+      byStopStatus[cat].targets += 1;
+      if (st === BAG_STATUS.CAPTURED || st === BAG_STATUS.CAPTURED_NULL) byStopStatus[cat][st] += 1;
+      else byStopStatus[cat].other += 1;
+    });
+    // Bag v3.7: Stop-level counts next to the v3.6 package-level ones (all v3.6 keys kept).
+    var stopLevel = summarizeStopProcessing(run, trDetailsByTrId, byReferenceId);
+    Object.keys(stopLevel).forEach(function (k) { stopOpen[k] = stopLevel[k]; });
+    // Bag v3.8: normal (<= 3 s) vs extended (3-6 s) trDetails wait outcome.
+    if (run && run.stopDom) {
+      var sd = summarizeStopDom(run, trDetailsByTrId);
+      Object.keys(sd).forEach(function (k) { stopOpen[k] = sd[k]; });
+    }
+    if (run && run.trWait) {
+      var tw = summarizeTrWait(run, trDetailsByTrId);
+      Object.keys(tw).forEach(function (k) { stopOpen[k] = tw[k]; });
+    }
+    var routeList = (run && run.routeResults) || [];
+    var routeStats = { total: routeList.length, done: 0, aborted: 0, byReason: {} };
+    var timing = { totalMs: 0, avgRouteMs: 0, maxRouteMs: 0, maxRouteCode: '' };
+    routeList.forEach(function (r) {
+      if (r.status === 'done') routeStats.done += 1;
+      else {
+        routeStats.aborted += 1;
+        var rc = r.reasonCode || r.status;
+        routeStats.byReason[rc] = (routeStats.byReason[rc] || 0) + 1;
+      }
+      var ms = r.routeElapsedMs != null ? r.routeElapsedMs : (r.durationMs || 0);
+      timing.totalMs += ms;
+      if (ms > timing.maxRouteMs) { timing.maxRouteMs = ms; timing.maxRouteCode = r.routeCode; }
+    });
+    timing.avgRouteMs = routeList.length ? Math.round(timing.totalMs / routeList.length) : 0;
     return {
-      targetCount: ((run && run.targets) || []).length,
+      targetCount: targetCount,
+      attempted: targetCount - (counts.not_attempted || 0),
+      groups: groups,
+      routeStats: routeStats,
+      bagTiming: timing,
+      stopOpen: stopOpen,
+      byStopStatus: byStopStatus,
       clicks: (run && run.clicks) || 0,
+      stopClicks: (run && run.stopClicks) || 0,
+      routeResults: ((run && run.routeResults) || []).slice(),
       aborted: (run && run.aborted) || '',
       counts: counts,
       byReferenceId: byReferenceId
     };
   }
 
+  // Display groups only; the per-package status values themselves are unchanged.
+  var BAG_SUMMARY_GROUPS = {
+    captured: ['captured'],
+    null: ['captured_null'],
+    notFound: ['dom_not_found', 'stop_not_found', 'package_dom_not_found'],
+    ambiguous: ['dom_ambiguous', 'stop_ambiguous'],
+    clickFailed: ['click_failed'],
+    timeout: ['timeout'],
+    uiBlocked: ['ui_blocked'],
+    otherError: ['stop_expand_failed', 'package_click_target_not_found', 'route_aborted'],
+    notAttempted: ['not_attempted']
+  };
+
+  var BAG_DETAIL_LABELS = [
+    ['stop_not_found', 'Stop未発見'],
+    ['package_dom_not_found', 'Package未発見'],
+    ['dom_not_found', 'DA未発見'],
+    ['stop_ambiguous', 'Stop重複'],
+    ['dom_ambiguous', 'DA重複'],
+    ['stop_expand_failed', 'Stop展開失敗'],
+    ['package_click_target_not_found', '荷物番号click対象なし'],
+    ['route_aborted', 'Route中断']
+  ];
+
   function formatBagSummary(summary) {
-    var c = (summary && summary.counts) || emptyBagCounts();
-    var text = 'Bag取得完了 対象 ' + ((summary && summary.targetCount) || 0) +
-      ' / captured ' + (c.captured || 0) +
-      ' / null ' + (c.captured_null || 0) +
-      ' / not found ' + (c.dom_not_found || 0) +
-      ' / ambiguous ' + (c.dom_ambiguous || 0) +
-      ' / click失敗 ' + (c.click_failed || 0) +
-      ' / timeout ' + (c.timeout || 0) +
-      ' / 未試行 ' + (c.not_attempted || 0) +
-      ' / click ' + ((summary && summary.clicks) || 0);
-    if (summary && summary.aborted) text += ' / 中断: ' + summary.aborted;
-    return text;
+    summary = summary || {};
+    var c = summary.counts || emptyBagCounts();
+    var g = summary.groups || {};
+    var total = summary.targetCount || 0;
+    var attempted = summary.attempted != null ? summary.attempted : total - (c.not_attempted || 0);
+    var lines = [
+      'Bag取得完了',
+      '対象 ' + total + ' / 試行済み ' + attempted + ' / 未試行 ' + (c.not_attempted || 0) +
+        (attempted + (c.not_attempted || 0) === total ? '' : ' / 件数不一致'),
+      'captured ' + (g.captured || 0) + ' / null ' + (g.null || 0) + ' / not found ' + (g.notFound || 0) +
+        ' / ambiguous ' + (g.ambiguous || 0) + ' / click失敗 ' + (g.clickFailed || 0) +
+        ' / timeout ' + (g.timeout || 0) + ' / UI blocked ' + (g.uiBlocked || 0) +
+        ' / その他エラー ' + (g.otherError || 0)
+    ];
+    var rs = summary.routeStats;
+    if (rs && rs.total) {
+      lines.push('Route完了 ' + rs.done + '/' + rs.total + ' / Route中断 ' + rs.aborted);
+      if (rs.aborted) {
+        lines.push('中断内訳: ' + Object.keys(rs.byReason).map(function (k) { return k + ' ' + rs.byReason[k]; }).join(' / '));
+      }
+    }
+    var detail = BAG_DETAIL_LABELS.filter(function (pair) { return c[pair[0]]; })
+      .map(function (pair) { return pair[1] + ' ' + c[pair[0]]; });
+    if (detail.length) lines.push('内訳: ' + detail.join(' / '));
+    var so = summary.stopOpen;
+    if (so) {
+      lines.push('Stop-open取得 ' + (so.stopOpenBagCaptured || 0) + ' / Stop-open null ' + (so.stopOpenBagNull || 0) +
+        ' / trDetailsなし ' + (so.stopOpenNoTrDetails || 0));
+      if (so.trWaitNormalReceived != null) {
+        lines.push('通常待機取得 ' + (so.trWaitNormalReceived || 0) + ' / 追加待機救済 ' + (so.trWaitExtendedRescued || 0) +
+          ' (Bag ' + (so.trWaitExtendedCaptured || 0) + ' / null ' + (so.trWaitExtendedNull || 0) + ')' +
+          ' / 6秒待機後trDetailsなし ' + (so.trWaitNoTrDetailsAfterExtended || 0));
+      }
+      if (so.processedStops != null) {
+        lines.push('Stop成功 ' + (so.successfulStopOpens || 0) + '/' + (so.processedStops || 0) +
+          ' / retry救済 ' + (so.stopOpenRetryRescued || 0) +
+          ' (retry1 ' + (so.stopOpenRetry1Success || 0) + '/' + (so.stopOpenRetry1 || 0) +
+          ', retry2 ' + (so.stopOpenRetry2Success || 0) + '/' + (so.stopOpenRetry2 || 0) + ')');
+        if (so.stopExpandFailedPackages) {
+          lines.push('Stop展開失敗 ' + so.stopExpandFailedPackages + ' package / ' + (so.stopExpandFailedStops || 0) + ' Stop');
+        }
+      }
+      if (so.stopDomAttempts != null) {
+        lines.push('Stop-DOM取得 ' + (so.stopDomCaptured || 0) + ' / DOM対象なし ' + (so.stopDomTargetNotFound || 0) +
+          ' / DOM Bagなし ' + (so.stopDomBagNotFound || 0) + (so.stopDomOtherFailure ? ' / DOM重複 ' + so.stopDomOtherFailure : ''));
+      }
+      lines.push('package fallback ' + (so.packageFallbackTargets || 0) + ' / package click ' + (so.actualPackageClicks || 0) +
+        ' / click取得 ' + (so.capturedByPackageClick || 0));
+    }
+    lines.push('click ' + (summary.clicks || 0) + ' / Stop click ' + (summary.stopClicks || 0));
+    var leftOpen = (summary.routeResults || []).reduce(function (n, r) { return n + ((r.leaveFailures || []).length); }, 0);
+    if (leftOpen) lines.push('Stop閉じ失敗（Route継続） ' + leftOpen);
+    var failed = (summary.routeResults || []).filter(function (r) { return r.status !== 'done'; })
+      .map(function (r) {
+        return r.routeCode + ' ' + (r.status === 'ui_blocked' ? 'UI blocked' : r.status) + (r.reasonCode ? '(' + r.reasonCode + ')' : '');
+      });
+    if (failed.length) lines.push('失敗Route: ' + failed.join(', '));
+    if (summary.aborted) lines.push('中断: ' + summary.aborted);
+    return lines.join('\n');
+  }
+
+  // ---- Bag v3.7: Stop-open retry v2 + per-Stop diagnostics (DOM-free; the runner supplies the DOM) ----
+  // The v3.6 path is unchanged: open the Stop, let Cortex send its own trDetails, match by referenceId.
+  // v3.7 only (a) accepts more proof that the Stop really opened and (b) retries a failed open at most
+  // twice with a freshly found button. A Stop is handled once for all its target packages.
+  var STOP_OPEN_MAX_ATTEMPTS = 3;
+  var STOP_OPEN_STRATEGIES = ['initial', 'row_refind', 'route_refind'];
+  var STOP_OPEN_SUCCESS_RESULTS = ['opened', 'already_open', 'present'];
+
+  // Pending targets of THIS Stop whose trDetails row exists now and did not before the open started.
+  // trDetails of any other referenceId (another Stop, a prefetch) never counts.
+  function targetTrDetailsArrived(trDetailsByTrId, pendingTargets, baseline) {
+    baseline = baseline || {};
+    return (pendingTargets || []).filter(function (t) {
+      return t && t.referenceId && !baseline[t.referenceId] && hasTrDetails(trDetailsByTrId, t.referenceId);
+    }).map(function (t) { return t.referenceId; });
+  }
+
+  // obs: { ariaExpanded, targetDaVisible, targetTrDetailsReceived, selectedStopIdBefore,
+  //        selectedStopIdAfter, targetPackageDom }. First signal proving the Stop opened, or ''.
+  // Row DOM growth alone is not proof (it only earns the v3.6 extra wait).
+  function stopOpenSignal(obs) {
+    obs = obs || {};
+    if (obs.ariaExpanded === true || obs.ariaExpanded === 'true') return 'aria_expanded';
+    if (obs.targetDaVisible) return 'target_da';
+    if (Number(obs.targetTrDetailsReceived) > 0) return 'target_tr_details';
+    var after = obs.selectedStopIdAfter;
+    var before = obs.selectedStopIdBefore;
+    if (after != null && after !== '' && String(after) !== String(before == null ? '' : before)) return 'selected_stop_id';
+    if (obs.targetPackageDom) return 'target_package_dom';
+    return '';
+  }
+
+  /**
+   * Initial click + at most 2 retries, only while the open is not proven. Never more than 3 clicks.
+   * o: { maxAttempts, resolve(n, strategy, cb(target|null, info)), click(n, target, rec, cb(res)),
+   *      observe(n, rec, cb(signal)), isOpen() -> signal|'', done(final) }
+   *  - resolve() must re-find the button in the current DOM every attempt; a target reported as
+   *    disconnected (target.connected === false) is never clicked.
+   *  - click res: { ok, covered, dispatched, detail }. covered -> blocked (no retry, as v3.6 ui_blocked).
+   *  - before every retry isOpen() is checked first: an open that became visible late is never clicked
+   *    again (a second click on an open row would collapse it).
+   * final: { opened, openedBy, openedAttempt, lateDetected, blocked, detail, attempts, clickCount }
+   */
+  function runStopOpenAttempts(o) {
+    var max = Math.min(o.maxAttempts > 0 ? o.maxAttempts : STOP_OPEN_MAX_ATTEMPTS, STOP_OPEN_MAX_ATTEMPTS);
+    var attempts = [];
+    var ended = false;
+    var lastDetail = '';
+    function end(r) {
+      if (ended) return;
+      ended = true;
+      r.attempts = attempts;
+      r.clickCount = attempts.filter(function (a) { return a.clicked; }).length;
+      if (!r.detail) r.detail = lastDetail;
+      o.done(r);
+    }
+    function lateOpen(n) {
+      var late = typeof o.isOpen === 'function' ? o.isOpen() : '';
+      if (!late) return false;
+      end({ opened: true, openedBy: late, openedAttempt: n, lateDetected: true });
+      return true;
+    }
+    function next(n) {
+      if (ended) return;
+      if (n > 1 && lateOpen(n - 1)) return;
+      if (n > max) { end({ opened: false, openedBy: '', openedAttempt: 0 }); return; }
+      var strategy = STOP_OPEN_STRATEGIES[n - 1];
+      var rec = { attempt: n, strategy: strategy, buttonFound: false, clicked: false, result: '' };
+      attempts.push(rec);
+      o.resolve(n, strategy, function (target, info) {
+        if (ended) return;
+        Object.keys(info || {}).forEach(function (k) { rec[k] = info[k]; });
+        if (!target || target.connected === false) {
+          rec.result = target ? 'stale_element' : 'button_not_found';
+          lastDetail = 'Stop行ボタン再取得失敗 (' + strategy + ')';
+          next(n + 1);
+          return;
+        }
+        rec.buttonFound = true;
+        o.click(n, target, rec, function (res) {
+          if (ended) return;
+          res = res || {};
+          if (!res.ok) {
+            rec.clicked = !!res.dispatched;
+            rec.detail = res.detail || '';
+            lastDetail = 'Stop click: ' + (res.detail || '');
+            if (res.covered) {
+              rec.result = 'covered';
+              end({ opened: false, blocked: true, openedBy: '', openedAttempt: 0, detail: lastDetail });
+              return;
+            }
+            rec.result = 'click_failed';
+            next(n + 1);
+            return;
+          }
+          rec.clicked = true;
+          o.observe(n, rec, function (signal) {
+            if (ended) return;
+            if (signal) {
+              rec.result = 'opened';
+              rec.openedBy = signal;
+              end({ opened: true, openedBy: signal, openedAttempt: n, lateDetected: false });
+              return;
+            }
+            rec.result = 'not_opened';
+            lastDetail = 'Stop click後に展開を確認できません (attempt ' + n + ')';
+            next(n + 1);
+          });
+        });
+      });
+    }
+    next(1);
+  }
+
+  // Engine side: one record per Route + Stop (the driver adds its click evidence as res.stopDiag).
+  function beginStopRecord(run, route, stop, pending, startedAt) {
+    run.stopRecords = run.stopRecords || [];
+    var targets = stop.targets || [];
+    var rec = {
+      routeCode: route.routeCode,
+      stopNumber: stop.stop,
+      stopStatus: targets.length && targets[0].stopStatus != null ? targets[0].stopStatus : null,
+      targetCount: targets.length,
+      pendingCount: (pending || []).length,
+      targetReferenceIds: targets.map(function (t) { return t.referenceId; }),
+      targetScannableIds: targets.map(function (t) { return t.scannableId; }),
+      initialAriaExpanded: null,
+      initialSelectedStopId: null,
+      clickAttemptCount: 0,
+      clickAttempts: [],
+      finalAriaExpanded: null,
+      finalSelectedStopId: null,
+      targetDaVisible: null,
+      openedBy: '',
+      openedAttempt: 0,
+      openResult: '',
+      closeResult: '',
+      failureReason: '',
+      startedAt: startedAt,
+      elapsedMs: null
+    };
+    run.stopRecords.push(rec);
+    return rec;
+  }
+
+  function applyStopOpenResult(rec, res) {
+    if (!rec) return;
+    var d = (res && res.stopDiag) || {};
+    ['initialAriaExpanded', 'initialSelectedStopId', 'finalAriaExpanded', 'finalSelectedStopId', 'targetDaVisible',
+      'openedBy', 'openedAttempt', 'lateDetected'].forEach(function (k) {
+      if (d[k] !== undefined) rec[k] = d[k];
+    });
+    rec.clickAttempts = Array.isArray(d.clickAttempts) ? d.clickAttempts : [];
+    rec.clickAttemptCount = rec.clickAttempts.filter(function (a) { return a && a.clicked; }).length;
+    if (res && res.ok) {
+      rec.openResult = d.openResult || 'opened';
+    } else {
+      rec.openResult = (res && res.status) || BAG_STATUS.STOP_NOT_FOUND;
+      rec.failureReason = (res && res.blocked ? 'ui_blocked: ' : '') + ((res && res.detail) || '');
+    }
+  }
+
+  function stopKeyOf(t) {
+    return String(t.routeCode) + '#' + String(t.stop);
+  }
+
+  // stopProcessingDiagnostics: the engine records + per-Stop trDetails outcome (package clicks excluded).
+  function buildStopProcessingDiagnostics(run, trDetailsByTrId) {
+    var clicked = (run && run.clickedRefs) || {};
+    return ((run && run.stopRecords) || []).map(function (rec) {
+      var out = {};
+      Object.keys(rec).forEach(function (k) { if (k !== 'startedAt') out[k] = rec[k]; });
+      var tr = 0, bag = 0, nul = 0;
+      rec.targetReferenceIds.forEach(function (ref) {
+        if (clicked[ref] || !hasTrDetails(trDetailsByTrId, ref)) return;
+        tr += 1;
+        if (trDetailsByTrId[ref] && trDetailsByTrId[ref].bagName) bag += 1; else nul += 1;
+      });
+      out.trDetailsReceivedCount = tr;
+      out.bagCapturedCount = bag;
+      out.bagNullCount = nul;
+      out.noTrDetailsCount = rec.targetCount - tr;
+      return out;
+    });
+  }
+
+  // v3.7 summary.stopOpen additions. byReferenceId: final per-package status.
+  function summarizeStopProcessing(run, trDetailsByTrId, byReferenceId) {
+    var targets = (run && run.targets) || [];
+    var keys = {};
+    targets.forEach(function (t) { keys[stopKeyOf(t)] = true; });
+    var failedPkgStops = {};
+    var failedPkgs = 0;
+    targets.forEach(function (t) {
+      if ((byReferenceId || {})[t.referenceId] === BAG_STATUS.STOP_EXPAND_FAILED) {
+        failedPkgs += 1;
+        failedPkgStops[stopKeyOf(t)] = true;
+      }
+    });
+    var out = {
+      uniqueTargetStops: Object.keys(keys).length,
+      processedStops: 0,
+      successfulStopOpens: 0,
+      failedStopOpens: 0,
+      stopOpenRetry1: 0,
+      stopOpenRetry1Success: 0,
+      stopOpenRetry2: 0,
+      stopOpenRetry2Success: 0,
+      stopOpenRetryRescued: 0,
+      stopExpandFailedPackages: failedPkgs,
+      stopExpandFailedStops: Object.keys(failedPkgStops).length,
+      trDetailsReceivedAfterRetry: 0,
+      bagCapturedAfterRetry: 0
+    };
+    var clicked = (run && run.clickedRefs) || {};
+    ((run && run.stopRecords) || []).forEach(function (rec) {
+      out.processedStops += 1;
+      var ok = STOP_OPEN_SUCCESS_RESULTS.indexOf(rec.openResult) >= 0;
+      if (ok) out.successfulStopOpens += 1; else out.failedStopOpens += 1;
+      var tried = {};
+      (rec.clickAttempts || []).forEach(function (a) { if (a) tried[a.attempt] = true; });
+      if (tried[2]) out.stopOpenRetry1 += 1;
+      if (tried[3]) out.stopOpenRetry2 += 1;
+      if (ok && rec.openedAttempt === 2) out.stopOpenRetry1Success += 1;
+      if (ok && rec.openedAttempt === 3) out.stopOpenRetry2Success += 1;
+      if (ok && rec.openedAttempt >= 2) {
+        out.stopOpenRetryRescued += 1;
+        rec.targetReferenceIds.forEach(function (ref) {
+          if (clicked[ref] || !hasTrDetails(trDetailsByTrId, ref)) return;
+          out.trDetailsReceivedAfterRetry += 1;
+          if (trDetailsByTrId[ref] && trDetailsByTrId[ref].bagName) out.bagCapturedAfterRetry += 1;
+        });
+      }
+    });
+    return out;
+  }
+
+  // Package fallback evidence (engine side; the driver adds candidateCount when it knows it).
+  function recordPackageFallback(run, target, patch) {
+    if (!run || !target) return null;
+    run.fallbackDiagnostics = run.fallbackDiagnostics || {};
+    var d = run.fallbackDiagnostics[target.referenceId];
+    if (!d) {
+      d = run.fallbackDiagnostics[target.referenceId] = {
+        routeCode: target.routeCode, stopNumber: target.stop, scannableId: target.scannableId,
+        referenceId: target.referenceId, packageDomFound: null, packageCandidateCount: null,
+        clickTargetFound: null, actualClickAttempted: false, failureReason: '', result: ''
+      };
+    }
+    Object.keys(patch || {}).forEach(function (k) { d[k] = patch[k]; });
+    return d;
+  }
+
+  function packageLookupFallbackPatch(res) {
+    res = res || {};
+    var st = res.ok ? '' : (res.status || BAG_STATUS.PACKAGE_DOM_NOT_FOUND);
+    var patch = { packageCandidateCount: res.candidateCount != null ? res.candidateCount : null };
+    if (res.ok) {
+      patch.packageDomFound = true;
+      patch.clickTargetFound = true;
+    } else if (st === BAG_STATUS.PACKAGE_DOM_NOT_FOUND || st === BAG_STATUS.DOM_NOT_FOUND) {
+      patch.packageDomFound = false;
+      patch.clickTargetFound = false;
+      patch.failureReason = 'package_dom_not_found';
+    } else if (st === BAG_STATUS.PACKAGE_CLICK_TARGET_NOT_FOUND) {
+      patch.packageDomFound = true;
+      patch.clickTargetFound = false;
+      patch.failureReason = 'package_click_target_not_found';
+    } else if (st === BAG_STATUS.DOM_AMBIGUOUS) {
+      patch.packageDomFound = true;
+      patch.failureReason = 'package_ambiguous';
+    } else {
+      patch.failureReason = st;
+    }
+    if (!res.ok) patch.result = st;
+    return patch;
+  }
+
+  // Shape of one trDetails row (keys + raw bag fields) for captured_null diagnostics. No other values.
+  function trDetailsRowShape(row) {
+    if (!row || typeof row !== 'object') return null;
+    var keys = Object.keys(row);
+    var bagFields = {};
+    keys.forEach(function (k) {
+      if (!/bag|tote|container|cart|pallet/i.test(k)) return;
+      var v = row[k];
+      bagFields[k] = v == null ? v : (typeof v === 'object' ? '[' + (Array.isArray(v) ? 'array' : 'object') + ']' : String(v).slice(0, 60));
+    });
+    return {
+      keys: keys.slice(0, 40),
+      hasBagName: Object.prototype.hasOwnProperty.call(row, 'bagName'),
+      bagNameRaw: Object.prototype.hasOwnProperty.call(row, 'bagName') ? (row.bagName === undefined ? 'undefined' : row.bagName) : 'missing',
+      bagFields: bagFields
+    };
+  }
+
+  // ---- Bag v3.8: two-phase wait for Cortex's own trDetails after a Stop open ----
+  // Normal wait (3 s) ends the moment every pending target of THIS Stop has its trDetails row;
+  // only when some are still missing does an extra wait (3 s) follow. Stop open / retry are unchanged.
+  var TR_WAIT_NORMAL_MS = 3000;
+  var TR_WAIT_EXTENDED_MS = 3000;
+
+  /**
+   * o: { pending, trMap() -> trDetailsByTrId, baseline {ref:true} (rows present before the open),
+   *      startedAt, now(), receivedAtOf(ref) -> epoch ms | null, normalMs, extendedMs,
+   *      wait(check, ms, cb(ok)), done(result) }
+   * result: { records: {ref: record}, extendedUsed, allArrived, waitedMs }
+   * record: { stopOpenedAt, targetTrDetailsReceivedAt, trDetailsLatencyMs, waitPhase, delayedRescue }
+   *   waitPhase: 'normal' (<= normalMs) | 'extended' (later) | 'preexisting' (row existed before the open)
+   *   no row after the whole wait -> targetTrDetailsReceivedAt null, noTrDetailsAfterWait true.
+   * Only the pending targets' referenceIds end the wait; any other trDetails row is ignored.
+   */
+  function runTargetTrWait(o) {
+    var pending = (o.pending || []).filter(function (t) { return t && t.referenceId; });
+    var baseline = o.baseline || {};
+    var normalMs = o.normalMs >= 0 ? o.normalMs : TR_WAIT_NORMAL_MS;
+    var extendedMs = o.extendedMs >= 0 ? o.extendedMs : TR_WAIT_EXTENDED_MS;
+    var now = o.now || function () { return Date.now(); };
+    var startedAt = o.startedAt != null ? o.startedAt : now();
+    var extendedUsed = false;
+    function has(ref) { return hasTrDetails(o.trMap(), ref); }
+    function allArrived() { return pending.every(function (t) { return has(t.referenceId); }); }
+    function finish(ok) {
+      var records = {};
+      pending.forEach(function (t) {
+        var ref = t.referenceId;
+        if (baseline[ref]) {
+          records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: null, trDetailsLatencyMs: null,
+            waitPhase: 'preexisting', delayedRescue: false };
+          return;
+        }
+        if (!has(ref)) {
+          records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: null, trDetailsLatencyMs: null,
+            waitPhase: extendedUsed ? 'extended' : 'normal', delayedRescue: false, noTrDetailsAfterWait: true };
+          return;
+        }
+        var at = typeof o.receivedAtOf === 'function' ? o.receivedAtOf(ref) : null;
+        if (at == null) at = now();
+        var latency = Math.max(0, at - startedAt);
+        var phase = latency <= normalMs ? 'normal' : 'extended';
+        records[ref] = { stopOpenedAt: startedAt, targetTrDetailsReceivedAt: at, trDetailsLatencyMs: latency,
+          waitPhase: phase, delayedRescue: phase === 'extended' };
+      });
+      o.done({ records: records, extendedUsed: extendedUsed, allArrived: ok, waitedMs: now() - startedAt });
+    }
+    o.wait(allArrived, normalMs, function (ok) {
+      if (ok || extendedMs <= 0) { finish(!!ok); return; }
+      extendedUsed = true;
+      o.wait(allArrived, extendedMs, function (ok2) { finish(!!ok2); });
+    });
+  }
+
+  function recordTrWait(run, result) {
+    if (!run || !result) return;
+    run.trWait = run.trWait || {};
+    Object.keys(result.records || {}).forEach(function (ref) {
+      if (!run.trWait[ref]) run.trWait[ref] = result.records[ref];
+    });
+  }
+
+  // summary.stopOpen additions: how many targets the normal / extended wait delivered.
+  function summarizeTrWait(run, trDetailsByTrId) {
+    var out = { trWaitNormalReceived: 0, trWaitNormalCaptured: 0, trWaitNormalNull: 0,
+      trWaitExtendedRescued: 0, trWaitExtendedCaptured: 0, trWaitExtendedNull: 0,
+      trWaitNoTrDetailsAfterExtended: 0, trWaitNoTrDetailsNormalOnly: 0 };
+    var w = (run && run.trWait) || {};
+    ((run && run.targets) || []).forEach(function (t) {
+      var r = w[t.referenceId];
+      if (!r || r.waitPhase === 'preexisting') return;
+      if (r.noTrDetailsAfterWait) {
+        if (r.waitPhase === 'extended') out.trWaitNoTrDetailsAfterExtended += 1;
+        else out.trWaitNoTrDetailsNormalOnly += 1;
+        return;
+      }
+      var tr = trDetailsByTrId && trDetailsByTrId[t.referenceId];
+      var bag = !!(tr && tr.bagName);
+      if (r.delayedRescue) {
+        out.trWaitExtendedRescued += 1;
+        if (bag) out.trWaitExtendedCaptured += 1; else out.trWaitExtendedNull += 1;
+      } else {
+        out.trWaitNormalReceived += 1;
+        if (bag) out.trWaitNormalCaptured += 1; else out.trWaitNormalNull += 1;
+      }
+    });
+    return out;
+  }
+
+  // ---- Bag v3.9: read the Bag label shown inside the opened Stop (package block of the target DA) ----
+  // Used only when the target's own trDetails row never came. Never copies another package's Bag:
+  // the label must sit in the smallest-safe block that contains the target DA and no other package number.
+  var BAG_COLOR_WORDS = [
+    '黄色', '黄', 'イエロー', 'yellow', '紺色', '紺', 'ネイビー', 'navy', 'オレンジ', '橙', '橙色', 'orange',
+    '赤色', '赤', 'レッド', 'red', '黒色', '黒', 'ブラック', 'black', '緑色', '緑', 'グリーン', 'green',
+    '灰色', 'グレー', 'グレイ', 'gray', 'grey', '白色', '白', 'ホワイト', 'white', '茶色', '茶', 'ブラウン', 'brown',
+    '紫色', '紫', 'パープル', 'purple', 'ピンク', '桃色', 'pink', '青色', '青', 'ブルー', 'blue', '水色'
+  ];
+  var BAG_LABEL_RE = new RegExp('^(' + BAG_COLOR_WORDS.slice().sort(function (a, b) { return b.length - a.length; })
+    .join('|') + ')\\s?(\\d{3,5})$', 'i');
+  var PACKAGE_TOKEN_RE = /\b[A-Z]{2,4}\d{8,14}\b/g;
+
+  function normalizeDomText(text) {
+    return String(text == null ? '' : text)
+      .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[\s　]+/g, ' ').trim();
+  }
+
+  // "黄色 5838" / "オレンジ1395" -> { text, color, number }; the Cortex bagName form
+  // (JP_OB-AT-4635_GRN) is accepted too. Anything else (addresses, order numbers, times) -> null.
+  function parseBagLabelText(text) {
+    var t = normalizeDomText(text);
+    if (!t || t.length > 24) return null;
+    var m = t.match(BAG_LABEL_RE);
+    if (m) return { text: m[1] + ' ' + m[2], color: m[1], number: m[2], raw: null };
+    if (/^[A-Z]{2}_[A-Z]{2}-[A-Z]{2}-\d{3,5}_[A-Z]{3}$/.test(t)) {
+      var p = parseBagName(t);
+      if (p.bagNumber) return { text: p.bagDisplay || t, color: p.bagColor, number: p.bagNumber, raw: t };
+    }
+    return null;
+  }
+
+  function packageTokensOf(text) {
+    var seen = {};
+    (normalizeDomText(text).match(PACKAGE_TOKEN_RE) || []).forEach(function (x) { seen[x] = true; });
+    return Object.keys(seen);
+  }
+
+  // Short diagnostic excerpt of a package block: only package numbers, order numbers and Bag labels
+  // are kept verbatim; every other text (names, addresses) becomes [text:N].
+  function safeContainerExcerpt(leafTexts) {
+    return (leafTexts || []).map(function (x) {
+      var t = normalizeDomText(x);
+      if (!t) return '';
+      if (/^[A-Z]{2,4}\d{8,14}$/.test(t) || /^\d{3}-\d{7}-\d{7}$/.test(t) || parseBagLabelText(t)) return t;
+      return '[text:' + t.length + ']';
+    }).filter(Boolean).slice(0, 12).join(' | ');
+  }
+
+  /**
+   * DOM-free search. acc: { root, children(n), parent(n), ownText(n) (the element's own text nodes),
+   *   text(n) (full textContent, used only for short Bag labels), skip(n), isStopRow(n),
+   *   stopRowNumber(n), visible(n) }.
+   * Package numbers are read per own-text node: a parent's textContent glues children together
+   * ("DA0012555685249-3490061-...") and is never tokenised.
+   * Returns { ok, reason, daFound, candidateCount, scope, bag, containerExcerpt, labels }.
+   *   reason: target_not_found | target_other_stop | target_ambiguous | bag_not_found | bag_ambiguous
+   */
+  function readStopDomBag(acc, targetDa, stopNumber) {
+    var da = String(targetDa || '').trim();
+    var out = { ok: false, reason: 'target_not_found', daFound: false, candidateCount: 0, scope: '', bag: null,
+      containerExcerpt: '', labels: [] };
+    if (!da || !acc || !acc.root) return out;
+    function skip(n) { return !!(acc.skip && acc.skip(n)); }
+    function ownTokens(n) { return packageTokensOf(acc.ownText(n)); }
+    function each(n, fn) {
+      if (skip(n)) return;
+      if (fn(n) === false) return;
+      (acc.children(n) || []).forEach(function (c) { each(c, fn); });
+    }
+    // Elements whose own text holds the target DA as a whole token.
+    var hits = [];
+    each(acc.root, function (n) { if (ownTokens(n).indexOf(da) >= 0) hits.push(n); });
+    function rowOf(n) {
+      for (var cur = n; cur; cur = acc.parent(cur)) if (acc.isStopRow(cur)) return cur;
+      return null;
+    }
+    var other = 0;
+    var mine = hits.filter(function (n) {
+      var row = rowOf(n);
+      if (!row) return true;
+      var num = acc.stopRowNumber(row);
+      if (num != null && Number(num) !== Number(stopNumber)) { other += 1; return false; }
+      return true;
+    });
+    out.candidateCount = hits.length;
+    if (!mine.length) { out.reason = other ? 'target_other_stop' : 'target_not_found'; return out; }
+    if (mine.length > 1 && acc.visible) {
+      var vis = mine.filter(function (n) { return acc.visible(n); });
+      if (vis.length) mine = vis;
+    }
+    if (mine.length > 1) { out.daFound = true; out.reason = 'target_ambiguous'; return out; }
+    var daEl = mine[0];
+    out.daFound = true;
+    out.scope = rowOf(daEl) ? 'stop_row' : 'detail_panel';
+    function subtreeTokens(n) {
+      var seen = {};
+      each(n, function (x) { ownTokens(x).forEach(function (t) { seen[t] = true; }); });
+      return Object.keys(seen);
+    }
+    // Package block: grow while the ancestor still holds no other package number; never past a Stop row.
+    var block = daEl;
+    for (var cur = acc.parent(daEl), depth = 0; cur && depth < 12; cur = acc.parent(cur), depth += 1) {
+      if (acc.isStopRow(cur) || cur === acc.root) break;
+      var tokens = subtreeTokens(cur);
+      if (tokens.length !== 1 || tokens[0] !== da) break;
+      block = cur;
+    }
+    var labels = [];
+    var leaves = [];
+    each(block, function (n) {
+      var lab = parseBagLabelText(acc.text(n));
+      if (lab && !(acc.children(n) || []).some(function (c) { return !skip(c) && !!parseBagLabelText(acc.text(c)); })) {
+        labels.push(lab);
+        leaves.push(acc.text(n));
+        return false;
+      }
+      var own = normalizeDomText(acc.ownText(n));
+      if (own) leaves.push(own);
+      return true;
+    });
+    out.containerExcerpt = safeContainerExcerpt(leaves);
+    var distinct = {};
+    labels.forEach(function (l) { distinct[l.text] = l; });
+    out.labels = Object.keys(distinct);
+    if (!out.labels.length) { out.reason = 'bag_not_found'; return out; }
+    if (out.labels.length > 1) { out.reason = 'bag_ambiguous'; return out; }
+    out.ok = true;
+    out.reason = '';
+    out.bag = distinct[out.labels[0]];
+    return out;
+  }
+
+  // summary.stopOpen additions for the Stop-DOM path.
+  function summarizeStopDom(run, trDetailsByTrId) {
+    var out = { stopDomAttempts: 0, stopDomCaptured: 0, stopDomTargetNotFound: 0, stopDomBagNotFound: 0, stopDomOtherFailure: 0 };
+    var d = (run && run.stopDom) || {};
+    Object.keys(d).forEach(function (ref) {
+      var r = d[ref];
+      out.stopDomAttempts += 1;
+      if (r.ok) out.stopDomCaptured += 1;
+      else if (r.reason === 'target_not_found' || r.reason === 'target_other_stop') out.stopDomTargetNotFound += 1;
+      else if (r.reason === 'bag_not_found') out.stopDomBagNotFound += 1;
+      else out.stopDomOtherFailure += 1;
+    });
+    return out;
+  }
+
+  // Where a captured target's Bag came from (diagnostics / export).
+  function bagSourceOf(run, trDetailsByTrId, referenceId) {
+    if (run && run.clickedRefs && run.clickedRefs[referenceId] && hasTrDetails(trDetailsByTrId, referenceId)) return 'package_click';
+    if (hasTrDetails(trDetailsByTrId, referenceId)) return 'cortex_stop_open';
+    if (run && run.stopDom && run.stopDom[referenceId] && run.stopDom[referenceId].ok) return 'stop_dom';
+    return null;
   }
 
   // Normal tour results are frozen before the Bag phase and restored after it,
@@ -1127,7 +1852,833 @@
     return store;
   }
 
-  function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId) {
+  // ---- Bag v2: Route -> Stop -> Package engine (DOM-free; the runner supplies the driver) ----
+  // Stop labels: exact number only ("#16", "Stop 16", "Stop #16", "ストップ 16"). "#1" never matches 11.
+  var STOP_LABEL_PATTERNS = [
+    /^#\s*(\d{1,4})$/,
+    /^(?:stop|ストップ|停車地)\s*#?\s*(\d{1,4})$/i
+  ];
+
+  function parseStopLabel(text) {
+    var t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 20) return null;
+    for (var i = 0; i < STOP_LABEL_PATTERNS.length; i++) {
+      var m = t.match(STOP_LABEL_PATTERNS[i]);
+      if (m) return parseInt(m[1], 10);
+    }
+    return null;
+  }
+
+  // Real Cortex Route detail (diagnostics 2026-09-24): Stop markers are
+  // <svg class="stop-K"><text>N</text></svg>. K is an index (stop-2 shows 3), so only the
+  // visible text N is the Stop number. Plain span/p/div numbers are never Stop labels.
+  var STOP_MARKER_KIND = 'svg-stop-marker';
+  // Real Cortex Stop list (diagnostics 2026-09-24, v3.2-diag): the Stop number is
+  // span "N" < p "N" < div "N" < span < div[role=button][aria-expanded] < ... < div.stops-list-item.
+  // The svg.stop-K markers belong to the Mapbox map and never open the package list.
+  var STOP_LIST_KIND = 'stop-list-row';
+
+  function isStopMarkerSvgClass(className) {
+    return String(className == null ? '' : className).split(/\s+/).some(function (c) {
+      return /^stop-\d+$/.test(c);
+    });
+  }
+
+  function parseStopMarkerText(text) {
+    var t = String(text == null ? '' : text).replace(/\s+/g, '').trim();
+    return /^\d{1,4}$/.test(t) ? parseInt(t, 10) : null;
+  }
+
+  function stopNumberOfEntry(e) {
+    if (!e) return null;
+    if (e.kind === STOP_MARKER_KIND || e.kind === STOP_LIST_KIND) return parseStopMarkerText(e.text);
+    return parseStopLabel(e.text);
+  }
+
+  // Candidates inside one stops-list-item header button: [{ text, chain: [parentText, grandParentText] }].
+  // A candidate counts only when its text is digits and the two wrappers show exactly the same digits
+  // (the diagnosed span < p < div nesting). Exactly one candidate -> that Stop number; else null.
+  function stopListRowNumber(candidates) {
+    var hits = [];
+    (candidates || []).forEach(function (c) {
+      if (!c) return;
+      var n = parseStopMarkerText(c.text);
+      if (n == null) return;
+      var chain = c.chain || [];
+      if (chain.length < 2) return;
+      var same = chain.slice(0, 2).every(function (t) { return parseStopMarkerText(t) === n; });
+      if (same) hits.push(n);
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  // entries: [{ text, key, kind? }] -> keys that are exactly a label for sequenceNumber.
+  // Priority: Stop list rows > text labels ("#16", "Stop 16") > svg markers.
+  // opts.excludeMarkers: never return svg markers (the Bag click path uses this).
+  function matchStopLabelEntries(entries, sequenceNumber, opts) {
+    var want = Number(sequenceNumber);
+    var listKeys = [];
+    var textKeys = [];
+    var markerKeys = [];
+    if (!isFinite(want)) return textKeys;
+    (entries || []).forEach(function (e) {
+      if (!e || stopNumberOfEntry(e) !== want) return;
+      var bucket = e.kind === STOP_LIST_KIND ? listKeys : (e.kind === STOP_MARKER_KIND ? markerKeys : textKeys);
+      if (bucket.indexOf(e.key) < 0) bucket.push(e.key);
+    });
+    if (listKeys.length) return listKeys;
+    if (textKeys.length) return textKeys;
+    return opts && opts.excludeMarkers ? [] : markerKeys;
+  }
+
+  // Package-number-like token (e.g. DA0012405022); used only to bound a package card.
+  function isPackageNumberText(text) {
+    return /^[A-Z]{2,4}\d{8,14}$/.test(String(text == null ? '' : text).trim());
+  }
+
+  function groupBagTargetsByStop(targets) {
+    var stops = [];
+    var bySeq = {};
+    (targets || []).forEach(function (t) {
+      var key = String(t.stop);
+      if (!bySeq[key]) {
+        bySeq[key] = { stop: t.stop, targets: [] };
+        stops.push(bySeq[key]);
+      }
+      bySeq[key].targets.push(t);
+    });
+    stops.forEach(function (s) {
+      s.priority = s.targets.reduce(function (m, t) { return Math.min(m, Number(t.stopPriority || 0)); }, 3);
+      if (!s.targets.some(function (t) { return t.stopPriority != null; })) s.priority = 0;
+    });
+    stops.sort(function (a, b) {
+      return (a.priority - b.priority) || (Number(a.stop || 0) - Number(b.stop || 0));
+    });
+    return stops;
+  }
+
+  // How a target's trDetails row came to exist (diagnostics only).
+  // info: { hasTr, clicked, priorFailureStatus, preexisting }
+  function classifyCaptureSource(info) {
+    info = info || {};
+    if (!info.hasTr) return null;
+    if (info.clicked) return 'package_click';
+    if (info.preexisting) return 'preexisting';
+    if (info.priorFailureStatus) return 'after_failed_package_lookup';
+    return 'cortex_stop_open';
+  }
+
+  // Any pending DA of the Stop already rendered -> the Stop is open; do not click (would collapse).
+  function stopNeedsExpand(stopTargets, presentByScannableId) {
+    presentByScannableId = presentByScannableId || {};
+    return !(stopTargets || []).some(function (t) {
+      var list = presentByScannableId[t.scannableId];
+      return Array.isArray(list) && list.length > 0;
+    });
+  }
+
+  function formatBagProgress(p) {
+    p = p || {};
+    var lines = ['Bag取得中'];
+    if (p.routeTotal) lines.push('Route ' + (p.routeIndex || 0) + '/' + p.routeTotal + ' ' + (p.routeCode || ''));
+    if (p.stopTotal) lines.push('Stop ' + (p.stopIndex || 0) + '/' + p.stopTotal + (p.stopSeq != null ? ' (#' + p.stopSeq + ')' : ''));
+    if (p.packageTotal) lines.push('Package ' + (p.packageIndex || 0) + '/' + p.packageTotal + (p.scannableId ? ' ' + p.scannableId : ''));
+    lines.push('状態: ' + (p.state || '-'));
+    lines.push('click ' + (p.clicks || 0) + ' / Stop click ' + (p.stopClicks || 0));
+    return lines.join('\n');
+  }
+
+  /**
+   * opts: { run, routes:[{routeId, routeCode, targets}], getTrMap(), driver, onProgress(p),
+   *         routeBudgetMs, now(), done(abortedMessage) }
+   * driver (all async via callback):
+   *   openRoute(route, cb({ok, detail}))
+   *   ensureStop(stop, pendingTargets, onState(text), cb({ok, clicked, status, detail, abortRoute}))
+   *   findPackage(target, stop, cb({ok, handle, status, detail}))
+   *   clickPackage(target, handle, cb({ok, detail, abortRoute}))
+   *   waitTrDetails(target, cb(gotBoolean))
+   *   restoreAfterPackage(target, cb({ok, detail}))
+   *   leaveStop(stop, cb({ok, detail}))
+   *   returnToList(cb({ok, detail}))
+   *   beginRoute({routeCode, noteProgress(kind)})   optional: sub-step progress of this Route
+   *   endRoute({routeCode, status, reasonCode})     optional: cancel work left from this Route
+   * opts.pageContext(): optional page state recorded with a Route abort.
+   * One Route failing marks that Route route_aborted and continues when the list is back.
+   */
+  function runBagEngine(opts) {
+    var run = opts.run;
+    var driver = opts.driver;
+    var routes = opts.routes || [];
+    var now = opts.now || function () { return Date.now(); };
+    var schedule = opts.schedule || function (fn, ms) { return setTimeout(fn, ms); };
+    var cancel = opts.cancel || function (id) { clearTimeout(id); };
+    // Bag v3.10: routeBudgetMs is a soft budget (diagnostics only). A Route is aborted only when
+    // nothing progressed for routeIdleMs (watchdog), or at the hard maximum routeHardMaxMs.
+    var budget = opts.routeBudgetMs > 0 ? opts.routeBudgetMs : 90000;
+    var idleMs = opts.routeIdleMs > 0 ? opts.routeIdleMs : 90000;
+    var hardMaxMs = opts.routeHardMaxMs > 0 ? opts.routeHardMaxMs : 900000;
+    var progress = {
+      routeIndex: 0, routeTotal: routes.length, routeCode: '',
+      stopIndex: 0, stopTotal: 0, stopSeq: null,
+      packageIndex: 0, packageTotal: 0, scannableId: '', state: ''
+    };
+    run.routeResults = run.routeResults || [];
+    run.stopClicks = run.stopClicks || 0;
+    run.log = run.log || [];
+    var finished = false;
+    var failCurrent = null;
+    var extendCurrent = null;
+    var progressCurrent = null;
+    var disposeCurrent = null;
+    var extensionCapMs = opts.routeExtensionCapMs > 0 ? opts.routeExtensionCapMs : 60000;
+
+    function log(line) {
+      run.log.push(line);
+      if (typeof opts.log === 'function') opts.log(line);
+    }
+    function emit(patch) {
+      Object.keys(patch || {}).forEach(function (k) { progress[k] = patch[k]; });
+      progress.clicks = run.clicks;
+      progress.stopClicks = run.stopClicks;
+      if (typeof opts.onProgress === 'function') opts.onProgress(Object.assign({}, progress));
+    }
+    function trMap() { return opts.getTrMap(); }
+    function pend(targets) { return pendingBagTargets(run, targets, trMap()); }
+    function stopped() { return finished || run.ended || run.stopRequested; }
+    function finish(aborted) {
+      if (finished) return;
+      finished = true;
+      failCurrent = null;
+      opts.done(aborted || '');
+    }
+    function markAll(targets, status, detail) {
+      pend(targets).forEach(function (t) { recordBagResult(run, t.referenceId, status, detail || ''); });
+    }
+
+    function nextRoute(i) {
+      if (stopped()) return;
+      if (i >= routes.length) { finish(''); return; }
+      var route = routes[i];
+      if (!pend(route.targets).length) { nextRoute(i + 1); return; }
+      var stops = groupBagTargetsByStop(route.targets);
+      var deadline = now() + budget;
+      var result = { routeCode: route.routeCode, status: 'done', detail: '', reasonCode: '', stopClicks: 0, startedAt: now(),
+        leaveFailures: [], extendedMs: 0,
+        // Bag v3.10 timing / counts (diagnostics)
+        routeStartedAt: null, routeFinishedAt: null, routeElapsedMs: null,
+        targetPackageCount: route.targets.length, targetStopCount: stops.length,
+        stopOpenCount: 0, stopRetryCount: 0, normalWaitCount: 0, extendedWaitCount: 0,
+        stopDomAttemptCount: 0, packageFallbackCount: 0, progressEvents: 0, lastProgressKind: '',
+        softBudgetExceededAtMs: null, maxIdleMs: 0,
+        // Bag v3.11: where the longest gap between progress events was, and why the Route ended
+        maxIdlePhase: '', maxIdleEndKind: '', progressKinds: {}, abortContext: null,
+        timing: { routeOpenMs: 0, stopOpenTotalMs: 0, trDetailsWaitTotalMs: 0, stopDomTotalMs: 0,
+          stopCloseTotalMs: 0, fallbackTotalMs: 0, returnToListMs: 0 } };
+      result.routeStartedAt = result.startedAt;
+      var hardDeadline = result.startedAt + hardMaxMs;
+      var closed = false;
+      var watchdog = null;
+      var progressSeq = 0;
+      var lastProgressAt = result.startedAt;
+      // The driver step now running (diagnostics only; never counts as progress).
+      var phase = { name: 'openRoute', stop: null, scannableId: '', startedAt: result.startedAt };
+      function setPhase(name, stop, target) {
+        phase = { name: name, stop: stop ? stop.stop : null, scannableId: target ? target.scannableId : '', startedAt: now() };
+      }
+      function noteProgress(kind) {
+        if (closed) return;
+        var t = now();
+        kind = kind || 'driver';
+        if (t - lastProgressAt > result.maxIdleMs) {
+          result.maxIdleMs = t - lastProgressAt;
+          result.maxIdlePhase = phase.name;
+          result.maxIdleEndKind = kind;
+        }
+        progressSeq += 1;
+        lastProgressAt = t;
+        result.progressEvents += 1;
+        result.lastProgressKind = kind;
+        result.progressKinds[kind] = (result.progressKinds[kind] || 0) + 1;
+      }
+      function armWatchdog(delay) {
+        if (watchdog != null) cancel(watchdog);
+        var seq = progressSeq;
+        watchdog = schedule(function () { fireWatchdog(seq); }, Math.max(1, delay));
+      }
+      // Fires every idle window: aborts only when nothing progressed since it was armed, or at the
+      // hard maximum (so a Route that keeps progressing can never run forever).
+      function fireWatchdog(seqAtArm) {
+        watchdog = null;
+        if (closed || stopped()) return;
+        var t = now();
+        if (t >= hardDeadline) {
+          abortRoute('Route上限時間(hard max ' + Math.round(hardMaxMs / 1000) + '秒)を超過', null, 'route_budget_exceeded');
+          return;
+        }
+        if (progressSeq === seqAtArm) {
+          result.idleMsAtAbort = t - lastProgressAt;
+          abortRoute('watchdog: ' + Math.round(idleMs / 1000) + '秒間progressなし（最後: ' + (result.lastProgressKind || '-') +
+            ' / 実行中: ' + phase.name + (phase.stop != null ? ' Stop #' + phase.stop : '') +
+            (phase.scannableId ? ' ' + phase.scannableId : '') + '）', null, 'watchdog');
+          return;
+        }
+        armWatchdog(Math.min(lastProgressAt + idleMs - t, hardDeadline - t));
+      }
+      disposeCurrent = function () {
+        if (watchdog != null) cancel(watchdog);
+        watchdog = null;
+      };
+      function timed(key, t0) { result.timing[key] += Math.max(0, now() - t0); }
+      // Retries (Stop close / Route click / slow Stop open) may add time to this Route only, capped.
+      // v3.10: only moves the soft budget (diagnostics); aborts come from the watchdog / hard max.
+      extendCurrent = function (ms) {
+        var add = Math.max(0, Math.min(Number(ms) || 0, extensionCapMs - result.extendedMs));
+        if (!add || closed) return 0;
+        result.extendedMs += add;
+        deadline += add;
+        return add;
+      };
+      progressCurrent = noteProgress;
+      // Soft budget: recorded, never aborts. Hard maximum: aborts.
+      function overBudget() {
+        var t = now();
+        if (t > deadline && result.softBudgetExceededAtMs == null) result.softBudgetExceededAtMs = t - result.startedAt;
+        if (t > hardDeadline) {
+          abortRoute('Route上限時間(hard max ' + Math.round(hardMaxMs / 1000) + '秒)を超過', null, 'route_budget_exceeded');
+          return true;
+        }
+        return false;
+      }
+      run.routeResults.push(result);
+
+      // Callbacks from a Route that already ended (abort / watchdog) are ignored.
+      // Every driver callback that arrives while the Route is live counts as progress.
+      function live(fn, kind) {
+        return function () {
+          if (stopped() || closed) return;
+          noteProgress(kind || phase.name + '_done');
+          fn.apply(null, arguments);
+        };
+      }
+      // A throwing driver call only ends this Route.
+      function call(fn) {
+        try { fn(); } catch (e) { abortRoute('exception: ' + (e && e.message ? e.message : String(e)), null, 'exception'); }
+      }
+
+      function routeCounts() {
+        var c = {};
+        route.targets.forEach(function (t) {
+          var st = capturedBagStatus(trMap(), t.referenceId) ||
+            (run.results[t.referenceId] && run.results[t.referenceId].status) || BAG_STATUS.NOT_ATTEMPTED;
+          c[st] = (c[st] || 0) + 1;
+        });
+        return Object.keys(c).map(function (k) { return k + ' ' + c[k]; }).join(', ');
+      }
+
+      // code: machine-readable reason (route_open_failed, route_detail_not_detected,
+      // route_budget_exceeded, watchdog, exception, stop_state_error, stop_leave_failed,
+      // package_restore_failed, list_return_failed, ...).
+      function abortRoute(detail, status, code) {
+        if (closed || stopped()) return;
+        status = status || BAG_STATUS.ROUTE_ABORTED;
+        result.status = status;
+        result.detail = detail || '';
+        result.reasonCode = code || (status === BAG_STATUS.UI_BLOCKED ? 'ui_blocked' : 'route_aborted');
+        var t = now();
+        var remaining = pend(route.targets);
+        result.abortContext = {
+          reasonCode: result.reasonCode, phase: phase.name, stop: phase.stop, scannableId: phase.scannableId,
+          phaseElapsedMs: t - phase.startedAt, lastProgressKind: result.lastProgressKind,
+          sinceLastProgressMs: t - lastProgressAt, routeElapsedMs: t - result.startedAt,
+          progressEvents: result.progressEvents,
+          capturedBeforeAbort: route.targets.filter(function (x) { return !!capturedBagStatus(trMap(), x.referenceId); }).length,
+          markedRemaining: remaining.length
+        };
+        if (typeof opts.pageContext === 'function') {
+          try { result.abortContext.page = opts.pageContext(); } catch (e) { result.abortContext.page = null; }
+        }
+        markAll(route.targets, status, detail);
+        back();
+      }
+
+      function back() {
+        if (closed) return;
+        closed = true;
+        failCurrent = null;
+        extendCurrent = null;
+        progressCurrent = null;
+        disposeCurrent = null;
+        if (watchdog != null) cancel(watchdog);
+        watchdog = null;
+        setPhase('returnToList');
+        // Bag v3.12: the driver stops everything still running for this Route before the list return.
+        if (typeof driver.endRoute === 'function') {
+          try {
+            driver.endRoute({ routeCode: route.routeCode, status: result.status, reasonCode: result.reasonCode || '' });
+          } catch (e) { log('[Bag] endRoute failed: ' + (e && e.message ? e.message : String(e))); }
+        }
+        var backStarted = now();
+        emit({ state: 'Route一覧へ復帰中' });
+        var attempts = 0;
+        function tryBack() {
+          attempts += 1;
+          try {
+            driver.returnToList(onBack);
+          } catch (e) {
+            onBack({ ok: false, detail: 'exception: ' + (e && e.message ? e.message : String(e)) });
+          }
+        }
+        function onBack(res) {
+          if (stopped()) return;
+          if (res && res.ok) {
+            result.timing.returnToListMs = Math.max(0, now() - backStarted);
+            result.durationMs = now() - result.startedAt;
+            result.routeFinishedAt = now();
+            result.routeElapsedMs = result.durationMs;
+            var label = result.status === 'done' ? 'done' : (result.status === BAG_STATUS.UI_BLOCKED ? 'UI blocked' :
+              result.status + '(' + result.reasonCode + ')');
+            log('[Bag] ' + route.routeCode + ' ' + label + (result.detail ? ' (' + result.detail + ')' : '') +
+              ' [' + routeCounts() + '] -> continue');
+            nextRoute(i + 1);
+            return;
+          }
+          if (attempts < 2) { tryBack(); return; }
+          // Without the Route list no later Route can be opened: the only fatal case.
+          if (result.status === 'done') {
+            result.status = BAG_STATUS.ROUTE_ABORTED;
+            result.detail = (res && res.detail) || 'Route一覧へ戻れません';
+            result.reasonCode = 'list_return_failed';
+          }
+          result.durationMs = now() - result.startedAt;
+          result.routeFinishedAt = now();
+          result.routeElapsedMs = result.durationMs;
+          var reason = 'Route一覧へ戻れませんでした（' + route.routeCode + '）' + (res && res.detail ? ': ' + res.detail : '');
+          log('[Bag] ' + route.routeCode + ' ' + reason + ' -> abort (以後のRouteを開けません)');
+          finish(reason);
+        }
+        tryBack();
+      }
+
+      function nextStop(j) {
+        if (stopped() || closed) return;
+        if (j >= stops.length) { back(); return; }
+        var stop = stops[j];
+        var list = pend(stop.targets);
+        if (!list.length) { nextStop(j + 1); return; }
+        if (overBudget()) return;
+        emit({
+          stopIndex: j + 1, stopSeq: stop.stop,
+          packageIndex: 0, packageTotal: stop.targets.length, scannableId: '',
+          state: 'Stop #' + stop.stop + '探索中'
+        });
+        // Bag v3.7: one record per Route + Stop; the Stop is opened once for all its targets.
+        var stopRec = beginStopRecord(run, route, stop, list, now());
+        var openT0 = now();
+        setPhase('ensureStop', stop);
+        call(function () {
+          driver.ensureStop(stop, list, function (state) { if (!closed) emit({ state: state }); }, live(function (res) {
+            var trWaitMs = res && res.trWaitMs > 0 ? res.trWaitMs : 0;
+            result.timing.trDetailsWaitTotalMs += trWaitMs;
+            result.timing.stopOpenTotalMs += Math.max(0, now() - openT0 - trWaitMs);
+            if (res && res.ok) {
+              result.stopOpenCount += 1;
+              if (res.trWaitExtended) result.extendedWaitCount += 1; else result.normalWaitCount += 1;
+            }
+            if (res && res.stopDiag && Array.isArray(res.stopDiag.clickAttempts)) {
+              result.stopRetryCount += res.stopDiag.clickAttempts.filter(function (a) { return a && a.attempt > 1; }).length;
+            }
+            if (res && res.clicked) {
+              // Retries click more than once; each dispatched click is counted.
+              var n = res.clickCount > 0 ? res.clickCount : 1;
+              run.stopClicks += n;
+              result.stopClicks += n;
+            }
+            applyStopOpenResult(stopRec, res);
+            if (!res || !res.ok) {
+              stopRec.elapsedMs = now() - stopRec.startedAt;
+              if (res && res.blocked) { abortRoute(res.detail, BAG_STATUS.UI_BLOCKED); return; }
+              markAll(stop.targets, (res && res.status) || BAG_STATUS.STOP_NOT_FOUND, res && res.detail);
+              if (res && res.abortRoute) { abortRoute(res.detail, null, res.code || 'stop_state_error'); return; }
+              nextStop(j + 1);
+              return;
+            }
+            // Bag v3.6: the Stop open itself is the first capture path. Targets whose trDetails
+            // arrived (bagName or null) are done; only those without any trDetails row may fall
+            // back to the package lookup / click below.
+            run.stopOpen = run.stopOpen || {};
+            list.forEach(function (t) {
+              var got = capturedBagStatus(trMap(), t.referenceId);
+              run.stopOpen[t.referenceId] = got || 'no_trdetails';
+              if (got) recordBagResult(run, t.referenceId, got, 'stop_open');
+            });
+            nextPackage(stop, function () {
+              var closeT0 = now();
+              setPhase('leaveStop', stop);
+              call(function () {
+                driver.leaveStop(stop, live(function (lres) {
+                  timed('stopCloseTotalMs', closeT0);
+                  stopRec.closeResult = !lres || !lres.ok ? 'failed' : (lres.leftOpen ? 'left_open' : 'closed');
+                  stopRec.elapsedMs = now() - stopRec.startedAt;
+                  if (!lres || !lres.ok) { abortRoute((lres && lres.detail) || 'Stopから戻れません', null, 'stop_leave_failed'); return; }
+                  if (lres.leftOpen) {
+                    // The Stop stayed open but the Route detail was verified usable: record and go on.
+                    result.leaveFailures.push({ stop: stop.stop, detail: lres.detail || '' });
+                    log('[Bag] ' + route.routeCode + ' Stop #' + stop.stop + ' could not be closed (' + (lres.detail || '') + ') -> Route detail OK, continue');
+                  }
+                  nextStop(j + 1);
+                }));
+              });
+            });
+          }));
+        });
+      }
+
+      function nextPackage(stop, doneStop) {
+        if (stopped() || closed) return;
+        var list = pend(stop.targets);
+        if (!list.length) { doneStop(); return; }
+        if (overBudget()) return;
+        var t = list[0];
+        emit({ packageIndex: stop.targets.indexOf(t) + 1, scannableId: t.scannableId, state: t.scannableId + '探索中' });
+        // Bag v3.9: no trDetails for this target -> read its Bag label from the opened Stop's DOM
+        // (its own package block only) before any package lookup / click.
+        if (typeof driver.readStopDomBag === 'function' && !(run.stopDom && run.stopDom[t.referenceId])) {
+          var domT0 = now();
+          result.stopDomAttemptCount += 1;
+          setPhase('readStopDomBag', stop, t);
+          call(function () {
+            driver.readStopDomBag(t, stop, live(function (dres) {
+              timed('stopDomTotalMs', domT0);
+              run.stopDom = run.stopDom || {};
+              run.stopDom[t.referenceId] = dres || { ok: false, reason: 'no_result' };
+              if (dres && dres.ok && dres.bag && !hasTrDetails(trMap(), t.referenceId)) {
+                recordBagResult(run, t.referenceId, BAG_STATUS.CAPTURED, 'stop_dom');
+                emit({ state: 'Stop DOM Bag ' + dres.bag.text });
+              }
+              nextPackage(stop, doneStop);
+            }));
+          });
+          return;
+        }
+        var fbT0 = now();
+        result.packageFallbackCount += 1;
+        setPhase('findPackage', stop, t);
+        call(function () {
+          driver.findPackage(t, stop, live(function (res) {
+            timed('fallbackTotalMs', fbT0);
+            recordPackageFallback(run, t, packageLookupFallbackPatch(res));
+            if (!res || !res.ok) {
+              recordBagResult(run, t.referenceId, (res && res.status) || BAG_STATUS.PACKAGE_DOM_NOT_FOUND, res && res.detail);
+              nextPackage(stop, doneStop);
+              return;
+            }
+            markBagAttempted(run, t.referenceId);
+            run.fallbackRefs = run.fallbackRefs || {};
+            run.fallbackRefs[t.referenceId] = true;
+            emit({ state: '荷物番号クリック' });
+            setPhase('clickPackage', stop, t);
+            call(function () {
+              driver.clickPackage(t, res.handle, live(function (cres) {
+                // Counted only when a click was really dispatched (not when covered / element lost).
+                recordPackageFallback(run, t, { actualClickAttempted: !!(cres && (cres.ok || cres.clicked)) });
+                if (cres && (cres.ok || cres.clicked)) {
+                  run.clicks += 1;
+                  run.clickedRefs = run.clickedRefs || {};
+                  run.clickedRefs[t.referenceId] = true;
+                  emit({});
+                }
+                if (!cres || !cres.ok) {
+                  recordBagResult(run, t.referenceId, BAG_STATUS.CLICK_FAILED, cres && cres.detail);
+                  recordPackageFallback(run, t, { result: BAG_STATUS.CLICK_FAILED, failureReason: 'click_failed' });
+                  if (cres && cres.blocked) { abortRoute(cres.detail, BAG_STATUS.UI_BLOCKED); return; }
+                  if (cres && cres.abortRoute) { abortRoute(cres.detail, null, 'package_click_state_error'); return; }
+                  nextPackage(stop, doneStop);
+                  return;
+                }
+                emit({ state: 'trDetails待機中' });
+                setPhase('waitTrDetails', stop, t);
+                call(function () {
+                  driver.waitTrDetails(t, live(function (got) {
+                    var status = got ? capturedBagStatus(trMap(), t.referenceId) : null;
+                    recordBagResult(run, t.referenceId, status || BAG_STATUS.TIMEOUT, status ? '' : 'trDetails not observed');
+                    recordPackageFallback(run, t, { result: status || BAG_STATUS.TIMEOUT, failureReason: status ? '' : 'timeout' });
+                    emit({ state: status || BAG_STATUS.TIMEOUT });
+                    call(function () {
+                      var restoreT0 = now();
+                      setPhase('restoreAfterPackage', stop, t);
+                      driver.restoreAfterPackage(t, live(function (rres) {
+                        timed('fallbackTotalMs', restoreT0);
+                        if (!rres || !rres.ok) { abortRoute((rres && rres.detail) || 'Package detailから戻れません', null, 'package_restore_failed'); return; }
+                        nextPackage(stop, doneStop);
+                      }));
+                    });
+                  }));
+                });
+              }));
+            });
+          }));
+        });
+      }
+
+      failCurrent = function (detail) { abortRoute(detail, null, 'exception'); };
+      // Bag v3.11: sub-step progress inside long driver steps is reported to this Route only; a step
+      // still running after its Route ended reports to a closed Route and is ignored.
+      if (typeof driver.beginRoute === 'function') {
+        try {
+          driver.beginRoute({ routeCode: route.routeCode, noteProgress: function (kind) { noteProgress(kind || 'driver_progress'); } });
+        } catch (e) { log('[Bag] beginRoute failed: ' + (e && e.message ? e.message : String(e))); }
+      }
+      armWatchdog(idleMs);
+      emit({
+        routeIndex: i + 1, routeCode: route.routeCode,
+        stopIndex: 0, stopTotal: stops.length, stopSeq: null,
+        packageIndex: 0, packageTotal: 0, scannableId: '', state: 'Routeを開いています'
+      });
+      var routeT0 = now();
+      call(function () {
+        driver.openRoute(route, live(function (res) {
+          timed('routeOpenMs', routeT0);
+          if (!res || !res.ok) {
+            abortRoute((res && res.detail) || 'Routeを開けません', res && res.blocked ? BAG_STATUS.UI_BLOCKED : null,
+              (res && res.code) || (res && res.blocked ? 'ui_blocked' : 'route_open_failed'));
+            return;
+          }
+          nextStop(0);
+        }));
+      });
+    }
+
+    nextRoute(0);
+    return {
+      // Runner-side exceptions (timers) end only the current Route.
+      failRoute: function (detail) {
+        if (typeof failCurrent === 'function') failCurrent(detail);
+      },
+      // Extra time for the current Route only (capped by routeExtensionCapMs). Returns ms granted.
+      extendRoute: function (ms) {
+        return typeof extendCurrent === 'function' ? extendCurrent(ms) : 0;
+      },
+      // Bag v3.10: runner-side progress inside a long driver step (e.g. a target trDetails arrived).
+      noteProgress: function (kind) {
+        if (typeof progressCurrent === 'function') progressCurrent(kind);
+      },
+      // Bag v3.11: manual stop / phase end -> no watchdog timer left behind.
+      dispose: function () {
+        if (typeof disposeCurrent === 'function') disposeCurrent();
+        disposeCurrent = null;
+      }
+    };
+  }
+
+  // ---- Unfinished Bag Test v1 (diagnostic mode; the normal 13:00 Bag phase is unchanged) ----
+  // Picks not-yet-completed Stops from route-details (any DROP_OFF, not only 13:00), capped,
+  // so the Stop-open-only hypothesis can be checked on live data.
+  var UNFINISHED_BAG_TEST_VERSION = 'Unfinished Bag Test v1';
+
+  function selectUnfinishedBagTargets(detailsList, trDetailsByTrId, limits) {
+    limits = limits || {};
+    var maxRoutes = limits.maxRoutes > 0 ? limits.maxRoutes : 3;
+    var maxStops = limits.maxStops > 0 ? limits.maxStops : 5;
+    var maxPackages = limits.maxPackages > 0 ? limits.maxPackages : 20;
+    var perRoute = limits.maxStopsPerRoute > 0 ? limits.maxStopsPerRoute : 3;
+    var out = {
+      targets: [], routesScanned: 0, routesWithUnfinished: 0, unfinishedStopsFound: 0,
+      completeStopsSkipped: 0, statusUnknownStops: 0, routesSelected: 0, stopsSelected: 0,
+      limits: { maxRoutes: maxRoutes, maxStops: maxStops, maxPackages: maxPackages, maxStopsPerRoute: perRoute }
+    };
+    var candidates = [];
+    (detailsList || []).filter(function (d) {
+      return d && d.rmsRouteDetails && Array.isArray(d.rmsRouteDetails.stops);
+    }).sort(function (a, b) {
+      return String(a.rmsRouteDetails.routeCode || '').localeCompare(String(b.rmsRouteDetails.routeCode || ''), 'en', { numeric: true });
+    }).forEach(function (d) {
+      var rd = d.rmsRouteDetails;
+      out.routesScanned += 1;
+      var stops = [];
+      rd.stops.forEach(function (stop) {
+        if (!stop) return;
+        var seen = {};
+        var pk = (stop.tasks || []).filter(function (t) { return t && t.taskType === 'DROP_OFF'; }).map(function (t) {
+          return { ref: String(t.referenceId || '').trim(), scan: String((t.domainMap || {}).scannableId || '').trim() };
+        }).filter(function (p) {
+          if (!p.ref || !p.scan || seen[p.ref]) return false;
+          seen[p.ref] = true;
+          return true;
+        });
+        if (!pk.length) return;
+        var st = stop.status == null ? '' : String(stop.status).trim();
+        if (!st) { out.statusUnknownStops += 1; return; }
+        if (isCompleteStopStatus(st)) { out.completeStopsSkipped += 1; return; }
+        out.unfinishedStopsFound += 1;
+        stops.push({ stop: stop.sequenceNumber, status: st, packages: pk });
+      });
+      if (stops.length) {
+        out.routesWithUnfinished += 1;
+        candidates.push({ rd: rd, stops: stops });
+      }
+    });
+    var used = {};
+    candidates.forEach(function (c) {
+      if (out.routesSelected >= maxRoutes || out.stopsSelected >= maxStops) return;
+      var ordered = c.stops.slice().sort(function (a, b) { return Number(a.stop) - Number(b.stop); });
+      var multi = null;
+      ordered.forEach(function (s) { if (!multi && s.packages.length > 1) multi = s; });
+      var pick = multi ? [multi].concat(ordered.filter(function (s) { return s !== multi; })) : ordered;
+      var took = 0;
+      pick.forEach(function (s) {
+        if (took >= perRoute || out.stopsSelected >= maxStops) return;
+        var fresh = s.packages.filter(function (p) { return !used[p.ref]; });
+        if (!fresh.length || out.targets.length + fresh.length > maxPackages) return;
+        fresh.forEach(function (p) {
+          used[p.ref] = true;
+          out.targets.push({
+            routeId: String(c.rd.routeId || ''), routeCode: String(c.rd.routeCode || ''),
+            stop: s.stop, stopStatus: s.status, stopPriority: 0,
+            scannableId: p.scan, referenceId: p.ref,
+            trDetailsBefore: hasTrDetails(trDetailsByTrId, p.ref)
+          });
+        });
+        took += 1;
+        out.stopsSelected += 1;
+      });
+      if (took) out.routesSelected += 1;
+    });
+    return out;
+  }
+
+  /**
+   * o: { targets, trMap, results, clickedRefs, preexisting, trSeenAt, stopDiags, responses,
+   *      selection, selectedDay, packageClicks, aborted }
+   * Per package + per Stop outcome of the Stop-open-only test.
+   */
+  function summarizeUnfinishedBagTest(o) {
+    o = o || {};
+    var targets = o.targets || [];
+    var trMap = o.trMap || {};
+    var results = o.results || {};
+    var clicked = o.clickedRefs || {};
+    var pre = o.preexisting || {};
+    var seenAt = o.trSeenAt || {};
+    var stopDiags = o.stopDiags || {};
+    var responses = o.responses || [];
+    var sel = o.selection || {};
+    var stops = [];
+    var byKey = {};
+    var packages = [];
+    targets.forEach(function (t) {
+      var key = t.routeCode + '#' + t.stop;
+      if (!byKey[key]) {
+        byKey[key] = {
+          routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus,
+          packagesExpected: 0, trDetailsReceivedCount: 0, bagNonNullCount: 0, bagNullCount: 0,
+          actualPackageClicks: 0, referenceIds: [], bagNames: [], packages: []
+        };
+        stops.push(byKey[key]);
+      }
+      var s = byKey[key];
+      var ref = t.referenceId;
+      var tr = hasTrDetails(trMap, ref) ? trMap[ref] : null;
+      var isClicked = !!clicked[ref];
+      var r = results[ref];
+      var preexisting = !!(pre[ref] || t.trDetailsBefore);
+      var prior = !isClicked && r && ['captured', 'captured_null'].indexOf(r.status) < 0 ? r.status : null;
+      var status = tr ? (tr.bagName ? 'captured' : 'captured_null') : (r && r.status ? r.status : 'not_attempted');
+      var pkg = {
+        routeCode: t.routeCode, stopNumber: t.stop, stopStatus: t.stopStatus,
+        scannableId: t.scannableId, referenceId: ref,
+        bagName: tr ? tr.bagName : null,
+        bagScannableId: tr ? tr.bagScannableId : null,
+        trDetailsReceived: !!tr,
+        receivedAfterStopOpen: !!tr && !preexisting,
+        receivedAtMs: seenAt[ref] == null ? null : seenAt[ref],
+        actualPackageClick: isClicked,
+        captureSource: classifyCaptureSource({ hasTr: !!tr, clicked: isClicked, preexisting: preexisting, priorFailureStatus: prior }),
+        status: status
+      };
+      if (status === 'captured_null') {
+        pkg.nullDiagnostics = responses.filter(function (x) { return (x.trIds || []).indexOf(ref) >= 0; }).slice(0, 2);
+      }
+      s.packagesExpected += 1;
+      s.referenceIds.push(ref);
+      if (isClicked) s.actualPackageClicks += 1;
+      if (tr) {
+        s.trDetailsReceivedCount += 1;
+        if (tr.bagName) { s.bagNonNullCount += 1; s.bagNames.push(tr.bagName); } else s.bagNullCount += 1;
+      }
+      s.packages.push(pkg);
+      packages.push(pkg);
+    });
+    var tested = 0;
+    stops.forEach(function (s) {
+      var statuses = s.packages.map(function (p) { return p.status; });
+      if (s.bagNonNullCount) s.status = 'bag_captured';
+      else if (s.trDetailsReceivedCount) s.status = 'bag_null';
+      else if (statuses.indexOf('no_trdetails_after_stop_open') >= 0) s.status = 'no_trdetails_after_stop_open';
+      else s.status = statuses[0] || 'not_attempted';
+      var reached = s.trDetailsReceivedCount > 0 || statuses.some(function (x) {
+        return x === 'no_trdetails_after_stop_open';
+      });
+      if (reached) tested += 1;
+      var d = stopDiags[s.routeCode + '#' + s.stopNumber];
+      if (d) s.stopOpen = d;
+    });
+    var confirmed = packages.filter(function (p) {
+      return p.status === 'captured' && p.bagName && !p.actualPackageClick &&
+        p.captureSource === 'cortex_stop_open' && !isCompleteStopStatus(p.stopStatus);
+    });
+    function count(st) { return packages.filter(function (p) { return p.status === st; }).length; }
+    return {
+      mode: 'stop_open_only',
+      version: UNFINISHED_BAG_TEST_VERSION,
+      selectedDay: o.selectedDay || '',
+      testStatus: !targets.length ? 'no_unfinished_stops' : (confirmed.length ? 'confirmed' : 'not_confirmed'),
+      routesScanned: sel.routesScanned || 0,
+      routesWithUnfinished: sel.routesWithUnfinished || 0,
+      unfinishedStopsFound: sel.unfinishedStopsFound || 0,
+      completeStopsSkipped: sel.completeStopsSkipped || 0,
+      unfinishedStopsSelected: stops.length,
+      unfinishedStopsTested: tested,
+      limits: sel.limits || null,
+      packagesExpected: packages.length,
+      trDetailsReceived: packages.filter(function (p) { return p.trDetailsReceived; }).length,
+      bagCaptured: count('captured'),
+      bagNull: count('captured_null'),
+      noTrDetails: count('no_trdetails_after_stop_open'),
+      packageClicks: Number(o.packageClicks) || 0,
+      stopOpenOnlyBagConfirmed: confirmed.length > 0,
+      confirmed: confirmed.map(function (p) {
+        return {
+          confirmedRouteCode: p.routeCode, confirmedStopNumber: p.stopNumber, confirmedReferenceId: p.referenceId,
+          confirmedScannableId: p.scannableId, confirmedBagName: p.bagName, stopStatus: p.stopStatus
+        };
+      }),
+      aborted: o.aborted || '',
+      stops: stops,
+      packages: packages
+    };
+  }
+
+  function formatUnfinishedBagTest(s) {
+    s = s || {};
+    if (s.testStatus === 'no_unfinished_stops') {
+      return '未完了Bagテスト完了\n未完了Stop 0 — Bag検証未実施\n（Route ' + (s.routesScanned || 0) + ' / COMPLETE除外 ' + (s.completeStopsSkipped || 0) + '）\n(' + UNFINISHED_BAG_TEST_VERSION + ')';
+    }
+    var lines = [
+      '未完了Bagテスト完了',
+      '未完了Stop発見 ' + (s.unfinishedStopsFound || 0) + ' / 選択 ' + (s.unfinishedStopsSelected || 0) + ' / テスト ' + (s.unfinishedStopsTested || 0),
+      '対象荷物 ' + (s.packagesExpected || 0) + ' / trDetails取得 ' + (s.trDetailsReceived || 0) +
+        ' / Bag実値 ' + (s.bagCaptured || 0) + ' / Bag null ' + (s.bagNull || 0) + ' / trDetailsなし ' + (s.noTrDetails || 0),
+      'package click ' + (s.packageClicks || 0),
+      'Stop-open only確認 ' + (s.stopOpenOnlyBagConfirmed ? 'YES' : 'NO')
+    ];
+    if (s.aborted) lines.push('中断: ' + s.aborted);
+    lines.push('(' + UNFINISHED_BAG_TEST_VERSION + ')');
+    return lines.join('\n');
+  }
+
+  // bagDomByReferenceId (Bag v3.9, optional): Bag labels read from the opened Stop's own package block,
+  // used only when that package has no trDetails row. { ref: { text, color, number } }
+  function extractPackageAssistIndex(details, trDetailsByTrId, bagStatusByReferenceId, bagDomByReferenceId) {
     var diagnostics = emptyPackageAssistDiagnostics();
     trDetailsByTrId = trDetailsByTrId || {};
     diagnostics.trDetailsCaptured = Object.keys(trDetailsByTrId).length;
@@ -1164,6 +2715,7 @@
         var bagName = tr && tr.bagName ? String(tr.bagName) : null;
         var bagScannableId = tr && tr.bagScannableId ? String(tr.bagScannableId) : null;
         var parsed = parseBagName(bagName);
+        var domBag = !tr && bagDomByReferenceId && referenceId && bagDomByReferenceId[referenceId] ? bagDomByReferenceId[referenceId] : null;
         if (referenceId && tr) diagnostics.assistMatched += 1;
         else if (referenceId) {
           diagnostics.assistUnmatched += 1;
@@ -1178,12 +2730,13 @@
           bagScannableId: bagScannableId,
           bagColorCode: parsed.bagColorCode,
           bagColor: parsed.bagColor,
-          bagNumber: parsed.bagNumber,
-          bagDisplay: parsed.bagDisplay,
+          bagNumber: domBag ? (domBag.number || null) : parsed.bagNumber,
+          bagDisplay: domBag ? (domBag.text || null) : parsed.bagDisplay,
           bagStatus: tr
             ? capturedBagStatus(trDetailsByTrId, referenceId)
-            : ((bagStatusByReferenceId && referenceId && bagStatusByReferenceId[referenceId]) || BAG_STATUS.NOT_ATTEMPTED),
-          bagSource: tr ? 'trDetails' : null
+            : (domBag ? BAG_STATUS.CAPTURED
+              : ((bagStatusByReferenceId && referenceId && bagStatusByReferenceId[referenceId]) || BAG_STATUS.NOT_ATTEMPTED)),
+          bagSource: tr ? 'trDetails' : (domBag ? 'stop_dom' : null)
         });
       });
     });
@@ -1311,6 +2864,7 @@
       details: details,
       trDetails: trDetails,
       bagStatusByReferenceId: store.bagStatusByReferenceId ? Object.assign({}, store.bagStatusByReferenceId) : undefined,
+      bagDomByReferenceId: store.bagDomByReferenceId ? Object.assign({}, store.bagDomByReferenceId) : undefined,
       failures: (store.failures || []).slice(),
       totalRouteCount: total,
       selectedRouteCount: eleven.ok ? eleven.routes.length : details.length
@@ -1738,7 +3292,8 @@
       extracted.packageSequenceIndex = pkgIndex.index || [];
       extracted.packageSequenceDiagnostics = pkgIndex.diagnostics || emptyPackageSequenceDiagnostics();
       var assist = extractPackageAssistIndex(d, trDetailsByTrId,
-        bundle.bagStatusByReferenceId && typeof bundle.bagStatusByReferenceId === 'object' ? bundle.bagStatusByReferenceId : null);
+        bundle.bagStatusByReferenceId && typeof bundle.bagStatusByReferenceId === 'object' ? bundle.bagStatusByReferenceId : null,
+        bundle.bagDomByReferenceId && typeof bundle.bagDomByReferenceId === 'object' ? bundle.bagDomByReferenceId : null);
       extracted.packageAssistIndex = assist.index || [];
       extracted.packageAssistDiagnostics = assist.diagnostics || emptyPackageAssistDiagnostics();
       results.push(extracted);
@@ -1864,7 +3419,51 @@
     summarizeBagRun: summarizeBagRun,
     formatBagSummary: formatBagSummary,
     snapshotNormalCapture: snapshotNormalCapture,
-    restoreNormalCapture: restoreNormalCapture
+    restoreNormalCapture: restoreNormalCapture,
+    parseStopLabel: parseStopLabel,
+    matchStopLabelEntries: matchStopLabelEntries,
+    STOP_MARKER_KIND: STOP_MARKER_KIND,
+    STOP_LIST_KIND: STOP_LIST_KIND,
+    isCompleteStopStatus: isCompleteStopStatus,
+    stopStatusCategory: stopStatusCategory,
+    stopStatusPriority: stopStatusPriority,
+    UNFINISHED_BAG_TEST_VERSION: UNFINISHED_BAG_TEST_VERSION,
+    selectUnfinishedBagTargets: selectUnfinishedBagTargets,
+    summarizeUnfinishedBagTest: summarizeUnfinishedBagTest,
+    formatUnfinishedBagTest: formatUnfinishedBagTest,
+    classifyCaptureSource: classifyCaptureSource,
+    stopListRowNumber: stopListRowNumber,
+    isStopMarkerSvgClass: isStopMarkerSvgClass,
+    parseStopMarkerText: parseStopMarkerText,
+    isPackageNumberText: isPackageNumberText,
+    groupBagTargetsByStop: groupBagTargetsByStop,
+    stopNeedsExpand: stopNeedsExpand,
+    formatBagProgress: formatBagProgress,
+    runBagEngine: runBagEngine,
+    STOP_OPEN_MAX_ATTEMPTS: STOP_OPEN_MAX_ATTEMPTS,
+    STOP_OPEN_STRATEGIES: STOP_OPEN_STRATEGIES,
+    targetTrDetailsArrived: targetTrDetailsArrived,
+    stopOpenSignal: stopOpenSignal,
+    runStopOpenAttempts: runStopOpenAttempts,
+    beginStopRecord: beginStopRecord,
+    applyStopOpenResult: applyStopOpenResult,
+    buildStopProcessingDiagnostics: buildStopProcessingDiagnostics,
+    summarizeStopProcessing: summarizeStopProcessing,
+    recordPackageFallback: recordPackageFallback,
+    packageLookupFallbackPatch: packageLookupFallbackPatch,
+    trDetailsRowShape: trDetailsRowShape,
+    TR_WAIT_NORMAL_MS: TR_WAIT_NORMAL_MS,
+    TR_WAIT_EXTENDED_MS: TR_WAIT_EXTENDED_MS,
+    runTargetTrWait: runTargetTrWait,
+    recordTrWait: recordTrWait,
+    summarizeTrWait: summarizeTrWait,
+    BAG_COLOR_WORDS: BAG_COLOR_WORDS,
+    parseBagLabelText: parseBagLabelText,
+    packageTokensOf: packageTokensOf,
+    safeContainerExcerpt: safeContainerExcerpt,
+    readStopDomBag: readStopDomBag,
+    summarizeStopDom: summarizeStopDom,
+    bagSourceOf: bagSourceOf
   };
 
   if (typeof module !== 'undefined' && module.exports) {
