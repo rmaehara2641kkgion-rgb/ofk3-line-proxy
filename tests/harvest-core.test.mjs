@@ -88,7 +88,7 @@ async function runOne(api, id) {
   eq(Object.keys(Core.STATUS).map(function (k) { return Core.STATUS[k]; }).sort(),
     ['awaiting-data', 'checking', 'error', 'idle', 'ok', 'partial', 'stale'], 'status enum');
   eq(Object.keys(Core.OVERALL).sort(), ['COMPLETE', 'FAILED', 'PARTIAL'], 'overall enum');
-  assert(Core.STATUS_LABEL['awaiting-data'] === '回収データ待ち', 'label awaiting');
+  assert(Core.STATUS_LABEL['awaiting-data'] === 'データなし（未送信または取得失敗）', 'label awaiting');
   assert(Core.STATUS_LABEL.checking === '検証中', 'label checking');
   assert(Core.STATUS_LABEL.ok === '正常' && Core.STATUS_LABEL.partial === '一部異常' && Core.STATUS_LABEL.error === '異常', 'labels');
   Object.keys(Core.STATUS_LABEL).forEach(function (k) {
@@ -147,6 +147,10 @@ async function runOne(api, id) {
 
   s = await runOne(makeFakeApi({ entry: null }), 'timeWindow');
   assert(s.status === 'awaiting-data', 'TW null entry -> awaiting-data');
+  // real load() swallows fetch errors and leaves entry=null without throwing: wording must not assert the cause
+  assert(s.errors[0].message.indexOf('取得失敗') >= 0, 'TW null entry msg mentions fetch failure');
+  assert(s.errors[0].message.indexOf('Cortex拡張から未送信') < 0, 'TW null entry msg not definitive');
+  assert(Core.STATUS_LABEL['awaiting-data'].indexOf('取得失敗') >= 0, 'label not definitive');
 
   s = await runOne(makeFakeApi({ packages: [pkg('R1', 'T1'), pkg('R1', '', {}), pkg('R2', 'T3', { plannedEndTime: null, plannedEndClock: '' })] }), 'timeWindow');
   assert(s.status === 'partial', 'TW partial');

@@ -38,7 +38,7 @@
 
   var STATUS_LABEL = {
     'idle': '未確認',
-    'awaiting-data': '回収データ待ち',
+    'awaiting-data': 'データなし（未送信または取得失敗）',
     'checking': '検証中',
     'ok': '正常',
     'partial': '一部異常',

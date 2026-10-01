@@ -146,7 +146,7 @@
           return {
             status: 'awaiting-data',
             counts: { success: 0, failure: 0, total: 0 },
-            errors: [{ code: 'no-packages', message: '回収データなし (Cortex拡張から未送信、またはサーバー応答なし)' }],
+            errors: [{ code: 'no-packages', message: '回収データなし (未送信、または取得失敗のため原因は特定できません)' }],
             details: { localDate: entry ? String(entry.localDate || '') : null, today: raw.today }
           };
         }
@@ -208,7 +208,7 @@
       summarize: function (result) {
         var d = result.details || {};
         var c = result.counts;
-        if (result.status === 'awaiting-data') return '回収データ待ち: 拡張から未送信 (13:00 package 0件)';
+        if (result.status === 'awaiting-data') return 'データなし: 未送信または取得失敗 (13:00 package 0件)';
         if (result.status === 'error' && !d.packageCount) return '検証失敗: ' + ((result.errors[0] && result.errors[0].message) || '');
         var s = 'package ' + c.total + '件 / Route ' + (d.routeCount || 0) + '件 / 有効 ' + c.success + ' 無効 ' + c.failure;
         if (d.stale) s += ' (本日分でない: ' + d.localDate + ')';
