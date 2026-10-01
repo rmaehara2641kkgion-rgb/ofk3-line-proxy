@@ -21,6 +21,7 @@
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script src="/lat-departure-core.js?v=20260823-1"></script>
   <script src="/lat-timeline-core.js?v=20260916-1"></script>
+  <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -4635,11 +4636,13 @@ var driverDB = {
         const workbook = XLSX.read(data, { type: 'array' });
         // 「配達アソシエート」列を含むシートを自動検出（READMEシート等をスキップ）
         var targetSheet = null;
+        var targetSheetName = '';
         for (var si = 0; si < workbook.SheetNames.length; si++) {
           var s = workbook.Sheets[workbook.SheetNames[si]];
           var j = XLSX.utils.sheet_to_json(s, { range: 0 });
           if (j.length > 0 && Object.keys(j[0]).some(function(k) { return k.indexOf('配達アソシエート') >= 0; })) {
             targetSheet = s;
+            targetSheetName = workbook.SheetNames[si];
             break;
           }
         }
@@ -4648,7 +4651,8 @@ var driverDB = {
           return;
         }
         var json = XLSX.utils.sheet_to_json(targetSheet);
-        processDriverData(json);
+        var mode = (typeof DriverAbilityImport !== 'undefined' && DriverAbilityImport.isCumulativeDriverUpload(file.name, targetSheetName)) ? 'cumulative' : 'weekly';
+        processDriverData(json, { mode: mode });
       };
       reader.readAsArrayBuffer(file);
     }
@@ -4745,90 +4749,21 @@ var driverDB = {
       reader.readAsArrayBuffer(file);
     }
 
-    function processDriverData(data) {
-      const today = new Date().toLocaleDateString('ja-JP');
-      var newlyRegisteredNames = []; // このインポートで初めて登録されたドライバー（タブレット同期用）
-
-      data.forEach(row => {
-        const name = row['配達アソシエート'] || '';
-        if (!name) return;
-
-        const packagesPerHour = parseFloat(row['1時間あたり配送個数']) || null;
-        // 列名に改行・空白が含まれる場合があるため、両方の空白を除去して部分一致検索
-        const findCol = (keys, ...patterns) => {
-          for (const p of patterns) {
-            const pNorm = p.replace(/\s+/g, '');
-            const key = keys.find(k => k.replace(/\s+/g, '').includes(pNorm));
-            if (key && row[key] != null) return row[key];
-          }
-          return null;
-        };
-        const colKeys = Object.keys(row);
-        const deliveryRateRaw = findCol(colKeys, '配管率%(平均)', '配管率%', '配管率');
-        const deliveryRate = deliveryRateRaw != null ? parseFloat(String(deliveryRateRaw).replace('%', '')) : null;
-        const workDaysRaw = findCol(colKeys, '集計対象稼働日数', '稼働日数');
-        const workDays = workDaysRaw != null ? parseInt(workDaysRaw) : 0;
-        const totalPkgRaw = findCol(colKeys, '配送個数合計', '配送個数');
-        const totalPackages = totalPkgRaw != null ? parseInt(totalPkgRaw) : 0;
-        const incidentRaw = findCol(colKeys, '正配依頼合計', '正配依頼');
-        const incidents = incidentRaw != null ? parseInt(incidentRaw) : 0;
-        const misRateRaw = findCol(colKeys, '誤配率%', '誤配率');
-        // Excelの内部値は小数（例: 0.0076 = 0.76%）なので、1未満なら×100して%に変換
-        let misdeliveryRate = misRateRaw != null ? parseFloat(String(misRateRaw).replace('%', '')) : null;
-        if (misdeliveryRate != null && misdeliveryRate < 1 && misdeliveryRate > 0) { misdeliveryRate = Math.round(misdeliveryRate * 10000) / 100; }
-
-        // If we already have data, calculate weighted average
-        if (driverDB[name] && driverDB[name].packagesPerHour && packagesPerHour) {
-          const existing = driverDB[name];
-          // 同じ日のデータなら上書き（加算しない）
-          var lastHistory = existing.history && existing.history.length > 0 ? existing.history[existing.history.length - 1] : null;
-          if (lastHistory && lastHistory.date === today) {
-            // 今日の分は上書き
-            driverDB[name] = {
-              ...existing,
-              packagesPerHour: Math.round(packagesPerHour * 10) / 10,
-              deliveryRate: deliveryRate || existing.deliveryRate,
-              misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
-              workDays: workDays,
-              totalPackages: totalPackages,
-              incidents: incidents,
-              lastUpdated: today
-            };
-            if (existing.history && existing.history.length > 0) {
-              driverDB[name].history = existing.history.slice(0, -1).concat([{ date: today, pph: packagesPerHour, days: workDays }]);
-            }
-          } else {
-            // 別日のデータなら加重平均
-            const totalDays = existing.workDays + workDays;
-            const weightedCapability = (existing.packagesPerHour * existing.workDays + packagesPerHour * workDays) / totalDays;
-
-            driverDB[name] = {
-              ...existing,
-              packagesPerHour: Math.round(weightedCapability * 10) / 10,
-              deliveryRate: deliveryRate || existing.deliveryRate,
-              misdeliveryRate: misdeliveryRate || existing.misdeliveryRate,
-              workDays: totalDays,
-              totalPackages: existing.totalPackages + totalPackages,
-              incidents: existing.incidents + incidents,
-              lastUpdated: today,
-              history: [...(existing.history || []), { date: today, pph: packagesPerHour, days: workDays }]
-            };
-          }
-        } else {
-          driverDB[name] = {
-            driverId: getNextDriverId(),
-            packagesPerHour: packagesPerHour ? Math.round(packagesPerHour * 10) / 10 : null,
-            deliveryRate,
-            misdeliveryRate,
-            workDays,
-            totalPackages,
-            incidents,
-            lastUpdated: today,
-            history: [{ date: today, pph: packagesPerHour, days: workDays }]
-          };
-          newlyRegisteredNames.push(name);
-        }
+    function processDriverData(data, options) {
+      options = options || {};
+      var mode = options.mode === 'cumulative' ? 'cumulative' : 'weekly';
+      if (typeof DriverAbilityImport === 'undefined' || !DriverAbilityImport.applyDriverAbilityRows) {
+        alert('ドライバー能力の取込処理を読み込めませんでした。ページを再読み込みしてください。');
+        return;
+      }
+      // 累計Excelは期間合計そのもの。既存localStorageの累計へ足すと再加算になるため、同一ドライバーはExcel値で置換する。
+      // 週次（modeがcumulativeでない）は従来どおり、同日は上書き・別日は加算する。
+      var applied = DriverAbilityImport.applyDriverAbilityRows(driverDB, data, {
+        mode: mode,
+        today: new Date().toLocaleDateString('ja-JP'),
+        nextDriverId: getNextDriverId
       });
+      var newlyRegisteredNames = applied.newlyRegisteredNames;
 
       // Save to localStorage
       // driverDBオーバーレイ保存（戻り値を確認し、失敗時は成功表示をしない）
