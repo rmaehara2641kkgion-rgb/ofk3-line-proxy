@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node inject-tenko-audit.js",
     "dev": "node inject-tenko-audit.js",
-    "test:area-experience": "node tests/area-experience-core.test.mjs",
+    "test:area-experience": "node tests/area-experience-core.test.mjs && node tests/area-experience-gas-api.test.mjs",
     "test:assign-support": "node tests/assign-support.test.mjs && node tests/auto-assign-amazon-schedule.test.mjs",
     "test:transport-audit": "node tests/test-transport-audit.mjs",
     "test:lat": "node tests/lat-departure-judgment.test.mjs && node tests/lat-dsp-route-map-scope.test.mjs && node tests/lat-low-only-pipeline.test.mjs && node tests/lat-timeline-normalization.test.mjs && node tests/lat-timeline-core.test.mjs",

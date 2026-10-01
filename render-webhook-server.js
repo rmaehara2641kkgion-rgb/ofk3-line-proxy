@@ -1301,6 +1301,51 @@ app.post('/area-experience-master', async (req, res) => {
   }
 });
 
+// エリア経験イベント追記（Route取得 / 経験イベント → 正規化 → GAS appendEvents）
+// エリア抽出は assign-support-core.js の extractAreaLabelsFromAddresses のみ（area-experience-core.js 経由）。
+// 冪等性は GAS 側のキー（serviceDate|routeCode / TransportID|normalizedArea|serviceDate）で担保する。
+var AreaExperienceCore = require('./area-experience-core.js');
+app.post('/area-experience-events', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var body = req.body || {};
+    var rawCaptures = Array.isArray(body.routeCaptures) ? body.routeCaptures : [];
+    var rawEvents = Array.isArray(body.events) ? body.events : [];
+    var captures = [];
+    var events = [];
+    var invalid = [];
+    rawCaptures.forEach(function (c) {
+      var n = AreaExperienceCore.normalizeRouteCapture(c);
+      if (n.ok) captures.push(n.capture);
+      else invalid.push({ type: 'routeCapture', routeCode: c && c.routeCode, serviceDate: c && c.serviceDate, reason: n.reason });
+    });
+    rawEvents.forEach(function (ev) {
+      var n = AreaExperienceCore.normalizeExperienceEventItem(ev);
+      if (n.ok) events.push(n.event);
+      else invalid.push({ type: 'event', reason: n.reason });
+    });
+    if (!captures.length && !events.length) {
+      return res.status(400).json({ status: 'error', message: 'no valid routeCaptures/events', invalid: invalid });
+    }
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=appendEvents';
+    console.log('area-experience-events POST: captures', captures.length, 'events', events.length, 'invalid', invalid.length);
+    var response = await axios.post(url, { routeCaptures: captures, events: events }, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5,
+      timeout: 120000,
+      validateStatus: function() { return true; }
+    });
+    var data = response.data && typeof response.data === 'object' ? response.data : { status: 'error', message: 'GAS returned non-JSON' };
+    data.invalidBeforeGas = invalid;
+    res.status(response.status).json(data);
+  } catch (e) {
+    console.error('area-experience-events POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
 // ===== 点呼マスタ＋ログ GASプロキシ =====
 app.get('/tenko-master', async (req, res) => {
   try {

@@ -776,7 +776,7 @@
         <!-- 登録/更新アップロード -->
         <section id="as-exp-upload-section" class="card p-4 mb-4 hidden">
           <h3 id="as-exp-upload-title" class="text-sm font-bold mb-2">エリア経験データを登録</h3>
-          <p class="text-xs text-ink-lighter mb-3">CSV / XLSX（TransportID 必須）。確定前に件数プレビューを表示します。</p>
+          <p class="text-xs text-ink-lighter mb-3">外部週次ツールの累積XLSX（areaExperience + importHistory シート）。選択時はプレビューのみで、確定するまでGASへ保存しません。スナップショットを置き換えても自動集計イベントは削除されません。</p>
           <div id="as-exp-dropzone" class="text-center py-6 border-2 border-dashed border-amber-300 rounded-lg cursor-pointer hover:border-amber-500 hover:bg-amber-50/50 transition-colors">
             <p class="text-sm font-medium">📂 エリア経験ファイルをドロップ / クリック</p>
             <p class="text-xs text-gray-400 mt-1">CSV, XLSX</p>
@@ -789,7 +789,14 @@
         <section class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold">ドライバー経験一覧</h3>
-            <input type="search" id="as-exp-search" placeholder="ドライバー名 / TransportID / エリア名" class="text-sm border rounded px-3 py-1.5 w-64 max-w-full">
+            <div class="flex items-center gap-2 flex-wrap justify-end">
+              <select id="as-exp-filter" class="text-sm border rounded px-2 py-1.5">
+                <option value="all">全員</option>
+                <option value="with">経験あり</option>
+                <option value="without">経験データなし</option>
+              </select>
+              <input type="search" id="as-exp-search" placeholder="ドライバー名 / TransportID / エリア名" class="text-sm border rounded px-3 py-1.5 w-64 max-w-full">
+            </div>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -21784,8 +21791,9 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260826-5"></script>
-  <script src="/assign-support.js?v=20260826-5"></script>
+  <script src="/assign-support-core.js?v=20261001-exp1b"></script>
+  <script src="/area-experience-core.js?v=20261001-exp1b"></script>
+  <script src="/assign-support.js?v=20261001-exp1b"></script>
   <script src="/manual-assign-board-core.js?v=20260903-2"></script>
   <script src="/manual-assign-board.js?v=20260903-2"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>

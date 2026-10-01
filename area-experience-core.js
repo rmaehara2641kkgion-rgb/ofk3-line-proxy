@@ -93,17 +93,33 @@
     return s.replace(/[\s　]+/g, '').toLowerCase();
   }
 
+  // 一意解決時の resolutionMethod（同一TIDに複数経路がある場合は先頭を採用）
+  var RESOLUTION_METHOD_ORDER = ['exact_name', 'master_japanese_name', 'alias'];
+
+  function isNameReversalOf(a, b) {
+    var pa = String(a || '').trim().split(/[\s　]+/);
+    var pb = String(b || '').trim().split(/[\s　]+/);
+    if (pa.length !== 2 || pb.length !== 2) return false;
+    return normalizeDriverNameForMatch(pa[1] + pa[0]) === normalizeDriverNameForMatch(pb[0] + pb[1]);
+  }
+
   /**
-   * ドライバーマスタ（transportIDs: {masterName: tid}、driverJapaneseNames: {masterName: jpName}）
-   * から 正規化氏名 → TransportID候補 の索引を作る。
+   * ドライバーマスタから 正規化氏名 → TransportID候補 の索引を作る。
+   *   transportIDs        : {masterName: tid}                  → exact_name
+   *   driverJapaneseNames : {masterName: jpName}               → master_japanese_name
+   *   driverNameAliases   : {alias: canonicalMasterName}       → alias
+   * alias は「正キーが transportIDs 上で空でないTIDに明示的に紐付く」場合のみ使う。
+   * resolveDriverKey の姓名入替で自動登録されたと判別できる alias（正キーの姓名入替と同一）は使わない。
    */
-  function buildDriverNameIndex(transportIDs, driverJapaneseNames) {
+  function buildDriverNameIndex(transportIDs, driverJapaneseNames, driverNameAliases) {
     var byKey = {};
     var noTidByKey = {};
+    var excludedAliases = [];
     transportIDs = transportIDs || {};
     driverJapaneseNames = driverJapaneseNames || {};
+    driverNameAliases = driverNameAliases || {};
 
-    function add(nameForMatch, masterName, tid) {
+    function add(nameForMatch, masterName, tid, method) {
       var key = normalizeDriverNameForMatch(nameForMatch);
       if (!key) return;
       if (!tid) {
@@ -112,52 +128,90 @@
         return;
       }
       if (!byKey[key]) byKey[key] = {};
-      if (!byKey[key][tid]) byKey[key][tid] = [];
-      if (byKey[key][tid].indexOf(masterName) < 0) byKey[key][tid].push(masterName);
+      if (!byKey[key][tid]) byKey[key][tid] = { masterNames: [], methods: [] };
+      var slot = byKey[key][tid];
+      if (slot.masterNames.indexOf(masterName) < 0) slot.masterNames.push(masterName);
+      if (slot.methods.indexOf(method) < 0) slot.methods.push(method);
     }
 
     var names = Object.keys(transportIDs);
     for (var i = 0; i < names.length; i++) {
       var masterName = names[i];
       var tid = String(transportIDs[masterName] || '').trim();
-      add(masterName, masterName, tid);
+      add(masterName, masterName, tid, 'exact_name');
       var jp = driverJapaneseNames[masterName];
-      if (jp) add(jp, masterName, tid);
+      if (jp) add(jp, masterName, tid, 'master_japanese_name');
     }
     var jpKeys = Object.keys(driverJapaneseNames);
     for (var j = 0; j < jpKeys.length; j++) {
       if (Object.prototype.hasOwnProperty.call(transportIDs, jpKeys[j])) continue;
-      add(driverJapaneseNames[jpKeys[j]], jpKeys[j], '');
+      add(driverJapaneseNames[jpKeys[j]], jpKeys[j], '', 'master_japanese_name');
     }
-    return { byKey: byKey, noTidByKey: noTidByKey };
+    var aliasKeys = Object.keys(driverNameAliases);
+    for (var a = 0; a < aliasKeys.length; a++) {
+      var alias = aliasKeys[a];
+      var canonical = driverNameAliases[alias];
+      if (!Object.prototype.hasOwnProperty.call(transportIDs, canonical)) {
+        excludedAliases.push({ alias: alias, canonical: canonical, reason: 'canonical_not_in_master' });
+        continue;
+      }
+      var aliasTid = String(transportIDs[canonical] || '').trim();
+      if (!aliasTid) {
+        excludedAliases.push({ alias: alias, canonical: canonical, reason: 'canonical_has_no_transport_id' });
+        continue;
+      }
+      if (isNameReversalOf(alias, canonical)) {
+        excludedAliases.push({ alias: alias, canonical: canonical, reason: 'name_reversal_alias' });
+        continue;
+      }
+      add(alias, canonical, aliasTid, 'alias');
+    }
+    return { byKey: byKey, noTidByKey: noTidByKey, excludedAliases: excludedAliases };
   }
 
-  /** 1氏名 → { transportId } または { reason, candidates }。一意一致時のみ解決。 */
+  function pickResolutionMethod(methods) {
+    for (var i = 0; i < RESOLUTION_METHOD_ORDER.length; i++) {
+      if (methods.indexOf(RESOLUTION_METHOD_ORDER[i]) >= 0) return RESOLUTION_METHOD_ORDER[i];
+    }
+    return methods[0] || '';
+  }
+
+  /** 1氏名 → { transportId, resolutionMethod } または { reason, candidates }。一意一致時のみ解決。 */
   function resolveTransportIdByExactName(name, nameIndex) {
     var key = normalizeDriverNameForMatch(name);
-    if (!key) return { transportId: '', reason: 'empty_name', candidates: [] };
+    if (!key) return { transportId: '', resolutionMethod: 'unresolved', reason: 'empty_name', candidates: [] };
     var hit = nameIndex.byKey[key];
     var tids = hit ? Object.keys(hit) : [];
-    if (tids.length === 1) return { transportId: tids[0], reason: '', candidates: [{ transportId: tids[0], masterNames: hit[tids[0]] }] };
+    var toCandidate = function (t) {
+      return { transportId: t, masterNames: hit[t].masterNames, methods: hit[t].methods };
+    };
+    if (tids.length === 1) {
+      return {
+        transportId: tids[0],
+        resolutionMethod: pickResolutionMethod(hit[tids[0]].methods),
+        reason: '',
+        candidates: [toCandidate(tids[0])],
+      };
+    }
     if (tids.length > 1) {
       return {
         transportId: '',
+        resolutionMethod: 'unresolved',
         reason: 'multiple_candidates',
-        candidates: tids.map(function (t) {
-          return { transportId: t, masterNames: hit[t] };
-        }),
+        candidates: tids.map(toCandidate),
       };
     }
     if (nameIndex.noTidByKey[key]) {
       return {
         transportId: '',
+        resolutionMethod: 'unresolved',
         reason: 'master_has_no_transport_id',
         candidates: nameIndex.noTidByKey[key].map(function (n) {
-          return { transportId: '', masterNames: [n] };
+          return { transportId: '', masterNames: [n], methods: [] };
         }),
       };
     }
-    return { transportId: '', reason: 'not_in_master', candidates: [] };
+    return { transportId: '', resolutionMethod: 'unresolved', reason: 'not_in_master', candidates: [] };
   }
 
   // ===== XLSX 全シート解析 =====
@@ -374,15 +428,25 @@
       if (!blankNameRows[nm0]) blankNameRows[nm0] = [];
       blankNameRows[nm0].push(r0);
     }
-    var nameIndex = buildDriverNameIndex(options.transportIDs, options.driverJapaneseNames);
+    var nameIndex = buildDriverNameIndex(options.transportIDs, options.driverJapaneseNames, options.driverNameAliases);
     var resolvedByName = {};
     var unresolvedDrivers = [];
     var tidClaims = {};
     var blankNames = Object.keys(blankNameRows);
+    // fixedResolution: 登録時に確定した解決結果（GAS保存値）。再読込時はマスタ変化に左右されずこれを使う。
+    var fixed = options.fixedResolution || null;
     for (var b = 0; b < blankNames.length; b++) {
-      var res = resolveTransportIdByExactName(blankNames[b], nameIndex);
+      var res;
+      if (fixed) {
+        var fx = fixed[blankNames[b]];
+        res = fx && fx.transportId
+          ? { transportId: fx.transportId, resolutionMethod: fx.resolutionMethod || 'exact_name', reason: '', candidates: [{ transportId: fx.transportId, masterNames: fx.masterNames || [], methods: [] }] }
+          : { transportId: '', resolutionMethod: 'unresolved', reason: (fx && fx.reason) || 'not_in_master', candidates: (fx && fx.candidates) || [] };
+      } else {
+        res = resolveTransportIdByExactName(blankNames[b], nameIndex);
+      }
       if (res.transportId && fileTidSet[res.transportId]) {
-        res = { transportId: '', reason: 'tid_already_in_snapshot', candidates: res.candidates };
+        res = { transportId: '', resolutionMethod: 'unresolved', reason: 'tid_already_in_snapshot', candidates: res.candidates };
       }
       if (res.transportId) {
         if (!tidClaims[res.transportId]) tidClaims[res.transportId] = [];
@@ -396,8 +460,9 @@
         tidClaims[t].forEach(function (nm) {
           resolvedByName[nm] = {
             transportId: '',
+            resolutionMethod: 'unresolved',
             reason: 'tid_shared_by_multiple_names',
-            candidates: [{ transportId: t, masterNames: tidClaims[t].slice() }],
+            candidates: [{ transportId: t, masterNames: tidClaims[t].slice(), methods: [] }],
           };
         });
       }
@@ -410,6 +475,7 @@
     var maxLastVisit = '';
     var unparsedLastVisit = 0;
     var areaSetByName = {};
+    var latestByName = {};
     for (var r = 0; r < rawRows.length; r++) {
       var row = rawRows[r];
       var fileTid = String(row[cols.transportId] || '').trim();
@@ -425,6 +491,7 @@
         var nm = cols.driverName !== undefined ? String(row[cols.driverName] || '').trim() : '';
         if (!areaSetByName[nm]) areaSetByName[nm] = {};
         if (area) areaSetByName[nm][area] = true;
+        latestByName[nm] = maxIso(latestByName[nm] || '', lvIso);
         var rr = resolvedByName[nm];
         tid = rr && rr.transportId ? rr.transportId : '';
         tidSource = tid ? 'name' : 'unresolved';
@@ -445,8 +512,10 @@
       unresolvedDrivers.push({
         driverName: nm,
         reason: rr2.reason,
+        resolutionMethod: 'unresolved',
         rowCount: blankNameRows[nm].length,
         areaCount: Object.keys(areaSetByName[nm] || {}).length,
+        latestLastVisitDate: latestByName[nm] || '',
         candidateTransportIds: rr2.candidates.map(function (c) {
           return c.transportId;
         }),
@@ -465,10 +534,24 @@
         return {
           driverName: nm,
           resolvedTransportId: resolvedByName[nm].transportId,
+          resolutionMethod: resolvedByName[nm].resolutionMethod,
           masterNames: resolvedByName[nm].candidates[0].masterNames,
           rowCount: blankNameRows[nm].length,
+          areaCount: Object.keys(areaSetByName[nm] || {}).length,
+          latestLastVisitDate: latestByName[nm] || '',
         };
       });
+    var resolution = {};
+    Object.keys(resolvedByName).forEach(function (nm) {
+      var rv = resolvedByName[nm];
+      resolution[nm] = rv.transportId
+        ? { transportId: rv.transportId, resolutionMethod: rv.resolutionMethod, masterNames: rv.candidates[0].masterNames }
+        : { transportId: '', resolutionMethod: 'unresolved', reason: rv.reason, candidates: rv.candidates };
+    });
+    var methodCounts = {};
+    resolvedDrivers.forEach(function (d) {
+      methodCounts[d.resolutionMethod] = (methodCounts[d.resolutionMethod] || 0) + 1;
+    });
 
     // --- TransportID + area 重複（統合しない・警告のみ） ---
     var seen = {};
@@ -504,6 +587,20 @@
       recordMeta: recordMeta,
       resolvedDrivers: resolvedDrivers,
       unresolvedDrivers: unresolvedDrivers,
+      resolution: resolution,
+      resolutionSummary: {
+        fileTransportIdDriverCount: Object.keys(fileTidSet).length,
+        blankTidDriverCount: blankNames.length,
+        blankTidRowCount: blankTidRowCount,
+        resolvedCount: resolvedDrivers.length,
+        resolvedRowCount: resolvedDrivers.reduce(function (acc, d) {
+          return acc + d.rowCount;
+        }, 0),
+        unresolvedCount: unresolvedDrivers.length,
+        methodCounts: methodCounts,
+        usedFixedResolution: !!fixed,
+      },
+      excludedAliases: nameIndex.excludedAliases,
       validation: {
         maxDateTo: maxDateTo,
         maxLastVisitDate: maxLastVisit,
@@ -768,6 +865,169 @@
     return base;
   }
 
+  // ===== 保存・復元（GAS areaExperienceMaster.json） =====
+
+  /**
+   * スナップショット登録時のGAS保存ペイロード。
+   * records / stats / updatedAt は既存形式（旧クライアント互換）。rawRows は変更せずそのまま保存し、
+   * 氏名→TID解決結果は snapshot.resolution として別保持する。
+   */
+  function buildSnapshotSavePayload(snapshot, options) {
+    options = options || {};
+    if (!snapshot || !snapshot.ok) return null;
+    var db = mergeSnapshotAndEvents(snapshot, [], { knownTransportIds: options.knownTransportIds });
+    return {
+      updatedAt: options.updatedAt || '',
+      records: snapshot.records,
+      stats: db.stats,
+      snapshot: {
+        schemaVersion: 2,
+        sourceFile: snapshot.sourceFile,
+        registeredAt: options.registeredAt || '',
+        header: snapshot.header,
+        rawRows: snapshot.rawRows,
+        importHistory: snapshot.importHistory.map(function (h) {
+          return {
+            weekKey: h.weekKey,
+            dateFrom: h.dateFrom,
+            dateTo: h.dateTo,
+            importedAt: h.importedAt,
+            sourceFingerprint: h.sourceFingerprint,
+            rowCount: h.rowCount,
+            source: h.source,
+          };
+        }),
+        snapshotThroughDate: snapshot.snapshotThroughDate,
+        missingPeriods: snapshot.validation.missingPeriods,
+        resolution: snapshot.resolution,
+        resolutionSummary: snapshot.resolutionSummary,
+        validation: {
+          maxDateTo: snapshot.validation.maxDateTo,
+          maxLastVisitDate: snapshot.validation.maxLastVisitDate,
+          rawRowCount: snapshot.validation.rawRowCount,
+          blankTidRowCount: snapshot.validation.blankTidRowCount,
+          duplicateCount: snapshot.validation.duplicates.length,
+          warnings: snapshot.warnings,
+        },
+      },
+      unresolved: { drivers: snapshot.unresolvedDrivers },
+    };
+  }
+
+  /** GAS保存済み snapshot → Snapshot Layer（登録時の解決結果を使い、マスタの後変化に影響されない） */
+  function restoreSnapshotLayer(saved) {
+    if (!saved || !Array.isArray(saved.rawRows) || !Array.isArray(saved.header)) {
+      return { ok: false, errors: ['保存済みスナップショットが不完全です'] };
+    }
+    var parsed = {
+      ok: true,
+      sourceFile: saved.sourceFile || '',
+      areaRows: [saved.header].concat(saved.rawRows),
+      importHistory: (saved.importHistory || []).map(function (h) {
+        return {
+          weekKey: h.weekKey || '',
+          dateFromRaw: h.dateFrom,
+          dateToRaw: h.dateTo,
+          dateFrom: toIsoDate(h.dateFrom),
+          dateTo: toIsoDate(h.dateTo),
+          importedAt: h.importedAt || '',
+          sourceFingerprint: h.sourceFingerprint || '',
+          rowCount: Number(h.rowCount) || 0,
+          source: h.source || '',
+        };
+      }),
+      hasImportHistory: true,
+    };
+    return buildSnapshotLayer(parsed, { fixedResolution: saved.resolution || {}, sourceFile: saved.sourceFile });
+  }
+
+  function experienceEventKey(transportId, normalizedArea, serviceDate) {
+    return transportId + '|' + normalizedArea + '|' + serviceDate;
+  }
+
+  /** 直接送信される経験イベント（Route文脈なし）の正規化 */
+  function normalizeExperienceEventItem(item) {
+    item = item || {};
+    var tid = String(item.transportId || '').trim();
+    var date = toIsoDate(item.serviceDate);
+    var label = String(item.areaLabel || item.area || item.normalizedArea || '').trim();
+    var norm = Core.normalizeAreaToken(item.normalizedArea || label);
+    if (!tid || !date || !norm) return { ok: false, reason: 'transportId/serviceDate/area required' };
+    return {
+      ok: true,
+      event: {
+        key: experienceEventKey(tid, norm, date),
+        transportId: tid,
+        normalizedArea: norm,
+        areaLabel: label || norm,
+        serviceDate: date,
+        source: String(item.source || ''),
+      },
+    };
+  }
+
+  /**
+   * GAS appendEvents と同一規則の冪等マージ（GAS側実装の仕様基準）。入力は変更しない。
+   *   routeCaptures: serviceDate|routeCode 単位で最新 capturedAt に置換（古い取得は無視）
+   *   items        : TransportID|normalizedArea|serviceDate 単位の集合（同一キーは上書きのみ）
+   */
+  function applyAppendEvents(eventsStore, body) {
+    eventsStore = eventsStore || {};
+    var captures = upsertRouteCaptures(eventsStore.routeCaptures || {}, (body && body.routeCaptures) || []);
+    var items = {};
+    Object.keys(eventsStore.items || {}).forEach(function (k) {
+      items[k] = eventsStore.items[k];
+    });
+    var added = 0;
+    var unchanged = 0;
+    var invalid = captures.invalid.slice();
+    ((body && body.events) || []).forEach(function (raw) {
+      var n = normalizeExperienceEventItem(raw);
+      if (!n.ok) {
+        invalid.push({ reason: n.reason });
+        return;
+      }
+      if (items[n.event.key]) unchanged++;
+      else added++;
+      items[n.event.key] = n.event;
+    });
+    return {
+      store: { routeCaptures: captures.store, items: items },
+      capturesApplied: captures.applied,
+      capturesStale: captures.ignoredStale,
+      eventsAdded: added,
+      eventsUnchanged: unchanged,
+      invalid: invalid,
+    };
+  }
+
+  /** 保存済み events（routeCaptures + items）→ 経験イベント配列（キー重複なし） */
+  function collectExperienceEvents(eventsStore) {
+    eventsStore = eventsStore || {};
+    var derived = deriveExperienceEvents(eventsStore.routeCaptures || {});
+    var byKey = {};
+    derived.forEach(function (e) {
+      byKey[e.key] = e;
+    });
+    Object.keys(eventsStore.items || {}).forEach(function (k) {
+      var it = eventsStore.items[k];
+      if (!it || byKey[k]) return;
+      byKey[k] = {
+        key: k,
+        transportId: it.transportId,
+        normalizedArea: it.normalizedArea,
+        areaLabel: it.areaLabel || it.normalizedArea,
+        serviceDate: it.serviceDate,
+        routeCodes: [],
+      };
+    });
+    return Object.keys(byKey)
+      .sort()
+      .map(function (k) {
+        return byKey[k];
+      });
+  }
+
   // ===== 一覧（driver master ∪ snapshot ∪ events） =====
 
   function buildExperienceDriverList(experienceDb, transportIDs) {
@@ -852,6 +1112,12 @@
     upsertRouteCaptures: upsertRouteCaptures,
     deriveExperienceEvents: deriveExperienceEvents,
     mergeSnapshotAndEvents: mergeSnapshotAndEvents,
+    buildSnapshotSavePayload: buildSnapshotSavePayload,
+    restoreSnapshotLayer: restoreSnapshotLayer,
+    experienceEventKey: experienceEventKey,
+    normalizeExperienceEventItem: normalizeExperienceEventItem,
+    applyAppendEvents: applyAppendEvents,
+    collectExperienceEvents: collectExperienceEvents,
     buildExperienceDriverList: buildExperienceDriverList,
     filterExperienceDriverList: filterExperienceDriverList,
     buildExperienceOverviewStats: buildExperienceOverviewStats,

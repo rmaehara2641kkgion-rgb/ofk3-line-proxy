@@ -53,9 +53,9 @@ function makeWorkbook(areaRows, historyRows) {
   return XLSX.read(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }), { type: 'array' });
 }
 
-function snapshotFrom(areaRows, historyRows, master) {
+function snapshotFrom(areaRows, historyRows, master, extra) {
   const parsed = AEC.parseExperienceWorkbook(makeWorkbook(areaRows, historyRows), XLSX, { fileName: 'test.xlsx' });
-  return AEC.buildSnapshotLayer(parsed, { transportIDs: master || MASTER, driverJapaneseNames: {} });
+  return AEC.buildSnapshotLayer(parsed, Object.assign({ transportIDs: master || MASTER, driverJapaneseNames: {} }, extra || {}));
 }
 
 function capture(date, route, tid, addresses, capturedAt) {
@@ -294,5 +294,62 @@ assert(stats.missingPeriods.length === 1, 'overview missing periods');
 
 // 日付ユーティリティ
 assert(AEC.toIsoDate('2026/9/5') === '2026-09-05' && AEC.toIsoDate('2026-02-30') === '' && AEC.toIsoDate(46291) === '2026-09-26', 'toIsoDate formats');
+
+// ===== Phase 1B: alias / 日本語名 / resolutionMethod =====
+{
+  const master = { 'taro yamada': 'T_TARO', 'hanako suzuki': 'T_HANA', 'jiro sato': '' };
+  const jp = { 'taro yamada': '太郎 山田', 'jiro sato': '次郎 佐藤' };
+  const aliases = {
+    'たろう やまだ': 'taro yamada', // 明示的な別名 → T_TARO
+    'yamada taro': 'taro yamada', // 姓名入替のみ（自動登録の可能性）→ 使わない
+    'はなこ': 'missing name', // 正キーがマスタに無い → 使わない
+    '次郎': 'jiro sato', // 正キーのTIDが空 → 使わない
+    'dup alias': 'hanako suzuki',
+  };
+  const idx2 = AEC.buildDriverNameIndex(master, jp, aliases);
+  const r1 = AEC.resolveTransportIdByExactName('taro yamada', idx2);
+  assert(r1.transportId === 'T_TARO' && r1.resolutionMethod === 'exact_name', 'exact_name method');
+  const r2 = AEC.resolveTransportIdByExactName('太郎　山田', idx2);
+  assert(r2.transportId === 'T_TARO' && r2.resolutionMethod === 'master_japanese_name', 'master_japanese_name method');
+  const r3 = AEC.resolveTransportIdByExactName('たろう やまだ', idx2);
+  assert(r3.transportId === 'T_TARO' && r3.resolutionMethod === 'alias', 'alias method');
+  assert(AEC.resolveTransportIdByExactName('yamada taro', idx2).transportId === '', 'reversal alias not used');
+  assert(AEC.resolveTransportIdByExactName('はなこ', idx2).transportId === '', 'alias to missing canonical not used');
+  assert(AEC.resolveTransportIdByExactName('次郎 佐藤', idx2).reason === 'master_has_no_transport_id', 'jp name without TID → reason');
+  const excludedReasons = idx2.excludedAliases.map((x) => x.reason).sort().join(',');
+  assert(excludedReasons === 'canonical_has_no_transport_id,canonical_not_in_master,name_reversal_alias', 'excluded aliases reported');
+  // 同じaliasが別TIDへ（alias と他人の正式名が衝突）→ 自動解決しない
+  const idx3 = AEC.buildDriverNameIndex({ 'dup alias': 'T_OTHER', 'hanako suzuki': 'T_HANA' }, {}, { 'dup alias': 'hanako suzuki' });
+  const r4 = AEC.resolveTransportIdByExactName('dup alias', idx3);
+  assert(r4.transportId === '' && r4.reason === 'multiple_candidates', 'alias colliding with other TID → unresolved');
+  // スナップショット経由で method が残る
+  const aliasSnap = snapshotFrom([HEADER, ['', 'たろう やまだ', '原', 4, '2026-09-20', 1, 0, 0, 1, 1, 'low']], HISTORY_W39, master, { driverJapaneseNames: jp, driverNameAliases: aliases });
+  const ar = aliasSnap.resolvedDrivers[0];
+  assert(ar.resolvedTransportId === 'T_TARO' && ar.resolutionMethod === 'alias', 'snapshot resolvedDrivers carry method');
+  assert(aliasSnap.resolutionSummary.methodCounts.alias === 1, 'resolutionSummary methodCounts');
+}
+
+// ===== Phase 1B: 保存→復元（登録時の解決結果を固定） =====
+{
+  const payload = AEC.buildSnapshotSavePayload(snap, { knownTransportIds: known, updatedAt: '2026-10-01' });
+  const restoredSaved = JSON.parse(JSON.stringify(payload.snapshot));
+  const restored = AEC.restoreSnapshotLayer(restoredSaved);
+  assert(restored.ok && restored.snapshotThroughDate === '2026-09-26', 'restore ok with throughDate');
+  assert(restored.resolutionSummary.usedFixedResolution, 'restore uses fixed resolution');
+  assert(deepEqual(restored.records, snap.records), 'restored records identical to registration');
+  assert(deepEqual(AEC.mergeSnapshotAndEvents(restored, []).byTransportId, merged0.byTransportId), 'restored experienceDb identical');
+  assert(restored.unresolvedDrivers.length === snap.unresolvedDrivers.length, 'unresolved preserved on restore');
+  assert(restored.unresolvedDrivers.every((u) => u.latestLastVisitDate), 'unresolved latestLastVisitDate available');
+  assert(deepEqual(restored.rawRows, snap.rawRows), 'rawRows identical after save/restore');
+}
+
+// ===== Phase 1B: TID既存ドライバーの全項目互換（旧方式との一致） =====
+{
+  const legacyAll = AssignSupportCore.parseExperienceRows(AREA_ROWS, { knownTransportIds: known });
+  const nb = AEC.mergeSnapshotAndEvents(AEC.restoreSnapshotLayer(JSON.parse(JSON.stringify(AEC.buildSnapshotSavePayload(snap).snapshot))), []);
+  ['TID_A', 'TID_B'].forEach((tid) => {
+    assert(deepEqual(nb.byTransportId[tid], legacyAll.byTransportId[tid]), 'all fields identical for ' + tid);
+  });
+}
 
 console.log('area-experience-core tests passed (' + passed + ' assertions)');
