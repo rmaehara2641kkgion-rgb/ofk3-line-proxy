@@ -11,6 +11,8 @@
     experienceLoadError: '',
     experienceSaving: false,
     experienceSnapshot: null,
+    experienceMode: '',
+    inactiveSnapshotThroughDate: '',
     experienceEvents: { routeCaptures: {}, items: {} },
     experienceUpdatedAtRaw: '',
     experienceLastAggregatedDate: '',
@@ -328,7 +330,10 @@
       .then(function (data) {
         var AEC = getAreaExperienceCore();
         var d = data && data.data;
-        if (data.status === 'ok' && d && d.snapshot && AEC) {
+        var mode = d ? d.mode || (d.snapshot ? 'snapshot' : 'legacy_records') : '';
+        state.experienceMode = mode;
+        state.inactiveSnapshotThroughDate = '';
+        if (data.status === 'ok' && d && d.snapshot && mode === 'snapshot' && AEC) {
           var restored = AEC.restoreSnapshotLayer(d.snapshot);
           if (restored.ok) {
             state.experienceSnapshot = restored;
@@ -341,7 +346,8 @@
             state.experienceLoadError = '保存済みスナップショットの復元に失敗: ' + (restored.errors || []).join(' / ');
           }
         } else if (data.status === 'ok' && d && d.records && d.records.length) {
-          // 旧形式（records のみ）: 従来どおり
+          // 旧形式 / Legacy records モード: records のみ（Events とは結合しない）
+          if (d.snapshot && d.snapshot.snapshotThroughDate) state.inactiveSnapshotThroughDate = d.snapshot.snapshotThroughDate;
           var rebuilt = AssignSupportCore.buildExperienceDbFromRecords(d.records, {
             knownTransportIds: getKnownTransportIds(),
           });
@@ -359,6 +365,57 @@
       .catch(function (e) {
         state.experienceLoadError = e.message || 'GAS接続エラー';
         if (cb) cb();
+      });
+  }
+
+  /** GAS が新action（saveSnapshot等）に対応しているか確認（旧GASへ新UIが送って unknown action になるのを防ぐ） */
+  function checkGasCapabilities(requiredAction, cb) {
+    fetch('/area-experience-master?action=capabilities')
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.status === 'ok' && Array.isArray(data.actions) && data.actions.indexOf(requiredAction) >= 0) {
+          cb(null, data);
+          return;
+        }
+        cb(new Error('GASが新形式（' + requiredAction + '）に未対応です。GASを更新・再デプロイしてから登録してください'));
+      })
+      .catch(function (e) {
+        cb(new Error('GAS疎通確認に失敗しました: ' + (e.message || e)));
+      });
+  }
+
+  /** Legacy records として保存（snapshotThroughDate なし・Events と結合しない） */
+  function saveLegacyRecordsToServer(db, cb) {
+    var payload = AssignSupportCore.serializeExperienceForSave(db);
+    if (!payload) {
+      if (cb) cb(new Error('保存データがありません'));
+      return;
+    }
+    state.experienceSaving = true;
+    renderExperienceDashboard();
+    fetch('/area-experience-master?action=save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        state.experienceSaving = false;
+        if (data.status === 'ok') {
+          state.pendingUpload = null;
+          toggleUploadSection(false);
+          if (cb) cb(null, data);
+          return;
+        }
+        if (cb) cb(new Error(data.message || '保存に失敗しました'));
+      })
+      .catch(function (e) {
+        state.experienceSaving = false;
+        if (cb) cb(e);
       });
   }
 
@@ -475,6 +532,14 @@
     var updatedLabel = state.experienceUpdatedAt || s.lastDate || '-';
     var o = overview || {};
     var html =
+      (state.experienceSnapshot
+        ? '<p class="text-xs mb-2"><span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">自動更新モード（Snapshot + Events）</span></p>'
+        : '<div class="text-xs mb-2 p-2 rounded bg-slate-100 border border-slate-300 text-slate-700"><span class="font-medium">Legacy records モード（自動更新なし）</span>' +
+          ' — 自動集計イベントは経験日数に反映されていません' +
+          (state.inactiveSnapshotThroughDate
+            ? '。保存済みスナップショット（〜' + escapeHtml(state.inactiveSnapshotThroughDate) + '）は保持中で、新方式XLSXの再登録で自動更新モードに戻ります'
+            : '') +
+          '</div>') +
       '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">' +
       statTile('最終更新', updatedLabel, 'good') +
       statTile('ドライバーマスタ', (o.masterDriverCount != null ? o.masterDriverCount : '-') + '名') +
@@ -604,6 +669,10 @@
       box.innerHTML = '';
       return;
     }
+    if (snap.legacy) {
+      renderLegacyUploadPreview(box, snap);
+      return;
+    }
     var v = snap.validation || {};
     var rs = snap.resolutionSummary || {};
     var li = function (label, value) {
@@ -717,15 +786,75 @@
     }
   }
 
+  function renderLegacyUploadPreview(box, p) {
+    var st = p.result.stats;
+    box.innerHTML =
+      '<div class="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-300 text-sm">' +
+      '<p class="font-bold text-slate-800">Legacy records 取込プレビュー（まだGASへ保存していません）</p>' +
+      '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-xs text-amber-900">' +
+      '<p class="font-bold">⚠ 自動更新対応スナップショットではありません</p>' +
+      '<ul class="list-disc ml-4 mt-1">' +
+      '<li>importHistory が無いため snapshotThroughDate を決定できません（日付境界は推測しません）</li>' +
+      '<li>従来どおり records としてのみ取り込みます。自動集計イベントとは結合せず、自動更新モードにもなりません</li>' +
+      '<li>登録すると「Legacy records モード」になります。保存済みのスナップショット・イベントは削除されず、新方式XLSXを再登録すると自動更新モードに戻ります</li>' +
+      '<li>TransportID空欄の行は従来どおり取り込まれません（' + p.blankTidRowCount + '行）</li>' +
+      '</ul></div>' +
+      '<ul class="mt-2 space-y-0.5">' +
+      '<li>ファイル：<strong>' + escapeHtml(p.sourceFile) + '</strong></li>' +
+      '<li>行数：<strong>' + p.rawRowCount.toLocaleString() + '</strong>行（取込 ' + st.records.toLocaleString() + '件）</li>' +
+      '<li>登録ドライバー：<strong>' + st.drivers + '</strong>名 / エリア数：<strong>' + st.areas + '</strong></li>' +
+      '<li>最終データ日：<strong>' + escapeHtml(st.lastDate || '-') + '</strong></li>' +
+      '</ul>' +
+      '<button type="button" id="as-exp-confirm-btn" class="mt-3 btn-secondary text-xs px-4 py-2 rounded">Legacy records として登録（自動更新なし）</button>' +
+      '<button type="button" id="as-exp-cancel-btn" class="mt-3 ml-2 btn-secondary text-xs px-4 py-2 rounded">キャンセル</button>' +
+      '</div>';
+    el('as-exp-confirm-btn').addEventListener('click', confirmPendingUpload);
+    el('as-exp-cancel-btn').addEventListener('click', function () {
+      state.pendingUpload = null;
+      renderUploadPreview();
+    });
+  }
+
   function confirmPendingUpload() {
     var snap = state.pendingUpload;
     if (!snap || !snap.ok) return;
+    if (snap.legacy) {
+      var okLegacy = window.confirm(
+        'このファイルは自動更新対応スナップショットではありません。\n' +
+          'Legacy records として登録し、自動集計イベントとは結合しない「Legacy records モード」に切り替えます。\n' +
+          '（保存済みのスナップショット・イベントは削除されません）\n\n登録しますか？'
+      );
+      if (!okLegacy) return;
+      saveLegacyRecordsToServer(snap.result, function (errL) {
+        if (errL) {
+          alert('GAS保存エラー: ' + errL.message);
+          renderExperienceDashboard();
+          return;
+        }
+        loadExperienceFromServer(function () {
+          markSuggestionsStale();
+          renderAll();
+          alert('Legacy records として登録しました（自動更新なし）');
+        });
+      });
+      return;
+    }
     if (snap.warnings && snap.warnings.length) {
       var ok = window.confirm(
         '以下の警告があります。内容を確認のうえ登録しますか？\n\n' + snap.warnings.map(function (w) { return '・' + w; }).join('\n')
       );
       if (!ok) return;
     }
+    checkGasCapabilities('saveSnapshot', function (capErr) {
+      if (capErr) {
+        alert(capErr.message);
+        return;
+      }
+      doSaveSnapshot(snap);
+    });
+  }
+
+  function doSaveSnapshot(snap) {
     saveSnapshotToServer(snap, function (err, res) {
       if (err) {
         alert('GAS保存エラー: ' + err.message + '\n\nRenderの AREA_EXPERIENCE_MASTER_GAS_URL を確認してください');
@@ -1765,6 +1894,28 @@
       sourceFile: file.name || '',
     };
     var finish = function (parsed) {
+      if (!parsed.hasImportHistory) {
+        // Legacy（CSV / importHistory の無いXLSX）: 従来の records としてのみ取込。日付境界は推測しない
+        var legacy = AssignSupportCore.parseExperienceRows(parsed.areaRows, { knownTransportIds: getKnownTransportIds() });
+        if (!legacy.ok) {
+          alert(legacy.error);
+          return;
+        }
+        var tidCol = AssignSupportCore.mapExperienceColumns(
+          (parsed.areaRows[0] || []).map(function (h) {
+            return String(h == null ? '' : h).trim();
+          })
+        ).transportId;
+        var blank = 0;
+        for (var r = 1; r < parsed.areaRows.length; r++) {
+          var row = parsed.areaRows[r];
+          if (row && row.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }) && !String(row[tidCol] || '').trim()) blank++;
+        }
+        state.pendingUpload = { legacy: true, ok: true, sourceFile: file.name || '', result: legacy, blankTidRowCount: blank, rawRowCount: parsed.areaRows.length - 1 };
+        toggleUploadSection(true);
+        renderUploadPreview();
+        return;
+      }
       state.pendingUpload = AEC.buildSnapshotLayer(parsed, masterOptions);
       if (!state.pendingUpload.header) state.pendingUpload.sourceFile = file.name || '';
       toggleUploadSection(true);

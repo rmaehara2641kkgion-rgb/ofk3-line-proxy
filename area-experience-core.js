@@ -123,8 +123,9 @@
       var key = normalizeDriverNameForMatch(nameForMatch);
       if (!key) return;
       if (!tid) {
-        if (!noTidByKey[key]) noTidByKey[key] = [];
-        if (noTidByKey[key].indexOf(masterName) < 0) noTidByKey[key].push(masterName);
+        if (!noTidByKey[key]) noTidByKey[key] = { masterNames: [], methods: [] };
+        if (noTidByKey[key].masterNames.indexOf(masterName) < 0) noTidByKey[key].masterNames.push(masterName);
+        if (noTidByKey[key].methods.indexOf(method) < 0) noTidByKey[key].methods.push(method);
         return;
       }
       if (!byKey[key]) byKey[key] = {};
@@ -169,47 +170,52 @@
     return { byKey: byKey, noTidByKey: noTidByKey, excludedAliases: excludedAliases };
   }
 
-  function pickResolutionMethod(methods) {
-    for (var i = 0; i < RESOLUTION_METHOD_ORDER.length; i++) {
-      if (methods.indexOf(RESOLUTION_METHOD_ORDER[i]) >= 0) return RESOLUTION_METHOD_ORDER[i];
-    }
-    return methods[0] || '';
-  }
-
-  /** 1氏名 → { transportId, resolutionMethod } または { reason, candidates }。一意一致時のみ解決。 */
+  /**
+   * 1氏名 → { transportId, resolutionMethod } または { reason, candidates }。
+   * 優先順位: exact_name → master_japanese_name → alias → unresolved。
+   * 上位の段で一意なら確定（下位の段は見ない）。上位の段で複数候補、または上位の段に
+   * TransportID未登録のマスタ行がある場合は、下位（alias等）へ進まず未解決にする。
+   */
   function resolveTransportIdByExactName(name, nameIndex) {
     var key = normalizeDriverNameForMatch(name);
     if (!key) return { transportId: '', resolutionMethod: 'unresolved', reason: 'empty_name', candidates: [] };
-    var hit = nameIndex.byKey[key];
-    var tids = hit ? Object.keys(hit) : [];
+    var hit = nameIndex.byKey[key] || {};
+    var noTid = nameIndex.noTidByKey[key] || null;
+    var allTids = Object.keys(hit);
     var toCandidate = function (t) {
       return { transportId: t, masterNames: hit[t].masterNames, methods: hit[t].methods };
     };
-    if (tids.length === 1) {
-      return {
-        transportId: tids[0],
-        resolutionMethod: pickResolutionMethod(hit[tids[0]].methods),
-        reason: '',
-        candidates: [toCandidate(tids[0])],
-      };
-    }
-    if (tids.length > 1) {
-      return {
-        transportId: '',
-        resolutionMethod: 'unresolved',
-        reason: 'multiple_candidates',
-        candidates: tids.map(toCandidate),
-      };
-    }
-    if (nameIndex.noTidByKey[key]) {
-      return {
-        transportId: '',
-        resolutionMethod: 'unresolved',
-        reason: 'master_has_no_transport_id',
-        candidates: nameIndex.noTidByKey[key].map(function (n) {
-          return { transportId: '', masterNames: [n], methods: [] };
-        }),
-      };
+    for (var i = 0; i < RESOLUTION_METHOD_ORDER.length; i++) {
+      var method = RESOLUTION_METHOD_ORDER[i];
+      var tierTids = allTids.filter(function (t) {
+        return hit[t].methods.indexOf(method) >= 0;
+      });
+      if (tierTids.length === 1) {
+        return {
+          transportId: tierTids[0],
+          resolutionMethod: method,
+          reason: '',
+          candidates: [toCandidate(tierTids[0])],
+          lowerTierCandidates: allTids
+            .filter(function (t) {
+              return t !== tierTids[0];
+            })
+            .map(toCandidate),
+        };
+      }
+      if (tierTids.length > 1) {
+        return { transportId: '', resolutionMethod: 'unresolved', reason: 'multiple_candidates', candidates: tierTids.map(toCandidate) };
+      }
+      if (noTid && noTid.methods.indexOf(method) >= 0) {
+        return {
+          transportId: '',
+          resolutionMethod: 'unresolved',
+          reason: 'master_has_no_transport_id',
+          candidates: noTid.masterNames.map(function (n) {
+            return { transportId: '', masterNames: [n], methods: [method] };
+          }),
+        };
+      }
     }
     return { transportId: '', resolutionMethod: 'unresolved', reason: 'not_in_master', candidates: [] };
   }

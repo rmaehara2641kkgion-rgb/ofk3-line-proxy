@@ -318,10 +318,29 @@ assert(AEC.toIsoDate('2026/9/5') === '2026-09-05' && AEC.toIsoDate('2026-02-30')
   assert(AEC.resolveTransportIdByExactName('次郎 佐藤', idx2).reason === 'master_has_no_transport_id', 'jp name without TID → reason');
   const excludedReasons = idx2.excludedAliases.map((x) => x.reason).sort().join(',');
   assert(excludedReasons === 'canonical_has_no_transport_id,canonical_not_in_master,name_reversal_alias', 'excluded aliases reported');
-  // 同じaliasが別TIDへ（alias と他人の正式名が衝突）→ 自動解決しない
+  // 優先順位: exact_name > master_japanese_name > alias（alias が正式名より優先されない）
   const idx3 = AEC.buildDriverNameIndex({ 'dup alias': 'T_OTHER', 'hanako suzuki': 'T_HANA' }, {}, { 'dup alias': 'hanako suzuki' });
   const r4 = AEC.resolveTransportIdByExactName('dup alias', idx3);
-  assert(r4.transportId === '' && r4.reason === 'multiple_candidates', 'alias colliding with other TID → unresolved');
+  assert(r4.transportId === 'T_OTHER' && r4.resolutionMethod === 'exact_name', 'exact_name wins over conflicting alias');
+  assert(r4.lowerTierCandidates.length === 1 && r4.lowerTierCandidates[0].transportId === 'T_HANA', 'lower-tier conflict recorded');
+  const idxJp = AEC.buildDriverNameIndex({ 'a b': 'T_JP', 'c d': 'T_AL' }, { 'a b': '花子 鈴木' }, { '花子 鈴木': 'c d' });
+  const r5 = AEC.resolveTransportIdByExactName('花子 鈴木', idxJp);
+  assert(r5.transportId === 'T_JP' && r5.resolutionMethod === 'master_japanese_name', 'japanese name wins over alias');
+  // 同じ alias 文字列（正規化後）が別々のTIDへ → 自動解決しない
+  const idxAA = AEC.buildDriverNameIndex({ x1: 'T1', x2: 'T2' }, {}, { 'old name': 'x1', 'OLD  NAME': 'x2' });
+  const r6 = AEC.resolveTransportIdByExactName('old name', idxAA);
+  assert(r6.transportId === '' && r6.reason === 'multiple_candidates', 'same alias to two TIDs → unresolved');
+  // 正式名がマスタにあるがTID未登録 → alias へフォールバックしない
+  const idxNo = AEC.buildDriverNameIndex({ 'same name': '', other: 'T_O' }, {}, { 'same name': 'other' });
+  const r7 = AEC.resolveTransportIdByExactName('same name', idxNo);
+  assert(r7.transportId === '' && r7.reason === 'master_has_no_transport_id', 'no fallback to alias when exact master row lacks TID');
+  // 氏名修正・統合済み（明示alias、旧氏名 → 新正式名）は一意なら解決
+  const idxRen = AEC.buildDriverNameIndex({ '新姓 花子': 'T_REN' }, {}, { '旧姓 花子': '新姓 花子' });
+  const r8 = AEC.resolveTransportIdByExactName('旧姓 花子', idxRen);
+  assert(r8.transportId === 'T_REN' && r8.resolutionMethod === 'alias', 'renamed driver resolved via explicit alias');
+  // 姓名入替のみのaliasは除外され、入替名では解決しない
+  const idxRev = AEC.buildDriverNameIndex({ '花子 新姓': 'T_R' }, {}, { '新姓 花子': '花子 新姓' });
+  assert(AEC.resolveTransportIdByExactName('新姓 花子', idxRev).transportId === '', 'reversal-only alias never resolves');
   // スナップショット経由で method が残る
   const aliasSnap = snapshotFrom([HEADER, ['', 'たろう やまだ', '原', 4, '2026-09-20', 1, 0, 0, 1, 1, 'low']], HISTORY_W39, master, { driverJapaneseNames: jp, driverNameAliases: aliases });
   const ar = aliasSnap.resolvedDrivers[0];

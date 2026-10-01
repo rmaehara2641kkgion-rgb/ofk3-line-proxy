@@ -24,10 +24,11 @@ function assert(condition, message) {
 
 // ---- GAS モック ----
 function createGasRuntime(initialContent) {
-  const state = { content: initialContent == null ? null : initialContent, lockAcquired: 0, lockReleased: 0 };
+  const state = { content: initialContent == null ? null : initialContent, lockAcquired: 0, lockReleased: 0, otherFiles: {}, setContentCalls: 0 };
   const file = {
     getBlob: () => ({ getDataAsString: () => state.content || '' }),
     setContent: (c) => {
+      state.setContentCalls++;
       state.content = c;
     },
   };
@@ -40,13 +41,18 @@ function createGasRuntime(initialContent) {
     PropertiesService: { getScriptProperties: () => ({ getProperty: () => 'FOLDER' }) },
     DriveApp: {
       getFolderById: () => ({
-        getFilesByName: () => {
+        getFilesByName: (name) => {
           let given = false;
-          return { hasNext: () => state.content !== null && !given, next: () => ((given = true), file) };
+          const exists = name === 'areaExperienceMaster.json' ? state.content !== null : name in state.otherFiles;
+          return { hasNext: () => exists && !given, next: () => ((given = true), file) };
         },
-        createFile: (_n, c) => {
-          state.content = c;
-          return file;
+        createFile: (name, c) => {
+          if (name === 'areaExperienceMaster.json') {
+            state.content = c;
+            return file;
+          }
+          state.otherFiles[name] = c;
+          return { getName: () => name };
         },
       }),
     },
@@ -237,7 +243,7 @@ async function withServer(env, fn) {
     proc.stderr.on('data', (c) => (out += c));
   });
   try {
-    await fn('http://127.0.0.1:' + PORT);
+    await fn('http://127.0.0.1:' + PORT, () => out);
   } finally {
     proc.kill('SIGTERM');
     await new Promise((r) => setTimeout(r, 400));
@@ -245,7 +251,7 @@ async function withServer(env, fn) {
 }
 
 await withMockGas(async (gasUrl, gasRt) => {
-  await withServer({ AREA_EXPERIENCE_MASTER_GAS_URL: gasUrl }, async (base) => {
+  await withServer({ AREA_EXPERIENCE_MASTER_GAS_URL: gasUrl }, async (base, serverLog) => {
     const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json().then((j) => ({ status: r.status, json: j })));
     const save = await post('/area-experience-master?action=saveSnapshot', payload);
     assert(save.json.status === 'ok' && save.json.rawRowCount === 4, 'API saveSnapshot via Render proxy');
@@ -264,7 +270,97 @@ await withMockGas(async (gasUrl, gasRt) => {
     assert(stored.events.routeCaptures['2026-09-30|DSX10'].areas[0] === '東油山', 'area extracted by existing extractor on server');
     const empty = await post('/area-experience-events', { routeCaptures: [] });
     assert(empty.status === 400, 'API rejects empty append');
+
+    // 実データ規模（6,510行）の saveSnapshot payload が Render(express.json 10mb) → GAS を通る
+    const bigRows = [HEADER];
+    for (let i = 0; i < 6510; i++) {
+      const tid = i % 2 ? 'BIGTID' + (i % 35) : '';
+      bigRows.push([tid, '個人名' + (i % 96), '町' + (i % 360), (i % 30) + 1, '2026-09-' + String((i % 26) + 1).padStart(2, '0'), 3, 1, 0, 40, 50, 'high']);
+    }
+    const bigSnap = buildSnapshot(bigRows, HISTORY, {});
+    const bigPayload = AEC.buildSnapshotSavePayload(bigSnap, { updatedAt: '2026-10-01' });
+    const bigBytes = Buffer.byteLength(JSON.stringify(bigPayload));
+    assert(bigBytes > 1024 * 1024, 'big payload is realistic (>1MB): ' + bigBytes);
+    const bigSave = await post('/area-experience-master?action=saveSnapshot', bigPayload);
+    assert(bigSave.status === 200 && bigSave.json.status === 'ok' && bigSave.json.rawRowCount === 6510, 'API accepts 6,510-row snapshot');
+    assert(gasRt.stored().snapshot.rawRows.length === 6510, 'GAS stored all rawRows');
+    const capRes = await fetch(base + '/area-experience-master?action=capabilities').then((r) => r.json());
+    assert(capRes.status === 'ok' && capRes.actions.indexOf('appendEvents') >= 0 && capRes.currentBytes > 0, 'capabilities via Render');
+    // ログ監査: 氏名・TransportID・rawRows を出力しない（集計値のみ）
+    await new Promise((r) => setTimeout(r, 200));
+    const log = serverLog();
+    ['個人名', 'BIGTID', '一郎 試験', 'TID_A', 'driver a', '東油山'].forEach((needle) => {
+      assert(log.indexOf(needle) < 0, 'server log does not contain ' + needle);
+    });
+    assert(log.indexOf('area-experience-events POST: captures') >= 0, 'server logs counts only');
   });
 });
+
+// ===== 6. 旧形式（schemaVersion 1 相当）→ schemaVersion 2 移行 =====
+{
+  const legacyRecords = [{ transportId: 'TID_A', driverName: 'driver a', area: '東油山', experienceDays: 27, lastVisitDate: '2026-09-20' }];
+  const v1 = JSON.stringify({ updatedAt: '2026-09-21', records: legacyRecords, stats: { drivers: 1 } });
+  const g = createGasRuntime(v1);
+  const got = g.get('get').data;
+  assert(got.records.length === 1 && got.mode === 'legacy_records', 'v1 GET returns records, mode legacy_records');
+  const cap = g.get('capabilities');
+  assert(cap.schemaVersion === 2 && cap.storedSchemaVersion === 1 && cap.actions.indexOf('saveSnapshot') >= 0 && cap.mode === 'legacy_records', 'capabilities on v1 data');
+  // appendEvents on v1 data does not touch records
+  g.post('appendEvents', { routeCaptures: [normCap('2026-09-27', 'DSX10', 'TID_A')] });
+  assert(JSON.stringify(g.stored().records) === JSON.stringify(legacyRecords), 'appendEvents keeps v1 records');
+  assert(g.get('get').data.mode === 'legacy_records', 'events alone do not promote to snapshot mode');
+  // 旧 save on v1 data: records replaced by explicit save only
+  g.post('save', { updatedAt: '2026-09-22', records: legacyRecords, stats: { drivers: 1 } });
+  assert(g.stored().records.length === 1 && Object.keys(g.stored().events.routeCaptures).length === 1, 'legacy save keeps events');
+  // saveSnapshot: 旧 records を別ファイルへ退避してから v2 化
+  const r = g.post('saveSnapshot', payload);
+  assert(r.status === 'ok' && r.legacyBackupFile.indexOf('areaExperienceMaster.legacy-backup-') === 0, 'legacy backup file created on first migration');
+  const backup = JSON.parse(g.state.otherFiles[r.legacyBackupFile]);
+  assert(JSON.stringify(backup.records) === JSON.stringify(legacyRecords), 'backup holds previous records verbatim');
+  const st = g.stored();
+  assert(st.schemaVersion === 2 && st.mode === 'snapshot' && st.legacyBackupFile === r.legacyBackupFile, 'migrated to v2 snapshot mode');
+  assert(Object.keys(st.events.routeCaptures).length === 1, 'events captured before migration preserved');
+  // 2回目の saveSnapshot では再バックアップしない
+  const r2 = g.post('saveSnapshot', payload);
+  assert(r2.legacyBackupFile === '' && Object.keys(g.state.otherFiles).length === 1, 'no second backup');
+  // Legacy CSV 登録 → legacy_records モード（snapshot/events は保持、昇格しない）
+  g.post('save', { updatedAt: '2026-10-02', records: legacyRecords, stats: { drivers: 1 } });
+  const afterLegacy = g.get('get').data;
+  assert(afterLegacy.mode === 'legacy_records' && afterLegacy.snapshot && Object.keys(afterLegacy.events.routeCaptures).length === 1, 'legacy save → legacy mode, snapshot/events kept');
+  // 新方式XLSX再登録で自動更新モードへ戻る
+  g.post('saveSnapshot', payload);
+  assert(g.get('get').data.mode === 'snapshot', 're-register snapshot → snapshot mode');
+}
+
+// ===== 6b. ロールバック互換: 旧クライアント（records のみ読む）が v2 データで従来表示できる =====
+{
+  const ASC = require('../assign-support-core.js');
+  const g = createGasRuntime(null);
+  g.post('saveSnapshot', payload);
+  g.post('appendEvents', { routeCaptures: [normCap('2026-09-27', 'DSX10', 'TID_A')] });
+  const d = g.get('get').data;
+  // 旧 assign-support.js loadExperienceFromServer と同じ処理
+  const oldClientDb = ASC.buildExperienceDbFromRecords(d.records, {});
+  const snapOnly = AEC.mergeSnapshotAndEvents(AEC.restoreSnapshotLayer(d.snapshot), []);
+  assert(JSON.stringify(oldClientDb.byTransportId) === JSON.stringify(snapOnly.byTransportId), 'old client reads v2 records = snapshot values (events not applied)');
+  // 旧クライアントの save（旧 payload 形式）でも snapshot/events は消えない
+  g.post('save', ASC.serializeExperienceForSave(oldClientDb));
+  const after = g.stored();
+  assert(after.snapshot && Object.keys(after.events.routeCaptures).length === 1 && after.mode === 'legacy_records', 'old client save keeps snapshot/events (legacy mode)');
+}
+
+// ===== 7. サイズ上限: 超過時は書き込まず既存内容を保持 =====
+{
+  const g = createGasRuntime(null);
+  g.post('saveSnapshot', payload);
+  const before = g.state.content;
+  const calls = g.state.setContentCalls;
+  const huge = JSON.parse(JSON.stringify(payload));
+  huge.snapshot.rawRows = Array.from({ length: 200000 }, (_, i) => ['T' + i, '名前' + i, 'エリア' + i, 1, '2026-09-26', 1, 0, 0, 1, 1, 'high']);
+  const res = g.post('saveSnapshot', huge);
+  assert(res.status === 'error' && res.message.indexOf('too large') >= 0, 'oversized write rejected');
+  assert(g.state.content === before && g.state.setContentCalls === calls, 'existing content untouched on rejection');
+  assert(res.message.indexOf('名前') < 0, 'error message has no personal data');
+}
 
 console.log('area-experience-gas-api tests passed (' + passed + ' assertions)');

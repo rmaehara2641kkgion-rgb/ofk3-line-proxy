@@ -1287,7 +1287,15 @@ app.post('/area-experience-master', async (req, res) => {
     }
     var action = req.query.action || 'save';
     var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
-    console.log('area-experience-master POST:', url, 'records:', req.body && req.body.records ? req.body.records.length : 0);
+    // 個人データ（氏名・TransportID・rawRows）はログに出さず、集計値のみ出力する
+    var snapLog = req.body && req.body.snapshot ? req.body.snapshot : null;
+    var summaryLog = snapLog && snapLog.resolutionSummary ? snapLog.resolutionSummary : {};
+    console.log('area-experience-master POST:', 'action=' + action,
+      'records:', req.body && req.body.records ? req.body.records.length : 0,
+      snapLog ? 'rawRows: ' + (Array.isArray(snapLog.rawRows) ? snapLog.rawRows.length : 0) +
+        ' resolved: ' + (summaryLog.resolvedCount || 0) +
+        ' unresolved: ' + (summaryLog.unresolvedCount || 0) +
+        ' snapshotThroughDate: ' + (snapLog.snapshotThroughDate || '') : '');
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
       maxRedirects: 5,
