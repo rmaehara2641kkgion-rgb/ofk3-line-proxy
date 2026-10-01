@@ -1956,6 +1956,7 @@
    *   leaveStop(stop, cb({ok, detail}))
    *   returnToList(cb({ok, detail}))
    *   beginRoute({routeCode, noteProgress(kind)})   optional: sub-step progress of this Route
+   *   endRoute({routeCode, status, reasonCode})     optional: cancel work left from this Route
    * opts.pageContext(): optional page state recorded with a Route abort.
    * One Route failing marks that Route route_aborted and continues when the list is back.
    */
@@ -2165,6 +2166,12 @@
         if (watchdog != null) cancel(watchdog);
         watchdog = null;
         setPhase('returnToList');
+        // Bag v3.12: the driver stops everything still running for this Route before the list return.
+        if (typeof driver.endRoute === 'function') {
+          try {
+            driver.endRoute({ routeCode: route.routeCode, status: result.status, reasonCode: result.reasonCode || '' });
+          } catch (e) { log('[Bag] endRoute failed: ' + (e && e.message ? e.message : String(e))); }
+        }
         var backStarted = now();
         emit({ state: 'Route一覧へ復帰中' });
         var attempts = 0;
