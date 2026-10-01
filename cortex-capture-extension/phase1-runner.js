@@ -1185,7 +1185,7 @@
   var BAG_PACKAGE_SCROLL_MAX_STEPS = 12;
   var BAG_ROUTE_OPEN_ATTEMPTS = 3;
   var BAG_STOP_APPEAR_TIMEOUT_MS = 6000;
-  var BAG_BUILD = 'Bag v3.11';
+  var BAG_BUILD = 'Bag v3.12';
   var BAG_STOP_CLOSE_TIMEOUT_MS = 5000;
   var BAG_STOP_EXPAND_EXTRA_MS = 3000;
   var BAG_STOP_OPEN_TR_WAIT_MS = 3000;
@@ -1196,6 +1196,8 @@
   var BAG_ROUTE_IDLE_MS = 90000;
   var BAG_ROUTE_HARD_MAX_MS = 900000;
   var BAG_ROUTE_RETRY_WAIT_MS = 15000;
+  // Bag v3.12: a visible tab normally gets its two frames within ~35 ms; the timer only covers a stalled rAF.
+  var BAG_LAYOUT_FALLBACK_MS = 1000;
   var bagRun = null;
   var bagTimer = 0;
   var bagSnapshot = null;
@@ -1210,10 +1212,95 @@
     return !!(bagRun && bagRun.id === runId && !bagRun.ended && !bagRun.stopRequested);
   }
 
+  // Bag v3.12: every Route (and the return to the list after it) runs under one operation. Timers,
+  // layout waits and CDP requests started under an operation that has been cancelled (Route ended /
+  // aborted, phase ended) never run their continuation, so a stale step cannot click or scroll
+  // while a later Route is being processed.
+  var bagRouteOp = null;
+  var bagRouteOpSeq = 0;
+
+  function bagOpAlive(op) {
+    return !op || !op.cancellationRequested;
+  }
+
+  function bagOpEnter(op) {
+    if (op) op.inflight += 1;
+  }
+
+  function bagOpLeave(op, ran) {
+    if (!op) return;
+    op.inflight = Math.max(0, op.inflight - 1);
+    if (!ran) op.staleCallbacksSkipped += 1;
+    if (op.cancellationRequested && !op.cancellationCompleted && op.inflight === 0) {
+      op.cancellationCompleted = true;
+      op.cancellationCompletedAt = Date.now() - op.startedAt;
+    }
+  }
+
+  function bagOpDom(op, name) {
+    if (op) op.lastSuccessfulDomOperation = { name: name, at: Date.now() - op.startedAt };
+  }
+
+  function bagCancelRouteOp(reason) {
+    var op = bagRouteOp;
+    if (op && !op.cancellationRequested) {
+      op.cancellationRequested = true;
+      op.cancellationRequestedAt = Date.now() - op.startedAt;
+      op.cancellationReason = reason || '';
+      if (op.inflight === 0) {
+        op.cancellationCompleted = true;
+        op.cancellationCompletedAt = op.cancellationRequestedAt;
+      }
+    }
+    return op;
+  }
+
+  function bagStartRouteOp(routeCode, kind) {
+    var prev = bagCancelRouteOp(kind === 'route' ? 'next_route' : 'route_end');
+    var op = {
+      id: ++bagRouteOpSeq, kind: kind, routeCode: routeCode, startedAt: Date.now(), startedAtIso: new Date().toISOString(),
+      timesAreMsFromStart: true, subPhase: '', lastSuccessfulDomOperation: null, inflight: 0, staleCallbacksSkipped: 0,
+      maxTimerLagMs: 0, layoutVia: {}, cancellationRequested: false, cancellationRequestedAt: null, cancellationReason: '',
+      cancellationCompleted: false, cancellationCompletedAt: null,
+      previousRouteOperationStillAlive: !!(prev && prev.inflight > 0), previousRouteOperationInflight: prev ? prev.inflight : 0,
+      previousRouteOperation: prev ? prev.routeCode + '#' + prev.id : null
+    };
+    if (kind === 'route') {
+      op.routeCardFoundAt = null;
+      op.routeClickAttemptAt = [];
+      op.routeClickAttemptCount = 0;
+      op.routeClickAttempts = [];
+      op.routeDetailDetectedAt = null;
+      op.routeRetryCount = 0;
+    }
+    bagRouteOp = op;
+    if (bagRun) {
+      bagRun.routeOperations = bagRun.routeOperations || [];
+      if (bagRun.routeOperations.length < 400) bagRun.routeOperations.push(op);
+    }
+    return op;
+  }
+
+  function bagOpSnapshot(op) {
+    if (!op) return null;
+    var out = {};
+    Object.keys(op).forEach(function (k) { out[k] = op[k]; });
+    out.layoutVia = Object.assign({}, op.layoutVia);
+    out.routeClickAttempts = op.routeClickAttempts ? op.routeClickAttempts.slice() : undefined;
+    out.routeClickAttemptAt = op.routeClickAttemptAt ? op.routeClickAttemptAt.slice() : undefined;
+    return out;
+  }
+
   // An exception inside a Bag timer ends only the current Route (never the tour or the page).
   function bagLater(fn, ms) {
+    var op = bagRouteOp;
+    var due = Date.now() + (ms || 0);
+    bagOpEnter(op);
     bagTimer = setTimeout(function () {
       bagTimer = 0;
+      if (op) op.maxTimerLagMs = Math.max(op.maxTimerLagMs, Date.now() - due);
+      if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }
+      bagOpLeave(op, true);
       try {
         fn();
       } catch (e) {
@@ -1235,12 +1322,33 @@
     }
   }
 
+  // Two animation frames after a scroll, so a virtualized list has re-rendered. Chrome runs no
+  // requestAnimationFrame callback in a hidden tab (and may stall it in an occluded window): the
+  // v3.11 click then never happened and the Route waited for the watchdog. Bag v3.12: hidden ->
+  // timer only; visible -> rAF as before, with a timer fallback. fn runs at most once.
   function afterBagLayout(fn) {
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(function () { requestAnimationFrame(fn); });
-    } else {
-      bagLater(fn, 50);
+    var op = bagRouteOp;
+    var settled = false;
+    var hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    bagOpEnter(op);
+    function run(via) {
+      if (settled) return;
+      settled = true;
+      if (op) op.layoutVia[via] = (op.layoutVia[via] || 0) + 1;
+      if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }
+      bagOpLeave(op, true);
+      try {
+        fn();
+      } catch (e) {
+        if (bagEngine && bagActive()) bagEngine.failRoute('exception: ' + (e && e.message ? e.message : String(e)));
+      }
     }
+    if (typeof requestAnimationFrame === 'function' && !hidden) {
+      requestAnimationFrame(function () { requestAnimationFrame(function () { run('raf'); }); });
+    }
+    setTimeout(function () {
+      run(hidden ? 'timer_hidden' : (typeof requestAnimationFrame === 'function' ? 'timer_fallback' : 'timer'));
+    }, hidden || typeof requestAnimationFrame !== 'function' ? 50 : BAG_LAYOUT_FALLBACK_MS);
   }
 
   function hrefNow() {
@@ -1502,6 +1610,7 @@
   // preferLater (v3.7 retry): labels clicked by an earlier attempt are tried last, so a different safe
   // point is used when one exists; the same point is still allowed when it is the only safe one.
   function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater) {
+    var op = bagRouteOp;
     var t = getTarget();
     if (!t) { done({ ok: false, detail: 'Stop行ボタンが見つかりません' }); return; }
     try { t.button.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e1) {}
@@ -1546,9 +1655,13 @@
         return;
       }
       if (diag) diag.clicked = { x: Math.round(chosen.x), y: Math.round(chosen.y), label: chosen.label };
+      bagOpEnter(op);
       requestCdpClick(chosen, function (res) {
         setPanelClickable(true);
-        if (!bagIsCurrent(runId)) return;
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
+        if (res && res.ok) bagOpDom(op, 'cdp_click');
         done(res && res.ok ? { ok: true, label: chosen.label } : { ok: false, detail: (res && (res.message || res.error)) || 'CDP' });
       });
     });
@@ -1942,6 +2055,7 @@
   // resolve() re-finds the element after layout (virtualized lists re-render on scroll).
   // diag (optional): filled with the hit-test evidence; never changes the decision.
   function safeCdpClick(resolve, runId, done, diag) {
+    var op = bagRouteOp;
     var first = resolve();
     if (!first || !first.el) { done({ ok: false, detail: 'element lost' }); return; }
     try { first.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e1) {}
@@ -1969,9 +2083,13 @@
         done({ ok: false, covered: true, detail: 'covered by ' + describeEl(lastHit) });
         return;
       }
+      bagOpEnter(op);
       requestCdpClick(point, function (res) {
         setPanelClickable(true);
-        if (!bagIsCurrent(runId)) return;
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
+        if (res && res.ok) bagOpDom(op, 'cdp_click');
         done(res && res.ok ? { ok: true } : { ok: false, dispatched: true, detail: (res && (res.message || res.error)) || 'CDP' });
       });
     });
@@ -2248,17 +2366,21 @@
 
   // Same search order as the tour: exact card, then CDP wheel up 12 / down 30.
   function findBagRouteCard(route, runId, done) {
+    var op = bagRouteOp;
     var direction = 'up';
     var attempts = 0;
     function look() {
-      if (!bagIsCurrent(runId)) return;
+      if (!bagIsCurrent(runId) || !bagOpAlive(op)) return;
       var card = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
       if (card) { done(card); return; }
       attempts += 1;
       if (direction === 'up' && attempts > 12) { direction = 'down'; attempts = 1; }
       else if (direction === 'down' && attempts > 30) { done(null); return; }
+      bagOpEnter(op);
       requestCdpWheel(routeViewportPoint(), direction === 'up' ? -720 : 520, function (res) {
-        if (!bagIsCurrent(runId)) return;
+        var alive = bagOpAlive(op);
+        bagOpLeave(op, alive);
+        if (!bagIsCurrent(runId) || !alive) return;
         if (!res || !res.ok) { done(null); return; }
         bagLater(look, 220);
       });
@@ -2316,16 +2438,29 @@
     var driver = {
       beginRoute: function (api) {
         ctx.routeProgress = api && typeof api.noteProgress === 'function' ? api.noteProgress : null;
+        bagStartRouteOp(api && api.routeCode, 'route');
+      },
+
+      // Bag v3.12: the Route ended (done or aborted). Its operation is cancelled before the return to
+      // the list, which runs under its own operation.
+      endRoute: function (info) {
+        var ended = bagCancelRouteOp((info && (info.reasonCode || info.status)) || 'route_end');
+        if (ended) ended.endStatus = info ? info.status + (info.reasonCode ? '(' + info.reasonCode + ')' : '') : '';
+        bagStartRouteOp((info && info.routeCode) + ' returnToList', 'return');
       },
 
       // Up to BAG_ROUTE_OPEN_ATTEMPTS tries: close new dialogs, wait for the list, re-find the
       // card, scrollIntoView + hit test (inside safeCdpClick). Still covered -> UI blocked.
       openRoute: function (route, cb) {
         var note = routeNote();
+        var op = bagRouteOp;
+        function sub(name) { if (op) op.subPhase = name; }
+        function rel() { return op ? Date.now() - op.startedAt : null; }
         ctx.routeNoStopLabels = false;
         ctx.stopMissLogged = false;
         if (ctx.currentPage) {
           ctx.routeHref = hrefNow();
+          sub('wait_stop_labels');
           afterRouteOpened(route, 'current page (no navigation)', cb);
           return;
         }
@@ -2336,10 +2471,14 @@
         function tryOpen() {
           if (!bagIsCurrent(runId)) return;
           attempt += 1;
+          sub('close_dialogs');
           closeNewDialogs(ctx.baseDialogs, runId, function () {
+            sub('wait_route_list');
             waitBag(function () { return routeListShown(ctx); }, 2000, runId, function () {
+              sub('find_route_card');
               findBagRouteCard(route, runId, function (card) {
                 if (!card) { cb({ ok: false, code: 'route_card_not_found', detail: 'Route一覧にRoute cardが見つかりません' }); return; }
+                if (op) { op.routeCardFoundAt = rel(); bagOpDom(op, 'route_card_found'); }
                 note('route_card_found');
                 var beforeDetails = store.detailsByRouteId[route.routeId] || null;
                 ctx.listHistoryLen = historyLength();
@@ -2352,10 +2491,25 @@
                   }, {})
                 };
                 routeClick.clicks.push(clickRec);
+                var clickTry = null;
+                if (op) {
+                  clickTry = { attempt: attempt, at: rel(), visibilityState: document.visibilityState || null,
+                    hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null, result: 'pending' };
+                  op.routeClickAttemptCount += 1;
+                  op.routeClickAttemptAt.push(clickTry.at);
+                  op.routeClickAttempts.push(clickTry);
+                }
+                clickRec.visibilityState = document.visibilityState || null;
+                sub('route_click');
                 safeCdpClick(function () {
                   var c = findRouteCardByRouteId(route.routeId) || findVisibleRouteByCode(route);
                   return c ? { el: findInnerClickTarget(c, route) || c, container: c } : null;
                 }, runId, function (res) {
+                  if (clickTry) {
+                    clickTry.result = res.ok ? 'clicked' : (res.covered ? 'covered' : 'failed');
+                    clickTry.doneAt = rel();
+                    clickTry.visibilityStateAfter = document.visibilityState || null;
+                  }
                   if (!res.ok) {
                     lastDetail = 'Route click: ' + res.detail;
                     bagLog('[Bag] ' + route.routeCode + ' ' + (res.covered ? 'Route一覧が覆われています' : 'Route click失敗') +
@@ -2366,6 +2520,7 @@
                     return;
                   }
                   note('route_click');
+                  sub('wait_route_detail');
                   var basis = '';
                   var detailsSeen = false;
                   waitBag(function () {
@@ -2383,8 +2538,10 @@
                       if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId)) {
                         routeRetried = true;
                         routeClick.retries = 1;
+                        if (op) op.routeRetryCount += 1;
                         if (bagEngine) bagEngine.extendRoute(BAG_ROUTE_RETRY_WAIT_MS + 2000);
                         note('route_retry');
+                        sub('route_retry');
                         bagLog('[Bag] ' + route.routeCode + ' Route詳細が開かないため1回だけ再クリック');
                         bagLater(tryOpen, 600);
                         return;
@@ -2392,11 +2549,17 @@
                       routeClick.retryBlockedReason = routeRetried ? 'retry済み' :
                         (!routeListShown(ctx) ? 'Route一覧が表示されていない' : 'routeIdでcardを特定できない');
                       pushRouteDiag(routeDomSnapshot(route, { phase: 'route_detail_not_detected', routeClick: routeClick }));
-                      cb({ ok: false, code: 'route_detail_not_detected',
-                        detail: 'Route click後にroute-details/URL変化なし（retry ' + routeClick.retries + '回）' });
+                      // The click was dispatched and the full wait passed without any Route transition:
+                      // with the tab hidden this is reported separately (never for hidden alone).
+                      var hiddenNow = document.visibilityState === 'hidden';
+                      cb({ ok: false, code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected',
+                        detail: 'Route click後にroute-details/URL変化なし（retry ' + routeClick.retries + '回' +
+                          (hiddenNow ? '、タブ非表示' : '') + '）' });
                       return;
                     }
                     if (routeRetried) pushRouteDiag({ phase: 'route_opened_after_retry', routeCode: route.routeCode, routeClick: routeClick });
+                    if (op) { op.routeDetailDetectedAt = rel(); op.routeDetailBasis = basis; bagOpDom(op, 'route_detail'); }
+                    sub('wait_stop_labels');
                     note('route_detail');
                     ctx.routeHref = hrefNow();
                     afterRouteOpened(route, basis, cb);
@@ -3037,6 +3200,8 @@
   function finishBagPhase(aborted) {
     if (!bagRun || bagRun.ended) return;
     if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    bagCancelRouteOp('phase_end');
+    bagRouteOp = null;
     setPanelClickable(true);
     bagRun.aborted = aborted || '';
     bagRun.ended = true;
@@ -3099,6 +3264,8 @@
   function finishUnfinishedTest(aborted) {
     if (!bagRun || bagRun.ended) return;
     if (bagTimer) { clearTimeout(bagTimer); bagTimer = 0; }
+    bagCancelRouteOp('phase_end');
+    bagRouteOp = null;
     setPanelClickable(true);
     bagRun.aborted = aborted || '';
     bagRun.ended = true;
@@ -3227,7 +3394,9 @@
     return {
       visibilityState: document.visibilityState || null,
       hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null,
-      href: hrefNow()
+      href: hrefNow(),
+      // Bag v3.12: where the Route's own operation stood (openRoute subPhase, clicks, stale work)
+      routeOperation: bagOpSnapshot(bagRouteOp)
     };
   }
 
@@ -3373,6 +3542,7 @@
       routeDiagnostics: bagRun.routeDiagnostics || [],
       stopClickDiagnostics: bagRun.stopClickDiagnostics || [],
       stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics || [],
+      routeOperations: (bagRun.routeOperations || []).map(bagOpSnapshot),
       unfinishedBagTest: lastUnfinishedTest,
       targetDiagnostics: targetDiagnostics(),
       stopProcessingDiagnostics: Core.buildStopProcessingDiagnostics(bagRun, store.trDetailsByTrId),

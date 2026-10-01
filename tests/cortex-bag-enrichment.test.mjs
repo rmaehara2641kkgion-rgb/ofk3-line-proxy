@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -699,7 +700,7 @@ v31Suite('phase1-core');
   });
   assert(bag.indexOf("'[text:' + t.length + ']'") >= 0, 'v3.1 long texts are not stored');
   assert(bag.indexOf('routeDiagnostics: bagRun.routeDiagnostics') >= 0, 'v3.1 diagnostics JSON includes route snapshots');
-  assert(bag.indexOf("code: 'route_detail_not_detected'") >= 0 && bag.indexOf("code: 'route_card_not_found'") >= 0,
+  assert(bag.indexOf("code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected'") >= 0 && bag.indexOf("code: 'route_card_not_found'") >= 0,
     'v3.1 runner reports route reason codes');
   assert(bag.indexOf('fetch(') < 0 && bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v3.1 no requests/watchers');
   console.log('ok: v3.1 runner Stop detection + diagnostics');
@@ -960,9 +961,9 @@ v35Suite('phase1-core');
   assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
   assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
     'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
-  assert(bag.indexOf("BAG_BUILD = 'Bag v3.11'") >= 0, 'v3.11 build label');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.12'") >= 0, 'v3.12 build label');
   const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
-  assert(manifest.version === '1.6.16', 'manifest 1.6.16');
+  assert(manifest.version === '1.6.17', 'manifest 1.6.17');
   console.log('ok: v3.5 runner wiring');
 })();
 
@@ -1122,7 +1123,7 @@ ubtSuite('phase1-core');
 (function () {
   const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
-  assert(runner.indexOf("BAG_BUILD = 'Bag v3.11'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.11 + test v1');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.12'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.12 + test v1');
   const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
   const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
   assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
@@ -2403,4 +2404,453 @@ v311Suite('phase1-core');
   assert(e0.length > 1000 && e0 === eng(readSource('cortex-capture-extension', 'cortex-13-priority-core.js')) &&
     e0 === eng(readSource('cortex-capture-extension', 'phase1-core.js')), 'v3.11: engine identical in all three copies');
   console.log('ok: v3.11 runner wiring');
+})();
+
+// ---------------- Bag v3.12: openRoute in a hidden tab, Route-bound cancellation ----------------
+// The runner's own route-operation block (bagRouteOp .. afterBagLayout) runs in a vm against a
+// virtual browser: one clock, Chrome-like timer throttling while hidden (>= 1 s, optional intensive
+// 1-minute alignment), requestAnimationFrame paused while hidden. The driver follows the runner's
+// openRoute order (find card -> scrollIntoView -> afterBagLayout -> CDP click -> wait detail ->
+// one retry) on top of those real primitives, under the real engine.
+function v312LoadOps(env) {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const a = runner.indexOf('  var bagRouteOp = null;');
+  const b = runner.indexOf('  function hrefNow() {');
+  assert(a > 0 && b > a, 'v3.12: route-op block found in the runner');
+  const src = 'var Date = __VDate; var BAG_LAYOUT_FALLBACK_MS = 1000; var bagRun = null; var bagTimer = 0; var bagEngine = null;\n' +
+    'function bagActive() { return !!(bagRun && !bagRun.ended); }\n' + runner.slice(a, b) +
+    '\nthis.ops = { bagStartRouteOp: bagStartRouteOp, bagCancelRouteOp: bagCancelRouteOp, bagLater: bagLater, afterBagLayout: afterBagLayout,' +
+    ' bagOpAlive: bagOpAlive, bagOpEnter: bagOpEnter, bagOpLeave: bagOpLeave, bagOpDom: bagOpDom, bagOpSnapshot: bagOpSnapshot,' +
+    ' current: function () { return bagRouteOp; }, setRun: function (r) { bagRun = r; }, setEngine: function (e) { bagEngine = e; } };';
+  const ctx = vm.createContext(env);
+  vm.runInContext(src, ctx, { filename: 'phase1-runner.js#bag-route-ops' });
+  return ctx.ops;
+}
+
+function v312Browser(o) {
+  o = o || {};
+  let clock = 0;
+  let seq = 0;
+  const q = [];
+  let visible = o.hidden ? false : true;
+  let hiddenSince = o.hidden ? (o.hiddenSince != null ? o.hiddenSince : 0) : null;
+  const raf = [];
+  let frameArmed = false;
+  const stats = { rafRequested: 0, rafRun: 0, maxTimerDelay: 0 };
+  function push(fn, due) { const t = { id: ++seq, due, fn }; q.push(t); return t.id; }
+  // Page timers (content script setTimeout): throttled while hidden, like Chrome.
+  function throttled(fn, ms) {
+    let due = clock + Math.max(0, ms || 0);
+    if (!visible) {
+      due = Math.max(due, clock + 1000);
+      if (o.intensive && clock - hiddenSince >= 300000) due = Math.ceil(due / 60000) * 60000;
+    }
+    stats.maxTimerDelay = Math.max(stats.maxTimerDelay, due - clock - (ms || 0));
+    return push(fn, due);
+  }
+  // Network / CDP replies / user actions: not page timers, never throttled.
+  function raw(fn, ms) { return push(fn, clock + Math.max(0, ms || 0)); }
+  function cancel(id) { const k = q.findIndex((t) => t.id === id); if (k >= 0) q.splice(k, 1); }
+  function armFrame() {
+    if (frameArmed || !visible || o.rafStalled || !raf.length) return;
+    frameArmed = true;
+    raw(frame, 16);
+  }
+  function frame() {
+    frameArmed = false;
+    if (!visible || o.rafStalled) return;
+    raf.splice(0).forEach((f) => { stats.rafRun += 1; f(); });
+    armFrame();
+  }
+  function setVisible(v) {
+    if (v === visible) return;
+    visible = v;
+    hiddenSince = v ? null : clock;
+    if (v) armFrame();
+  }
+  class VDate extends Date {
+    constructor(...a) { super(...(a.length ? a : [clock])); }
+    static now() { return clock; }
+  }
+  const doc = {
+    get visibilityState() { return visible ? 'visible' : 'hidden'; },
+    hasFocus: () => visible,
+    getElementById: () => null
+  };
+  const env = {
+    __VDate: VDate, document: doc, console,
+    setTimeout: (fn, ms) => throttled(fn, ms), clearTimeout: cancel,
+    requestAnimationFrame: (fn) => { stats.rafRequested += 1; raf.push(fn); armFrame(); return stats.rafRequested; }
+  };
+  return {
+    env, doc, stats, now: () => clock, schedule: throttled, cancel, raw, setVisible,
+    visibleAt: (t, v) => push(() => setVisible(v), t),
+    pending: () => q.length,
+    pendingRaf: () => raf.length,
+    runAll(limitMs) {
+      for (let n = 0; q.length && n < 2000000; n++) {
+        q.sort((x, y) => x.due - y.due || x.id - y.id);
+        if (limitMs != null && q[0].due > limitMs) break;
+        const t = q.shift();
+        clock = Math.max(clock, t.due);
+        t.fn();
+      }
+    }
+  };
+}
+
+function v312Suite(label) {
+  const C = Core2;
+  const IDLE = 90000;
+  function mkRoute(code, n, perStop, codeNum) {
+    const stops = [];
+    for (let i = 0; i < Math.ceil(n / perStop); i++) {
+      const pk = [];
+      for (let k = 0; k < perStop && i * perStop + k < n; k++) {
+        const j = i * perStop + k;
+        pk.push(['DA' + String(codeNum).padStart(4, '0') + String(j).padStart(6, '0'), 'tr-' + code + '-' + j]);
+      }
+      stops.push({ seq: i + 1, status: 'NOT_STARTED', pk });
+    }
+    return [v36Details(code, stops)];
+  }
+
+  // page: detailMs(code, attempt) -> ms until route-details after the click lands (null = never);
+  //       cdpMs(code, attempt) -> CDP reply delay (Infinity = never); stopHang(code, stop).
+  function go(details, page, bo, legacyLayout) {
+    const B = v312Browser(bo);
+    const ops = v312LoadOps(B.env);
+    const trMap = {};
+    const shown = {};
+    const clicks = [];
+    const events = [];
+    let cur = '';
+    let note = null;
+    const layout = legacyLayout
+      ? (fn) => B.env.requestAnimationFrame(() => B.env.requestAnimationFrame(fn))
+      : ops.afterBagLayout;
+    function cdpClick(code, attempt, done) {
+      const op = ops.current();
+      clicks.push({ code, attempt, at: B.now(), current: cur, opId: op.id, visibilityState: B.doc.visibilityState });
+      const d = page.detailMs ? page.detailMs(code, attempt) : 400;
+      if (d != null) B.raw(() => { shown[code] = true; }, d);
+      const reply = page.cdpMs ? page.cdpMs(code, attempt) : 30;
+      ops.bagOpEnter(op);
+      if (reply === Infinity) return;
+      B.raw(() => {
+        const alive = ops.bagOpAlive(op);
+        ops.bagOpLeave(op, alive);
+        if (!alive) { events.push('stale_cdp_reply:' + code); return; }
+        ops.bagOpDom(op, 'cdp_click');
+        done();
+      }, reply);
+    }
+    const driver = {
+      beginRoute(api) { note = api.noteProgress; cur = api.routeCode; ops.bagStartRouteOp(api.routeCode, 'route'); events.push('begin:' + cur); },
+      endRoute(info) {
+        events.push('end:' + info.routeCode + ':' + info.status);
+        const ended = ops.bagCancelRouteOp(info.reasonCode || info.status);
+        if (ended) ended.endStatus = info.status + (info.reasonCode ? '(' + info.reasonCode + ')' : '');
+        ops.bagStartRouteOp(info.routeCode + ' returnToList', 'return');
+        cur = '';
+      },
+      openRoute(route, cb) {
+        const op = ops.current();
+        const n = note;
+        const code = route.routeCode;
+        let attempt = 0;
+        let retried = false;
+        function tryOpen() {
+          attempt += 1;
+          ops.bagLater(() => {
+            op.routeCardFoundAt = B.now() - op.startedAt;
+            n('route_card_found');
+            const tryRec = { attempt, at: B.now() - op.startedAt, visibilityState: B.doc.visibilityState, hasFocus: B.doc.hasFocus() };
+            op.routeClickAttemptCount += 1;
+            op.routeClickAttemptAt.push(tryRec.at);
+            op.routeClickAttempts.push(tryRec);
+            layout(() => {
+              cdpClick(code, attempt, () => {
+                n('route_click');
+                const started = B.now();
+                (function poll() {
+                  if (shown[code]) {
+                    op.routeDetailDetectedAt = B.now() - op.startedAt;
+                    n('route_detail');
+                    ops.bagLater(() => cb({ ok: true }), 300);
+                    return;
+                  }
+                  if (B.now() - started >= 15000) {
+                    if (!retried) {
+                      retried = true;
+                      op.routeRetryCount += 1;
+                      n('route_retry');
+                      ops.bagLater(tryOpen, 600);
+                      return;
+                    }
+                    const hidden = B.doc.visibilityState === 'hidden';
+                    cb({ ok: false, code: hidden ? 'route_hidden_blocked' : 'route_detail_not_detected', detail: 'sim' });
+                    return;
+                  }
+                  ops.bagLater(poll, 150);
+                })();
+              });
+            });
+          }, 220);
+        }
+        tryOpen();
+      },
+      ensureStop(stop, pending, onState, cb) {
+        const n = note;
+        const code = cur;
+        ops.bagLater(() => {
+          n('stop_click');
+          if (page.stopHang && page.stopHang(code, stop.stop)) return;
+          ops.bagLater(() => {
+            pending.forEach((t) => C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'B', bagScannableId: 's' } }));
+            cb({ ok: true, clicked: true, clickCount: 1, trWaitMs: 1000, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+          }, 1200);
+        }, 300);
+      },
+      findPackage: (t, s, cb) => cb({ ok: false, status: 'package_dom_not_found' }),
+      clickPackage: (t, x, cb) => cb({ ok: false }), waitTrDetails: (t, cb) => cb(false), restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => { ops.bagLater(() => cb({ ok: true }), 500); },
+      returnToList: (cb) => { events.push('return'); ops.bagLater(() => cb({ ok: true }), 800); }
+    };
+    const sel = C.selectBagTargets(details, {});
+    const run = C.createBagRun(sel.targets);
+    ops.setRun(run);
+    let doneMsg = null;
+    const h = C.runBagEngine({
+      run, routes: C.groupBagTargetsByRoute(sel.targets), driver, getTrMap: () => trMap,
+      now: B.now, schedule: B.schedule, cancel: B.cancel, routeIdleMs: IDLE, routeHardMaxMs: 900000, routeBudgetMs: 120000,
+      pageContext: () => ({ visibilityState: B.doc.visibilityState, routeOperation: ops.bagOpSnapshot(ops.current()) }),
+      done: (a) => { doneMsg = a; ops.bagCancelRouteOp('phase_end'); } // finishBagPhase
+    });
+    ops.setEngine(h);
+    return { B, ops, run, h, trMap, clicks, events, sel, get done() { return doneMsg; },
+      summary: () => C.summarizeBagRun(run, trMap),
+      rr: (code) => run.routeResults.find((x) => x.routeCode === code),
+      op: (code) => run.routeOperations.find((x) => x.kind === 'route' && x.routeCode === code) };
+  }
+  const noStale = (r) => r.clicks.every((c) => c.code === c.current);
+
+  // 1. foreground: double rAF as before, one click, Route done
+  (function () {
+    const r = go(mkRoute('DCX80', 4, 2, 80), {});
+    r.B.runAll();
+    const rr = r.rr('DCX80');
+    const op = r.op('DCX80');
+    assert(rr.status === 'done' && r.summary().counts.captured === 4 && op.layoutVia.raf === 1 && !op.layoutVia.timer_hidden &&
+      op.routeClickAttemptCount === 1 && op.routeRetryCount === 0 && op.routeDetailDetectedAt > op.routeCardFoundAt &&
+      op.routeClickAttempts[0].visibilityState === 'visible' && op.routeClickAttempts[0].hasFocus === true &&
+      op.cancellationCompleted && r.B.pending() === 0 && r.done === '',
+      label + ' v3.12-1: foreground success ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, via: op.layoutVia }));
+  })();
+
+  // 2. hidden from the start: v3.11 (rAF only) waits for the watchdog exactly like DCX44-46;
+  //    v3.12 clicks through the hidden-tab timer and finishes the Route
+  (function () {
+    const old = go(mkRoute('DCX81', 4, 2, 81), {}, { hidden: true }, true);
+    old.B.runAll();
+    const o = old.rr('DCX81');
+    assert(o.status === 'route_aborted' && o.reasonCode === 'watchdog' && o.abortContext.phase === 'openRoute' &&
+      o.abortContext.lastProgressKind === 'route_card_found' && old.clicks.length === 0 && old.B.pendingRaf() === 1,
+      label + ' v3.12-2: v3.11 layout reproduces the field abort ' + JSON.stringify(o.abortContext));
+    const r = go(mkRoute('DCX81', 4, 2, 81), {}, { hidden: true });
+    r.B.runAll();
+    const rr = r.rr('DCX81');
+    const op = r.op('DCX81');
+    assert(rr.status === 'done' && r.summary().counts.captured === 4 && op.layoutVia.timer_hidden === 1 && !op.layoutVia.raf &&
+      r.B.stats.rafRequested === 0 && op.routeClickAttempts[0].visibilityState === 'hidden' && op.routeClickAttempts[0].hasFocus === false &&
+      r.clicks.length === 1 && r.B.pending() === 0,
+      label + ' v3.12-2: hidden success ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, via: op.layoutVia, raf: r.B.stats }));
+    // visible but rAF stalled (occluded window): the timer fallback clicks once
+    const s = go(mkRoute('DCX82', 2, 2, 82), {}, { rafStalled: true });
+    s.B.runAll();
+    const sop = s.op('DCX82');
+    assert(s.rr('DCX82').status === 'done' && sop.layoutVia.timer_fallback === 1 && !sop.layoutVia.raf && s.clicks.length === 1,
+      label + ' v3.12-2: stalled rAF -> timer fallback ' + JSON.stringify(sop.layoutVia));
+  })();
+
+  // 3. first click lost, retry succeeds; DCX44 case: visible at the first click, hidden before the retry
+  (function () {
+    const r = go(mkRoute('DCX83', 2, 2, 83), { detailMs: (c, a) => (a === 1 ? null : 500) });
+    r.B.runAll();
+    const op = r.op('DCX83');
+    const rr = r.rr('DCX83');
+    assert(rr.status === 'done' && op.routeRetryCount === 1 && op.routeClickAttemptCount === 2 && op.routeClickAttemptAt.length === 2 &&
+      rr.progressKinds.route_retry === 1 && r.clicks.length === 2,
+      label + ' v3.12-3: retry success ' + JSON.stringify({ s: rr.status, op: op.routeClickAttemptAt }));
+    const h = go(mkRoute('DCX44', 2, 2, 44), { detailMs: (c, a) => (a === 1 ? null : 500) });
+    h.B.visibleAt(5000, false);
+    h.B.runAll();
+    const hop = h.op('DCX44');
+    assert(h.rr('DCX44').status === 'done' && hop.routeClickAttempts[0].visibilityState === 'visible' &&
+      hop.routeClickAttempts[1].visibilityState === 'hidden' && hop.layoutVia.raf === 1 && hop.layoutVia.timer_hidden === 1,
+      label + ' v3.12-3: hidden between the clicks ' + JSON.stringify({ s: h.rr('DCX44').status, a: hop.routeClickAttempts, via: hop.layoutVia }));
+    const o = go(mkRoute('DCX44', 2, 2, 44), { detailMs: (c, a) => (a === 1 ? null : 500) }, null, true);
+    o.B.visibleAt(5000, false);
+    o.B.runAll();
+    assert(o.rr('DCX44').reasonCode === 'watchdog' && o.rr('DCX44').abortContext.lastProgressKind === 'route_card_found' && o.clicks.length === 1,
+      label + ' v3.12-3: same timeline under v3.11 = field DCX44 ' + JSON.stringify(o.rr('DCX44').abortContext));
+  })();
+
+  // 4. detail never arrives: a real stall (CDP reply never comes) -> watchdog ends that Route only;
+  //    clicks dispatched + full waits without a transition -> route_detail_not_detected / route_hidden_blocked
+  (function () {
+    const details = mkRoute('DCX84', 2, 2, 84).concat(mkRoute('DCX85', 2, 2, 85));
+    const r = go(details, { cdpMs: (c) => (c === 'DCX84' ? Infinity : 30) }, { hidden: true });
+    r.B.runAll();
+    const a = r.rr('DCX84');
+    const b = r.rr('DCX85');
+    assert(a.status === 'route_aborted' && a.reasonCode === 'watchdog' && a.abortContext.phase === 'openRoute' &&
+      a.abortContext.lastProgressKind === 'route_card_found' && a.idleMsAtAbort >= IDLE && a.idleMsAtAbort < IDLE + 2000 &&
+      a.abortContext.page.routeOperation.routeCode === 'DCX84' && a.abortContext.page.routeOperation.routeClickAttemptCount === 1 &&
+      b.status === 'done' && r.summary().counts.captured === 2 && r.summary().counts.route_aborted === 2,
+      label + ' v3.12-4: watchdog only on the stalled Route ' + JSON.stringify({ a: a.abortContext, b: b.status }));
+    const n = go(mkRoute('DCX86', 2, 2, 86).concat(mkRoute('DCX87', 2, 2, 87)), { detailMs: (c) => (c === 'DCX86' ? null : 400) }, { hidden: true });
+    n.B.runAll();
+    const nv = go(mkRoute('DCX86', 2, 2, 86), { detailMs: () => null });
+    nv.B.runAll();
+    assert(n.rr('DCX86').reasonCode === 'route_hidden_blocked' && n.op('DCX86').routeClickAttemptCount === 2 && n.rr('DCX87').status === 'done' &&
+      nv.rr('DCX86').reasonCode === 'route_detail_not_detected',
+      label + ' v3.12-4/E: hidden_blocked only after 2 dispatched clicks + full waits ' +
+      JSON.stringify([n.rr('DCX86').reasonCode, n.rr('DCX87').status, nv.rr('DCX86').reasonCode]));
+  })();
+
+  // 5. after an abort the old openRoute is fully stopped: its late CDP reply, retry and poll never run,
+  //    the next Route opens normally; a parked rAF from a visible->hidden switch never clicks twice
+  (function () {
+    const details = mkRoute('DCX88', 2, 2, 88).concat(mkRoute('DCX89', 4, 2, 89));
+    const r = go(details, { cdpMs: (c) => (c === 'DCX88' ? 200000 : 30) }, { hidden: true });
+    r.B.runAll();
+    const a = r.rr('DCX88');
+    const aop = r.op('DCX88');
+    const bop = r.op('DCX89');
+    const abortAt = a.startedAt + a.abortContext.routeElapsedMs;
+    assert(a.reasonCode === 'watchdog' && r.rr('DCX89').status === 'done' && r.events.indexOf('stale_cdp_reply:DCX88') >= 0 &&
+      r.clicks.filter((c) => c.code === 'DCX88').every((c) => c.at < abortAt) && noStale(r) &&
+      aop.cancellationRequested && aop.cancellationCompleted && aop.staleCallbacksSkipped === 1 && aop.inflight === 0 && aop.endStatus === 'route_aborted(watchdog)',
+      label + ' v3.12-5: stale openRoute fully stopped ' + JSON.stringify({ ev: r.events, op: { c: aop.cancellationCompleted, s: aop.staleCallbacksSkipped } }));
+    // Route ended while its detail poll is running (runner exception path): the poll and its retry click stop
+    const f = go(mkRoute('DCX96', 2, 2, 96).concat(mkRoute('DCX97', 2, 2, 97)), { detailMs: (c) => (c === 'DCX96' ? null : 400) });
+    f.B.raw(() => f.h.failRoute('exception: test'), 5000);
+    f.B.runAll();
+    const fop = f.op('DCX96');
+    assert(f.rr('DCX96').reasonCode === 'exception' && f.rr('DCX97').status === 'done' && noStale(f) &&
+      f.clicks.filter((c) => c.code === 'DCX96').length === 1 && fop.routeRetryCount === 0 && fop.staleCallbacksSkipped === 1 && fop.cancellationCompleted,
+      label + ' v3.12-5: poll of an ended Route stops ' + JSON.stringify({ c: f.clicks.map((c) => c.code + '/' + c.current), op: fop.staleCallbacksSkipped }));
+    const ret = r.run.routeOperations.find((x) => x.kind === 'return' && x.routeCode === 'DCX88 returnToList');
+    assert(ret && ret.previousRouteOperationStillAlive === true && ret.previousRouteOperationInflight === 1 && bop.previousRouteOperationStillAlive === false,
+      label + ' v3.12-5: previousRouteOperationStillAlive recorded ' + JSON.stringify({ ret: ret && ret.previousRouteOperationInflight }));
+    const p = go(mkRoute('DCX90', 2, 2, 90).concat(mkRoute('DCX91', 2, 2, 91)), {});
+    p.B.visibleAt(229, false); // after the card lookup, before the two frames
+    p.B.visibleAt(120000, true);
+    p.B.runAll();
+    const pop = p.op('DCX90');
+    assert(p.rr('DCX90').status === 'done' && p.rr('DCX91').status === 'done' && p.clicks.length === 2 && noStale(p) &&
+      pop.layoutVia.timer_fallback === 1 && p.B.stats.rafRun >= 2 && p.B.pendingRaf() === 0,
+      label + ' v3.12-5: parked rAF runs later without a second click ' + JSON.stringify({ c: p.clicks.map((c) => c.code), via: pop.layoutVia }));
+  })();
+
+  // 7. captured Bags kept when the watchdog ends a Route mid-way
+  (function () {
+    const r = go(mkRoute('DCX92', 6, 1, 92), { stopHang: (c, s) => s === 4 }, { hidden: true });
+    r.B.runAll();
+    const s = r.summary();
+    const rr = r.rr('DCX92');
+    assert(rr.reasonCode === 'watchdog' && rr.abortContext.capturedBeforeAbort === 3 && rr.abortContext.markedRemaining === 3 &&
+      s.counts.captured === 3 && s.counts.route_aborted === 3,
+      label + ' v3.12-7: captured kept ' + JSON.stringify({ ac: rr.abortContext, c: s.counts }));
+  })();
+
+  // 6. 22 Routes, visibility toggling, retries, one real stall: no stale click, one watchdog
+  (function () {
+    let details = [];
+    for (let i = 0; i < 22; i++) details = details.concat(mkRoute('DCX' + (100 + i), i < 14 ? 8 : 7, 2, 100 + i));
+    const r = go(details, {
+      detailMs: (c, a) => (Number(c.slice(3)) % 5 === 1 && a === 1 ? null : 400),
+      cdpMs: (c, a) => (c === 'DCX110' ? (a === 1 ? 400000 : 30) : 30)
+    });
+    (function toggle(v) { if (r.done !== null) return; r.B.setVisible(v); r.B.raw(() => toggle(!v), 37000); })(true);
+    r.B.runAll();
+    const s = r.summary();
+    const bad = r.run.routeResults.filter((x) => x.status !== 'done');
+    const ops = r.run.routeOperations;
+    const begins = r.events.filter((e) => e.startsWith('begin:')).length;
+    const ends = r.events.filter((e) => e.startsWith('end:')).length;
+    assert(r.sel.targets.length === 168 && r.run.routeResults.length === 22 && bad.length === 1 && bad[0].routeCode === 'DCX110' &&
+      bad[0].reasonCode === 'watchdog' && s.counts.captured === 160 && s.counts.route_aborted === 8 && noStale(r) &&
+      begins === 22 && ends === 22 && ops.length === 44 && ops.every((x) => x.cancellationRequested) &&
+      ops.filter((x) => x.kind === 'route').every((x) => x.cancellationCompleted || x.routeCode === 'DCX110') &&
+      r.events.indexOf('stale_cdp_reply:DCX110') >= 0 && r.B.pending() === 0 && r.done === '',
+      label + ' v3.12-6: 22 Routes ' + JSON.stringify({ ns: noStale(r), be: [begins, ends], p: r.B.pending(),
+        cc: ops.filter((x) => !x.cancellationCompleted).map((x) => x.routeCode), st: r.events.filter((e) => e.startsWith('stale')), c: s.counts, bad: bad.map((x) => x.routeCode + ':' + x.reasonCode), ops: ops.length }));
+    const viaHidden = ops.filter((x) => x.layoutVia.timer_hidden).length;
+    const viaRaf = ops.filter((x) => x.layoutVia.raf).length;
+    assert(viaHidden > 0 && viaRaf > 0, label + ' v3.12-6: both visible and hidden Routes covered ' + viaHidden + '/' + viaRaf);
+  })();
+
+  // 8a. endRoute: once per Route, done or aborted, before the list return
+  (function () {
+    const r = go(mkRoute('DCX93', 2, 2, 93).concat(mkRoute('DCX94', 2, 2, 94)), { cdpMs: (c) => (c === 'DCX93' ? Infinity : 30) });
+    r.B.runAll();
+    const seqs = r.events.filter((e) => !e.startsWith('stale'));
+    assert(JSON.stringify(seqs) === JSON.stringify(['begin:DCX93', 'end:DCX93:route_aborted', 'return', 'begin:DCX94', 'end:DCX94:done', 'return']),
+      label + ' v3.12-8: endRoute order ' + JSON.stringify(seqs));
+  })();
+
+  // 9. why 90 s became 109 s: the watchdog is a page timer; hidden > 5 min, Chrome aligns it to whole
+  //    minutes, so it fires late. The idle it reports is measured, not assumed.
+  (function () {
+    const r = go(mkRoute('DCX95', 2, 2, 95), { cdpMs: () => Infinity }, { hidden: true, hiddenSince: -600000, intensive: true });
+    r.B.runAll();
+    const rr = r.rr('DCX95');
+    assert(rr.reasonCode === 'watchdog' && rr.idleMsAtAbort > IDLE && rr.idleMsAtAbort <= IDLE + 60000 && rr.abortContext.sinceLastProgressMs === rr.idleMsAtAbort &&
+      rr.abortContext.page.routeOperation.maxTimerLagMs > 0,
+      label + ' v3.12-9: intensive throttling delays the watchdog ' + JSON.stringify({ idle: rr.idleMsAtAbort, lag: rr.abortContext.page.routeOperation.maxTimerLagMs }));
+  })();
+  console.log('ok: Bag v3.12 hidden-tab openRoute + Route-bound cancellation (' + label + ')');
+}
+Core2 = RootCore;
+v312Suite('root core');
+Core2 = PhaseCore;
+v312Suite('phase1-core');
+
+// runner wiring v3.12
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const layout = bag.slice(bag.indexOf('  function afterBagLayout(fn) {'), bag.indexOf('  function hrefNow() {'));
+  assert(layout.indexOf("document.visibilityState === 'hidden'") >= 0 && layout.indexOf("typeof requestAnimationFrame === 'function' && !hidden") >= 0 &&
+    layout.indexOf("run(hidden ? 'timer_hidden'") >= 0 && layout.indexOf('if (settled) return;') >= 0, 'v3.12-B: no rAF dependence when hidden, runs once');
+  const later = bag.slice(bag.indexOf('  function bagLater(fn, ms) {'), bag.indexOf('  function bagLog('));
+  assert(later.indexOf('var op = bagRouteOp;') >= 0 && later.indexOf('if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }') >= 0, 'v3.12-A: timers bound to the Route op');
+  ['  function safeCdpClick(resolve, runId, done, diag) {', '  function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater) {',
+    '  function findBagRouteCard(route, runId, done) {'].forEach((k) => {
+    const body = bag.slice(bag.indexOf(k), bag.indexOf(k) + 6000);
+    assert(bag.indexOf(k) >= 0 && body.indexOf('var op = bagRouteOp;') >= 0 && body.indexOf('bagOpLeave(op, alive);') >= 0 &&
+      body.indexOf('|| !alive) return;') >= 0, 'v3.12-A: CDP reply guarded by the Route op: ' + k.trim());
+  });
+  const drv = bag.slice(bag.indexOf('  function createBagDriver(ctx, runId) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(drv.indexOf("bagStartRouteOp(api && api.routeCode, 'route');") >= 0 && drv.indexOf('endRoute: function (info) {') >= 0 &&
+    drv.indexOf("bagStartRouteOp((info && info.routeCode) + ' returnToList', 'return');") >= 0, 'v3.12-A: begin/end Route op');
+  ['routeCardFoundAt', 'routeClickAttemptAt', 'routeClickAttemptCount', 'routeDetailDetectedAt', 'routeRetryCount', 'hasFocus', 'visibilityStateAfter',
+    "sub('find_route_card')", "sub('route_click')", "sub('wait_route_detail')", "sub('route_retry')"]
+    .forEach((k) => assert(drv.indexOf(k) >= 0 || bag.indexOf(k) >= 0, 'v3.12 diagnostics: ' + k));
+  ['cancellationRequested', 'cancellationCompleted', 'previousRouteOperationStillAlive', 'lastSuccessfulDomOperation', 'staleCallbacksSkipped', 'maxTimerLagMs']
+    .forEach((k) => assert(bag.indexOf(k) >= 0, 'v3.12 op field: ' + k));
+  assert(bag.indexOf('routeOperation: bagOpSnapshot(bagRouteOp)') >= 0 && bag.indexOf('routeOperations: (bagRun.routeOperations || []).map(bagOpSnapshot),') >= 0,
+    'v3.12: abort context + diagnostics JSON carry the Route operation');
+  assert((bag.match(/bagCancelRouteOp\('phase_end'\);\n {4}bagRouteOp = null;/g) || []).length === 2, 'v3.12: op cancelled at both phase ends');
+  assert(bag.indexOf("code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected'") >= 0 &&
+    bag.indexOf("if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId))") >= 0, 'v3.12-E: hidden_blocked only after the retry path');
+  assert(bag.indexOf('setInterval') < 0 && bag.indexOf('MutationObserver') < 0 && (runner.match(/setInterval\(/g) || []).length === 1, 'v3.12: no heartbeat / watcher');
+  ['BAG_ROUTE_IDLE_MS = 90000', 'BAG_ROUTE_HARD_MAX_MS = 900000', 'BAG_ROUTE_RETRY_WAIT_MS = 15000', 'BAG_ROUTE_OPEN_ATTEMPTS']
+    .forEach((k) => assert(bag.indexOf(k) >= 0, 'v3.12: unchanged ' + k));
+  const core = readSource('cortex-13-priority-core.js');
+  assert((core.match(/driver\.endRoute\(/g) || []).length === 1 && core.indexOf("if (typeof driver.endRoute === 'function') {") > core.indexOf("setPhase('returnToList');"),
+    'v3.12: engine calls the optional endRoute hook once, at returnToList');
+  console.log('ok: v3.12 runner wiring');
 })();
