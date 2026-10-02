@@ -7134,18 +7134,24 @@ var driverDB = {
     function syncKnownLineIds() {
       return fetch('/line-unlinked/known', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getProxyHeaders(),
         body: JSON.stringify({ mapping: lineUnlinkedKnownMapping() })
-      }).then(function(r) { return r.json(); }).catch(function() { return null; });
+      }).then(function(r) {
+        if (!r.ok) return null;
+        return r.json();
+      }).catch(function() { return null; });
     }
 
     function refreshLineUnlinkedCount() {
-      syncKnownLineIds().then(function() { return fetch('/line-unlinked'); })
-        .then(function(r) { return r.json(); })
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked', { headers: getProxyHeaders() }); })
+        .then(function(r) {
+          if (!r.ok) return null;
+          return r.json();
+        })
         .then(function(data) {
-          var n = data && data.users ? data.users.length : 0;
+          if (!data || !data.users) return;
           var el = document.getElementById('line-unlinked-count');
-          if (el) el.textContent = String(n);
+          if (el) el.textContent = String(data.users.length);
         }).catch(function() {});
     }
 
@@ -7172,9 +7178,19 @@ var driverDB = {
     }
 
     function openLineUnlinkedPanel() {
-      syncKnownLineIds().then(function() { return fetch('/line-unlinked'); })
-        .then(function(r) { return r.json(); })
-        .then(function(data) { renderLineUnlinkedPanel((data && data.users) || []); })
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked', { headers: getProxyHeaders() }); })
+        .then(function(r) {
+          if (r.status === 403) {
+            alert('LINE未登録一覧を見るには、設定画面の Proxy Secret を入力してください。');
+            return null;
+          }
+          if (!r.ok) throw new Error('line-unlinked');
+          return r.json();
+        })
+        .then(function(data) {
+          if (!data) return;
+          renderLineUnlinkedPanel(data.users || []);
+        })
         .catch(function() { alert('LINE未登録一覧を取得できませんでした'); });
     }
 
@@ -7230,7 +7246,7 @@ var driverDB = {
       }
       fetch('/line-unlinked/link', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getProxyHeaders(),
         body: JSON.stringify({ userId: userId, driverName: driverName, currentLineId: current, lineIdOwner: owner, source: 'manual' })
       }).then(function(r) {
         return r.json().then(function(body) { return { ok: r.ok, body: body }; });
