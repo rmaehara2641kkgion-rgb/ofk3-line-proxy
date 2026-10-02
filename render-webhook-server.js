@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
+const LineUnlinked = require('./line-unlinked-core.js');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -135,6 +136,74 @@ function persistTenkoSyncStoreToDisk() {
   } catch (e) {
     console.warn('tenko-sync: disk backup write failed (ignoring):', e.message);
   }
+}
+
+// LINE未紐付け候補。点呼同期と同じ一時ディスク（再デプロイで消えるベストエフォート）。
+// チャネルトークンはこのストアにもレスポンスにも入れない。
+var lineUnlinkedStore = LineUnlinked.createStore();
+var LINE_UNLINKED_STORE_PATH = path.join(os.tmpdir(), 'line-unlinked-users.json');
+(function loadLineUnlinkedStore() {
+  try {
+    if (fs.existsSync(LINE_UNLINKED_STORE_PATH)) {
+      var loaded = JSON.parse(fs.readFileSync(LINE_UNLINKED_STORE_PATH, 'utf8'));
+      if (loaded && typeof loaded === 'object') {
+        lineUnlinkedStore.users = loaded.users || {};
+        lineUnlinkedStore.knownLineIds = loaded.knownLineIds || {};
+      }
+    }
+  } catch (e) {
+    console.warn('line-unlinked: restore failed (ignoring):', e.message);
+  }
+})();
+function persistLineUnlinkedStore() {
+  try {
+    fs.writeFileSync(LINE_UNLINKED_STORE_PATH, JSON.stringify(lineUnlinkedStore), 'utf8');
+  } catch (e) {
+    console.warn('line-unlinked: disk write failed (ignoring):', e.message);
+  }
+}
+async function fetchLineProfile(userId) {
+  if (!CHANNEL_ACCESS_TOKEN) return null;
+  try {
+    var response = await axios.get(
+      'https://api.line.me/v2/bot/profile/' + encodeURIComponent(userId),
+      { headers: { Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN }, timeout: 4000 }
+    );
+    return {
+      displayName: response.data && response.data.displayName || '',
+      pictureUrl: response.data && response.data.pictureUrl || ''
+    };
+  } catch (e) {
+    log('LINE profile fetch failed:', e.message);
+    return null;
+  }
+}
+async function captureUnlinkedLineUser(userId) {
+  var id = String(userId || '').trim();
+  if (!id) return;
+  if (lineUnlinkedStore.knownLineIds[id]) return;
+  var existing = lineUnlinkedStore.users[id];
+  if (existing && existing.status === 'linked') return;
+  var profile = await fetchLineProfile(id);
+  LineUnlinked.captureLineUser(lineUnlinkedStore, {
+    userId: id,
+    now: new Date().toISOString(),
+    profile: profile || {}
+  });
+  persistLineUnlinkedStore();
+}
+function rememberKnownLineIdsFromDrivers(drivers) {
+  if (!Array.isArray(drivers)) return;
+  var mapping = {};
+  for (var i = 0; i < drivers.length; i++) {
+    var row = drivers[i] || {};
+    var lineId = String(row.lineId || '').trim();
+    if (!lineId) continue;
+    mapping[lineId] = row.englishName || row.name || '';
+  }
+  if (!Object.keys(mapping).length) return;
+  LineUnlinked.mergeKnownLineIds(lineUnlinkedStore, mapping);
+  persistLineUnlinkedStore();
 }
 
 // 静的ファイル配信。index.htmlだけはCortex 13:00 UIタグをレスポンス時に注入する。
@@ -313,6 +382,7 @@ app.post('/webhook', async (req, res) => {
 
       if (event.source && event.source.userId) {
         log('=== USER ID FOUND:', event.source.userId, '===');
+        await captureUnlinkedLineUser(event.source.userId);
 
         if (event.type === 'follow' && CHANNEL_ACCESS_TOKEN) {
           await sendWelcomeMessage(event.source.userId);
@@ -366,6 +436,37 @@ app.get('/proxy', async (req, res) => {
       message: err.response && err.response.data ? err.response.data : err.message
     });
   }
+});
+
+app.get('/line-unlinked', function(req, res) {
+  res.json({ status: 'ok', users: LineUnlinked.listPending(lineUnlinkedStore) });
+});
+
+app.post('/line-unlinked/known', function(req, res) {
+  var mapping = req.body && req.body.mapping;
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+    return res.status(400).json({ status: 'error', message: 'mapping required' });
+  }
+  LineUnlinked.replaceKnownLineIds(lineUnlinkedStore, mapping);
+  persistLineUnlinkedStore();
+  res.json({ status: 'ok', pending: LineUnlinked.listPending(lineUnlinkedStore).length });
+});
+
+app.post('/line-unlinked/link', function(req, res) {
+  var body = req.body || {};
+  var result = LineUnlinked.linkPendingUser(lineUnlinkedStore, {
+    userId: body.userId,
+    driverName: body.driverName,
+    currentLineId: body.currentLineId || '',
+    lineIdOwner: body.lineIdOwner || '',
+    source: body.source || 'manual',
+    now: new Date().toISOString()
+  });
+  if (!result.ok) {
+    return res.status(409).json({ status: 'error', error: result.error });
+  }
+  persistLineUnlinkedStore();
+  res.json({ status: 'ok', user: result.user });
 });
 
 // Cortex 13:00優先データ受信（拡張 → OFK3本体）
@@ -1392,6 +1493,10 @@ app.post('/tenko-master', async (req, res) => {
       } catch (backupErr) {
         log('Master backup error: ' + backupErr.message);
       }
+    }
+    if (req.body && req.body.action === 'saveMaster') {
+      var masterRows = Array.isArray(req.body.drivers) ? req.body.drivers : (Array.isArray(req.body.data) ? req.body.data : null);
+      rememberKnownLineIdsFromDrivers(masterRows);
     }
 
     var url = TENKO_MASTER_GAS_URL;

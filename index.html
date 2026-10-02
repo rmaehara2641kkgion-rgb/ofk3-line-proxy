@@ -22,6 +22,8 @@
   <script src="/lat-departure-core.js?v=20260823-1"></script>
   <script src="/lat-timeline-core.js?v=20260916-1"></script>
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
+  <script src="/line-unlinked-core.js?v=20261002-1"></script>
+  <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -751,6 +753,7 @@
           <span id="master-total">合計: 0名</span>
           <span id="master-linked">LINE紐付け済み: 0名</span>
           <span id="master-unlinked">未紐付け: 0名</span>
+          <button type="button" id="line-unlinked-open" onclick="openLineUnlinkedPanel()" class="text-xs px-2 py-1 rounded font-bold bg-emerald-600 text-white hover:bg-emerald-700">LINE未登録 <span id="line-unlinked-count">0</span>名</button>
         </div>
       </div>
 
@@ -7126,6 +7129,132 @@ var driverDB = {
       window.open(url, '_blank');
     }
 
+    function lineUnlinkedKnownMapping() {
+      var mapping = {};
+      Object.keys(lineMapping).forEach(function(name) {
+        var id = String(lineMapping[name] || '').trim();
+        if (id) mapping[id] = name;
+      });
+      return mapping;
+    }
+
+    function syncKnownLineIds() {
+      return fetch('/line-unlinked/known', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapping: lineUnlinkedKnownMapping() })
+      }).then(function(r) { return r.json(); }).catch(function() { return null; });
+    }
+
+    function refreshLineUnlinkedCount() {
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked'); })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var n = data && data.users ? data.users.length : 0;
+          var el = document.getElementById('line-unlinked-count');
+          if (el) el.textContent = String(n);
+        }).catch(function() {});
+    }
+
+    function formatLineSeen(iso) {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso || '');
+      var p = function(n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function lineUnlinkedDriverOptions() {
+      var names = Object.keys(driverDB).concat(Object.keys(lineMapping));
+      var seen = {};
+      var list = [];
+      names.forEach(function(name) {
+        if (!name || seen[name] || (typeof isDriverDeleted === 'function' && isDriverDeleted(name))) return;
+        seen[name] = true;
+        list.push(name);
+      });
+      list.sort(function(a, b) { return a.localeCompare(b, 'ja'); });
+      return '<option value="">ドライバーを選択</option>' + list.map(function(name) {
+        return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
+      }).join('');
+    }
+
+    function openLineUnlinkedPanel() {
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked'); })
+        .then(function(r) { return r.json(); })
+        .then(function(data) { renderLineUnlinkedPanel((data && data.users) || []); })
+        .catch(function() { alert('LINE未登録一覧を取得できませんでした'); });
+    }
+
+    function renderLineUnlinkedPanel(users) {
+      window.__lineUnlinkedUsers = users;
+      var existing = document.getElementById('line-unlinked-panel');
+      if (existing) existing.remove();
+      var root = document.createElement('div');
+      root.id = 'line-unlinked-panel';
+      root.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.4);display:flex;justify-content:center;align-items:flex-start;padding:16px;overflow:auto';
+      var rows = users.map(function(user, i) {
+        var hints = (typeof LineUnlinked !== 'undefined') ? LineUnlinked.suggestDriverCandidates(user.displayName, Object.keys(driverDB)) : [];
+        var picture = /^https:\/\//.test(String(user.pictureUrl || '')) ? '<img src="' + escapeHtml(user.pictureUrl) + '" alt="" style="width:40px;height:40px;border-radius:999px;vertical-align:middle;margin-right:8px">' : '';
+        return '<div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:8px">' +
+          picture +
+          '<div style="font-weight:bold">LINE表示名：' + escapeHtml(user.displayName || '（未取得）') + '</div>' +
+          '<div style="font-size:12px;color:#666">初回検知：' + escapeHtml(formatLineSeen(user.firstSeenAt)) + '</div>' +
+          '<div style="font-size:12px;word-break:break-all">LINE userId：' + escapeHtml(user.userId) + '</div>' +
+          (hints.length ? '<div style="font-size:12px;color:#047857">候補: ' + escapeHtml(hints.join('、')) + '</div>' : '') +
+          '<div style="margin-top:8px;font-size:12px">紐付け先</div>' +
+          '<select id="line-unlinked-driver-' + i + '" style="border:1px solid #ccc;border-radius:4px;padding:4px;width:100%">' + lineUnlinkedDriverOptions() + '</select>' +
+          '<button type="button" style="margin-top:8px;font-size:12px;padding:4px 12px;border-radius:4px;background:#059669;color:#fff;border:0" onclick="linkLineUnlinkedUser(' + i + ')">このドライバーに紐付け</button>' +
+        '</div>';
+      }).join('') || '<p style="font-size:14px">未登録のLINEユーザーはいません。</p>';
+      root.innerHTML = '<div style="background:#fff;border-radius:8px;max-width:32rem;width:100%;padding:16px;margin:32px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h2 style="font-weight:bold;margin:0">LINE未登録 ' + users.length + '名</h2>' +
+        '<button type="button" onclick="document.getElementById(\'line-unlinked-panel\').remove()">閉じる</button></div>' +
+        '<p style="font-size:12px;color:#666;margin-bottom:12px">表示名だけでは紐付けません。ドライバーを選んで確定してください。別のLINE IDが登録済みのドライバーには上書きしません。</p>' +
+        rows + '</div>';
+      document.body.appendChild(root);
+      var count = document.getElementById('line-unlinked-count');
+      if (count) count.textContent = String(users.length);
+    }
+
+    function linkLineUnlinkedUser(index) {
+      var user = (window.__lineUnlinkedUsers || [])[index];
+      var sel = document.getElementById('line-unlinked-driver-' + index);
+      var driverName = sel ? sel.value : '';
+      if (!user || !driverName) { alert('ドライバーを選択してください'); return; }
+      var userId = String(user.userId || '').trim();
+      var current = String(lineMapping[driverName] || '').trim();
+      var owner = '';
+      Object.keys(lineMapping).forEach(function(name) {
+        if (String(lineMapping[name] || '').trim() === userId) owner = name;
+      });
+      if (current && current !== userId) {
+        alert(driverName + ' には別のLINE IDが登録されています。上書きはしません。');
+        return;
+      }
+      if (owner && owner !== driverName) {
+        alert('このLINE IDは ' + owner + ' に登録済みです。');
+        return;
+      }
+      fetch('/line-unlinked/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userId, driverName: driverName, currentLineId: current, lineIdOwner: owner, source: 'manual' })
+      }).then(function(r) {
+        return r.json().then(function(body) { return { ok: r.ok, body: body }; });
+      }).then(function(res) {
+        if (!res.ok) {
+          alert(res.body && res.body.error === 'overwrite_blocked' ? '別のLINE IDが登録済みのため上書きしません。' : '紐付けできませんでした。');
+          return;
+        }
+        lineMapping[driverName] = userId;
+        localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+        if (typeof syncMasterFieldToServer === 'function') syncMasterFieldToServer(driverName, 'lineId', userId);
+        renderMasterTable();
+        if (typeof renderLineMappings === 'function') renderLineMappings();
+        openLineUnlinkedPanel();
+      }).catch(function() { alert('紐付けできませんでした'); });
+    }
+
     function renderMasterTable() {
       const tbody = document.getElementById('master-table-body');
       const searchVal = (document.getElementById('master-search')?.value || '').toLowerCase();
@@ -7159,6 +7288,7 @@ var driverDB = {
       document.getElementById('master-total').textContent = '\u5408\u8A08: ' + (allDrivers.size - deletedCount) + '\u540D' + (deletedCount > 0 ? '\uFF08\u9000\u8077\u8005' + deletedCount + '\u540D\u975E\u8868\u793A\uFF09' : '');
       document.getElementById('master-linked').textContent = '\u7D10\u4ED8\u3051\u6E08\u307F: ' + linked + '\u540D';
       document.getElementById('master-unlinked').textContent = '\u672A\u7D10\u4ED8\u3051: ' + unlinked + '\u540D';
+      refreshLineUnlinkedCount();
       updateDeletedCountBadge();
 
       if (drivers.length === 0) {
@@ -7279,6 +7409,7 @@ var driverDB = {
 
       renderMasterTable();
       renderLineMappings();
+      syncKnownLineIds();
     }
 
     function updatePhone(name, value) {
@@ -7587,7 +7718,11 @@ var driverDB = {
         ...Object.keys(lineMapping),
         ...Object.keys(phoneMapping),
         ...Object.keys(transportIDs)
-      ])].sort((a, b) => a.localeCompare(b, 'ja'));
+      ])];
+      drivers = (typeof QrPrintOrder !== 'undefined' ? QrPrintOrder.sortDriversForBulkQr(drivers, function(name) {
+        var db = driverDB[name] || {};
+        return { createdAt: db.createdAt, driverId: db.driverId };
+      }) : drivers.slice().sort(function(a, b) { return a.localeCompare(b, 'ja'); }));
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
       // 自己修復: 一括印刷対象全員のdriverId/TIDをタブレットへ再同期（未同期のまま印刷されるのを防止）
@@ -7600,7 +7735,7 @@ var driverDB = {
 
       var cards = [];
       var done = 0;
-      drivers.forEach(function(name) {
+      drivers.forEach(function(name, order) {
         var tid = transportIDs[name];
         // 異常データをスキップ
         if (tid && String(tid).length > 50) {
@@ -7627,7 +7762,7 @@ var driverDB = {
         setTimeout(function() {
           var c = qrDiv.querySelector('canvas');
           var imgSrc = c ? c.toDataURL('image/png') : '';
-          cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3' });
+          cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3', order: order });
           done++;
           if (done === drivers.length) {
             finishPrintQR(cards, tempDiv);
@@ -7638,6 +7773,7 @@ var driverDB = {
 
     function finishPrintQR(cards, tempDiv) {
       document.body.removeChild(tempDiv);
+      cards.sort(function(a, b) { return a.order - b.order; });
       var win = window.open('', '_blank', 'width=800,height=600');
       var html = cards.map(function(r) {
         return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid;background:#fff">' +
@@ -7650,6 +7786,7 @@ var driverDB = {
         '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
         'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
         '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
+        '<p class="no-print" style="font-size:12px;color:#444">新しいドライバーは末尾です。印刷画面で最後のページだけを指定すると、そのページだけ印刷できます。</p>' +
         '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
         '<div class="grid">' + html + '</div></body></html>'
       );
@@ -8221,6 +8358,20 @@ var driverDB = {
       xhr.send(formData);
     }
 
+    function createNewDriverRecord() {
+      return {
+        driverId: getNextDriverId(),
+        packagesPerHour: null,
+        deliveryRate: null,
+        workDays: 0,
+        totalPackages: 0,
+        incidents: 0,
+        lastUpdated: getTodayJst(),
+        createdAt: Date.now(),
+        history: []
+      };
+    }
+
     function addNewDriver() {
       const name = prompt('ドライバー名を入力してください:');
       if (!name || !name.trim()) return;
@@ -8229,16 +8380,7 @@ var driverDB = {
         alert('このドライバーは既に登録されています');
         return;
       }
-      driverDB[trimmed] = {
-        driverId: getNextDriverId(),
-        packagesPerHour: null,
-        deliveryRate: null,
-        workDays: 0,
-        totalPackages: 0,
-        incidents: 0,
-        lastUpdated: getTodayJst(),
-        history: []
-      };
+      driverDB[trimmed] = createNewDriverRecord();
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
       if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(trimmed);
@@ -8255,16 +8397,7 @@ var driverDB = {
         el.focus();
         return;
       }
-      driverDB[name] = {
-        driverId: getNextDriverId(),
-        packagesPerHour: null,
-        deliveryRate: null,
-        workDays: 0,
-        totalPackages: 0,
-        incidents: 0,
-        lastUpdated: getTodayJst(),
-        history: []
-      };
+      driverDB[name] = createNewDriverRecord();
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
       if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
