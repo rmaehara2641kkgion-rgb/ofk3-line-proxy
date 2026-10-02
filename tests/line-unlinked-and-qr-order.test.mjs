@@ -2,6 +2,7 @@ import { createRequire } from 'module';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import http from 'node:http';
 import assert from 'node:assert/strict';
 
 const require = createRequire(import.meta.url);
@@ -64,6 +65,22 @@ function testManualLinkRemovesPendingAndBlocksOverwrite() {
   assert.equal(Line.listPending(store).length, 1, 'clearing the driver LINE ID returns the user to the pending list');
 }
 
+function testProfileFailureKeepsUserId() {
+  var store = Line.createStore();
+  var result = Line.captureLineUser(store, { userId: 'Unoprofile', now: '2026-10-02T00:00:00.000Z', profile: null });
+  assert.equal(result.created, true);
+  assert.equal(store.users.Unoprofile.userId, 'Unoprofile');
+  assert.equal(store.users.Unoprofile.displayName, '');
+  assert.equal(Line.listPending(store).length, 1);
+}
+
+function testProxySecretDoesNotUseLineToken() {
+  assert.equal(Line.proxySecretAllows('', ''), true);
+  assert.equal(Line.proxySecretAllows('proxy-secret', 'proxy-secret'), true);
+  assert.equal(Line.proxySecretAllows('proxy-secret', ''), false);
+  assert.equal(Line.proxySecretAllows('proxy-secret', 'channel-access-token'), false);
+}
+
 function testSuggestDoesNotAutoLink() {
   var names = Line.suggestDriverCandidates('山田太郎', ['山田 太郎', '佐藤']);
   assert.deepEqual(names, ['山田 太郎']);
@@ -119,15 +136,88 @@ function testWiringLeavesQrPayloadAndWebhookLog() {
   assert.match(indexSrc, /QrPrintOrder\.sortDriversForBulkQr/);
   assert.match(indexSrc, /createdAt: Date\.now\(\)/);
   assert.match(indexSrc, /openLineUnlinkedPanel/);
+  assert.match(indexSrc, /fetch\('\/line-unlinked', \{ headers: getProxyHeaders\(\) \}/);
+  assert.match(indexSrc, /fetch\('\/line-unlinked\/known', \{[\s\S]*headers: getProxyHeaders\(\)/);
+  assert.match(indexSrc, /fetch\('\/line-unlinked\/link', \{[\s\S]*headers: getProxyHeaders\(\)/);
+  assert.match(indexSrc, /syncMasterFieldToServer\(driverName, 'lineId', userId\)/);
+  assert.match(indexSrc, /grid-template-columns:repeat\(4,1fr\)/);
   var createdCount = indexSrc.split('createdAt: Date.now()').length - 1;
   assert.equal(createdCount, 1, 'createdAt is stamped only by the new-driver helper');
+  var routeStart = serverSrc.indexOf("function lineUnlinkedForbidden");
+  var routeEnd = serverSrc.indexOf('// Cortex 13:00', routeStart);
+  var routes = serverSrc.slice(routeStart, routeEnd);
+  assert.equal((routes.match(/if \(lineUnlinkedForbidden\(req, res\)\) return;/g) || []).length, 3);
+  assert.equal(routes.indexOf('CHANNEL_ACCESS_TOKEN'), -1);
+  assert.match(routes, /message: 'Forbidden'/);
+  assert.ok(routes.indexOf('lineUnlinkedForbidden(req, res)') < routes.indexOf('listPending'));
+  assert.ok(serverSrc.indexOf('sendWelcomeMessage(event.source.userId)') > serverSrc.indexOf('captureUnlinkedLineUser(event.source.userId)'));
+}
+
+function requestJson(port, headers) {
+  return new Promise(function (resolve, reject) {
+    var req = http.request({
+      hostname: '127.0.0.1',
+      port: port,
+      path: '/line-unlinked',
+      headers: headers || {}
+    }, function (res) {
+      var chunks = '';
+      res.on('data', function (chunk) { chunks += chunk; });
+      res.on('end', function () { resolve({ status: res.statusCode, body: JSON.parse(chunks) }); });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function testGuardedListHidesUsers() {
+  var secret = 'proxy-test-secret';
+  var store = Line.createStore();
+  Line.captureLineUser(store, { userId: 'Uhttp', now: '2026-10-02T00:00:00.000Z', profile: { displayName: '検証' } });
+  var server = http.createServer(function (req, res) {
+    if (!Line.proxySecretAllows(secret, req.headers['x-proxy-secret'])) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'error', message: 'Forbidden' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', users: Line.listPending(store) }));
+  });
+  return new Promise(function (resolve, reject) {
+    server.listen(0, '127.0.0.1', function () {
+      var port = server.address().port;
+      requestJson(port).then(function (anon) {
+        assert.equal(anon.status, 403);
+        assert.equal(anon.body.message, 'Forbidden');
+        assert.equal(Object.prototype.hasOwnProperty.call(anon.body, 'users'), false);
+        return requestJson(port, { 'X-Proxy-Secret': 'wrong' });
+      }).then(function (wrong) {
+        assert.equal(wrong.status, 403);
+        return requestJson(port, { 'X-Proxy-Secret': secret });
+      }).then(function (ok) {
+        assert.equal(ok.status, 200);
+        assert.equal(ok.body.users.length, 1);
+        assert.equal(ok.body.users[0].userId, 'Uhttp');
+        server.close(function (err) { if (err) reject(err); else resolve(); });
+      }).catch(function (err) {
+        server.close(function () { reject(err); });
+      });
+    });
+  });
 }
 
 testNewUserIsCapturedOnce();
 testKnownUserIsNotPending();
 testManualLinkRemovesPendingAndBlocksOverwrite();
+testProfileFailureKeepsUserId();
+testProxySecretDoesNotUseLineToken();
 testSuggestDoesNotAutoLink();
 testQrOrderKeepsUndatedAndAppendsNew();
 testQrPagesPutNewDriversLast();
 testWiringLeavesQrPayloadAndWebhookLog();
-console.log('line-unlinked-and-qr-order tests passed');
+testGuardedListHidesUsers().then(function () {
+  console.log('line-unlinked-and-qr-order tests passed');
+}).catch(function (err) {
+  console.error(err);
+  process.exit(1);
+});

@@ -438,11 +438,19 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+function lineUnlinkedForbidden(req, res) {
+  if (LineUnlinked.proxySecretAllows(PROXY_SECRET, req.headers['x-proxy-secret'])) return false;
+  res.status(403).json({ status: 'error', message: 'Forbidden' });
+  return true;
+}
+
 app.get('/line-unlinked', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
   res.json({ status: 'ok', users: LineUnlinked.listPending(lineUnlinkedStore) });
 });
 
 app.post('/line-unlinked/known', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
   var mapping = req.body && req.body.mapping;
   if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
     return res.status(400).json({ status: 'error', message: 'mapping required' });
@@ -453,6 +461,7 @@ app.post('/line-unlinked/known', function(req, res) {
 });
 
 app.post('/line-unlinked/link', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
   var body = req.body || {};
   var result = LineUnlinked.linkPendingUser(lineUnlinkedStore, {
     userId: body.userId,

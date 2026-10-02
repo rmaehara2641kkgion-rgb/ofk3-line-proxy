@@ -10,6 +10,13 @@
     return { users: {}, knownLineIds: {} };
   }
 
+  // /proxy と同じ簡易認証。秘密が未設定のときは既存管理APIと同様に通す。
+  // CHANNEL_ACCESS_TOKEN は使わない。
+  function proxySecretAllows(configuredSecret, presentedSecret) {
+    if (!configuredSecret) return true;
+    return String(presentedSecret || '') === String(configuredSecret);
+  }
+
   function normalizeUserId(userId) {
     return String(userId || '').trim();
   }
@@ -155,6 +162,7 @@
 
   var api = {
     createStore: createStore,
+    proxySecretAllows: proxySecretAllows,
     captureLineUser: captureLineUser,
     mergeKnownLineIds: mergeKnownLineIds,
     replaceKnownLineIds: replaceKnownLineIds,
