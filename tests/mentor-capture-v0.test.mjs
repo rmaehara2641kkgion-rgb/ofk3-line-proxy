@@ -21,6 +21,7 @@ const sandbox = {
   String: String,
   Number: Number,
   Boolean: Boolean,
+  AbortController: AbortController,
   console: console
 };
 sandbox.globalThis = sandbox;
@@ -318,5 +319,38 @@ for (var n = 0; n < 40; n += 1) MC.rememberObserved(observed, 'fetch', 'GET', 'h
 assert(observed.observedPaths.length === 30, 'observed paths stop at 30');
 assert(observed.observedPathCount === 42, 'observed path count includes paths beyond the cap');
 assert(JSON.stringify(MC.buildDiagnostic(observed)).indexOf('SECRET-FLEET') < 0, 'diagnostic observedPaths omit secrets');
+
+var parent = new AbortController();
+var bridge = MC.detachableSignal(parent.signal);
+assert(bridge.pageAborted() === 'false', 'page signal starts unaborted');
+bridge.detach();
+parent.abort();
+assert(bridge.pageAborted() === 'true', 'page abort is still visible after detach');
+assert(bridge.signal.aborted === false, 'detach stops the fetch signal from being aborted');
+var parentEarly = new AbortController();
+var early = MC.detachableSignal(parentEarly.signal);
+parentEarly.abort();
+assert(early.signal.aborted === true, 'abort before the response still cancels the fetch signal');
+var abortedRead = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  bodyUsed: false,
+  contentType: 'application/json',
+  clone: 'SUCCESS',
+  textStatus: 'FAILED',
+  errorName: 'AbortError',
+  errorMessage: 'signal is aborted without reason',
+  signalAtStart: 'false',
+  signalAtResponse: 'false',
+  signalAtReadFailure: 'true'
+});
+assert(abortedRead.issue === 'TEXT_FAILED', 'aborted body read stays a text failure');
+assert(abortedRead.lastResponse.signalAtStart === 'false', 'signal state at start is kept');
+assert(abortedRead.lastResponse.signalAtResponse === 'false', 'signal state at response is kept');
+assert(abortedRead.lastResponse.signalAtReadFailure === 'true', 'signal state at read failure is kept');
+assert(JSON.stringify(abortedRead.lastResponse).indexOf('Bearer') < 0, 'abort diagnostic has no credential text');
 
 console.log('mentor-capture-v0 tests passed');

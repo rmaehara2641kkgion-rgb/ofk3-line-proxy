@@ -243,6 +243,71 @@
     return out;
   }
 
+  function signalState(signal) {
+    try {
+      if (!signal) return 'none';
+      return signal.aborted ? 'true' : 'false';
+    } catch (e) {
+      return 'none';
+    }
+  }
+
+  function safeSignalState(value) {
+    if (value === 'true' || value === 'false' || value === 'none') return value;
+    return 'none';
+  }
+
+  function detachableSignal(parent) {
+    var controller = new AbortController();
+    var detached = false;
+    function forward() {
+      if (detached || controller.signal.aborted) return;
+      try { controller.abort(); } catch (e) {}
+    }
+    if (parent && typeof parent.addEventListener === 'function') {
+      if (parent.aborted) forward();
+      else parent.addEventListener('abort', forward);
+    }
+    return {
+      signal: controller.signal,
+      detach: function () {
+        detached = true;
+        if (parent && typeof parent.removeEventListener === 'function') {
+          parent.removeEventListener('abort', forward);
+        }
+      },
+      pageAborted: function () {
+        return signalState(parent);
+      }
+    };
+  }
+
+  function pageSignal(input, init) {
+    try {
+      if (input && input.signal) return input.signal;
+    } catch (e) {}
+    try {
+      if (init && init.signal) return init.signal;
+    } catch (e2) {}
+    return null;
+  }
+
+  function invokeFetch(origFetch, thisArg, input, init, bridge) {
+    if (typeof Request === 'function' && input instanceof Request) {
+      var copy = input.clone();
+      return origFetch.call(thisArg, new Request(copy, { signal: bridge.signal }));
+    }
+    var nextInit = { signal: bridge.signal };
+    if (init) {
+      var key;
+      for (key in init) {
+        if (key === 'signal') continue;
+        if (Object.prototype.hasOwnProperty.call(init, key)) nextInit[key] = init[key];
+      }
+    }
+    return origFetch.call(thisArg, input, nextInit);
+  }
+
   function kindCaptured(state, kind) {
     if (kind === 'meta') return !!state.metaCaptured;
     if (kind === 'shifts') return !!state.shiftsCaptured;
@@ -272,7 +337,10 @@
       xssiPrefix: parsed ? parsed.xssiPrefix : 'NO',
       jsonParse: parsed ? parsed.jsonParse : 'FAILED',
       errorName: parsed ? parsed.errorName : safeErrorName(obs.error || obs.errorName),
-      errorMessage: parsed ? parsed.errorMessage : safeErrorMessage(obs.error || obs.errorMessage)
+      errorMessage: parsed ? parsed.errorMessage : safeErrorMessage(obs.error || obs.errorMessage),
+      signalAtStart: safeSignalState(obs.signalAtStart),
+      signalAtResponse: safeSignalState(obs.signalAtResponse),
+      signalAtReadFailure: textOk ? '' : safeSignalState(obs.signalAtReadFailure)
     };
     var accepted = !!(parsed && parsed.ok && status >= 200 && status < 300);
     if (kindCaptured(state, kind) && !accepted) return state;
@@ -370,6 +438,8 @@
     applyObservation: applyObservation,
     safeErrorMessage: safeErrorMessage,
     safeHeaderValue: safeHeaderValue,
+    signalState: signalState,
+    detachableSignal: detachableSignal,
     buildDiagnostic: buildDiagnostic,
     identifierCandidates: IDENTIFIER_CANDIDATES.slice()
   };
@@ -436,7 +506,11 @@
     else if (kind === 'shifts') state.shiftsMatched += 1;
   }
 
-  function observeFetchResponse(kind, info, res) {
+  function observeFetchResponse(kind, info, res, signals) {
+    signals = signals || {};
+    function pageAbortedNow() {
+      return signals.pageAborted ? signals.pageAborted() : 'none';
+    }
     var facts = {
       pathname: pathnameOnly(info && info.url),
       method: info && info.method,
@@ -454,7 +528,10 @@
         clone: 'FAILED',
         textStatus: 'FAILED',
         errorName: 'TypeError',
-        errorMessage: 'clone unavailable'
+        errorMessage: 'clone unavailable',
+        signalAtStart: signals.signalAtStart,
+        signalAtResponse: signals.signalAtResponse,
+        signalAtReadFailure: pageAbortedNow()
       }));
       schedulePaint();
       return;
@@ -466,7 +543,10 @@
       applyObservation(state, kind, Object.assign(facts, {
         clone: 'FAILED',
         textStatus: 'FAILED',
-        error: e
+        error: e,
+        signalAtStart: signals.signalAtStart,
+        signalAtResponse: signals.signalAtResponse,
+        signalAtReadFailure: pageAbortedNow()
       }));
       schedulePaint();
       return;
@@ -475,14 +555,20 @@
       applyObservation(state, kind, Object.assign(facts, {
         clone: 'SUCCESS',
         textStatus: 'SUCCESS',
-        text: text
+        text: text,
+        signalAtStart: signals.signalAtStart,
+        signalAtResponse: signals.signalAtResponse,
+        signalAtReadFailure: ''
       }));
       schedulePaint();
     }, function (e) {
       applyObservation(state, kind, Object.assign(facts, {
         clone: 'SUCCESS',
         textStatus: 'FAILED',
-        error: e
+        error: e,
+        signalAtStart: signals.signalAtStart,
+        signalAtResponse: signals.signalAtResponse,
+        signalAtReadFailure: pageAbortedNow()
       }));
       schedulePaint();
     });
@@ -556,11 +642,32 @@
       rememberObserved(state, 'fetch', info.method, info.url);
       var kind = captureKind(info.url, info.method);
       noteMatch(kind);
-      var promise = origFetch.apply(this, arguments);
+      var bridge = null;
+      var signalAtStart = 'none';
+      var promise = null;
+      if (kind && typeof AbortController === 'function') {
+        try {
+          bridge = detachableSignal(pageSignal(input, init));
+          signalAtStart = bridge.pageAborted();
+          promise = invokeFetch(origFetch, this, input, init, bridge);
+        } catch (e0) {
+          bridge = null;
+          promise = null;
+        }
+      }
+      if (!promise) promise = origFetch.apply(this, arguments);
       if (kind && promise && typeof promise.then === 'function') {
         promise.then(function (res) {
           state.responsesReceived += 1;
-          try { observeFetchResponse(kind, info, res); } catch (e) {}
+          var signalAtResponse = bridge ? bridge.pageAborted() : signalState(pageSignal(input, init));
+          if (bridge) bridge.detach();
+          try {
+            observeFetchResponse(kind, info, res, {
+              signalAtStart: signalAtStart,
+              signalAtResponse: signalAtResponse,
+              pageAborted: bridge ? function () { return bridge.pageAborted(); } : function () { return signalState(pageSignal(input, init)); }
+            });
+          } catch (e) {}
         }, function () {});
       }
       schedulePaint();
@@ -677,6 +784,9 @@
     line(body, 'ok: ', last.ok == null ? '-' : String(last.ok));
     line(body, 'redirected: ', last.redirected == null ? '-' : String(last.redirected));
     line(body, 'bodyUsed: ', last.bodyUsed == null ? '-' : String(last.bodyUsed));
+    line(body, 'signal at start: ', last.signalAtStart || '-');
+    line(body, 'signal at response: ', last.signalAtResponse || '-');
+    line(body, 'signal at read failure: ', last.signalAtReadFailure || '-');
     line(body, 'content-type: ', last.contentType || '-');
     line(body, 'content-length: ', last.contentLength || '-');
     line(body, 'clone: ', last.clone || '-');
