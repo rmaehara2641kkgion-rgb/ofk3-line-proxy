@@ -303,4 +303,17 @@ assert(MC.safeHeaderValue('application/json') === 'application/json', 'content t
 assert(MC.safeHeaderValue('Bearer SECRET') === '', 'unsafe header text is dropped');
 assert(MC.captureKind(devicesUrl, 'GET') === '', 'devices stay excluded after the reader change');
 
+const observed = { observedPaths: [], observedPathCount: 0 };
+MC.rememberObserved(observed, 'fetch', 'GET', shiftsUrl);
+MC.rememberObserved(observed, 'xhr', 'POST', 'https://user:SECRET-FLEET@mis-api.edriving.com/reports/driver/shifts/meta?fpId=SECRET-FLEET#frag');
+assert(observed.observedPaths.length === 2, 'observed paths are recorded');
+assert(observed.observedPaths[0].pathname === '/reports/driver/shifts', 'observed pathname drops the query');
+assert(observed.observedPaths[0].hostname === 'mis-api.edriving.com', 'observed hostname is kept');
+assert(JSON.stringify(observed).indexOf('SECRET-FLEET') < 0, 'observed paths omit query and userinfo');
+assert(observed.observedPaths[1].pathname === '/reports/driver/shifts/meta', 'meta pathname is recorded without the query');
+for (var n = 0; n < 40; n += 1) MC.rememberObserved(observed, 'fetch', 'GET', 'https://vrm-mentor.edriving.com/asset/' + n + '?token=SECRET-FLEET');
+assert(observed.observedPaths.length === 30, 'observed paths stop at 30');
+assert(observed.observedPathCount === 42, 'observed path count includes paths beyond the cap');
+assert(JSON.stringify(MC.buildDiagnostic(observed)).indexOf('SECRET-FLEET') < 0, 'diagnostic observedPaths omit secrets');
+
 console.log('mentor-capture-v0 tests passed');

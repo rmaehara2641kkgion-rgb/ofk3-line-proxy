@@ -148,6 +148,39 @@
     return path;
   }
 
+  function publicRequestTarget(url) {
+    var hostname = '';
+    var pathname = '';
+    try {
+      var parsed = new URL(String(url || ''), 'https://vrm-mentor.edriving.com');
+      hostname = parsed.hostname || '';
+      pathname = parsed.pathname || '';
+    } catch (e) {
+      pathname = String(url || '').split('?')[0].split('#')[0];
+    }
+    if (!/^[A-Za-z0-9.-]{0,180}$/.test(hostname)) hostname = '';
+    pathname = String(pathname || '').split('?')[0].split('#')[0];
+    if (pathname.length > 180) pathname = pathname.slice(0, 180);
+    if (!/^[\w./~%+-]*$/.test(pathname)) pathname = '';
+    return { hostname: hostname, pathname: pathname };
+  }
+
+  function rememberObserved(state, transport, method, url) {
+    if (!state) return;
+    if (!state.observedPaths) state.observedPaths = [];
+    state.observedPathCount = (state.observedPathCount || 0) + 1;
+    if (state.observedPaths.length >= 30) return;
+    var target = publicRequestTarget(url);
+    var verb = String(method || '').toUpperCase();
+    if (!/^[A-Z]{3,12}$/.test(verb)) verb = '';
+    state.observedPaths.push({
+      transport: transport === 'xhr' ? 'xhr' : 'fetch',
+      method: verb,
+      hostname: target.hostname,
+      pathname: target.pathname
+    });
+  }
+
   function safeHeaderValue(value) {
     var text = value == null ? '' : String(value).trim();
     if (!text || text.length > 80) return '';
@@ -304,6 +337,8 @@
       metaMatched: state.metaMatched || 0,
       shiftsMatched: state.shiftsMatched || 0,
       responsesReceived: state.responsesReceived || 0,
+      observedPathCount: state.observedPathCount || 0,
+      observedPaths: (state.observedPaths || []).slice(0, 30),
       metaCaptured: state.metaCaptured ? 'YES' : 'NO',
       shiftsCaptured: state.shiftsCaptured ? 'YES' : 'NO',
       metaTopKeys: state.metaTopKeys || [],
@@ -329,6 +364,8 @@
     summarizeShifts: summarizeShifts,
     captureStatus: captureStatus,
     pathnameOnly: pathnameOnly,
+    publicRequestTarget: publicRequestTarget,
+    rememberObserved: rememberObserved,
     parseResponseText: parseResponseText,
     applyObservation: applyObservation,
     safeErrorMessage: safeErrorMessage,
@@ -356,6 +393,8 @@
     metaMatched: 0,
     shiftsMatched: 0,
     responsesReceived: 0,
+    observedPathCount: 0,
+    observedPaths: [],
     metaCaptured: false,
     shiftsCaptured: false,
     capturedAt: null,
@@ -514,6 +553,7 @@
     global.fetch = function (input, init) {
       var info = requestInfo(input, init);
       state.fetchIntercepted += 1;
+      rememberObserved(state, 'fetch', info.method, info.url);
       var kind = captureKind(info.url, info.method);
       noteMatch(kind);
       var promise = origFetch.apply(this, arguments);
@@ -547,6 +587,7 @@
       var kind = '';
       try { kind = captureKind(xhr.__ofk3MentorUrl, xhr.__ofk3MentorMethod); } catch (e1) { kind = ''; }
       state.xhrIntercepted += 1;
+      rememberObserved(state, 'xhr', xhr.__ofk3MentorMethod, xhr.__ofk3MentorUrl);
       noteMatch(kind);
       if (kind) {
         xhr.addEventListener('load', function () {
@@ -600,6 +641,14 @@
     line(body, 'meta matched: ', diagnostic.metaMatched);
     line(body, 'shifts matched: ', diagnostic.shiftsMatched);
     line(body, 'responses received: ', diagnostic.responsesReceived);
+    line(body, 'observed paths: ', diagnostic.observedPathCount);
+    var paths = document.createElement('pre');
+    paths.textContent = (diagnostic.observedPaths || []).map(function (item) {
+      return item.transport + ' ' + item.method + ' ' + item.hostname + ' ' + item.pathname;
+    }).join('\n') || '-';
+    paths.style.whiteSpace = 'pre-wrap';
+    paths.style.margin = '4px 0 8px';
+    body.appendChild(paths);
     line(body, 'meta captured: ', diagnostic.metaCaptured);
     line(body, 'shifts captured: ', diagnostic.shiftsCaptured);
     line(body, 'capturedAt: ', diagnostic.capturedAt || '-');
