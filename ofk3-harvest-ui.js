@@ -29,6 +29,12 @@
       try { console.error('OFK3Harvest: collector registration failed', e); } catch (e2) {}
     }
   }
+  var MentorCols = (typeof window !== 'undefined') ? window.HarvestCollectorsMentor : null;
+  if (MentorCols && typeof MentorCols.registerMentorCollectors === 'function' && hub.listIds().indexOf('mentorActive') < 0) {
+    try { MentorCols.registerMentorCollectors(hub); } catch (e3) {
+      try { console.error('OFK3Harvest: mentor collector registration failed', e3); } catch (e4) {}
+    }
+  }
 
   var STATUS_COLOR = {
     'idle': '#6b7280',
@@ -77,6 +83,29 @@
     var notes = [];
     if (state.summary) notes.push(esc(state.summary));
     if (d.stale) notes.push('データ日付 ' + esc(d.localDate) + ' は本日分ではありません。');
+    if (state.id === 'mentorActive') {
+      var drivers = Array.isArray(d.drivers) ? d.drivers : [];
+      if (d.capturedAt) notes.push('取得時刻 ' + esc(fmtTime(d.capturedAt)) + ' / Active ' + esc(d.activeCount) + '名');
+      if (d.staffConflicts) notes.push('realStaffNumber の対応が割れている行: ' + esc(d.staffConflicts));
+      if (drivers.length) {
+        var table = '<table style="width:100%;border-collapse:collapse;margin-top:6px;"><thead><tr>'
+          + '<th style="text-align:left;padding:4px;">氏名</th>'
+          + '<th style="text-align:left;padding:4px;">realStaffNumber</th>'
+          + '<th style="text-align:left;padding:4px;">開始</th>'
+          + '<th style="text-align:left;padding:4px;">vehicle</th>'
+          + '</tr></thead><tbody>';
+        drivers.forEach(function (driver) {
+          driver = driver || {};
+          var name = String(driver.firstName || '') + (driver.firstName && driver.lastName ? ' ' : '') + String(driver.lastName || '');
+          table += '<tr><td style="padding:4px;">' + esc(name || '-') + '</td>'
+            + '<td style="padding:4px;">' + esc(driver.realStaffNumber || '-') + '</td>'
+            + '<td style="padding:4px;">' + esc(fmtTime(driver.shiftStartTime)) + '</td>'
+            + '<td style="padding:4px;">' + esc(driver.vehicleIdentifier || '-') + '</td></tr>';
+        });
+        table += '</tbody></table>';
+        notes.push(table);
+      }
+    }
     if (state.id === 'bag' && d.scopePackageCount) {
       if (d.legacyUnknown || d.legacyCaptured) {
         notes.push('旧データ形式の行があります (bagStatusなし): 「未試行」と「取得成功だがBagなし(null)」は区別できません。');
@@ -98,7 +127,8 @@
     var h = '';
     h += '<div style="font-size:13px;line-height:1.7;background:#f3f4f6;border-radius:8px;padding:10px 12px;margin-bottom:12px;">';
     h += '<b>人間の操作手順:</b> Cortexで拡張パネルの「取得開始」→「Bag取得」→「OFK3へ送信」を実行後、ここで「再確認」を押してください。<br>';
-    h += '<span style="color:#6b7280;">この画面はCortexの取得を開始しません。すでにOFK3へ送信された素材を確認・検証・正規化するだけです。</span>';
+    h += '<span style="color:#6b7280;">この画面はCortexの取得を開始しません。すでにOFK3へ送信された素材を確認・検証・正規化するだけです。</span><br>';
+    h += '<span style="color:#6b7280;">Mentorは Mentor画面の「HARVESTへ送る」で送られた Active Snapshot を再確認します。Mentor APIの再取得はしません。</span>';
     h += '</div>';
     h += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">';
     h += '<button type="button" data-hv-act="run-all"' + (runningAll ? ' disabled' : '')

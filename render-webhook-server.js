@@ -10,6 +10,7 @@ const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/d
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
 const LineUnlinked = require('./line-unlinked-core.js');
+const MentorActive = require('./mentor-active-store.js');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -243,6 +244,16 @@ app.get(['/', '/index.html'], function(req, res, next) {
       var hvColBodyPos = html.lastIndexOf('</body>');
       if (hvColBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvColBodyPos) + '  <script src="/harvest-collectors-cortex.js?v=20261002-1"></script>\n' + html.slice(hvColBodyPos);
+    }
+    if (html.indexOf('/harvest-collectors-mentor.js') < 0) {
+      var hvMentorBodyPos = html.lastIndexOf('</body>');
+      if (hvMentorBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, hvMentorBodyPos) + '  <script src="/harvest-collectors-mentor.js?v=20261005-1"></script>\n' + html.slice(hvMentorBodyPos);
+    }
+    if (html.indexOf('/ofk3-mentor-active.js') < 0) {
+      var mentorActiveBodyPos = html.lastIndexOf('</body>');
+      if (mentorActiveBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, mentorActiveBodyPos) + '  <script src="/ofk3-mentor-active.js?v=20261005-1"></script>\n' + html.slice(mentorActiveBodyPos);
     }
     if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
       var hvUiBodyPos = html.lastIndexOf('</body>');
@@ -744,6 +755,25 @@ app.get('/cortex-priority', function(req, res) {
     out.packageAssistDiagnostics.indexCount = out.packageAssistIndex.length;
   }
   res.json(out);
+});
+
+var mentorActiveStore = MentorActive.createMentorActiveStore();
+app.post('/mentor-active/import', function(req, res) {
+  var saved = mentorActiveStore.save(req.body, new Date().toISOString());
+  if (!saved.ok) return res.status(400).json({ status: 'error', message: saved.message });
+  log('mentor-active import count=' + saved.snapshot.activeCount);
+  res.json({
+    status: 'ok',
+    activeCount: saved.snapshot.activeCount,
+    capturedAt: saved.snapshot.capturedAt
+  });
+});
+app.get('/mentor-active', function(req, res) {
+  var entry = mentorActiveStore.read();
+  if (!entry) {
+    return res.status(404).json({ status: 'empty', source: 'mentor', activeCount: 0, drivers: [] });
+  }
+  res.json(Object.assign({ status: 'ok' }, entry));
 });
 
 // 住所→緯度経度取得

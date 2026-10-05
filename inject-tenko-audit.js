@@ -13,6 +13,8 @@ const tags = [
   '<script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>',
   '<script src="/harvest-core.js?v=20261002-1"></script>',
   '<script src="/harvest-collectors-cortex.js?v=20261002-1"></script>',
+  '<script src="/harvest-collectors-mentor.js?v=20261005-1"></script>',
+  '<script src="/ofk3-mentor-active.js?v=20261005-1"></script>',
   '<script src="/ofk3-harvest-ui.js?v=20261002-1"></script>'
 ];
 
@@ -46,8 +48,14 @@ try {
   if (html.indexOf('/harvest-collectors-cortex.js') < 0) {
     insert += '  ' + tags[7] + '\n';
   }
-  if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
+  if (html.indexOf('/harvest-collectors-mentor.js') < 0) {
     insert += '  ' + tags[8] + '\n';
+  }
+  if (html.indexOf('/ofk3-mentor-active.js') < 0) {
+    insert += '  ' + tags[9] + '\n';
+  }
+  if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
+    insert += '  ' + tags[10] + '\n';
   }
 
   if (insert) {

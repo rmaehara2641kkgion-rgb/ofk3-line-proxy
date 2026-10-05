@@ -255,6 +255,61 @@
     return out;
   }
 
+  function cleanSnapshotText(value, max) {
+    if (typeof value === 'number' && isFinite(value)) value = String(value);
+    if (typeof value !== 'string') return '';
+    var text = value.trim();
+    if (!text) return '';
+    if (text.length > max) text = text.slice(0, max);
+    if (/bearer|cookie|password/i.test(text)) return '';
+    return text;
+  }
+
+  function cleanSnapshotStart(value) {
+    if (typeof value === 'number' && isFinite(value)) return value;
+    if (typeof value === 'string' && /^-?\d{1,16}$/.test(value.trim())) {
+      var n = Number(value.trim());
+      if (isFinite(n)) return n;
+    }
+    return null;
+  }
+
+  function cleanSnapshotVehicle(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number' && isFinite(value)) return String(value);
+    if (typeof value !== 'string') return null;
+    var text = value.trim();
+    if (!text || text.length > 80) return null;
+    if (/bearer|cookie|password/i.test(text)) return null;
+    return text;
+  }
+
+  function buildActiveSnapshot(body, capturedAt) {
+    var drivers = [];
+    var rows = body && Array.isArray(body.data) ? body.data : [];
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+      if (row.shiftEndTime !== 'N/A' || row.vrmStatus !== 'Active') return;
+      var driver = {
+        driverId: cleanSnapshotText(row.driverId, 80),
+        realStaffNumber: cleanSnapshotText(row.realStaffNumber, 80),
+        firstName: cleanSnapshotText(row.firstName, 80),
+        lastName: cleanSnapshotText(row.lastName, 80),
+        shiftStartTime: cleanSnapshotStart(row.shiftStartTime),
+        vehicleIdentifier: cleanSnapshotVehicle(row.vehicleIdentifier)
+      };
+      if (!driver.driverId && !driver.realStaffNumber) return;
+      drivers.push(driver);
+    });
+    var at = typeof capturedAt === 'string' ? capturedAt : '';
+    return {
+      capturedAt: at,
+      source: 'mentor',
+      activeCount: drivers.length,
+      drivers: drivers
+    };
+  }
+
   function captureStatus(metaCaptured, shiftsCaptured) {
     if (metaCaptured && shiftsCaptured) return 'SUCCESS';
     if (shiftsCaptured) return 'SHIFTS CAPTURED';
@@ -525,6 +580,7 @@
       state.driverIdsWithMultipleRealStaffNumbers = shifts.driverIdsWithMultipleRealStaffNumbers;
       state.realStaffNumbersWithMultipleDriverIds = shifts.realStaffNumbersWithMultipleDriverIds;
       state.sampleRow = shifts.sampleRow;
+      state.activeSnapshot = buildActiveSnapshot(parsed.body, new Date().toISOString());
       state.issue = '';
     }
     state.capturedAt = new Date().toISOString();
@@ -572,6 +628,7 @@
       activeOpenRealStaffNumberDuplicateValues: state.activeOpenRealStaffNumberDuplicateValues || 0,
       driverIdsWithMultipleRealStaffNumbers: state.driverIdsWithMultipleRealStaffNumbers || 0,
       realStaffNumbersWithMultipleDriverIds: state.realStaffNumbersWithMultipleDriverIds || 0,
+      activeSnapshotCount: state.activeSnapshot && typeof state.activeSnapshot.activeCount === 'number' ? state.activeSnapshot.activeCount : null,
       sampleRow: state.sampleRow || null,
       lastResponse: last,
       issue: state.issue || '',
@@ -585,6 +642,7 @@
     redactRow: redactRow,
     summarizeMeta: summarizeMeta,
     summarizeShifts: summarizeShifts,
+    buildActiveSnapshot: buildActiveSnapshot,
     captureStatus: captureStatus,
     pathnameOnly: pathnameOnly,
     publicRequestTarget: publicRequestTarget,
@@ -646,6 +704,7 @@
     activeOpenRealStaffNumberDuplicateValues: 0,
     driverIdsWithMultipleRealStaffNumbers: 0,
     realStaffNumbersWithMultipleDriverIds: 0,
+    activeSnapshot: null,
     sampleRow: null,
     issue: '',
     lastResponse: null
@@ -884,7 +943,7 @@
   state.hookInstalledAt = state.hookInstalled ? new Date().toISOString() : null;
 
   var PANEL_ID = 'ofk3-mentor-capture-v0';
-  var panelCollapsed = false;
+  var panelCollapsed = true;
 
   function setPanelCollapsed(collapsed) {
     panelCollapsed = !!collapsed;
@@ -983,6 +1042,7 @@
     line(body, 'active open realStaffNumber unique / duplicate values: ', diagnostic.activeOpenRealStaffNumberUnique + ' / ' + diagnostic.activeOpenRealStaffNumberDuplicateValues);
     line(body, 'driverIds with multiple realStaffNumbers: ', diagnostic.driverIdsWithMultipleRealStaffNumbers);
     line(body, 'realStaffNumbers with multiple driverIds: ', diagnostic.realStaffNumbersWithMultipleDriverIds);
+    line(body, 'active snapshot: ', diagnostic.activeSnapshotCount == null ? '-' : diagnostic.activeSnapshotCount);
     line(body, 'structure keys: ', diagnostic.structureKeys.length ? diagnostic.structureKeys.join(', ') : '-');
     line(body, 'Detected row keys: ', diagnostic.detectedRowKeys.length ? diagnostic.detectedRowKeys.join(', ') : '-');
     line(body, 'candidate identifier fields: ', diagnostic.candidateIdentifierFields.length ? diagnostic.candidateIdentifierFields.join(', ') : '-');
@@ -1012,6 +1072,47 @@
     mark('コピーできませんでした');
   }
 
+  function markSend(message) {
+    var note = document.getElementById(PANEL_ID);
+    var status = note && note.shadowRoot && note.shadowRoot.getElementById('ofk3-mentor-send-note');
+    if (status) status.textContent = message;
+  }
+
+  function sendActiveSnapshot() {
+    var snap = state.activeSnapshot;
+    if (!snap || snap.source !== 'mentor' || !Array.isArray(snap.drivers)) {
+      markSend('Active Snapshotがありません');
+      return;
+    }
+    var requestId = String(Date.now());
+    state.pendingSendId = requestId;
+    try {
+      global.postMessage({
+        source: 'OFK3_MENTOR',
+        type: 'mentor-active-import',
+        requestId: requestId,
+        payload: {
+          capturedAt: snap.capturedAt,
+          source: 'mentor',
+          activeCount: snap.activeCount,
+          drivers: snap.drivers
+        }
+      }, global.location.origin);
+      markSend('送信中');
+    } catch (e) {
+      markSend('送信できませんでした');
+    }
+  }
+
+  global.addEventListener('message', function (ev) {
+    if (ev.source !== global) return;
+    var data = ev.data;
+    if (!data || data.source !== 'OFK3_MENTOR' || data.type !== 'mentor-active-import-result') return;
+    if (state.pendingSendId && data.requestId !== state.pendingSendId) return;
+    if (data.ok) markSend('送信しました (' + (data.activeCount == null ? '-' : data.activeCount) + ')');
+    else markSend(data.message || '送信できませんでした');
+  });
+
   function ensurePanel() {
     if (!document.documentElement || document.getElementById(PANEL_ID)) return;
     var host = document.createElement('div');
@@ -1021,18 +1122,20 @@
     var style = document.createElement('style');
     style.textContent = '.box{width:420px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} .box.collapsed{width:auto;max-height:none;padding:0;background:transparent;box-shadow:none;overflow:visible} .head{display:flex;align-items:center;justify-content:space-between;gap:8px} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .chip{margin:0;font-weight:700} .note{opacity:.8;min-height:1.2em}';
     var box = document.createElement('div');
-    box.className = 'box';
+    box.className = 'box collapsed';
     var head = document.createElement('div');
     head.className = 'head';
     head.id = 'ofk3-mentor-head';
+    head.style.display = 'block';
     var titleName = document.createElement('b');
     titleName.id = 'ofk3-mentor-title';
     titleName.textContent = 'MENTOR CAPTURE v0';
+    titleName.style.display = 'none';
     var toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.id = 'ofk3-mentor-toggle';
     toggle.className = 'chip';
-    toggle.textContent = '最小化';
+    toggle.textContent = 'MENTOR CAPTURE v0';
     toggle.addEventListener('click', function () {
       setPanelCollapsed(!panelCollapsed);
     });
@@ -1040,6 +1143,7 @@
     head.appendChild(toggle);
     var details = document.createElement('div');
     details.id = 'ofk3-mentor-details';
+    details.style.display = 'none';
     var status = document.createElement('div');
     status.id = 'ofk3-mentor-status';
     status.textContent = 'WAITING';
@@ -1052,10 +1156,19 @@
     var copyNote = document.createElement('div');
     copyNote.id = 'ofk3-mentor-copy-note';
     copyNote.className = 'note';
+    var sendButton = document.createElement('button');
+    sendButton.type = 'button';
+    sendButton.textContent = 'HARVESTへ送る';
+    sendButton.addEventListener('click', sendActiveSnapshot);
+    var sendNote = document.createElement('div');
+    sendNote.id = 'ofk3-mentor-send-note';
+    sendNote.className = 'note';
     details.appendChild(status);
     details.appendChild(body);
     details.appendChild(button);
     details.appendChild(copyNote);
+    details.appendChild(sendButton);
+    details.appendChild(sendNote);
     box.appendChild(head);
     box.appendChild(details);
     shadow.appendChild(style);

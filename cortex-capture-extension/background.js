@@ -123,6 +123,28 @@ function dispatchLeftClick(target, x, y, done) {
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg) return;
+  if (msg.type === 'mentor-active-import') {
+    resolveOfk3BaseUrl().then(function (baseUrl) {
+      return fetch(baseUrl + '/mentor-active/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg.payload || {})
+      });
+    }).then(function (res) {
+      return res.json().then(function (body) {
+        if (!res.ok || !body || body.status !== 'ok') {
+          throw new Error((body && body.message) || ('HTTP ' + res.status));
+        }
+        sendResponse({
+          ok: true,
+          body: { status: 'ok', activeCount: body.activeCount, capturedAt: body.capturedAt }
+        });
+      });
+    }).catch(function (e) {
+      sendResponse({ ok: false, message: e && e.message ? e.message : 'Mentor送信失敗' });
+    });
+    return true;
+  }
   if (msg.type === 'ofk3-priority-import') {
     resolveOfk3BaseUrl().then(function (baseUrl) {
       return fetch(baseUrl + '/cortex-priority/import', {

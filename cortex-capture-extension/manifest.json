@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OFK3 Cortex Capture",
   "version": "1.6.17",
-  "description": "Capture Cortex SPA route JSON locally. Does not read cookies or send data. Mentor Capture v0 only observes Mentor shift GET responses.",
+  "description": "Capture Cortex SPA route JSON locally. Does not read cookies or send data. Mentor Sensor v1 observes Mentor shift GETs and can send the Active snapshot to OFK3.",
   "action": {
     "default_title": "OFK3取得"
   },
@@ -55,6 +55,16 @@
       ],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://vrm-mentor.edriving.com/*"
+      ],
+      "js": [
+        "mentor-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
     }
   ]
 }

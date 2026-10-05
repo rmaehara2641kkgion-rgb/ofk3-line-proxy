@@ -213,7 +213,8 @@
         probe: def.probe,
         normalize: def.normalize,
         summarize: typeof def.summarize === 'function' ? def.summarize : defaultSummarize,
-        handoff: typeof def.handoff === 'function' ? def.handoff : defaultHandoff
+        handoff: typeof def.handoff === 'function' ? def.handoff : defaultHandoff,
+        affectsOverall: def.affectsOverall !== false
       };
       order.push(def.id);
       store[def.id] = {
@@ -262,8 +263,14 @@
       return order.map(function (id) { return getState(id); });
     }
 
+    function overallStatuses() {
+      return order.filter(function (id) {
+        return defs[id].affectsOverall !== false;
+      }).map(function (id) { return store[id].status; });
+    }
+
     function getOverall() {
-      var statuses = order.map(function (id) { return store[id].status; });
+      var statuses = overallStatuses();
       for (var i = 0; i < statuses.length; i++) {
         if (statuses[i] === STATUS.IDLE || statuses[i] === STATUS.CHECKING) return null;
       }
@@ -392,7 +399,7 @@
       runAllPromise = chain.catch(function () {}).then(function () {
         var results = {};
         order.forEach(function (id) { results[id] = getState(id); });
-        var statuses = order.map(function (id) { return store[id].status; });
+        var statuses = overallStatuses();
         release();
         runAllPromise = null;
         notify('*');
