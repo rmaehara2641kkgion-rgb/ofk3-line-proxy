@@ -137,12 +137,173 @@
     return 'WAITING';
   }
 
+  function pathnameOnly(url) {
+    var path = '';
+    try {
+      path = new URL(String(url || ''), 'https://vrm-mentor.edriving.com').pathname;
+    } catch (e1) {
+      path = String(url || '').split('?')[0];
+    }
+    if (path.length > 180) path = path.slice(0, 180);
+    return path;
+  }
+
+  function safeHeaderValue(value) {
+    var text = value == null ? '' : String(value).trim();
+    if (!text || text.length > 80) return '';
+    if (!/^[A-Za-z0-9 .;=_+/,-]+$/.test(text)) return '';
+    if (/bearer|token|cookie/i.test(text)) return '';
+    return text;
+  }
+
+  function safeErrorName(value) {
+    var name = value && value.name ? String(value.name) : (typeof value === 'string' ? value : '');
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(name)) return '';
+    return name;
+  }
+
+  function safeErrorMessage(value) {
+    var message = value && value.message ? String(value.message) : (typeof value === 'string' ? value : '');
+    message = message.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '');
+    message = message.replace(/\s+/g, ' ').trim();
+    if (!message || message.length > 160) return 'unavailable';
+    if (/[{}`]|bearer|token|cookie/i.test(message)) return 'unavailable';
+    return message;
+  }
+
+  function safeResponseType(value) {
+    var text = String(value || '');
+    if (text === 'basic' || text === 'cors' || text === 'default' || text === 'error' || text === 'opaque' || text === 'opaqueredirect' || text === 'xhr') {
+      return text;
+    }
+    return '';
+  }
+
+  function parseResponseText(text) {
+    var raw = text == null ? '' : String(text);
+    var out = {
+      ok: false,
+      body: null,
+      textLength: raw.length,
+      xssiPrefix: /^\)\]\}',?\n/.test(raw) ? 'YES' : 'NO',
+      jsonParse: 'FAILED',
+      errorName: '',
+      errorMessage: '',
+      issue: ''
+    };
+    var source = raw.replace(/^\)\]\}',?\n/, '');
+    if (!source) {
+      out.issue = 'EMPTY_BODY';
+      out.errorName = 'SyntaxError';
+      out.errorMessage = 'empty body';
+      return out;
+    }
+    try {
+      out.body = JSON.parse(source);
+      out.ok = true;
+      out.jsonParse = 'SUCCESS';
+    } catch (e) {
+      out.issue = 'JSON_PARSE_FAILED';
+      out.errorName = safeErrorName(e);
+      out.errorMessage = safeErrorMessage(e);
+    }
+    return out;
+  }
+
+  function kindCaptured(state, kind) {
+    if (kind === 'meta') return !!state.metaCaptured;
+    if (kind === 'shifts') return !!state.shiftsCaptured;
+    return false;
+  }
+
+  function applyObservation(state, kind, obs) {
+    obs = obs || {};
+    var cloneOk = obs.clone === 'SUCCESS';
+    var textOk = obs.textStatus === 'SUCCESS';
+    var parsed = cloneOk && textOk ? parseResponseText(obs.text) : null;
+    var status = Number(obs.status) || 0;
+    var last = {
+      pathname: pathnameOnly(obs.pathname || obs.url || ''),
+      method: String(obs.method || 'GET').toUpperCase(),
+      transport: obs.transport === 'xhr' ? 'xhr' : 'fetch',
+      status: status,
+      type: safeResponseType(obs.type),
+      ok: !!obs.ok,
+      redirected: !!obs.redirected,
+      bodyUsed: !!obs.bodyUsed,
+      contentType: safeHeaderValue(obs.contentType),
+      contentLength: safeHeaderValue(obs.contentLength),
+      clone: cloneOk ? 'SUCCESS' : 'FAILED',
+      text: textOk ? 'SUCCESS' : 'FAILED',
+      textLength: parsed ? parsed.textLength : 0,
+      xssiPrefix: parsed ? parsed.xssiPrefix : 'NO',
+      jsonParse: parsed ? parsed.jsonParse : 'FAILED',
+      errorName: parsed ? parsed.errorName : safeErrorName(obs.error || obs.errorName),
+      errorMessage: parsed ? parsed.errorMessage : safeErrorMessage(obs.error || obs.errorMessage)
+    };
+    var accepted = !!(parsed && parsed.ok && status >= 200 && status < 300);
+    if (kindCaptured(state, kind) && !accepted) return state;
+    state.lastResponse = last;
+    if (!cloneOk) {
+      state.issue = 'CLONE_FAILED';
+      return state;
+    }
+    if (!textOk) {
+      state.issue = 'TEXT_FAILED';
+      return state;
+    }
+    if (!parsed.ok) {
+      state.issue = parsed.issue || 'JSON_PARSE_FAILED';
+      return state;
+    }
+    if (!(status >= 200 && status < 300)) {
+      state.issue = 'HTTP_' + status;
+      return state;
+    }
+    if (kind === 'meta') {
+      var meta = summarizeMeta(parsed.body);
+      if (!meta.ok) {
+        state.issue = meta.issue || 'META_NOT_OBJECT';
+        return state;
+      }
+      state.metaCaptured = true;
+      state.metaTopKeys = meta.topKeys;
+      state.structureKeys = meta.structureKeys;
+      state.issue = meta.issue && !state.shiftsCaptured ? meta.issue : '';
+    } else if (kind === 'shifts') {
+      var shifts = summarizeShifts(parsed.body);
+      if (!shifts.ok) {
+        state.issue = shifts.issue || 'NO_DATA_ARRAY';
+        return state;
+      }
+      state.shiftsCaptured = true;
+      state.totalRows = shifts.totalRows;
+      state.detectedRowKeys = shifts.detectedRowKeys;
+      state.candidateIdentifierFields = shifts.candidateIdentifierFields;
+      state.rowsWithShiftStartTime = shifts.rowsWithShiftStartTime;
+      state.rowsWithShiftEndTime = shifts.rowsWithShiftEndTime;
+      state.rowsWithEndNA = shifts.rowsWithEndNA;
+      state.sampleRow = shifts.sampleRow;
+      state.issue = '';
+    }
+    state.capturedAt = new Date().toISOString();
+    return state;
+  }
+
   function buildDiagnostic(state) {
     state = state || {};
+    var last = state.lastResponse || null;
     return {
       product: 'MENTOR CAPTURE v0',
       capture: captureStatus(!!state.metaCaptured, !!state.shiftsCaptured),
       capturedAt: state.capturedAt || null,
+      hookInstalled: state.hookInstalled ? 'YES' : 'NO',
+      hookInstalledAt: state.hookInstalledAt || null,
+      fetchIntercepted: state.fetchIntercepted || 0,
+      xhrIntercepted: state.xhrIntercepted || 0,
+      metaMatched: state.metaMatched || 0,
+      shiftsMatched: state.shiftsMatched || 0,
+      responsesReceived: state.responsesReceived || 0,
       metaCaptured: state.metaCaptured ? 'YES' : 'NO',
       shiftsCaptured: state.shiftsCaptured ? 'YES' : 'NO',
       metaTopKeys: state.metaTopKeys || [],
@@ -154,6 +315,7 @@
       rowsWithShiftEndTime: state.rowsWithShiftEndTime || 0,
       rowsWithEndNA: state.rowsWithEndNA || 0,
       sampleRow: state.sampleRow || null,
+      lastResponse: last,
       issue: state.issue || '',
       endTimeMeaning: 'shiftEndTime "N/A" means a trip session with no end time'
     };
@@ -166,6 +328,11 @@
     summarizeMeta: summarizeMeta,
     summarizeShifts: summarizeShifts,
     captureStatus: captureStatus,
+    pathnameOnly: pathnameOnly,
+    parseResponseText: parseResponseText,
+    applyObservation: applyObservation,
+    safeErrorMessage: safeErrorMessage,
+    safeHeaderValue: safeHeaderValue,
     buildDiagnostic: buildDiagnostic,
     identifierCandidates: IDENTIFIER_CANDIDATES.slice()
   };
@@ -182,6 +349,13 @@
   if (!onMentorHost()) return;
 
   var state = {
+    hookInstalled: false,
+    hookInstalledAt: null,
+    fetchIntercepted: 0,
+    xhrIntercepted: 0,
+    metaMatched: 0,
+    shiftsMatched: 0,
+    responsesReceived: 0,
     metaCaptured: false,
     shiftsCaptured: false,
     capturedAt: null,
@@ -194,73 +368,143 @@
     rowsWithShiftEndTime: 0,
     rowsWithEndNA: 0,
     sampleRow: null,
-    issue: ''
+    issue: '',
+    lastResponse: null
   };
+  var paintScheduled = false;
 
-  function stamp() {
-    state.capturedAt = new Date().toISOString();
+  function schedulePaint() {
+    if (paintScheduled) return;
+    paintScheduled = true;
+    global.setTimeout(function () {
+      paintScheduled = false;
+      paint();
+    }, 0);
   }
 
-  function noteIssue(code) {
-    if (state.metaCaptured && state.shiftsCaptured) return;
-    state.issue = code;
-    paint();
-  }
-
-  function applyMeta(body) {
-    var summary = summarizeMeta(body);
-    if (!summary.ok) {
-      noteIssue(summary.issue || 'META_NOT_OBJECT');
-      return;
-    }
-    state.metaCaptured = true;
-    state.metaTopKeys = summary.topKeys;
-    state.structureKeys = summary.structureKeys;
-    if (summary.issue && !state.shiftsCaptured) state.issue = summary.issue;
-    else if (!summary.issue) state.issue = state.shiftsCaptured ? '' : state.issue;
-    stamp();
-    paint();
-  }
-
-  function applyShifts(body) {
-    var summary = summarizeShifts(body);
-    if (!summary.ok) {
-      noteIssue(summary.issue || 'NO_DATA_ARRAY');
-      return;
-    }
-    state.shiftsCaptured = true;
-    state.totalRows = summary.totalRows;
-    state.detectedRowKeys = summary.detectedRowKeys;
-    state.candidateIdentifierFields = summary.candidateIdentifierFields;
-    state.rowsWithShiftStartTime = summary.rowsWithShiftStartTime;
-    state.rowsWithShiftEndTime = summary.rowsWithShiftEndTime;
-    state.rowsWithEndNA = summary.rowsWithEndNA;
-    state.sampleRow = summary.sampleRow;
-    state.issue = '';
-    stamp();
-    paint();
-  }
-
-  function observeResponse(kind, res) {
+  function readAllowedHeader(getter, name) {
+    var lower = String(name || '').toLowerCase();
+    if (lower !== 'content-type' && lower !== 'content-length') return '';
     try {
-      if (!res || typeof res.clone !== 'function') {
-        noteIssue('NO_CLONE');
+      return safeHeaderValue(getter(lower));
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function noteMatch(kind) {
+    if (kind === 'meta') state.metaMatched += 1;
+    else if (kind === 'shifts') state.shiftsMatched += 1;
+  }
+
+  function observeFetchResponse(kind, info, res) {
+    var facts = {
+      pathname: pathnameOnly(info && info.url),
+      method: info && info.method,
+      transport: 'fetch',
+      status: res && Number(res.status) || 0,
+      type: res && res.type,
+      ok: !!(res && res.ok),
+      redirected: !!(res && res.redirected),
+      bodyUsed: !!(res && res.bodyUsed),
+      contentType: res && res.headers ? readAllowedHeader(function (name) { return res.headers.get(name); }, 'content-type') : '',
+      contentLength: res && res.headers ? readAllowedHeader(function (name) { return res.headers.get(name); }, 'content-length') : ''
+    };
+    if (!res || typeof res.clone !== 'function') {
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'FAILED',
+        textStatus: 'FAILED',
+        errorName: 'TypeError',
+        errorMessage: 'clone unavailable'
+      }));
+      schedulePaint();
+      return;
+    }
+    var cloned;
+    try {
+      cloned = res.clone();
+    } catch (e) {
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'FAILED',
+        textStatus: 'FAILED',
+        error: e
+      }));
+      schedulePaint();
+      return;
+    }
+    cloned.text().then(function (text) {
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'SUCCESS',
+        textStatus: 'SUCCESS',
+        text: text
+      }));
+      schedulePaint();
+    }, function (e) {
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'SUCCESS',
+        textStatus: 'FAILED',
+        error: e
+      }));
+      schedulePaint();
+    });
+  }
+
+  function observeXhr(kind, xhr) {
+    var facts = {
+      pathname: pathnameOnly(xhr && xhr.__ofk3MentorUrl),
+      method: xhr && xhr.__ofk3MentorMethod,
+      transport: 'xhr',
+      status: xhr ? Number(xhr.status) || 0 : 0,
+      type: 'xhr',
+      ok: !!(xhr && xhr.status >= 200 && xhr.status < 300),
+      redirected: false,
+      bodyUsed: false,
+      contentType: readAllowedHeader(function (name) { return xhr.getResponseHeader(name); }, 'content-type'),
+      contentLength: readAllowedHeader(function (name) { return xhr.getResponseHeader(name); }, 'content-length')
+    };
+    var responseType = '';
+    try { responseType = xhr.responseType || ''; } catch (e1) { responseType = ''; }
+    if (responseType === 'json' && xhr.response && typeof xhr.response === 'object') {
+      var encoded = '';
+      try { encoded = JSON.stringify(xhr.response); } catch (e2) { encoded = ''; }
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'SUCCESS',
+        textStatus: encoded ? 'SUCCESS' : 'FAILED',
+        text: encoded,
+        errorName: encoded ? '' : 'TypeError',
+        errorMessage: encoded ? '' : 'unavailable'
+      }));
+      schedulePaint();
+      return;
+    }
+    var text = '';
+    try {
+      if (responseType && responseType !== 'text') {
+        applyObservation(state, kind, Object.assign(facts, {
+          clone: 'SUCCESS',
+          textStatus: 'FAILED',
+          errorName: 'InvalidStateError',
+          errorMessage: 'unsupported responseType'
+        }));
+        schedulePaint();
         return;
       }
-      var status = Number(res.status);
-      res.clone().json().then(function (body) {
-        if (!(status >= 200 && status < 300)) {
-          noteIssue('HTTP_' + status);
-          return;
-        }
-        if (kind === 'meta') applyMeta(body);
-        else applyShifts(body);
-      }).catch(function () {
-        noteIssue('RESPONSE_JSON_UNAVAILABLE');
-      });
-    } catch (e) {
-      noteIssue('OBSERVE_FAILED');
+      text = xhr.responseText || '';
+    } catch (e3) {
+      applyObservation(state, kind, Object.assign(facts, {
+        clone: 'SUCCESS',
+        textStatus: 'FAILED',
+        error: e3
+      }));
+      schedulePaint();
+      return;
     }
+    applyObservation(state, kind, Object.assign(facts, {
+      clone: 'SUCCESS',
+      textStatus: 'SUCCESS',
+      text: text
+    }));
+    schedulePaint();
   }
 
   function installFetch() {
@@ -269,19 +513,57 @@
     if (typeof origFetch !== 'function') return;
     global.fetch = function (input, init) {
       var info = requestInfo(input, init);
-      var promise = origFetch.apply(this, arguments);
+      state.fetchIntercepted += 1;
       var kind = captureKind(info.url, info.method);
+      noteMatch(kind);
+      var promise = origFetch.apply(this, arguments);
       if (kind && promise && typeof promise.then === 'function') {
         promise.then(function (res) {
-          observeResponse(kind, res);
+          state.responsesReceived += 1;
+          try { observeFetchResponse(kind, info, res); } catch (e) {}
         }, function () {});
       }
+      schedulePaint();
       return promise;
     };
     global.__OFK3_MENTOR_HOOKED__ = true;
   }
 
+  function installXhr() {
+    if (global.__OFK3_MENTOR_XHR_HOOKED__) return;
+    if (!global.XMLHttpRequest || !global.XMLHttpRequest.prototype) return;
+    var xhrOpen = global.XMLHttpRequest.prototype.open;
+    var xhrSend = global.XMLHttpRequest.prototype.send;
+    if (typeof xhrOpen !== 'function' || typeof xhrSend !== 'function') return;
+    global.XMLHttpRequest.prototype.open = function (method, url) {
+      try {
+        this.__ofk3MentorMethod = method;
+        this.__ofk3MentorUrl = url;
+      } catch (e) {}
+      return xhrOpen.apply(this, arguments);
+    };
+    global.XMLHttpRequest.prototype.send = function () {
+      var xhr = this;
+      var kind = '';
+      try { kind = captureKind(xhr.__ofk3MentorUrl, xhr.__ofk3MentorMethod); } catch (e1) { kind = ''; }
+      state.xhrIntercepted += 1;
+      noteMatch(kind);
+      if (kind) {
+        xhr.addEventListener('load', function () {
+          state.responsesReceived += 1;
+          try { observeXhr(kind, xhr); } catch (e2) {}
+        });
+      }
+      schedulePaint();
+      return xhrSend.apply(this, arguments);
+    };
+    global.__OFK3_MENTOR_XHR_HOOKED__ = true;
+  }
+
   installFetch();
+  installXhr();
+  state.hookInstalled = !!(global.__OFK3_MENTOR_HOOKED__ || global.__OFK3_MENTOR_XHR_HOOKED__);
+  state.hookInstalledAt = state.hookInstalled ? new Date().toISOString() : null;
 
   var PANEL_ID = 'ofk3-mentor-capture-v0';
 
@@ -310,9 +592,34 @@
     var diagnostic = buildDiagnostic(state);
     status.textContent = diagnostic.capture;
     body.textContent = '';
+    var last = diagnostic.lastResponse || {};
+    line(body, 'hook installed: ', diagnostic.hookInstalled);
+    line(body, 'hookInstalledAt: ', diagnostic.hookInstalledAt || '-');
+    line(body, 'fetch intercepted: ', diagnostic.fetchIntercepted);
+    line(body, 'xhr intercepted: ', diagnostic.xhrIntercepted);
+    line(body, 'meta matched: ', diagnostic.metaMatched);
+    line(body, 'shifts matched: ', diagnostic.shiftsMatched);
+    line(body, 'responses received: ', diagnostic.responsesReceived);
     line(body, 'meta captured: ', diagnostic.metaCaptured);
     line(body, 'shifts captured: ', diagnostic.shiftsCaptured);
     line(body, 'capturedAt: ', diagnostic.capturedAt || '-');
+    line(body, 'last pathname: ', last.pathname || '-');
+    line(body, 'last method: ', last.method || '-');
+    line(body, 'last transport: ', last.transport || '-');
+    line(body, 'status: ', last.status == null ? '-' : last.status);
+    line(body, 'type: ', last.type || '-');
+    line(body, 'ok: ', last.ok == null ? '-' : String(last.ok));
+    line(body, 'redirected: ', last.redirected == null ? '-' : String(last.redirected));
+    line(body, 'bodyUsed: ', last.bodyUsed == null ? '-' : String(last.bodyUsed));
+    line(body, 'content-type: ', last.contentType || '-');
+    line(body, 'content-length: ', last.contentLength || '-');
+    line(body, 'clone: ', last.clone || '-');
+    line(body, 'text: ', last.text || '-');
+    line(body, 'textLength: ', last.textLength == null ? '-' : last.textLength);
+    line(body, 'xssiPrefix: ', last.xssiPrefix || '-');
+    line(body, 'JSON.parse: ', last.jsonParse || '-');
+    line(body, 'error.name: ', last.errorName || '-');
+    line(body, 'error.message: ', last.errorMessage || '-');
     line(body, 'totalRows: ', diagnostic.totalRows);
     line(body, 'shiftStartTime: ', diagnostic.rowsWithShiftStartTime);
     line(body, 'shiftEndTime: ', diagnostic.rowsWithShiftEndTime);
@@ -353,7 +660,7 @@
     host.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483646;';
     var shadow = host.attachShadow({ mode: 'open' });
     var style = document.createElement('style');
-    style.textContent = '.box{width:320px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .note{opacity:.8;min-height:1.2em}';
+    style.textContent = '.box{width:420px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .note{opacity:.8;min-height:1.2em}';
     var box = document.createElement('div');
     box.className = 'box';
     var title = document.createElement('div');

@@ -135,8 +135,9 @@ assert(mentorSrc.indexOf('localStorage') < 0, 'case 7: does not touch localStora
 assert(mentorSrc.indexOf('document.cookie') < 0, 'case 7: does not read cookies');
 assert(mentorSrc.indexOf('access_token') < 0, 'case 7: does not name the access token key');
 assert(mentorSrc.indexOf('Authorization') < 0, 'case 7: does not read Authorization');
-assert(mentorSrc.indexOf('getRequestHeader') < 0 && mentorSrc.indexOf('getAllResponseHeaders') < 0, 'case 7: does not read headers');
-assert(mentorSrc.indexOf('res.clone().json()') >= 0, 'uses a cloned response body');
+assert(mentorSrc.indexOf('getRequestHeader') < 0 && mentorSrc.indexOf('getAllResponseHeaders') < 0, 'case 7: does not read request headers or every response header');
+assert(mentorSrc.indexOf('res.clone().json()') < 0, 'does not rely on response.json()');
+assert(mentorSrc.indexOf('cloned.text()') >= 0 && mentorSrc.indexOf('JSON.parse') >= 0, 'reads a clone as text and parses it');
 assert(mentorSrc.indexOf('origFetch.apply') >= 0, 'returns the page fetch promise');
 assert(mentorSrc.indexOf('vrm-mentor.edriving.com') >= 0, 'host gate is explicit');
 assert(mentorSrc.indexOf('shifts\\/devices') >= 0, 'devices path is explicitly excluded');
@@ -164,5 +165,142 @@ const runner = readFileSync(join(repo, 'cortex-capture-extension', 'phase1-runne
 const core = readFileSync(join(repo, 'cortex-capture-extension', 'phase1-core.js'), 'utf8');
 assert(runner.indexOf('mentor-capture') < 0 && core.indexOf('mentor-capture') < 0, 'case 8: Cortex capture files do not import Mentor');
 assert(runner.indexOf("mk('Bag取得'") >= 0 && runner.indexOf('origFetch.apply') >= 0, 'case 8: Bag button and Cortex fetch wrap remain');
+
+function freshState() {
+  return {
+    hookInstalled: true,
+    hookInstalledAt: '2026-10-05T12:00:00.000Z',
+    fetchIntercepted: 2,
+    xhrIntercepted: 0,
+    metaMatched: 1,
+    shiftsMatched: 1,
+    responsesReceived: 1,
+    metaCaptured: false,
+    shiftsCaptured: false,
+    capturedAt: null,
+    metaTopKeys: [],
+    structureKeys: [],
+    totalRows: 0,
+    detectedRowKeys: [],
+    candidateIdentifierFields: [],
+    rowsWithShiftStartTime: 0,
+    rowsWithShiftEndTime: 0,
+    rowsWithEndNA: 0,
+    sampleRow: null,
+    issue: '',
+    lastResponse: null
+  };
+}
+
+const secretBody = JSON.stringify({
+  data: [{
+    driverId: secretId,
+    firstName: secretName,
+    staffNumber: secretStaff,
+    shiftStartTime: 1791160800000,
+    shiftEndTime: 'N/A',
+    device: 'phone-secret'
+  }]
+});
+const parsedOk = MC.applyObservation(freshState(), 'shifts', {
+  pathname: shiftsUrl,
+  method: 'GET',
+  transport: 'fetch',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  redirected: false,
+  bodyUsed: false,
+  contentType: 'application/json; charset=utf-8',
+  contentLength: '48800',
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: secretBody
+});
+const parsedCopy = JSON.stringify(MC.buildDiagnostic(parsedOk));
+assert(parsedOk.shiftsCaptured && parsedOk.totalRows === 1, 'text then JSON.parse fills shift rows');
+assert(parsedOk.rowsWithEndNA === 1, 'parsed N/A row is counted');
+assert(parsedOk.lastResponse.jsonParse === 'SUCCESS', 'JSON.parse success is recorded');
+assert(parsedOk.lastResponse.text === 'SUCCESS' && parsedOk.lastResponse.clone === 'SUCCESS', 'clone and text success are recorded');
+assert(parsedOk.lastResponse.pathname.indexOf('SECRET-FLEET') < 0, 'last pathname drops the query');
+assert(parsedOk.lastResponse.pathname === '/reports/driver/shifts', 'last pathname is the shifts path');
+assert(parsedCopy.indexOf(secretName) < 0 && parsedCopy.indexOf(secretId) < 0 && parsedCopy.indexOf(secretStaff) < 0, 'parsed diagnostic hides driver values');
+assert(parsedCopy.indexOf('1791160800000') < 0, 'parsed diagnostic hides the timestamp');
+
+const prefixed = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  contentType: 'application/json',
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: ")]}',\n" + secretBody
+});
+assert(prefixed.shiftsCaptured && prefixed.lastResponse.xssiPrefix === 'YES', 'Angular XSSI prefix is removed before parse');
+assert(JSON.stringify(prefixed.lastResponse).indexOf(secretName) < 0, 'prefix path does not keep the body');
+
+const empty = MC.applyObservation(freshState(), 'meta', {
+  pathname: '/reports/driver/shifts/meta',
+  method: 'GET',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  bodyUsed: false,
+  contentType: 'application/json',
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: ''
+});
+assert(empty.issue === 'EMPTY_BODY' && empty.metaCaptured === false, 'empty body is its own issue');
+assert(empty.lastResponse.textLength === 0 && empty.lastResponse.jsonParse === 'FAILED', 'empty body records text length');
+
+const brokenSecret = 'DRIVER-SECRET-VALUE-SHOULD-NOT-APPEAR';
+const broken = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'basic',
+  ok: true,
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: brokenSecret
+});
+assert(broken.issue === 'JSON_PARSE_FAILED' && broken.shiftsCaptured === false, 'invalid JSON does not become rows');
+assert(JSON.stringify(MC.buildDiagnostic(broken)).indexOf(brokenSecret) < 0, 'invalid body text is not copied into the diagnostic');
+
+const cloneFail = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'opaque',
+  ok: false,
+  bodyUsed: true,
+  clone: 'FAILED',
+  textStatus: 'FAILED',
+  text: brokenSecret,
+  errorName: 'TypeError',
+  errorMessage: 'Failed to execute clone: body stream is locked'
+});
+assert(cloneFail.issue === 'CLONE_FAILED', 'clone failure is recorded');
+assert(JSON.stringify(MC.buildDiagnostic(cloneFail)).indexOf(brokenSecret) < 0, 'clone failure does not keep the unread body');
+assert(cloneFail.lastResponse.type === 'opaque' && cloneFail.lastResponse.bodyUsed === true, 'opaque and bodyUsed are visible');
+
+const kept = MC.applyObservation(parsedOk, 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: ''
+});
+assert(kept.totalRows === 1 && kept.issue === '', 'a later empty body does not erase a captured shift response');
+
+assert(MC.safeHeaderValue('application/json') === 'application/json', 'content type is kept');
+assert(MC.safeHeaderValue('Bearer SECRET') === '', 'unsafe header text is dropped');
+assert(MC.captureKind(devicesUrl, 'GET') === '', 'devices stay excluded after the reader change');
 
 console.log('mentor-capture-v0 tests passed');
