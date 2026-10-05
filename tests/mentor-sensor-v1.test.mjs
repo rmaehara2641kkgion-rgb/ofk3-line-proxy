@@ -218,6 +218,7 @@ assert(manifest.content_scripts.some(function (cs) {
     (cs.matches || []).length === 1 && cs.matches[0] === 'https://vrm-mentor.edriving.com/*';
 }), 'Mentor bridge is limited to the Mentor origin');
 assert((manifest.host_permissions || []).indexOf('https://mis-api.edriving.com/*') < 0, 'API host permission is not added');
+assert((manifest.host_permissions || []).indexOf('http://127.0.0.1:3000/*') >= 0, 'local OFK3 can receive the snapshot without deploy');
 
 const client = read('ofk3-mentor-active.js');
 assert(client.indexOf("fetch('/mentor-active'") >= 0, 'OFK3 reads the Mentor store');

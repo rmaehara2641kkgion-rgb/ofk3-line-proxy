@@ -17,7 +17,9 @@
     "https://logistics.amazon.com/*",
     "https://vrm-mentor.edriving.com/*",
     "https://ofk3-line-proxy-1.onrender.com/*",
-    "https://ofk3-cortex-preview.onrender.com/*"
+    "https://ofk3-cortex-preview.onrender.com/*",
+    "http://127.0.0.1:3000/*",
+    "http://localhost:3000/*"
   ],
   "background": {
     "service_worker": "background.js"
