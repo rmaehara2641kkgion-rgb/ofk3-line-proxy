@@ -101,16 +101,41 @@
     };
   }
 
-  function stableKeyCandidate(total, driverId, realStaffNumber) {
-    function stable(stat) {
-      return total > 0 && stat.present === total && stat.unique === total && stat.duplicateValues === 0;
-    }
-    var driverStable = stable(driverId);
-    var staffStable = stable(realStaffNumber);
-    if (driverStable && staffStable) return 'both';
-    if (driverStable) return 'driverId';
-    if (staffStable) return 'realStaffNumber';
-    return 'neither';
+  function identifierToken(value) {
+    if (!hasValue(value)) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return JSON.stringify(value);
+  }
+
+  function activeOpenRow(row) {
+    return !!(row && typeof row === 'object' && !Array.isArray(row) && row.shiftEndTime === 'N/A' && row.vrmStatus === 'Active');
+  }
+
+  function mappingConflicts(rows) {
+    var staffByDriver = Object.create(null);
+    var driversByStaff = Object.create(null);
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+      var driver = identifierToken(row.driverId);
+      var staff = identifierToken(row.realStaffNumber);
+      if (!driver || !staff) return;
+      if (!staffByDriver[driver]) staffByDriver[driver] = Object.create(null);
+      staffByDriver[driver][staff] = true;
+      if (!driversByStaff[staff]) driversByStaff[staff] = Object.create(null);
+      driversByStaff[staff][driver] = true;
+    });
+    var driverIdsWithMultipleRealStaffNumbers = 0;
+    var realStaffNumbersWithMultipleDriverIds = 0;
+    Object.keys(staffByDriver).forEach(function (driver) {
+      if (Object.keys(staffByDriver[driver]).length > 1) driverIdsWithMultipleRealStaffNumbers += 1;
+    });
+    Object.keys(driversByStaff).forEach(function (staff) {
+      if (Object.keys(driversByStaff[staff]).length > 1) realStaffNumbersWithMultipleDriverIds += 1;
+    });
+    return {
+      driverIdsWithMultipleRealStaffNumbers: driverIdsWithMultipleRealStaffNumbers,
+      realStaffNumbersWithMultipleDriverIds: realStaffNumbersWithMultipleDriverIds
+    };
   }
 
   function redactRow(row) {
@@ -168,17 +193,13 @@
       naRowsWithShiftStartTime: 0,
       naRowsWithDriverId: 0,
       naRowsWithRealStaffNumber: 0,
-      driverIdPresent: 0,
-      driverIdMissing: 0,
-      driverIdUnique: 0,
-      driverIdDuplicateValues: 0,
-      driverIdDuplicateRows: 0,
-      realStaffNumberPresent: 0,
-      realStaffNumberMissing: 0,
-      realStaffNumberUnique: 0,
-      realStaffNumberDuplicateValues: 0,
-      realStaffNumberDuplicateRows: 0,
-      stableKeyCandidate: 'neither',
+      activeOpenRows: 0,
+      activeOpenDriverIdUnique: 0,
+      activeOpenDriverIdDuplicateValues: 0,
+      activeOpenRealStaffNumberUnique: 0,
+      activeOpenRealStaffNumberDuplicateValues: 0,
+      driverIdsWithMultipleRealStaffNumbers: 0,
+      realStaffNumbersWithMultipleDriverIds: 0,
       sampleRow: null,
       issue: ''
     };
@@ -215,19 +236,17 @@
     Object.keys(naStatus).sort().forEach(function (label) {
       out.naVrmStatusCounts[label] = naStatus[label];
     });
-    var driverKey = tallyKey(body.data, 'driverId');
-    var staffKey = tallyKey(body.data, 'realStaffNumber');
-    out.driverIdPresent = driverKey.present;
-    out.driverIdMissing = driverKey.missing;
-    out.driverIdUnique = driverKey.unique;
-    out.driverIdDuplicateValues = driverKey.duplicateValues;
-    out.driverIdDuplicateRows = driverKey.duplicateRows;
-    out.realStaffNumberPresent = staffKey.present;
-    out.realStaffNumberMissing = staffKey.missing;
-    out.realStaffNumberUnique = staffKey.unique;
-    out.realStaffNumberDuplicateValues = staffKey.duplicateValues;
-    out.realStaffNumberDuplicateRows = staffKey.duplicateRows;
-    out.stableKeyCandidate = stableKeyCandidate(out.totalRows, driverKey, staffKey);
+    var activeOpen = body.data.filter(activeOpenRow);
+    var activeDriver = tallyKey(activeOpen, 'driverId');
+    var activeStaff = tallyKey(activeOpen, 'realStaffNumber');
+    var mapping = mappingConflicts(body.data);
+    out.activeOpenRows = activeOpen.length;
+    out.activeOpenDriverIdUnique = activeDriver.unique;
+    out.activeOpenDriverIdDuplicateValues = activeDriver.duplicateValues;
+    out.activeOpenRealStaffNumberUnique = activeStaff.unique;
+    out.activeOpenRealStaffNumberDuplicateValues = activeStaff.duplicateValues;
+    out.driverIdsWithMultipleRealStaffNumbers = mapping.driverIdsWithMultipleRealStaffNumbers;
+    out.realStaffNumbersWithMultipleDriverIds = mapping.realStaffNumbersWithMultipleDriverIds;
     out.detectedRowKeys = Object.keys(keySet).sort();
     out.candidateIdentifierFields = IDENTIFIER_CANDIDATES.filter(function (name) {
       return Object.prototype.hasOwnProperty.call(keySet, name);
@@ -498,17 +517,13 @@
       state.naRowsWithShiftStartTime = shifts.naRowsWithShiftStartTime;
       state.naRowsWithDriverId = shifts.naRowsWithDriverId;
       state.naRowsWithRealStaffNumber = shifts.naRowsWithRealStaffNumber;
-      state.driverIdPresent = shifts.driverIdPresent;
-      state.driverIdMissing = shifts.driverIdMissing;
-      state.driverIdUnique = shifts.driverIdUnique;
-      state.driverIdDuplicateValues = shifts.driverIdDuplicateValues;
-      state.driverIdDuplicateRows = shifts.driverIdDuplicateRows;
-      state.realStaffNumberPresent = shifts.realStaffNumberPresent;
-      state.realStaffNumberMissing = shifts.realStaffNumberMissing;
-      state.realStaffNumberUnique = shifts.realStaffNumberUnique;
-      state.realStaffNumberDuplicateValues = shifts.realStaffNumberDuplicateValues;
-      state.realStaffNumberDuplicateRows = shifts.realStaffNumberDuplicateRows;
-      state.stableKeyCandidate = shifts.stableKeyCandidate;
+      state.activeOpenRows = shifts.activeOpenRows;
+      state.activeOpenDriverIdUnique = shifts.activeOpenDriverIdUnique;
+      state.activeOpenDriverIdDuplicateValues = shifts.activeOpenDriverIdDuplicateValues;
+      state.activeOpenRealStaffNumberUnique = shifts.activeOpenRealStaffNumberUnique;
+      state.activeOpenRealStaffNumberDuplicateValues = shifts.activeOpenRealStaffNumberDuplicateValues;
+      state.driverIdsWithMultipleRealStaffNumbers = shifts.driverIdsWithMultipleRealStaffNumbers;
+      state.realStaffNumbersWithMultipleDriverIds = shifts.realStaffNumbersWithMultipleDriverIds;
       state.sampleRow = shifts.sampleRow;
       state.issue = '';
     }
@@ -550,17 +565,13 @@
       naRowsWithShiftStartTime: state.naRowsWithShiftStartTime || 0,
       naRowsWithDriverId: state.naRowsWithDriverId || 0,
       naRowsWithRealStaffNumber: state.naRowsWithRealStaffNumber || 0,
-      driverIdPresent: state.driverIdPresent || 0,
-      driverIdMissing: state.driverIdMissing || 0,
-      driverIdUnique: state.driverIdUnique || 0,
-      driverIdDuplicateValues: state.driverIdDuplicateValues || 0,
-      driverIdDuplicateRows: state.driverIdDuplicateRows || 0,
-      realStaffNumberPresent: state.realStaffNumberPresent || 0,
-      realStaffNumberMissing: state.realStaffNumberMissing || 0,
-      realStaffNumberUnique: state.realStaffNumberUnique || 0,
-      realStaffNumberDuplicateValues: state.realStaffNumberDuplicateValues || 0,
-      realStaffNumberDuplicateRows: state.realStaffNumberDuplicateRows || 0,
-      stableKeyCandidate: state.stableKeyCandidate || 'neither',
+      activeOpenRows: state.activeOpenRows || 0,
+      activeOpenDriverIdUnique: state.activeOpenDriverIdUnique || 0,
+      activeOpenDriverIdDuplicateValues: state.activeOpenDriverIdDuplicateValues || 0,
+      activeOpenRealStaffNumberUnique: state.activeOpenRealStaffNumberUnique || 0,
+      activeOpenRealStaffNumberDuplicateValues: state.activeOpenRealStaffNumberDuplicateValues || 0,
+      driverIdsWithMultipleRealStaffNumbers: state.driverIdsWithMultipleRealStaffNumbers || 0,
+      realStaffNumbersWithMultipleDriverIds: state.realStaffNumbersWithMultipleDriverIds || 0,
       sampleRow: state.sampleRow || null,
       lastResponse: last,
       issue: state.issue || '',
@@ -628,17 +639,13 @@
     naRowsWithShiftStartTime: 0,
     naRowsWithDriverId: 0,
     naRowsWithRealStaffNumber: 0,
-    driverIdPresent: 0,
-    driverIdMissing: 0,
-    driverIdUnique: 0,
-    driverIdDuplicateValues: 0,
-    driverIdDuplicateRows: 0,
-    realStaffNumberPresent: 0,
-    realStaffNumberMissing: 0,
-    realStaffNumberUnique: 0,
-    realStaffNumberDuplicateValues: 0,
-    realStaffNumberDuplicateRows: 0,
-    stableKeyCandidate: 'neither',
+    activeOpenRows: 0,
+    activeOpenDriverIdUnique: 0,
+    activeOpenDriverIdDuplicateValues: 0,
+    activeOpenRealStaffNumberUnique: 0,
+    activeOpenRealStaffNumberDuplicateValues: 0,
+    driverIdsWithMultipleRealStaffNumbers: 0,
+    realStaffNumbersWithMultipleDriverIds: 0,
     sampleRow: null,
     issue: '',
     lastResponse: null
@@ -971,21 +978,11 @@
     line(body, 'N/A rows with shiftStartTime: ', diagnostic.naRowsWithShiftStartTime);
     line(body, 'N/A rows with driverId: ', diagnostic.naRowsWithDriverId);
     line(body, 'N/A rows with realStaffNumber: ', diagnostic.naRowsWithRealStaffNumber);
-    line(body, 'driverId present / missing / unique / duplicate values / duplicate rows: ', [
-      diagnostic.driverIdPresent,
-      diagnostic.driverIdMissing,
-      diagnostic.driverIdUnique,
-      diagnostic.driverIdDuplicateValues,
-      diagnostic.driverIdDuplicateRows
-    ].join(' / '));
-    line(body, 'realStaffNumber present / missing / unique / duplicate values / duplicate rows: ', [
-      diagnostic.realStaffNumberPresent,
-      diagnostic.realStaffNumberMissing,
-      diagnostic.realStaffNumberUnique,
-      diagnostic.realStaffNumberDuplicateValues,
-      diagnostic.realStaffNumberDuplicateRows
-    ].join(' / '));
-    line(body, 'stable key candidate: ', diagnostic.stableKeyCandidate);
+    line(body, 'active open rows: ', diagnostic.activeOpenRows);
+    line(body, 'active open driverId unique / duplicate values: ', diagnostic.activeOpenDriverIdUnique + ' / ' + diagnostic.activeOpenDriverIdDuplicateValues);
+    line(body, 'active open realStaffNumber unique / duplicate values: ', diagnostic.activeOpenRealStaffNumberUnique + ' / ' + diagnostic.activeOpenRealStaffNumberDuplicateValues);
+    line(body, 'driverIds with multiple realStaffNumbers: ', diagnostic.driverIdsWithMultipleRealStaffNumbers);
+    line(body, 'realStaffNumbers with multiple driverIds: ', diagnostic.realStaffNumbersWithMultipleDriverIds);
     line(body, 'structure keys: ', diagnostic.structureKeys.length ? diagnostic.structureKeys.join(', ') : '-');
     line(body, 'Detected row keys: ', diagnostic.detectedRowKeys.length ? diagnostic.detectedRowKeys.join(', ') : '-');
     line(body, 'candidate identifier fields: ', diagnostic.candidateIdentifierFields.length ? diagnostic.candidateIdentifierFields.join(', ') : '-');

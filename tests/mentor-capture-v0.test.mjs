@@ -164,35 +164,38 @@ assert(anon.naVehicleIdentifierNonEmpty === 1 && anon.naVehicleIdentifierEmpty =
 assert(anon.naRowsWithShiftStartTime === 3, 'N/A rows with shiftStartTime are counted');
 assert(anon.naRowsWithDriverId === 4, 'N/A rows with driverId are counted');
 assert(anon.naRowsWithRealStaffNumber === 3, 'N/A rows with realStaffNumber are counted');
-assert(anon.driverIdPresent === 4 && anon.driverIdMissing === 1, 'driverId presence is counted across every row');
-assert(anon.driverIdUnique === 3 && anon.driverIdDuplicateValues === 1 && anon.driverIdDuplicateRows === 2, 'driverId duplicates are counts only');
-assert(anon.realStaffNumberPresent === 4 && anon.realStaffNumberMissing === 1, 'realStaffNumber presence is counted across every row');
-assert(anon.realStaffNumberUnique === 3 && anon.realStaffNumberDuplicateValues === 1 && anon.realStaffNumberDuplicateRows === 2, 'realStaffNumber duplicates are counts only');
-assert(anon.stableKeyCandidate === 'neither', 'a key with gaps or duplicates is not treated as stable');
+assert(anon.activeOpenRows === 0, 'N/A rows that are not Active stay out of the open set');
+assert(anon.driverIdsWithMultipleRealStaffNumbers === 1, 'one driverId mapping to several staff numbers is a count');
+assert(anon.realStaffNumbersWithMultipleDriverIds === 1, 'one staff number mapping to several driverIds is a count');
 const anonCopy = JSON.stringify(anon);
 assert(anonCopy.indexOf(secretId) < 0 && anonCopy.indexOf(secretStaff) < 0 && anonCopy.indexOf(secretName) < 0, 'anonymous counts omit driver values');
 assert(anonCopy.indexOf('VH-SECRET') < 0 && anonCopy.indexOf('phone-secret') < 0, 'anonymous counts omit device and vehicle values');
 assert(anonCopy.indexOf(opaqueStatus) < 0 && anonCopy.indexOf(namedStatus) < 0, 'unsafe vrmStatus values are not copied');
 assert(anonCopy.indexOf('STF-OTHER') < 0 && anonCopy.indexOf('DA-OPEN-3') < 0, 'other identifier values are not copied');
 
-assert(MC.summarizeShifts({
+const openKeys = MC.summarizeShifts({
   data: [
-    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
-    { driverId: 'B', realStaffNumber: '2', shiftEndTime: 1 }
+    { driverId: 'DRV-1', realStaffNumber: 'STF-1', firstName: secretName, vrmStatus: 'Active', shiftEndTime: 'N/A' },
+    { driverId: 'DRV-1', realStaffNumber: 'STF-1', vrmStatus: 'Complete', shiftEndTime: 10 },
+    { driverId: 'DRV-2', realStaffNumber: 'STF-2', vrmStatus: 'Active', shiftEndTime: 'N/A' },
+    { driverId: 'DRV-2', realStaffNumber: 'STF-2', vrmStatus: 'Active', shiftEndTime: 'N/A' },
+    { driverId: 'DRV-3', realStaffNumber: 'STF-3', vrmStatus: 'Idle', shiftEndTime: 'N/A' },
+    { driverId: 'DRV-4', realStaffNumber: 'STF-9', vrmStatus: 'Complete', shiftEndTime: 11 },
+    { driverId: 'DRV-4', realStaffNumber: 'STF-8', vrmStatus: 'Complete', shiftEndTime: 12 },
+    { driverId: 'DRV-5', realStaffNumber: 'STF-7', vrmStatus: 'Complete', shiftEndTime: 13 },
+    { driverId: 'DRV-6', realStaffNumber: 'STF-7', vrmStatus: 'Complete', shiftEndTime: 14 },
+    { driverId: '', realStaffNumber: 'STF-6', vrmStatus: 'Active', shiftEndTime: 'N/A' }
   ]
-}).stableKeyCandidate === 'both', 'both complete unique keys stay candidates');
-assert(MC.summarizeShifts({
-  data: [
-    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
-    { driverId: 'B', realStaffNumber: '1', shiftEndTime: 1 }
-  ]
-}).stableKeyCandidate === 'driverId', 'only a complete unique driverId is the stable candidate');
-assert(MC.summarizeShifts({
-  data: [
-    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
-    { driverId: 'A', realStaffNumber: '2', shiftEndTime: 1 }
-  ]
-}).stableKeyCandidate === 'realStaffNumber', 'only a complete unique realStaffNumber is the stable candidate');
+});
+assert(openKeys.activeOpenRows === 4, 'active open rows are N/A and Active only');
+assert(openKeys.activeOpenDriverIdUnique === 2 && openKeys.activeOpenDriverIdDuplicateValues === 1, 'active open driverId uniqueness ignores closed history');
+assert(openKeys.activeOpenRealStaffNumberUnique === 3 && openKeys.activeOpenRealStaffNumberDuplicateValues === 1, 'active open staff uniqueness ignores closed history and blank driverIds');
+assert(openKeys.driverIdsWithMultipleRealStaffNumbers === 1, 'repeated sessions with the same pair are not a mapping conflict');
+assert(openKeys.realStaffNumbersWithMultipleDriverIds === 1, 'one staff number used by two driverIds is a mapping conflict');
+const openCopy = JSON.stringify(openKeys);
+assert(openCopy.indexOf('DRV-1') < 0 && openCopy.indexOf('STF-1') < 0 && openCopy.indexOf(secretName) < 0, 'active open counts omit identifier values');
+assert(openCopy.indexOf('stableKeyCandidate') < 0, 'all-row uniqueness is not treated as the identifier decision');
+
 const anonObserved = MC.applyObservation(freshState(), 'shifts', {
   pathname: '/reports/driver/shifts',
   method: 'GET',
@@ -204,16 +207,19 @@ const anonObserved = MC.applyObservation(freshState(), 'shifts', {
   textStatus: 'SUCCESS',
   text: JSON.stringify({
     data: [
-      { driverId: 'A', realStaffNumber: '1', vrmStatus: openStatus, device: 'x', vehicleIdentifier: 'y', shiftStartTime: 1, shiftEndTime: 'N/A' },
-      { driverId: 'B', realStaffNumber: '2', shiftEndTime: 2 }
+      { driverId: 'A', realStaffNumber: '1', vrmStatus: 'Active', device: 'x', vehicleIdentifier: 'y', shiftStartTime: 1, shiftEndTime: 'N/A' },
+      { driverId: 'A', realStaffNumber: '1', vrmStatus: openStatus, shiftEndTime: 2 },
+      { driverId: 'B', realStaffNumber: '2', vrmStatus: 'Active', shiftEndTime: 'N/A' }
     ]
   })
 });
 const anonDiagnostic = MC.buildDiagnostic(anonObserved);
-assert(anonDiagnostic.naVrmStatusCounts[openStatus] === 1, 'diagnostic keeps N/A status counts');
+assert(anonDiagnostic.naVrmStatusCounts.Active === 2, 'diagnostic keeps N/A status counts');
 assert(anonDiagnostic.naDeviceNonEmpty === 1 && anonDiagnostic.naVehicleIdentifierNonEmpty === 1, 'diagnostic keeps N/A empty checks');
-assert(anonDiagnostic.driverIdPresent === 2 && anonDiagnostic.realStaffNumberUnique === 2, 'diagnostic keeps key counts');
-assert(anonDiagnostic.stableKeyCandidate === 'both', 'diagnostic keeps the stable key candidate');
+assert(anonDiagnostic.activeOpenRows === 2, 'diagnostic keeps the active open row count');
+assert(anonDiagnostic.activeOpenDriverIdUnique === 2 && anonDiagnostic.activeOpenDriverIdDuplicateValues === 0, 'diagnostic keeps active open uniqueness');
+assert(anonDiagnostic.driverIdsWithMultipleRealStaffNumbers === 0 && anonDiagnostic.realStaffNumbersWithMultipleDriverIds === 0, 'diagnostic keeps mapping conflict counts');
+assert(JSON.stringify(anonDiagnostic).indexOf('stableKeyCandidate') < 0, 'diagnostic does not publish an all-row key choice');
 assert(JSON.stringify(anonDiagnostic).indexOf('"x"') < 0 && JSON.stringify(anonDiagnostic).indexOf('"y"') < 0, 'diagnostic does not copy device or vehicle values');
 
 const diagnostic = MC.buildDiagnostic({
