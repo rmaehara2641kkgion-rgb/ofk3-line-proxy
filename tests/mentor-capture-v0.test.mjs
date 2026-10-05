@@ -140,6 +140,9 @@ assert(mentorSrc.indexOf('res.clone().json()') < 0, 'does not rely on response.j
 assert(mentorSrc.indexOf('cloned.text()') >= 0 && mentorSrc.indexOf('JSON.parse') >= 0, 'reads a clone as text and parses it');
 assert(mentorSrc.indexOf('origFetch.apply') >= 0, 'returns the page fetch promise');
 assert(mentorSrc.indexOf('vrm-mentor.edriving.com') >= 0, 'host gate is explicit');
+assert(mentorSrc.indexOf('top:12px;right:12px') >= 0, 'diagnostic panel is fixed at the top right');
+assert(mentorSrc.indexOf('left:12px;bottom:12px') < 0, 'diagnostic panel is not fixed at the bottom left');
+assert(mentorSrc.indexOf('最小化') >= 0 && mentorSrc.indexOf('ofk3-mentor-details') >= 0, 'diagnostic panel can collapse to the title');
 assert(mentorSrc.indexOf('shifts\\/devices') >= 0, 'devices path is explicitly excluded');
 
 const manifest = JSON.parse(readFileSync(join(repo, 'cortex-capture-extension', 'manifest.json'), 'utf8'));

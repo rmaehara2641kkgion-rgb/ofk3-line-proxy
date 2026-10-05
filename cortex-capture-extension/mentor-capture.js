@@ -607,6 +607,23 @@
   state.hookInstalledAt = state.hookInstalled ? new Date().toISOString() : null;
 
   var PANEL_ID = 'ofk3-mentor-capture-v0';
+  var panelCollapsed = false;
+
+  function setPanelCollapsed(collapsed) {
+    panelCollapsed = !!collapsed;
+    var host = document.getElementById(PANEL_ID);
+    if (!host || !host.shadowRoot) return;
+    var box = host.shadowRoot.querySelector('.box');
+    var head = host.shadowRoot.getElementById('ofk3-mentor-head');
+    var title = host.shadowRoot.getElementById('ofk3-mentor-title');
+    var toggle = host.shadowRoot.getElementById('ofk3-mentor-toggle');
+    var details = host.shadowRoot.getElementById('ofk3-mentor-details');
+    if (box) box.className = panelCollapsed ? 'box collapsed' : 'box';
+    if (head) head.style.display = panelCollapsed ? 'block' : 'flex';
+    if (title) title.style.display = panelCollapsed ? 'none' : '';
+    if (details) details.style.display = panelCollapsed ? 'none' : 'block';
+    if (toggle) toggle.textContent = panelCollapsed ? 'MENTOR CAPTURE v0' : '最小化';
+  }
 
   function line(parent, label, value) {
     var row = document.createElement('div');
@@ -706,16 +723,30 @@
     if (!document.documentElement || document.getElementById(PANEL_ID)) return;
     var host = document.createElement('div');
     host.id = PANEL_ID;
-    host.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483646;';
+    host.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483646;';
     var shadow = host.attachShadow({ mode: 'open' });
     var style = document.createElement('style');
-    style.textContent = '.box{width:420px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .note{opacity:.8;min-height:1.2em}';
+    style.textContent = '.box{width:420px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} .box.collapsed{width:auto;max-height:none;padding:0;background:transparent;box-shadow:none;overflow:visible} .head{display:flex;align-items:center;justify-content:space-between;gap:8px} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .chip{margin:0;font-weight:700} .note{opacity:.8;min-height:1.2em}';
     var box = document.createElement('div');
     box.className = 'box';
-    var title = document.createElement('div');
+    var head = document.createElement('div');
+    head.className = 'head';
+    head.id = 'ofk3-mentor-head';
     var titleName = document.createElement('b');
+    titleName.id = 'ofk3-mentor-title';
     titleName.textContent = 'MENTOR CAPTURE v0';
-    title.appendChild(titleName);
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.id = 'ofk3-mentor-toggle';
+    toggle.className = 'chip';
+    toggle.textContent = '最小化';
+    toggle.addEventListener('click', function () {
+      setPanelCollapsed(!panelCollapsed);
+    });
+    head.appendChild(titleName);
+    head.appendChild(toggle);
+    var details = document.createElement('div');
+    details.id = 'ofk3-mentor-details';
     var status = document.createElement('div');
     status.id = 'ofk3-mentor-status';
     status.textContent = 'WAITING';
@@ -728,11 +759,12 @@
     var copyNote = document.createElement('div');
     copyNote.id = 'ofk3-mentor-copy-note';
     copyNote.className = 'note';
-    box.appendChild(title);
-    box.appendChild(status);
-    box.appendChild(body);
-    box.appendChild(button);
-    box.appendChild(copyNote);
+    details.appendChild(status);
+    details.appendChild(body);
+    details.appendChild(button);
+    details.appendChild(copyNote);
+    box.appendChild(head);
+    box.appendChild(details);
     shadow.appendChild(style);
     shadow.appendChild(box);
     document.documentElement.appendChild(host);
