@@ -52,6 +52,67 @@
     return value != null && value !== '';
   }
 
+  function hasValue(value) {
+    if (value == null) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  }
+
+  function statusBucket(value) {
+    if (!hasValue(value)) return '(empty)';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value !== 'string' && typeof value !== 'number') return '(non-scalar)';
+    var label = String(value).trim();
+    if (label.length > 32 || /^\d{6,}$/.test(label)) return '(opaque)';
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _./:-]{0,31}$/.test(label)) return '(opaque)';
+    return label;
+  }
+
+  function tallyKey(rows, field) {
+    var counts = Object.create(null);
+    var present = 0;
+    rows.forEach(function (row) {
+      if (!row || typeof row !== 'object' || Array.isArray(row) || !hasValue(row[field])) return;
+      present += 1;
+      var raw = row[field];
+      var token = (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean')
+        ? String(raw)
+        : JSON.stringify(raw);
+      counts[token] = (counts[token] || 0) + 1;
+    });
+    var unique = 0;
+    var duplicateValues = 0;
+    var duplicateRows = 0;
+    Object.keys(counts).forEach(function (token) {
+      unique += 1;
+      if (counts[token] > 1) {
+        duplicateValues += 1;
+        duplicateRows += counts[token];
+      }
+    });
+    return {
+      present: present,
+      missing: rows.length - present,
+      unique: unique,
+      duplicateValues: duplicateValues,
+      duplicateRows: duplicateRows
+    };
+  }
+
+  function stableKeyCandidate(total, driverId, realStaffNumber) {
+    function stable(stat) {
+      return total > 0 && stat.present === total && stat.unique === total && stat.duplicateValues === 0;
+    }
+    var driverStable = stable(driverId);
+    var staffStable = stable(realStaffNumber);
+    if (driverStable && staffStable) return 'both';
+    if (driverStable) return 'driverId';
+    if (staffStable) return 'realStaffNumber';
+    return 'neither';
+  }
+
   function redactRow(row) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
     var out = {};
@@ -99,6 +160,25 @@
       rowsWithShiftStartTime: 0,
       rowsWithShiftEndTime: 0,
       rowsWithEndNA: 0,
+      naVrmStatusCounts: {},
+      naDeviceEmpty: 0,
+      naDeviceNonEmpty: 0,
+      naVehicleIdentifierEmpty: 0,
+      naVehicleIdentifierNonEmpty: 0,
+      naRowsWithShiftStartTime: 0,
+      naRowsWithDriverId: 0,
+      naRowsWithRealStaffNumber: 0,
+      driverIdPresent: 0,
+      driverIdMissing: 0,
+      driverIdUnique: 0,
+      driverIdDuplicateValues: 0,
+      driverIdDuplicateRows: 0,
+      realStaffNumberPresent: 0,
+      realStaffNumberMissing: 0,
+      realStaffNumberUnique: 0,
+      realStaffNumberDuplicateValues: 0,
+      realStaffNumberDuplicateRows: 0,
+      stableKeyCandidate: 'neither',
       sampleRow: null,
       issue: ''
     };
@@ -111,6 +191,7 @@
     var keySet = {};
     var sample = null;
     var openSample = null;
+    var naStatus = {};
     body.data.forEach(function (row) {
       if (!row || typeof row !== 'object' || Array.isArray(row)) return;
       Object.keys(row).forEach(function (key) { keySet[key] = true; });
@@ -119,9 +200,34 @@
       if (row.shiftEndTime === 'N/A') {
         out.rowsWithEndNA += 1;
         if (!openSample) openSample = row;
+        var label = statusBucket(row.vrmStatus);
+        naStatus[label] = (naStatus[label] || 0) + 1;
+        if (hasValue(row.device)) out.naDeviceNonEmpty += 1;
+        else out.naDeviceEmpty += 1;
+        if (hasValue(row.vehicleIdentifier)) out.naVehicleIdentifierNonEmpty += 1;
+        else out.naVehicleIdentifierEmpty += 1;
+        if (hasValue(row.shiftStartTime)) out.naRowsWithShiftStartTime += 1;
+        if (hasValue(row.driverId)) out.naRowsWithDriverId += 1;
+        if (hasValue(row.realStaffNumber)) out.naRowsWithRealStaffNumber += 1;
       }
       if (!sample) sample = row;
     });
+    Object.keys(naStatus).sort().forEach(function (label) {
+      out.naVrmStatusCounts[label] = naStatus[label];
+    });
+    var driverKey = tallyKey(body.data, 'driverId');
+    var staffKey = tallyKey(body.data, 'realStaffNumber');
+    out.driverIdPresent = driverKey.present;
+    out.driverIdMissing = driverKey.missing;
+    out.driverIdUnique = driverKey.unique;
+    out.driverIdDuplicateValues = driverKey.duplicateValues;
+    out.driverIdDuplicateRows = driverKey.duplicateRows;
+    out.realStaffNumberPresent = staffKey.present;
+    out.realStaffNumberMissing = staffKey.missing;
+    out.realStaffNumberUnique = staffKey.unique;
+    out.realStaffNumberDuplicateValues = staffKey.duplicateValues;
+    out.realStaffNumberDuplicateRows = staffKey.duplicateRows;
+    out.stableKeyCandidate = stableKeyCandidate(out.totalRows, driverKey, staffKey);
     out.detectedRowKeys = Object.keys(keySet).sort();
     out.candidateIdentifierFields = IDENTIFIER_CANDIDATES.filter(function (name) {
       return Object.prototype.hasOwnProperty.call(keySet, name);
@@ -384,6 +490,25 @@
       state.rowsWithShiftStartTime = shifts.rowsWithShiftStartTime;
       state.rowsWithShiftEndTime = shifts.rowsWithShiftEndTime;
       state.rowsWithEndNA = shifts.rowsWithEndNA;
+      state.naVrmStatusCounts = shifts.naVrmStatusCounts;
+      state.naDeviceEmpty = shifts.naDeviceEmpty;
+      state.naDeviceNonEmpty = shifts.naDeviceNonEmpty;
+      state.naVehicleIdentifierEmpty = shifts.naVehicleIdentifierEmpty;
+      state.naVehicleIdentifierNonEmpty = shifts.naVehicleIdentifierNonEmpty;
+      state.naRowsWithShiftStartTime = shifts.naRowsWithShiftStartTime;
+      state.naRowsWithDriverId = shifts.naRowsWithDriverId;
+      state.naRowsWithRealStaffNumber = shifts.naRowsWithRealStaffNumber;
+      state.driverIdPresent = shifts.driverIdPresent;
+      state.driverIdMissing = shifts.driverIdMissing;
+      state.driverIdUnique = shifts.driverIdUnique;
+      state.driverIdDuplicateValues = shifts.driverIdDuplicateValues;
+      state.driverIdDuplicateRows = shifts.driverIdDuplicateRows;
+      state.realStaffNumberPresent = shifts.realStaffNumberPresent;
+      state.realStaffNumberMissing = shifts.realStaffNumberMissing;
+      state.realStaffNumberUnique = shifts.realStaffNumberUnique;
+      state.realStaffNumberDuplicateValues = shifts.realStaffNumberDuplicateValues;
+      state.realStaffNumberDuplicateRows = shifts.realStaffNumberDuplicateRows;
+      state.stableKeyCandidate = shifts.stableKeyCandidate;
       state.sampleRow = shifts.sampleRow;
       state.issue = '';
     }
@@ -417,6 +542,25 @@
       rowsWithShiftStartTime: state.rowsWithShiftStartTime || 0,
       rowsWithShiftEndTime: state.rowsWithShiftEndTime || 0,
       rowsWithEndNA: state.rowsWithEndNA || 0,
+      naVrmStatusCounts: state.naVrmStatusCounts || {},
+      naDeviceEmpty: state.naDeviceEmpty || 0,
+      naDeviceNonEmpty: state.naDeviceNonEmpty || 0,
+      naVehicleIdentifierEmpty: state.naVehicleIdentifierEmpty || 0,
+      naVehicleIdentifierNonEmpty: state.naVehicleIdentifierNonEmpty || 0,
+      naRowsWithShiftStartTime: state.naRowsWithShiftStartTime || 0,
+      naRowsWithDriverId: state.naRowsWithDriverId || 0,
+      naRowsWithRealStaffNumber: state.naRowsWithRealStaffNumber || 0,
+      driverIdPresent: state.driverIdPresent || 0,
+      driverIdMissing: state.driverIdMissing || 0,
+      driverIdUnique: state.driverIdUnique || 0,
+      driverIdDuplicateValues: state.driverIdDuplicateValues || 0,
+      driverIdDuplicateRows: state.driverIdDuplicateRows || 0,
+      realStaffNumberPresent: state.realStaffNumberPresent || 0,
+      realStaffNumberMissing: state.realStaffNumberMissing || 0,
+      realStaffNumberUnique: state.realStaffNumberUnique || 0,
+      realStaffNumberDuplicateValues: state.realStaffNumberDuplicateValues || 0,
+      realStaffNumberDuplicateRows: state.realStaffNumberDuplicateRows || 0,
+      stableKeyCandidate: state.stableKeyCandidate || 'neither',
       sampleRow: state.sampleRow || null,
       lastResponse: last,
       issue: state.issue || '',
@@ -476,6 +620,25 @@
     rowsWithShiftStartTime: 0,
     rowsWithShiftEndTime: 0,
     rowsWithEndNA: 0,
+    naVrmStatusCounts: {},
+    naDeviceEmpty: 0,
+    naDeviceNonEmpty: 0,
+    naVehicleIdentifierEmpty: 0,
+    naVehicleIdentifierNonEmpty: 0,
+    naRowsWithShiftStartTime: 0,
+    naRowsWithDriverId: 0,
+    naRowsWithRealStaffNumber: 0,
+    driverIdPresent: 0,
+    driverIdMissing: 0,
+    driverIdUnique: 0,
+    driverIdDuplicateValues: 0,
+    driverIdDuplicateRows: 0,
+    realStaffNumberPresent: 0,
+    realStaffNumberMissing: 0,
+    realStaffNumberUnique: 0,
+    realStaffNumberDuplicateValues: 0,
+    realStaffNumberDuplicateRows: 0,
+    stableKeyCandidate: 'neither',
     sampleRow: null,
     issue: '',
     lastResponse: null
@@ -800,6 +963,29 @@
     line(body, 'shiftStartTime: ', diagnostic.rowsWithShiftStartTime);
     line(body, 'shiftEndTime: ', diagnostic.rowsWithShiftEndTime);
     line(body, 'shiftEndTime == "N/A": ', diagnostic.rowsWithEndNA);
+    line(body, 'N/A vrmStatus counts: ', Object.keys(diagnostic.naVrmStatusCounts || {}).map(function (label) {
+      return label + '=' + diagnostic.naVrmStatusCounts[label];
+    }).join(', ') || '-');
+    line(body, 'N/A device empty / non-empty: ', diagnostic.naDeviceEmpty + ' / ' + diagnostic.naDeviceNonEmpty);
+    line(body, 'N/A vehicleIdentifier empty / non-empty: ', diagnostic.naVehicleIdentifierEmpty + ' / ' + diagnostic.naVehicleIdentifierNonEmpty);
+    line(body, 'N/A rows with shiftStartTime: ', diagnostic.naRowsWithShiftStartTime);
+    line(body, 'N/A rows with driverId: ', diagnostic.naRowsWithDriverId);
+    line(body, 'N/A rows with realStaffNumber: ', diagnostic.naRowsWithRealStaffNumber);
+    line(body, 'driverId present / missing / unique / duplicate values / duplicate rows: ', [
+      diagnostic.driverIdPresent,
+      diagnostic.driverIdMissing,
+      diagnostic.driverIdUnique,
+      diagnostic.driverIdDuplicateValues,
+      diagnostic.driverIdDuplicateRows
+    ].join(' / '));
+    line(body, 'realStaffNumber present / missing / unique / duplicate values / duplicate rows: ', [
+      diagnostic.realStaffNumberPresent,
+      diagnostic.realStaffNumberMissing,
+      diagnostic.realStaffNumberUnique,
+      diagnostic.realStaffNumberDuplicateValues,
+      diagnostic.realStaffNumberDuplicateRows
+    ].join(' / '));
+    line(body, 'stable key candidate: ', diagnostic.stableKeyCandidate);
     line(body, 'structure keys: ', diagnostic.structureKeys.length ? diagnostic.structureKeys.join(', ') : '-');
     line(body, 'Detected row keys: ', diagnostic.detectedRowKeys.length ? diagnostic.detectedRowKeys.join(', ') : '-');
     line(body, 'candidate identifier fields: ', diagnostic.candidateIdentifierFields.length ? diagnostic.candidateIdentifierFields.join(', ') : '-');

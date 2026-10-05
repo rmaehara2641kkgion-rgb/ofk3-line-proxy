@@ -105,6 +105,117 @@ assert(shifts.candidateIdentifierFields.indexOf('transporterId') < 0, 'non-candi
 assert(shifts.sampleRow.shiftEndTime === 'N/A', 'sample prefers an open session and keeps the N/A sentinel');
 assert(shifts.sampleRow.shiftStartTime === '[NUMBER]', 'sample hides the timestamp digits');
 
+const openStatus = 'On Trip';
+const idleStatus = 'Idle';
+const opaqueStatus = '9988776655';
+const namedStatus = '山田太郎';
+const anon = MC.summarizeShifts({
+  data: [
+    {
+      driverId: secretId,
+      realStaffNumber: secretStaff,
+      firstName: secretName,
+      vrmStatus: openStatus,
+      device: { id: 'phone-secret' },
+      vehicleIdentifier: 'VH-SECRET',
+      shiftStartTime: 1791160800000,
+      shiftEndTime: 'N/A'
+    },
+    {
+      driverId: secretId,
+      realStaffNumber: 'STF-OTHER',
+      vrmStatus: openStatus,
+      device: '',
+      vehicleIdentifier: '   ',
+      shiftStartTime: 1791160900000,
+      shiftEndTime: 'N/A'
+    },
+    {
+      driverId: 'DA-OPEN-3',
+      realStaffNumber: '',
+      vrmStatus: idleStatus,
+      device: null,
+      vehicleIdentifier: null,
+      shiftEndTime: 'N/A'
+    },
+    {
+      driverId: 'DA-OPEN-4',
+      realStaffNumber: secretStaff,
+      vrmStatus: opaqueStatus,
+      device: [],
+      vehicleIdentifier: {},
+      shiftStartTime: 1791161000000,
+      shiftEndTime: 'N/A'
+    },
+    {
+      driverId: '   ',
+      realStaffNumber: 'STF-CLOSED',
+      vrmStatus: namedStatus,
+      shiftStartTime: 1791161100000,
+      shiftEndTime: 1791170000000
+    }
+  ]
+});
+assert(anon.rowsWithEndNA === 4, 'N/A rows are counted without listing them');
+assert(anon.naVrmStatusCounts[openStatus] === 2 && anon.naVrmStatusCounts[idleStatus] === 1, 'N/A rows are counted by vrmStatus label');
+assert(anon.naVrmStatusCounts['(opaque)'] === 1, 'identifier-shaped vrmStatus values are not copied');
+assert(anon.naDeviceNonEmpty === 1 && anon.naDeviceEmpty === 3, 'N/A device empty and non-empty counts');
+assert(anon.naVehicleIdentifierNonEmpty === 1 && anon.naVehicleIdentifierEmpty === 3, 'N/A vehicleIdentifier empty and non-empty counts');
+assert(anon.naRowsWithShiftStartTime === 3, 'N/A rows with shiftStartTime are counted');
+assert(anon.naRowsWithDriverId === 4, 'N/A rows with driverId are counted');
+assert(anon.naRowsWithRealStaffNumber === 3, 'N/A rows with realStaffNumber are counted');
+assert(anon.driverIdPresent === 4 && anon.driverIdMissing === 1, 'driverId presence is counted across every row');
+assert(anon.driverIdUnique === 3 && anon.driverIdDuplicateValues === 1 && anon.driverIdDuplicateRows === 2, 'driverId duplicates are counts only');
+assert(anon.realStaffNumberPresent === 4 && anon.realStaffNumberMissing === 1, 'realStaffNumber presence is counted across every row');
+assert(anon.realStaffNumberUnique === 3 && anon.realStaffNumberDuplicateValues === 1 && anon.realStaffNumberDuplicateRows === 2, 'realStaffNumber duplicates are counts only');
+assert(anon.stableKeyCandidate === 'neither', 'a key with gaps or duplicates is not treated as stable');
+const anonCopy = JSON.stringify(anon);
+assert(anonCopy.indexOf(secretId) < 0 && anonCopy.indexOf(secretStaff) < 0 && anonCopy.indexOf(secretName) < 0, 'anonymous counts omit driver values');
+assert(anonCopy.indexOf('VH-SECRET') < 0 && anonCopy.indexOf('phone-secret') < 0, 'anonymous counts omit device and vehicle values');
+assert(anonCopy.indexOf(opaqueStatus) < 0 && anonCopy.indexOf(namedStatus) < 0, 'unsafe vrmStatus values are not copied');
+assert(anonCopy.indexOf('STF-OTHER') < 0 && anonCopy.indexOf('DA-OPEN-3') < 0, 'other identifier values are not copied');
+
+assert(MC.summarizeShifts({
+  data: [
+    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
+    { driverId: 'B', realStaffNumber: '2', shiftEndTime: 1 }
+  ]
+}).stableKeyCandidate === 'both', 'both complete unique keys stay candidates');
+assert(MC.summarizeShifts({
+  data: [
+    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
+    { driverId: 'B', realStaffNumber: '1', shiftEndTime: 1 }
+  ]
+}).stableKeyCandidate === 'driverId', 'only a complete unique driverId is the stable candidate');
+assert(MC.summarizeShifts({
+  data: [
+    { driverId: 'A', realStaffNumber: '1', shiftEndTime: 'N/A' },
+    { driverId: 'A', realStaffNumber: '2', shiftEndTime: 1 }
+  ]
+}).stableKeyCandidate === 'realStaffNumber', 'only a complete unique realStaffNumber is the stable candidate');
+const anonObserved = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  method: 'GET',
+  status: 200,
+  type: 'cors',
+  ok: true,
+  contentType: 'application/json',
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: JSON.stringify({
+    data: [
+      { driverId: 'A', realStaffNumber: '1', vrmStatus: openStatus, device: 'x', vehicleIdentifier: 'y', shiftStartTime: 1, shiftEndTime: 'N/A' },
+      { driverId: 'B', realStaffNumber: '2', shiftEndTime: 2 }
+    ]
+  })
+});
+const anonDiagnostic = MC.buildDiagnostic(anonObserved);
+assert(anonDiagnostic.naVrmStatusCounts[openStatus] === 1, 'diagnostic keeps N/A status counts');
+assert(anonDiagnostic.naDeviceNonEmpty === 1 && anonDiagnostic.naVehicleIdentifierNonEmpty === 1, 'diagnostic keeps N/A empty checks');
+assert(anonDiagnostic.driverIdPresent === 2 && anonDiagnostic.realStaffNumberUnique === 2, 'diagnostic keeps key counts');
+assert(anonDiagnostic.stableKeyCandidate === 'both', 'diagnostic keeps the stable key candidate');
+assert(JSON.stringify(anonDiagnostic).indexOf('"x"') < 0 && JSON.stringify(anonDiagnostic).indexOf('"y"') < 0, 'diagnostic does not copy device or vehicle values');
+
 const diagnostic = MC.buildDiagnostic({
   metaCaptured: true,
   shiftsCaptured: true,
