@@ -24,7 +24,7 @@
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
-  <script src="/billing-reconcile-core.js?v=20261006-1"></script>
+  <script src="/billing-reconcile-core.js?v=20261006-2"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -11798,6 +11798,8 @@ var driverDB = {
             label: a.label,
             targetName: a.targetName,
             sendable: a.sendable,
+            duplicateTarget: !!a.duplicateTarget,
+            duplicateWarning: a.duplicateWarning || '',
             base64: prepared[idx].base64 || '',
             lineLinked: false
           };
@@ -11859,13 +11861,15 @@ var driverDB = {
     }
 
     function billingPdfDecision(r) {
+      if (r.duplicateTarget) return 'LINE送信禁止';
       if (r.code === 'ambiguous') return '自動送信禁止';
-      if (r.code === 'matched' && r.lineLinked) return '送信可能';
+      if (r.code === 'matched' && r.lineLinked && r.sendable) return '送信可能';
       return 'LINE送信禁止';
     }
 
     function removeBillingPdfResult(index) {
       billingPdfResults.splice(index, 1);
+      if (window.BillingReconcile) BillingReconcile.applyDuplicatePdfBlock(billingPdfResults);
       syncBillingPdfMapFromResults();
       renderPdfMatchList();
     }
@@ -11903,6 +11907,7 @@ var driverDB = {
         html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
         html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
         if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE未登録') + '</div>';
+        if (r.duplicateWarning) html += '<div class="text-amber-700">→ ' + escapeHtmlBilling(r.duplicateWarning) + '</div>';
         if (r.code === 'matched' && r.targetName) {
           for (var t = 0; t < billingData.length; t++) {
             if (billingData[t].name === r.targetName) {

@@ -348,25 +348,60 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   console.log('  ok - tid mismatch is warning-only');
 }
 
-// 1つのPDFは1人だけ。同一人物への複数PDFは結果が別々で、宛先は1人に留まる
+// 同一人物への複数PDFは送信しない。1件に戻したときだけ送信可
 {
+  const one = Core.assignBillingPdfs(
+    [{ filename: '永浦.pdf', text: '永浦 康明 様', error: '' }],
+    targets,
+    {}
+  );
+  assert.equal(one[0].targetName, '永浦 康明');
+  assert.equal(one[0].sendable, true);
+  assert.equal(one[0].duplicateTarget, false);
+  console.log('  ok - single pdf for one person stays sendable');
+
   const files = [
-    { filename: '永浦-1.pdf', text: '永浦 康明 様', error: '' },
-    { filename: '永浦-2.pdf', text: '永浦　康明', error: '' }
+    { filename: '永浦.pdf', text: '永浦 康明 様', error: '' },
+    { filename: '永浦_修正版.pdf', text: '永浦　康明', error: '' },
+    { filename: '金子.pdf', text: '金子 昌巧', error: '' }
   ];
   const results = Core.assignBillingPdfs(files, targets, {});
-  assert.equal(results[0].sendable, true);
-  assert.equal(results[1].sendable, true);
   assert.equal(results[0].targetName, '永浦 康明');
   assert.equal(results[1].targetName, '永浦 康明');
-  const map = {};
+  assert.equal(results[0].sendable, false);
+  assert.equal(results[1].sendable, false);
+  assert.equal(results[0].duplicateWarning, '同一対象者に複数PDFがあります');
+  assert.equal(results[1].duplicateWarning, '同一対象者に複数PDFがあります');
+  assert.equal(results[2].targetName, '金子 昌巧');
+  assert.equal(results[2].sendable, true);
+  const blocked = {};
   results.forEach(function (r) {
     if (!r.sendable) return;
-    map[r.targetName] = r.filename;
+    assert.equal(blocked[r.targetName], undefined);
+    blocked[r.targetName] = r.filename;
   });
-  assert.equal(Object.keys(map).length, 1);
-  assert.equal(map['永浦 康明'], '永浦-2.pdf');
-  console.log('  ok - one pdf stays on one person; later file wins the slot');
+  assert.equal(blocked['永浦 康明'], undefined);
+  assert.equal(blocked['金子 昌巧'], '金子.pdf');
+  console.log('  ok - duplicate pdfs for one person are not sendable');
+
+  results.splice(1, 1);
+  Core.applyDuplicatePdfBlock(results);
+  assert.equal(results[0].filename, '永浦.pdf');
+  assert.equal(results[0].targetName, '永浦 康明');
+  assert.equal(results[0].sendable, true);
+  assert.equal(results[0].duplicateWarning, '');
+  assert.equal(results[1].sendable, true);
+  console.log('  ok - removing the extra pdf restores sendable');
+}
+
+{
+  assert.match(indexSrc, /同一対象者に複数PDFがあります|duplicateWarning/);
+  assert.match(indexSrc, /applyDuplicatePdfBlock\(billingPdfResults\)/);
+  const removeAt = indexSrc.indexOf('function removeBillingPdfResult');
+  const syncAt = indexSrc.indexOf('syncBillingPdfMapFromResults();', removeAt);
+  const blockAt = indexSrc.indexOf('applyDuplicatePdfBlock(billingPdfResults)', removeAt);
+  assert.ok(removeAt > 0 && blockAt > removeAt && blockAt < syncAt);
+  console.log('  ok - ui blocks duplicate pdfs before the send map');
 }
 
 console.log('billing-reconcile tests passed');

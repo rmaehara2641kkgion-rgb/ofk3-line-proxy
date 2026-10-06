@@ -8,6 +8,7 @@
  *
  * PDFの自動送信は、空白差を除いた氏名の一意一致だけ。
  * 部分一致・複数候補・読込失敗は sendable=false。
+ * 同一対象者へ2件以上割り当てた場合も sendable=false。先着も後着も採用しない。
  */
 (function (global) {
   'use strict';
@@ -299,12 +300,36 @@
     return resultOf(file, 'unmatched', null);
   }
 
+  var DUPLICATE_PDF_WARNING = '同一対象者に複数PDFがあります';
+
+  // 同一対象者に2件以上の一意一致があるとき、その対象者のPDFはすべて送信不可。
+  // 1件に戻したあと再度呼ぶと、残った一致は送信可に戻る。PDFの中身は結合しない。
+  function applyDuplicatePdfBlock(results) {
+    results = results || [];
+    var counts = {};
+    for (var i = 0; i < results.length; i++) {
+      var row = results[i];
+      if (!row || row.code !== 'matched' || !row.targetName) continue;
+      var key = normalizePersonName(row.targetName);
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    for (var j = 0; j < results.length; j++) {
+      var item = results[j];
+      if (!item || item.code !== 'matched' || !item.targetName) continue;
+      var dup = counts[normalizePersonName(item.targetName)] >= 2;
+      item.sendable = !dup;
+      item.duplicateTarget = dup;
+      item.duplicateWarning = dup ? DUPLICATE_PDF_WARNING : '';
+    }
+    return results;
+  }
+
   function assignBillingPdfs(files, targets, options) {
     var readings = (options && options.readings) || {};
     var list = files || [];
     var out = [];
     for (var i = 0; i < list.length; i++) out.push(assignOne(list[i], targets || [], readings));
-    return out;
+    return applyDuplicatePdfBlock(out);
   }
 
   function collectNameReadings(targets, master) {
@@ -364,6 +389,7 @@
     extractPdfText: extractPdfText,
     extractBracketName: extractBracketName,
     assignBillingPdfs: assignBillingPdfs,
+    applyDuplicatePdfBlock: applyDuplicatePdfBlock,
     collectNameReadings: collectNameReadings,
     matchUniqueTarget: matchUniqueTarget,
     tidNameMismatch: tidNameMismatch,
