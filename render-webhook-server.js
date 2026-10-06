@@ -269,11 +269,15 @@ console.log('LINE_NOTIFICATIONS_ENABLED (Render env, マスターキルスイッ
 var LINE_APP_SWITCH_STORE_PATH = path.join(os.tmpdir(), 'line-app-switch-store.json');
 // 既定値は enabled:false（＝状態不明時は送信禁止のフェイルセーフ）。
 // 保存済みファイルが正しく読めた場合のみ、その内容（enabled:trueも含む）を採用する。
-var lineAppSwitchState = { enabled: false, updatedAt: null, updatedBy: null };
+// Render の一時ディスクは再デプロイで消えるため、状態ファイルが無い場合は
+// 永続設定である LINE_NOTIFICATIONS_ENABLED を初期値として採用する。
+// これにより通常の再起動/再デプロイだけで LINE が意図せず停止し続けるのを防ぐ。
+// 緊急停止を永続させる場合は Render 側の LINE_NOTIFICATIONS_ENABLED=false を使用する。
+var lineAppSwitchState = { enabled: LINE_NOTIFICATIONS_ENABLED, updatedAt: null, updatedBy: 'render-env-default' };
 (function loadLineAppSwitchState() {
   try {
     if (!fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
-      console.log('LINE app switch (非常停止): 状態ファイルなし → フェイルセーフでenabled=false');
+      console.log('LINE app switch (非常停止): 状態ファイルなし → Renderマスター設定を初期値として採用 enabled=' + lineAppSwitchState.enabled);
       return;
     }
     var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
