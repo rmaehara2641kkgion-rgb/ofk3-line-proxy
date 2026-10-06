@@ -11572,9 +11572,11 @@ var driverDB = {
           ? '<span class="text-xs text-green-600">✅ 登録済</span>'
           : '<span class="text-xs text-gray-400">未登録</span>';
 
+        var tidWarn = billingTidMismatchWarning(d);
         return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
           '<td class="px-3 py-2"><input type="checkbox" ' + (d.selected ? 'checked' : '') + ' onchange="toggleBillingSelect(' + i + ', this.checked)" class="cursor-pointer"></td>' +
-          '<td class="px-3 py-2 font-medium">' + d.name + '</td>' +
+          '<td class="px-3 py-2 font-medium">' + escapeHtmlBilling(String(d.name || '')) +
+            (tidWarn ? '<div class="text-xs text-amber-700">' + tidWarn + '</div>' : '') + '</td>' +
           '<td class="px-3 py-2 text-right">' + d.workDays + '日</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.charter) + '</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.mileage) + '</td>' +
@@ -11595,6 +11597,23 @@ var driverDB = {
 
     function toggleBillingSelect(index, checked) {
       billingData[index].selected = checked;
+    }
+
+    function billingMasterNamesForTid(tid) {
+      var names = [];
+      if (!tid || typeof transportIDs === 'undefined') return names;
+      for (var key in transportIDs) {
+        if (String(transportIDs[key] || '') !== String(tid)) continue;
+        names.push(key);
+        if (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[key]) names.push(driverJapaneseNames[key]);
+      }
+      return names;
+    }
+
+    function billingTidMismatchWarning(row) {
+      if (!row || !row.tid || !row.name || !window.BillingReconcile) return '';
+      if (!BillingReconcile.tidNameMismatch(row.name, billingMasterNamesForTid(row.tid))) return '';
+      return 'TIDとドライバーマスタの氏名が一致しません';
     }
 
     function findLineUserId(driverKey, name) {
@@ -11884,6 +11903,15 @@ var driverDB = {
         html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
         html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
         if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE未登録') + '</div>';
+        if (r.code === 'matched' && r.targetName) {
+          for (var t = 0; t < billingData.length; t++) {
+            if (billingData[t].name === r.targetName) {
+              var tidWarn = billingTidMismatchWarning(billingData[t]);
+              if (tidWarn) html += '<div class="text-amber-700">→ ' + tidWarn + '</div>';
+              break;
+            }
+          }
+        }
         html += '<div>→ ' + decision + '</div>';
         html += '<button type="button" onclick="removeBillingPdfResult(' + i + ')" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>';
         html += '</div>';

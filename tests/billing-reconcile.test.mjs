@@ -327,4 +327,46 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   console.log('  ok - index wiring keeps LINE send path');
 }
 
+// TID不一致は警告判定のみ。氏名もTIDも書き換えない
+{
+  assert.equal(Core.tidNameMismatch('金子 昌巧', ['勝幸 矢野']), true);
+  assert.equal(Core.tidNameMismatch('永浦 康明', ['康明 永浦']), false);
+  assert.equal(Core.tidNameMismatch('金子 昌巧', []), false);
+  assert.equal(Core.tidNameMismatch('金子 昌巧', ['金子 昌巧']), false);
+  const rows = [headerRow()];
+  const kaneko = [];
+  kaneko[1] = 'A1GKOXURY2BDIZ';
+  kaneko[2] = '金子 昌巧';
+  rows.push(kaneko);
+  const parsed = Core.parseBillingRows(rows);
+  assert.equal(parsed[0].name, '金子 昌巧');
+  assert.equal(parsed[0].tid, 'A1GKOXURY2BDIZ');
+  assert.equal(parsed[0].driverKey, '');
+  const master = { '勝幸 矢野': 'A1GKOXURY2BDIZ' };
+  assert.equal(master['A1GKOXURY2BDIZ'], undefined);
+  assert.equal(master['勝幸 矢野'], 'A1GKOXURY2BDIZ');
+  console.log('  ok - tid mismatch is warning-only');
+}
+
+// 1つのPDFは1人だけ。同一人物への複数PDFは結果が別々で、宛先は1人に留まる
+{
+  const files = [
+    { filename: '永浦-1.pdf', text: '永浦 康明 様', error: '' },
+    { filename: '永浦-2.pdf', text: '永浦　康明', error: '' }
+  ];
+  const results = Core.assignBillingPdfs(files, targets, {});
+  assert.equal(results[0].sendable, true);
+  assert.equal(results[1].sendable, true);
+  assert.equal(results[0].targetName, '永浦 康明');
+  assert.equal(results[1].targetName, '永浦 康明');
+  const map = {};
+  results.forEach(function (r) {
+    if (!r.sendable) return;
+    map[r.targetName] = r.filename;
+  });
+  assert.equal(Object.keys(map).length, 1);
+  assert.equal(map['永浦 康明'], '永浦-2.pdf');
+  console.log('  ok - one pdf stays on one person; later file wins the slot');
+}
+
 console.log('billing-reconcile tests passed');
