@@ -283,7 +283,7 @@
     SAME_NAME_DIFFERENT_TID: '同名・別TransportID（別人として集計）',
     SAME_NAME_MULTIPLE_COMPANIES: '同名が複数所属に存在（統合せず）',
     COMPANY_LABEL_VARIANTS: '所属表記ゆれ',
-    COUNT_COLUMN_MISMATCH: 'シフト表「回数」列と集計値が不一致',
+    COUNT_COLUMN_MISMATCH: 'シフト表「回数」列（○の回数）と○の集計が不一致',
     SHEET_MONTH_DIFFERS_FROM_SELECTED: 'シフト表の年月と選択月が不一致',
     NAME_HEADER_NOT_FOUND: '氏名ヘッダー未検出のシート',
     DATE_HEADER_NOT_FOUND: '日付ヘッダー未検出のシート',
@@ -302,7 +302,7 @@
     if (w.transportIds) parts.push('TID: ' + w.transportIds.join(' / '));
     if (w.companies) parts.push('所属: ' + w.companies.join(' / '));
     if (w.variants) parts.push('表記: ' + w.variants.join(' / '));
-    if (w.sheetCount !== undefined) parts.push('回数列=' + w.sheetCount + ' / 集計=' + w.computed);
+    if (w.sheetCount !== undefined) parts.push('回数列=' + w.sheetCount + ' / ○集計=' + w.computed);
     if (w.sheetMonth) parts.push(w.sheetMonth + ' ≠ ' + w.selected);
     return parts.join('　');
   }

@@ -72,7 +72,8 @@
    */
   function classifyShiftCell(value) {
     var raw = value === null || value === undefined ? '' : String(value).trim();
-    if (!raw) return { category: 'BLANK', code: '', raw: '' };
+    // シフト表の空欄は数式結果の 0 になっている（実データ「メイン」シートで確認）→ 空欄扱い
+    if (!raw || raw === '0') return { category: 'BLANK', code: '', raw: '' };
     var compact = raw.replace(/[\s　]+/g, '');
     if (isNonWorkingCode(compact)) return { category: 'NON_WORKING', code: compact, raw: raw };
     var aliasKey = nfkc(compact).toUpperCase();
@@ -126,6 +127,11 @@
       n = Math.floor((n - 1) / 26);
     }
     return s + row;
+  }
+
+  function isValidYmd(y, m, d) {
+    var dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
   }
 
   function pad2(n) {
@@ -267,12 +273,27 @@
     var dataStart = Math.max(headerRowIdx, dateRowIdx) + 1;
     var dateGroups = {};
     var dateHeaderRow = rows[dateRowIdx] || [];
+    // 日付見出しにExcel日付（年月日つき）がある場合は、日番号だけの見出し（例: 末尾の「31」
+    // ＝9月に存在しない日、集計列等）は使わない（実データ「メイン」シートで確認）
+    var hasFullDates = false;
+    for (var c1 = nameCol + 1; c1 < dateHeaderRow.length; c1++) {
+      var h1 = parseHeaderDateCell(dateHeaderRow[c1]);
+      if (h1 && h1.date) hasFullDates = true;
+    }
     for (var c2 = nameCol + 1; c2 < dateHeaderRow.length; c2++) {
       if (c2 === countCol || c2 === tidCol || c2 === companyCol) continue;
       var h = parseHeaderDateCell(dateHeaderRow[c2]);
       if (!h) continue;
+      if (hasFullDates && !h.date) {
+        warnings.push({ type: 'DAY_ONLY_HEADER_IGNORED', sheet: sheetName, col: c2, value: dateHeaderRow[c2] });
+        continue;
+      }
       var key = h.date;
       if (!key) {
+        if (ym && !isValidYmd(ym.year, ym.month, h.day)) {
+          warnings.push({ type: 'INVALID_DAY_HEADER_IGNORED', sheet: sheetName, col: c2, value: dateHeaderRow[c2] });
+          continue;
+        }
         if (!ym) {
           return { ok: false, records: [], warnings: warnings.concat([{ type: 'MONTH_UNRESOLVED', sheet: sheetName }]), meta: {} };
         }
@@ -498,6 +519,7 @@
       p.counts = emptyCounts();
       p.shiftDays = {}; // date -> [code]（アルコール照合用）
       var seen = {}; // date|code -> 'sheet!row'
+      var rawMaru = 0;
       p.records.forEach(function (rec) {
         rec.cells.forEach(function (cell) {
           var cls = classifyShiftCell(cell.value);
@@ -532,14 +554,16 @@
             convertedCodes.push({ company: p.company, name: p.name, date: cell.date, raw: cls.raw, code: cls.code, sheet: rec.sheet, row: rec.row, cell: cellAddress(cell.col, rec.row) });
           }
           (p.shiftDays[cell.date] = p.shiftDays[cell.date] || []).push(cls.code);
+          if (cls.code === 'MARU' && !cls.convertedFrom) rawMaru++;
         });
       });
       p.total = sumCounts(p.counts);
 
-      // シフト表の「回数」列がある場合は照合のみ行う（値は採用しない）
+      // シフト表の「回数」列は「○」の回数（実データで確認。読み替え前の○のみ）。
+      // 照合のみ行い、値は採用しない
       var countVals = p.records.map(function (r) { return r.countColumnValue; }).filter(function (v) { return typeof v === 'number'; });
-      if (p.records.length === 1 && countVals.length === 1 && countVals[0] !== p.total) {
-        warnings.push({ type: 'COUNT_COLUMN_MISMATCH', company: p.company, name: p.name, sheetCount: countVals[0], computed: p.total });
+      if (p.records.length === 1 && countVals.length === 1 && countVals[0] !== rawMaru) {
+        warnings.push({ type: 'COUNT_COLUMN_MISMATCH', company: p.company, name: p.name, sheetCount: countVals[0], computed: rawMaru });
       }
     });
 

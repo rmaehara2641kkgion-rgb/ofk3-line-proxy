@@ -59,6 +59,8 @@ function testClassify() {
   eq(c('').category, 'BLANK', '空欄');
   eq(c(null).category, 'BLANK', 'null');
   eq(c('  ').category, 'BLANK', '空白のみ');
+  eq(c(0).category, 'BLANK', '数式結果の0は空欄（実データ「メイン」シート）');
+  eq(c('0').category, 'BLANK', '文字列の0も空欄');
   eq(c('C2').category, 'OTHER', 'C2は集計対象外（既知）');
   eq(c('唐津').category, 'OTHER', '唐津は集計対象外');
   eq(c('嘉').category, 'OTHER', '嘉は集計対象外');
@@ -164,6 +166,22 @@ function testSummary() {
   assert(aoa.some((r) => r[0] === 'JHS 合計' && r[2] === 8), '所属ブロック合計行');
   assert(aoa.some((r) => r[0] === '所属' && r[1] === 'ドライバー名'), '内訳ヘッダー');
   return res;
+}
+
+function testSerialHeaderWithTrailingDayNumber() {
+  // 実データ「メイン」: 見出しは 9/1〜9/30 のExcel日付（シリアル値）＋末尾に数値「31」、空欄セルは 0
+  const header = ['社　名', '名　前', '回数'];
+  for (let i = 0; i < 30; i++) header.push(46266 + i);
+  header.push(31, 'Roman character', 'Transport ID');
+  const row = ['GDS', '砥綿　剛平', 1];
+  for (let i = 0; i < 30; i++) row.push(i === 14 ? '○' : 0);
+  row.push('○', 'x', 'T');
+  const res = Core.summarizeShiftWorkbook({ メイン: [[46266], [], header, ['', '', '', '火'], row] }, ['メイン'], { month: '2026-09' });
+  eq(res.sheetsUsed[0].dateRange.max, '2026-09-30', '存在しない 9/31 列を作らない');
+  eq(res.totals.total, 1, '末尾「31」列の値は集計しない');
+  eq(res.unknownShifts.length, 0, '0 は UNKNOWN_SHIFT にしない');
+  assert(res.warnings.some((w) => w.type === 'DAY_ONLY_HEADER_IGNORED'), '日番号だけの見出しを無視した警告');
+  assert(!res.warnings.some((w) => w.type === 'COUNT_COLUMN_MISMATCH'), '回数列は○の回数として照合');
 }
 
 function testDateHeaderAndDuplicateColumns() {
@@ -348,7 +366,7 @@ function testRealData() {
   const res = Core.summarizeShiftWorkbook(wb.sheets, wb.order, { month: '2026-09', isNonDriverRow: AssignSupportCore.isShiftNonDriverRow });
   console.log('INFO: 使用シート ' + res.sheetsUsed.map((m) => m.sheet + '（氏名列' + m.nameCol + '・社名列' + m.companyCol + '・日付行' + (m.dateRowIdx + 1) + '・' + m.dateRange.min + '〜' + m.dateRange.max + '）').join(',') +
     ' / UNKNOWN_SHIFT ' + res.unknownShifts.length + '件 / 対象外コード ' + JSON.stringify(res.otherCodes));
-  res.unknownShifts.forEach((u) => console.log('  UNKNOWN_SHIFT: ' + [u.company, u.name, u.date, u.raw, u.sheet + '!' + u.cell].join(' | ')));
+  res.unknownShifts.slice(0, 50).forEach((u) => console.log('  UNKNOWN_SHIFT: ' + [u.company, u.name, u.date, u.raw, u.sheet + '!' + u.cell].join(' | ')));
   // 読み替え（研修→○ / 研C1→C1 / C319・C320→C3）を原体のセル位置つきで列挙し、完成版「日付別」の同じ人・同じ日と照合する
   const labelOf = {};
   Core.TARGET_CODES.forEach((c) => (labelOf[c.key] = c.label));
@@ -361,10 +379,11 @@ function testRealData() {
     goldenDaily = {};
     (readWorkbook(XLSX, expectedFile).sheets['日付別'] || []).slice(1).forEach((r) => (goldenDaily[Core.nameKey(r[2]) + '|' + ser(r[0])] = String(r[3])));
   }
+  const convMismatch = [];
   res.convertedCodes.forEach((x) => {
     const g = goldenDaily ? goldenDaily[Core.nameKey(x.name) + '|' + x.date] : undefined;
     console.log('  読み替え: ' + [x.company, x.name, x.date, x.sheet + '!' + x.cell, '「' + x.raw + '」→' + labelOf[x.code], '完成版=' + (g === undefined ? '(未照合)' : g)].join(' | '));
-    if (goldenDaily) assert(g === labelOf[x.code], '読み替え結果が完成版と不一致: ' + x.name + ' ' + x.date + ' ' + x.raw);
+    if (goldenDaily && g !== labelOf[x.code]) convMismatch.push(x.name + ' ' + x.date + ' ' + x.sheet + '!' + x.cell + ' ' + x.raw);
   });
   if (fs.existsSync(expectedFile)) {
     const diffs = traceDailyDiffs(res, readWorkbook(XLSX, expectedFile));
@@ -373,6 +392,7 @@ function testRealData() {
       diffs.forEach((d) => console.log('  ' + d));
     }
   }
+  assert(convMismatch.length === 0, '読み替え結果が完成版と不一致: ' + convMismatch.join(' / '));
   compareAffiliations(res, '原体');
   console.log('OK: 2026年9月 原体 → 所属別集計・全社合計が期待値と一致（1068）');
   if (!fs.existsSync(expectedFile)) {
@@ -387,6 +407,7 @@ function testRealData() {
 testClassify();
 testSummary();
 testDateHeaderAndDuplicateColumns();
+testSerialHeaderWithTrailingDayNumber();
 testGoldenDailyBreakdown();
 testRealData();
 console.log('run-summary-core tests passed');
