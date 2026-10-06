@@ -15,15 +15,38 @@
 
   var state = {
     shift: null, // { fileName, sheets, order }
-    alcohol: null, // { fileName, rows }
+    alcohol: null, // { fileName, sheet, parsed }（AlcoholAuditCore.parseAlcoholRows の結果）
     result: null,
     audit: null,
-    alcoholParse: null,
     expanded: {},
   };
 
   function core() {
     return window.RunSummaryCore || null;
+  }
+
+  function alcoholCore() {
+    return window.AlcoholAuditCore || null;
+  }
+
+  var ALIAS_STORAGE_KEY = 'runSummaryAlcoholAliases';
+
+  function loadAliasText() {
+    try { return localStorage.getItem(ALIAS_STORAGE_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function saveAliasText(t) {
+    try { localStorage.setItem(ALIAS_STORAGE_KEY, t); } catch (e) {}
+  }
+
+  /** 「CSV表記,シフト表表記」形式（1行1件）→ 名前対応 */
+  function parseAliasText(text) {
+    var rows = [['CSV表記', 'シフト表表記']];
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+      var parts = line.split(/[,，\t]/);
+      if (parts.length >= 2) rows.push([parts[0], parts[1]]);
+    });
+    return alcoholCore().parseAliasRows(rows);
   }
 
   function esc(s) {
@@ -72,6 +95,10 @@
       '      <p id="rs-alc-status" class="text-xs mt-2"></p>' +
       '    </div>' +
       '  </div>' +
+      '  <div class="mb-3">' +
+      '    <details><summary class="text-xs text-ink-lighter cursor-pointer">名前対応（アルコールCSVの氏名とシフト表の氏名が異なる人：1行に「CSV表記,シフト表表記」）</summary>' +
+      '    <textarea id="rs-alc-aliases" rows="4" class="w-full text-xs border border-border rounded p-2 mt-1" placeholder="田中安香音,辻　安香音"></textarea></details>' +
+      '  </div>' +
       '  <div id="rs-result"></div>' +
       '</div>'
     );
@@ -81,7 +108,14 @@
     var reader = new FileReader();
     reader.onload = function (e) {
       try {
-        var wb = XLSX.read(e.target.result, { type: 'array' });
+        var wb;
+        if (/\.csv$/i.test(file.name || '') && alcoholCore()) {
+          // 検知器CSVは Shift_JIS。値の自動変換（日時→シリアル値等）をさせず文字列のまま読む
+          var text = alcoholCore().decodeCsvBytes(new Uint8Array(e.target.result));
+          wb = XLSX.read(text, { type: 'string', raw: true });
+        } else {
+          wb = XLSX.read(e.target.result, { type: 'array' });
+        }
         var sheets = {};
         wb.SheetNames.forEach(function (sn) {
           sheets[sn] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: '' });
@@ -115,10 +149,11 @@
         return;
       }
       // ヘッダーを検出できた最初のシートを使う
-      var C = core();
+      var A = alcoholCore();
+      if (!A) return;
       var picked = null;
       for (var i = 0; i < wb.order.length; i++) {
-        var p = C.parseAlcoholRows(wb.sheets[wb.order[i]]);
+        var p = A.parseAlcoholRows(wb.sheets[wb.order[i]]);
         if (p.ok) {
           picked = { sheet: wb.order[i], parsed: p };
           break;
@@ -147,7 +182,10 @@
     var isNonDriverRow =
       typeof AssignSupportCore !== 'undefined' && AssignSupportCore.isShiftNonDriverRow ? AssignSupportCore.isShiftNonDriverRow : null;
     state.result = C.summarizeShiftWorkbook(state.shift.sheets, state.shift.order, { month: month, isNonDriverRow: isNonDriverRow });
-    state.audit = state.alcohol ? C.auditAlcohol(state.result, state.alcohol.parsed.records) : null;
+    state.audit =
+      state.alcohol && alcoholCore()
+        ? alcoholCore().auditAlcohol(state.result, state.alcohol.parsed.records, { aliases: parseAliasText($('rs-alc-aliases').value) })
+        : null;
     state.expanded = {};
     render();
   }
@@ -310,24 +348,32 @@
     if (!state.audit) return '';
     var c = state.audit.counts;
     var rows = [
-      ['シフトあり＋出発前測定あり', c.shiftWithBefore],
-      ['シフトあり＋出発前測定なし', c.shiftWithoutBefore],
-      ['シフトあり＋帰着後測定あり', c.shiftWithAfter],
-      ['シフトあり＋帰着後測定なし', c.shiftWithoutAfter],
-      ['シフトなし＋測定あり', c.measuredWithoutShift],
+      ['OK（出発前・帰着後とも測定、全てA）', c.OK],
+      ['軽微（帰着後未測定）', c['軽微']],
+      ['重大（A以外の判定、または出発前未測定）', c['重大']],
+      ['未測定（シフトありで測定なし）', c['未測定']],
+      ['シフト外（休・空欄の日に測定あり）', c['シフト外']],
+      ['シフトあり＋出発前測定あり／なし', c.shiftWithBefore + ' ／ ' + c.shiftWithoutBefore],
+      ['シフトあり＋帰着後測定あり／なし', c.shiftWithAfter + ' ／ ' + c.shiftWithoutAfter],
     ];
     var html = '<h4 class="text-xs font-bold text-ink-lighter mb-2">🍺 アルコールチェック照合（監査用・シフト数には影響しません）</h4><table class="text-xs mb-2">';
     rows.forEach(function (r) {
       html += '<tr><td class="pr-4 py-0.5">' + esc(r[0]) + '</td><td class="text-right font-bold">' + r[1] + '</td></tr>';
     });
     html += '</table>';
-    var unmatched = Object.keys(state.audit.unmatchedNames);
-    if (unmatched.length) html += '<div class="text-xs text-amber-700">シフト表に氏名が見つからない測定者: ' + esc(unmatched.join('、')) + '</div>';
-    if (state.audit.ambiguousNames.length) html += '<div class="text-xs text-amber-700">同名が複数いるため自動照合しなかった氏名: ' + esc(state.audit.ambiguousNames.join('、')) + '</div>';
-    var pw = state.alcohol.parsed.warnings;
-    if (pw.some(function (w) { return w.type === 'ALCOHOL_TIMING_COLUMN_NOT_FOUND'; })) {
-      html += '<div class="text-xs text-amber-700">測定区分（出発前／帰着後）の列が見つからないため、前後の判定ができません</div>';
+    var serious = state.audit.days.filter(function (d) { return d.result === '重大' || d.result === '未測定'; });
+    if (serious.length) {
+      html += '<details class="mb-2"><summary class="text-xs text-red-600 cursor-pointer">重大・未測定の明細（' + serious.length + '件）</summary><ul class="ml-4 list-disc text-xs">';
+      serious.forEach(function (d) {
+        html += '<li>' + esc(d.date + '　' + d.company + '　' + d.name + '　' + d.result + (d.note ? '（' + d.note + '）' : '')) + '</li>';
+      });
+      html += '</ul></details>';
     }
+    var unmatched = Object.keys(state.audit.unmatchedNames);
+    if (unmatched.length) html += '<div class="text-xs text-amber-700">シフト表に氏名が見つからない測定者（名前対応に追加してください）: ' + esc(unmatched.join('、')) + '</div>';
+    var ambiguous = Object.keys(state.audit.ambiguousNames);
+    if (ambiguous.length) html += '<div class="text-xs text-amber-700">同名が複数いるため自動照合しなかった氏名: ' + esc(ambiguous.join('、')) + '</div>';
+    if (state.audit.sharedRecords.length) html += '<div class="text-xs text-ink-lighter">共用ID（flex / biker / テスト）の測定 ' + state.audit.sharedRecords.length + '件は照合対象外</div>';
     return html;
   }
 
@@ -366,7 +412,7 @@
     ws['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 6 }];
     XLSX.utils.book_append_sheet(wb, ws, '所属別運行集計');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(C.buildUnknownAoa(r)), 'UNKNOWN_SHIFT');
-    if (state.audit) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(C.buildAlcoholAoa(state.audit)), 'アルコール照合');
+    if (state.audit) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(alcoholCore().buildAlcoholAoa(state.audit)), 'アルコール照合');
     XLSX.writeFile(wb, '所属別運行集計_' + r.month + '.xlsx');
   }
 
@@ -408,6 +454,11 @@
     $('rs-export').addEventListener('click', exportExcel);
     wireDrop('rs-shift-drop', 'rs-shift-file', onShiftFile);
     wireDrop('rs-alc-drop', 'rs-alc-file', onAlcoholFile);
+    $('rs-alc-aliases').value = loadAliasText();
+    $('rs-alc-aliases').addEventListener('change', function () {
+      saveAliasText(this.value);
+      if (state.alcohol) run();
+    });
   }
 
   function boot() {

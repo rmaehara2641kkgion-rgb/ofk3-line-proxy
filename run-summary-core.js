@@ -578,156 +578,6 @@
   }
 
   // ===========================================================================
-  // 6. アルコールチェック照合（監査用途。シフト回数には一切影響させない）
-  // ===========================================================================
-
-  function findHeaderCol(row, patterns, exclude) {
-    for (var c = 0; c < row.length; c++) {
-      var lab = compactLabel(row[c]);
-      if (!lab) continue;
-      if (exclude && exclude.some(function (x) { return lab.indexOf(x) >= 0; })) continue;
-      for (var i = 0; i < patterns.length; i++) {
-        if (lab.indexOf(patterns[i]) >= 0) return c;
-      }
-    }
-    return -1;
-  }
-
-  function toYMD(v) {
-    if (v === null || v === undefined || v === '') return null;
-    if (v instanceof Date && !isNaN(v.getTime())) return v.getFullYear() + '-' + pad2(v.getMonth() + 1) + '-' + pad2(v.getDate());
-    if (typeof v === 'number') return v > 40000 && v < 60000 ? serialToYMD(v) : null;
-    var m = String(v).trim().match(/(\d{4})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})/);
-    return m ? m[1] + '-' + pad2(parseInt(m[2], 10)) + '-' + pad2(parseInt(m[3], 10)) : null;
-  }
-
-  /** 測定区分 → 'before'（出発前）/ 'after'（帰着後）/ '' */
-  function classifyAlcoholTiming(v) {
-    var s = String(v === null || v === undefined ? '' : v).replace(/[\s　]/g, '');
-    if (!s) return '';
-    if (/帰着|帰庫|乗務後|業務後|運転後|終業|退勤/.test(s)) return 'after';
-    if (/出発|出庫|乗務前|業務前|運転前|始業|出勤/.test(s)) return 'before';
-    if (/後/.test(s)) return 'after';
-    if (/前/.test(s)) return 'before';
-    return '';
-  }
-
-  /**
-   * アルコールチェック原体の rows（header:1）を解析する。列はヘッダー名で検出。
-   */
-  function parseAlcoholRows(rows, options) {
-    options = options || {};
-    rows = rows || [];
-    var headerIdx = -1;
-    var col = {};
-    for (var r = 0; r < Math.min(rows.length, 15) && headerIdx < 0; r++) {
-      var row = rows[r] || [];
-      var nc = findHeaderCol(row, ['氏名', '名前', '運転者', 'ドライバー', '測定者', '社員名', '従業員名', 'ユーザー名'], ['ﾌﾘｶﾞﾅ', 'フリガナ', 'かな', 'カナ', 'ローマ', 'id']);
-      var dc = findHeaderCol(row, ['測定日時', '日時', '測定日', '日付', '年月日', '実施日']);
-      if (nc >= 0 && dc >= 0) {
-        headerIdx = r;
-        col.name = nc;
-        col.date = dc;
-        col.time = findHeaderCol(row, ['測定時刻', '時刻'], ['日時']);
-        col.timing = findHeaderCol(row, ['測定区分', '点呼区分', '乗務区分', '区分', '種別', 'タイミング', '出発/帰着', '乗務前後']);
-        col.company = findHeaderCol(row, ['所属', '会社', '社名']);
-      }
-    }
-    if (headerIdx < 0) return { ok: false, records: [], warnings: [{ type: 'ALCOHOL_HEADER_NOT_FOUND' }], meta: {} };
-    var warnings = [];
-    if (col.timing < 0) warnings.push({ type: 'ALCOHOL_TIMING_COLUMN_NOT_FOUND' });
-    var records = [];
-    for (var i = headerIdx + 1; i < rows.length; i++) {
-      var dr = rows[i];
-      if (!dr) continue;
-      var name = normalizeDisplayName(dr[col.name]);
-      if (!name) continue;
-      var date = toYMD(dr[col.date]);
-      if (!date) {
-        warnings.push({ type: 'ALCOHOL_DATE_UNPARSED', row: i + 1, value: String(dr[col.date]) });
-        continue;
-      }
-      records.push({
-        row: i + 1,
-        name: name,
-        nameKey: nameKey(name),
-        company: col.company >= 0 ? normalizeDisplayName(dr[col.company]) : '',
-        date: date,
-        timing: col.timing >= 0 ? classifyAlcoholTiming(dr[col.timing]) : '',
-        rawTiming: col.timing >= 0 ? String(dr[col.timing] === undefined ? '' : dr[col.timing]) : '',
-      });
-    }
-    return { ok: true, records: records, warnings: warnings, meta: { headerRowIdx: headerIdx, columns: col } };
-  }
-
-  /**
-   * シフト（summarizeShiftRecords の persons）とアルコール測定を照合する。
-   * 氏名キーで照合し、同一氏名キーが複数人物に該当する場合は自動判定しない。
-   */
-  function auditAlcohol(summary, alcoholRecords) {
-    var month = summary.month;
-    var byKey = {};
-    (summary.persons || []).forEach(function (p) {
-      (byKey[p.nameKey] = byKey[p.nameKey] || []).push(p);
-    });
-    var meas = {}; // nameKey|date -> {before, after, any}
-    var noShift = [];
-    var unmatchedNames = {};
-    var ambiguousNames = {};
-    (alcoholRecords || []).forEach(function (a) {
-      if (month && a.date.slice(0, 7) !== month) return;
-      var k = a.nameKey + '|' + a.date;
-      var m = (meas[k] = meas[k] || { before: 0, after: 0, any: 0 });
-      m.any++;
-      if (a.timing === 'before') m.before++;
-      if (a.timing === 'after') m.after++;
-      var cands = byKey[a.nameKey] || [];
-      if (!cands.length) {
-        unmatchedNames[a.name] = (unmatchedNames[a.name] || 0) + 1;
-        return;
-      }
-      if (cands.length > 1) {
-        ambiguousNames[a.name] = true;
-        return;
-      }
-      if (!cands[0].shiftDays[a.date]) noShift.push({ name: cands[0].name, company: cands[0].company, date: a.date, timing: a.timing, row: a.row });
-    });
-
-    var c = { shiftWithBefore: 0, shiftWithoutBefore: 0, shiftWithAfter: 0, shiftWithoutAfter: 0, measuredWithoutShift: 0 };
-    var missingBefore = [];
-    var missingAfter = [];
-    (summary.persons || []).forEach(function (p) {
-      if ((byKey[p.nameKey] || []).length > 1) return;
-      Object.keys(p.shiftDays || {}).sort().forEach(function (date) {
-        var m = meas[p.nameKey + '|' + date] || { before: 0, after: 0, any: 0 };
-        if (m.before > 0) c.shiftWithBefore++;
-        else {
-          c.shiftWithoutBefore++;
-          missingBefore.push({ company: p.company, name: p.name, date: date, codes: p.shiftDays[date] });
-        }
-        if (m.after > 0) c.shiftWithAfter++;
-        else {
-          c.shiftWithoutAfter++;
-          missingAfter.push({ company: p.company, name: p.name, date: date, codes: p.shiftDays[date] });
-        }
-      });
-    });
-    var noShiftDays = {};
-    noShift.forEach(function (x) { noShiftDays[x.name + '|' + x.date] = x; });
-    var noShiftList = Object.keys(noShiftDays).sort().map(function (k) { return noShiftDays[k]; });
-    c.measuredWithoutShift = noShiftList.length;
-
-    return {
-      counts: c,
-      missingBefore: missingBefore,
-      missingAfter: missingAfter,
-      measuredWithoutShift: noShiftList,
-      unmatchedNames: unmatchedNames,
-      ambiguousNames: Object.keys(ambiguousNames),
-    };
-  }
-
-  // ===========================================================================
   // 7. Excel出力用 AOA（「所属別運行集計」シート）
   // ===========================================================================
 
@@ -778,31 +628,6 @@
     return aoa;
   }
 
-  function buildAlcoholAoa(audit) {
-    var c = audit.counts;
-    var aoa = [
-      ['区分', '件数'],
-      ['シフトあり＋出発前測定あり', c.shiftWithBefore],
-      ['シフトあり＋出発前測定なし', c.shiftWithoutBefore],
-      ['シフトあり＋帰着後測定あり', c.shiftWithAfter],
-      ['シフトあり＋帰着後測定なし', c.shiftWithoutAfter],
-      ['シフトなし＋測定あり', c.measuredWithoutShift],
-      [],
-      ['明細区分', '所属', 'ドライバー名', '日付', 'シフト'],
-    ];
-    function lbl(codes) {
-      return (codes || []).map(function (k) {
-        for (var i = 0; i < TARGET_CODES.length; i++) if (TARGET_CODES[i].key === k) return TARGET_CODES[i].label;
-        return k;
-      }).join('+');
-    }
-    audit.missingBefore.forEach(function (x) { aoa.push(['出発前測定なし', x.company, x.name, x.date, lbl(x.codes)]); });
-    audit.missingAfter.forEach(function (x) { aoa.push(['帰着後測定なし', x.company, x.name, x.date, lbl(x.codes)]); });
-    audit.measuredWithoutShift.forEach(function (x) { aoa.push(['シフトなし測定', x.company, x.name, x.date, '']); });
-    Object.keys(audit.unmatchedNames).forEach(function (n) { aoa.push(['シフト表に氏名なし', '', n, '', audit.unmatchedNames[n] + '件']); });
-    return aoa;
-  }
-
   var RunSummaryCore = {
     TARGET_CODES: TARGET_CODES,
     OTHER_KNOWN_CODES: OTHER_KNOWN_CODES,
@@ -814,12 +639,8 @@
     parseShiftWorkbook: parseShiftWorkbook,
     summarizeShiftRecords: summarizeShiftRecords,
     summarizeShiftWorkbook: summarizeShiftWorkbook,
-    parseAlcoholRows: parseAlcoholRows,
-    classifyAlcoholTiming: classifyAlcoholTiming,
-    auditAlcohol: auditAlcohol,
     buildSummaryAoa: buildSummaryAoa,
     buildUnknownAoa: buildUnknownAoa,
-    buildAlcoholAoa: buildAlcoholAoa,
   };
 
   global.RunSummaryCore = RunSummaryCore;

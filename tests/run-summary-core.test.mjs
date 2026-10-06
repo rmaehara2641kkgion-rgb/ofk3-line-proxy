@@ -173,40 +173,6 @@ function testDateHeaderAndDuplicateColumns() {
   eq(res2.dateRange.min, '2026-09-01', 'シリアル値→日付の変換（タイムゾーンずれなし）');
 }
 
-function testAlcohol(summary) {
-  const rows = [
-    ['アルコールチェック記録'],
-    ['測定日時', '氏名', '測定区分', '結果'],
-    ['2026/09/01 10:30', '平田　太郎', '出発前', '0.00'],
-    ['2026/09/01 22:00', '平田 太郎', '帰着後', '0.00'],
-    ['2026/09/02 10:00', '平田太郎', '乗務前', '0.00'],
-    ['2026/09/03 10:00', '平田太郎', '乗務前', '0.00'], // 9/3は休 → シフトなし測定
-    ['2026/09/01 09:00', '未登録 さん', '出発前', '0.00'],
-  ];
-  const parsed = Core.parseAlcoholRows(rows);
-  assert(parsed.ok, 'アルコール原体のヘッダー検出');
-  eq(parsed.records.length, 5, 'アルコール明細件数');
-  const audit = Core.auditAlcohol(summary, parsed.records);
-  // 平田(JHS)と平田(AE物流)が同名のため、平田は自動照合しない（曖昧）
-  assert(audit.ambiguousNames.indexOf('平田 太郎') >= 0 || audit.ambiguousNames.indexOf('平田太郎') >= 0, '同名複数人物は曖昧扱い');
-  eq(audit.unmatchedNames['未登録 さん'], 1, 'シフト表に無い氏名');
-
-  // 曖昧でないケース
-  const single = Core.summarizeShiftRecords(
-    [{ sheet: 's', row: 1, company: 'X', rawName: '平田 太郎', name: '平田 太郎', nameKey: '平田太郎', transportId: '', countColumnValue: null,
-      cells: [{ date: '2026-09-01', value: '○' }, { date: '2026-09-02', value: '❽' }, { date: '2026-09-03', value: '休' }] }],
-    { month: '2026-09' }
-  );
-  const a2 = Core.auditAlcohol(single, parsed.records);
-  eq(a2.counts.shiftWithBefore, 2, 'シフトあり＋出発前測定あり');
-  eq(a2.counts.shiftWithoutBefore, 0, 'シフトあり＋出発前測定なし');
-  eq(a2.counts.shiftWithAfter, 1, 'シフトあり＋帰着後測定あり');
-  eq(a2.counts.shiftWithoutAfter, 1, 'シフトあり＋帰着後測定なし');
-  eq(a2.counts.measuredWithoutShift, 1, 'シフトなし＋測定あり');
-  eq(single.totals.total, 2, 'アルコール照合でシフト数は変わらない');
-  assert(Core.buildAlcoholAoa(a2).length > 5, 'アルコール照合AOA');
-}
-
 // ---------------------------------------------------------------------------
 // 実データ回帰（2026年9月）。個人情報を含むため原体はリポジトリに含めない。
 //   RUN_SUMMARY_SHIFT_XLSX=<シフト表>   （既定: tests/fixtures/run-summary/private/shift-2026-09.xlsx）
@@ -233,18 +199,41 @@ function readWorkbook(XLSX, file) {
   return { sheets, order: wb.SheetNames };
 }
 
-function testRealData() {
-  const dir = path.join(__dirname, 'fixtures', 'run-summary', 'private');
-  const shiftFile = process.env.RUN_SUMMARY_SHIFT_XLSX || path.join(dir, 'shift-2026-09.xlsx');
-  const expectedFile = process.env.RUN_SUMMARY_EXPECTED_XLSX || path.join(dir, 'expected-2026-09.xlsx');
-  if (!fs.existsSync(shiftFile)) {
-    console.log('SKIP: 2026年9月 実データ回帰（シフト表が未配置: ' + shiftFile + '）');
-    return;
-  }
-  const XLSX = require('xlsx');
-  const wb = readWorkbook(XLSX, shiftFile);
-  const res = Core.summarizeShiftWorkbook(wb.sheets, wb.order, { month: '2026-09', isNonDriverRow: AssignSupportCore.isShiftNonDriverRow });
+// 完成版Excelの「所属別運行集計」シートからドライバー別内訳（所属|氏名キー → 合計,○,❽,bike,b1,b2,C1,C3）を抽出
+function readExpectedDrivers(exp) {
+  const rows = exp.sheets['所属別運行集計'];
+  assert(rows, '完成版Excelに「所属別運行集計」シートがない');
+  const out = {};
+  let inBlock = false;
+  rows.forEach((r) => {
+    const a = String(r[0] || '').trim();
+    const b = String(r[1] || '').trim();
+    if (a === '所属' && (b === 'ドライバー' || b === 'ドライバー名')) {
+      inBlock = true;
+      return;
+    }
+    if (!inBlock || !a || !b || /合計$/.test(a)) return;
+    out[a + '|' + Core.nameKey(b)] = r.slice(2, 10).map(Number).join(',');
+  });
+  return out;
+}
 
+function compareDrivers(res, expectedDrivers, label) {
+  const actualDrivers = {};
+  res.affiliations.forEach((a) => a.drivers.forEach((d) => {
+    actualDrivers[a.company + '|' + d.nameKey] = rowOf(d.total, d.counts, 0).slice(0, 8).join(',');
+  }));
+  const ddiffs = [];
+  Object.keys(expectedDrivers).forEach((k) => {
+    if (actualDrivers[k] !== expectedDrivers[k]) ddiffs.push(k + ': got ' + actualDrivers[k] + ' / expected ' + expectedDrivers[k]);
+  });
+  Object.keys(actualDrivers).forEach((k) => {
+    if (!expectedDrivers[k]) ddiffs.push(k + ': 完成版に無いドライバー ' + actualDrivers[k]);
+  });
+  assert(ddiffs.length === 0, label + ': ドライバー別集計が完成版Excelと不一致\n  ' + ddiffs.join('\n  '));
+}
+
+function compareAffiliations(res, label) {
   const actual = {};
   res.affiliations.forEach((a) => (actual[a.company] = rowOf(a.total, a.counts, a.headcount)));
   actual['全社合計'] = rowOf(res.totals.total, res.totals.counts, res.totals.headcount);
@@ -256,49 +245,110 @@ function testRealData() {
   Object.keys(actual).forEach((k) => {
     if (!EXPECTED_2026_09[k]) diffs.push(k + ': 期待値に無い所属 ' + actual[k].join(','));
   });
-  if (res.unknownShifts.length) console.log('INFO: UNKNOWN_SHIFT ' + res.unknownShifts.length + '件', JSON.stringify(res.unknownShifts.slice(0, 10)));
-  assert(diffs.length === 0, '2026年9月 所属別集計が期待値と不一致\n  ' + diffs.join('\n  '));
-  console.log('OK: 2026年9月 所属別集計・全社合計が期待値と一致（1068）');
+  assert(diffs.length === 0, label + ': 所属別集計が期待値と不一致\n  ' + diffs.join('\n  '));
+}
 
+/**
+ * 完成版Excelの「日付別」シート（1人×1日のシフト明細。シフト表原体から作成されたもの）を
+ * 集計ロジックに通し、集計定義（構成人数・重複行統合・所属表記・並び）が完成版と一致することを確認する。
+ * ※シフト表原体のパース（列検出・記号判定）の検証ではない（それは testRealData で行う）。
+ */
+function testGoldenDailyBreakdown() {
+  const dir = path.join(__dirname, 'fixtures', 'run-summary', 'private');
+  const expectedFile = process.env.RUN_SUMMARY_EXPECTED_XLSX || path.join(dir, 'expected-2026-09.xlsx');
+  if (!fs.existsSync(expectedFile)) {
+    console.log('SKIP: 完成版「日付別」明細による集計定義の検証（完成版Excelが未配置: ' + expectedFile + '）');
+    return;
+  }
+  const XLSX = require('xlsx');
+  const exp = readWorkbook(XLSX, expectedFile);
+  const daily = exp.sheets['日付別'];
+  assert(daily && daily.length > 1, '完成版Excelに「日付別」シートがない');
+  const ser = (n) => new Date(Math.round((n - 25569) * 864e5)).toISOString().slice(0, 10);
+  const records = daily.slice(1).map((r, i) => ({
+    sheet: '日付別', row: i + 2, company: Core.normalizeDisplayName(r[1]), rawName: String(r[2]),
+    name: Core.normalizeDisplayName(r[2]), nameKey: Core.nameKey(r[2]), transportId: '', countColumnValue: null,
+    cells: [{ date: typeof r[0] === 'number' ? ser(r[0]) : String(r[0]), value: r[3] }],
+  }));
+  const res = Core.summarizeShiftRecords(records, { month: '2026-09' });
+  eq(res.unknownShifts.length, 0, '日付別: UNKNOWN_SHIFTなし');
+  compareAffiliations(res, '日付別');
+  compareDrivers(res, readExpectedDrivers(exp), '日付別');
+  console.log('OK: 完成版「日付別」明細 → 全社1068・7コード・6所属・構成人数72・ドライバー' + Object.keys(readExpectedDrivers(exp)).length + '名が完全一致');
+}
+
+/**
+ * 原体と完成版「日付別」を 1人×1日 で突き合わせ、差異を
+ * 所属 / ドライバー / 日付 / 原体の値 / 風神の判定値 / 正解値 で列挙する（差異原因の追跡用）。
+ */
+function traceDailyDiffs(res, exp) {
+  const ser = (n) => new Date(Math.round((n - 25569) * 864e5)).toISOString().slice(0, 10);
+  const golden = {};
+  (exp.sheets['日付別'] || []).slice(1).forEach((r) => {
+    const code = String(r[3]);
+    if (code === '（休）') return;
+    golden[Core.nameKey(r[2]) + '|' + (typeof r[0] === 'number' ? ser(r[0]) : r[0])] = { company: String(r[1]), code };
+  });
+  const labelOf = {};
+  Core.TARGET_CODES.forEach((c) => (labelOf[c.key] = c.label));
+  const ours = {};
+  res.persons.forEach((p) => {
+    p.records.forEach((rec) => rec.cells.forEach((cell) => {
+      if (!cell.date.startsWith('2026-09')) return;
+      const cls = Core.classifyShiftCell(cell.value);
+      if (cls.category === 'BLANK') return;
+      const k = p.nameKey + '|' + cell.date;
+      ours[k] = ours[k] || { company: p.company, name: p.name, raws: [], codes: [] };
+      ours[k].raws.push(String(cell.value) + '@' + rec.sheet + '!' + rec.row);
+      ours[k].codes.push(cls.category === 'TARGET' ? labelOf[cls.code] : cls.category + (cls.category === 'OTHER' ? ':' + cls.code : ''));
+    }));
+  });
+  const out = [];
+  new Set([...Object.keys(golden), ...Object.keys(ours)]).forEach((k) => {
+    const g = golden[k];
+    const o = ours[k];
+    const oursCode = o ? o.codes.filter((c) => Core.TARGET_CODES.some((t) => t.label === c)).join('+') : '';
+    const gCode = g ? g.code : '';
+    if (oursCode === gCode && (!g || !o || g.company === o.company)) return;
+    const [nk, date] = k.split('|');
+    out.push([(o && o.company) || (g && g.company), (o && o.name) || nk, date, o ? o.raws.join(' / ') : '(空欄/行なし)', o ? o.codes.join('+') : '(なし)', gCode || '(なし)'].join(' | '));
+  });
+  return out.sort();
+}
+
+function testRealData() {
+  const dir = path.join(__dirname, 'fixtures', 'run-summary', 'private');
+  const shiftFile = process.env.RUN_SUMMARY_SHIFT_XLSX || path.join(dir, 'shift-2026-09.xlsx');
+  const expectedFile = process.env.RUN_SUMMARY_EXPECTED_XLSX || path.join(dir, 'expected-2026-09.xlsx');
+  if (!fs.existsSync(shiftFile)) {
+    console.log('SKIP: 2026年9月 シフト表原体の回帰（シフト表原体が未配置: ' + shiftFile + '）');
+    return;
+  }
+  const XLSX = require('xlsx');
+  const wb = readWorkbook(XLSX, shiftFile);
+  const res = Core.summarizeShiftWorkbook(wb.sheets, wb.order, { month: '2026-09', isNonDriverRow: AssignSupportCore.isShiftNonDriverRow });
+  console.log('INFO: 使用シート ' + res.sheetsUsed.map((m) => m.sheet).join(',') + ' / UNKNOWN_SHIFT ' + res.unknownShifts.length + '件 / 対象外コード ' + JSON.stringify(res.otherCodes));
+  if (fs.existsSync(expectedFile)) {
+    const diffs = traceDailyDiffs(res, readWorkbook(XLSX, expectedFile));
+    if (diffs.length) {
+      console.log('差異明細（所属 | ドライバー | 日付 | 原体の値@シート!行 | 風神の判定値 | 正解値）: ' + diffs.length + '件');
+      diffs.forEach((d) => console.log('  ' + d));
+    }
+  }
+  compareAffiliations(res, '原体');
+  console.log('OK: 2026年9月 原体 → 所属別集計・全社合計が期待値と一致（1068）');
   if (!fs.existsSync(expectedFile)) {
     console.log('SKIP: ドライバー別内訳の照合（完成版Excelが未配置: ' + expectedFile + '）');
     return;
   }
-  // 完成版Excelの「所属,ドライバー名,合計シフト,○,❽,bike,b1,b2,C1,C3」行を全シートから抽出して照合
-  const exp = readWorkbook(XLSX, expectedFile);
-  const expectedDrivers = {};
-  Object.keys(exp.sheets).forEach((sn) => {
-    let inBlock = false;
-    exp.sheets[sn].forEach((r) => {
-      const a = String(r[0] || '').trim();
-      const b = String(r[1] || '').trim();
-      if (a === '所属' && b === 'ドライバー名') {
-        inBlock = true;
-        return;
-      }
-      if (!inBlock || !a || !b || /合計$/.test(a)) return;
-      expectedDrivers[a + '|' + Core.nameKey(b)] = r.slice(2, 10).map(Number).join(',');
-    });
-  });
-  const actualDrivers = {};
-  res.affiliations.forEach((a) => a.drivers.forEach((d) => {
-    actualDrivers[a.company + '|' + d.nameKey] = rowOf(d.total, d.counts, 0).slice(0, 8).join(',');
-  }));
-  assert(Object.keys(expectedDrivers).length > 0, '完成版Excelからドライバー別内訳を読み取れない');
-  const ddiffs = [];
-  Object.keys(expectedDrivers).forEach((k) => {
-    if (actualDrivers[k] !== expectedDrivers[k]) ddiffs.push(k + ': got ' + actualDrivers[k] + ' / expected ' + expectedDrivers[k]);
-  });
-  Object.keys(actualDrivers).forEach((k) => {
-    if (!expectedDrivers[k]) ddiffs.push(k + ': 完成版に無いドライバー ' + actualDrivers[k]);
-  });
-  assert(ddiffs.length === 0, 'ドライバー別集計が完成版Excelと不一致\n  ' + ddiffs.join('\n  '));
-  console.log('OK: ドライバー別集計が完成版Excelと一致（' + Object.keys(expectedDrivers).length + '名）');
+  const expectedDrivers = readExpectedDrivers(readWorkbook(XLSX, expectedFile));
+  compareDrivers(res, expectedDrivers, '原体');
+  console.log('OK: 原体 → ドライバー別集計が完成版Excelと一致（' + Object.keys(expectedDrivers).length + '名）');
 }
 
 testClassify();
-const summary = testSummary();
+testSummary();
 testDateHeaderAndDuplicateColumns();
-testAlcohol(summary);
+testGoldenDailyBreakdown();
 testRealData();
 console.log('run-summary-core tests passed');
