@@ -7,7 +7,9 @@
  * （別ドライバーの TransportID へ送信先を付け替えないため）。
  *
  * PDFの自動送信は、空白差を除いた氏名の一意一致だけ。
- * 部分一致・複数候補・読込失敗は sendable=false。
+ * 2要素の氏名は「姓 名」と「名 姓」を同一人物候補にする。
+ * スペース無しは、2要素のフルネームの「姓+名」または「名+姓」と一意のときだけ同一。
+ * 姓だけ・名だけ・部分一致・複数候補・読込失敗は sendable=false。
  * 同一対象者へ2件以上割り当てた場合も sendable=false。先着も後着も採用しない。
  */
 (function (global) {
@@ -42,14 +44,83 @@
     });
   }
 
+  function fullNameKeys(name) {
+    var tokens = nameTokens(name);
+    if (tokens.length === 2) return [tokens[0] + tokens[1], tokens[1] + tokens[0]];
+    var compact = normalizePersonName(name);
+    return compact ? [compact] : [];
+  }
+
+  // 2要素の反転、またはスペース無しが相手の姓名連結と完全一致するときだけ同一。
+  // 文字の並べ替えはしない。姓だけ・名だけは一致しない。
   function samePersonName(a, b) {
-    var na = normalizePersonName(a);
-    var nb = normalizePersonName(b);
-    if (!na || !nb) return false;
-    if (na === nb) return true;
-    var ta = nameTokens(a);
-    var tb = nameTokens(b);
-    return ta.length === 2 && tb.length === 2 && ta[0] === tb[1] && ta[1] === tb[0];
+    var ka = fullNameKeys(a);
+    var kb = fullNameKeys(b);
+    if (!ka.length || !kb.length) return false;
+    for (var i = 0; i < ka.length; i++) {
+      for (var j = 0; j < kb.length; j++) {
+        if (ka[i] === kb[j]) return true;
+      }
+    }
+    return false;
+  }
+
+  function matchUniquePerson(query, candidates) {
+    candidates = candidates || [];
+    var hits = [];
+    for (var i = 0; i < candidates.length; i++) {
+      var name = typeof candidates[i] === 'string' ? candidates[i] : (candidates[i] && candidates[i].name);
+      if (!name || !samePersonName(query, name)) continue;
+      hits.push(name);
+    }
+    return hits.length === 1 ? hits[0] : '';
+  }
+
+  // マスタで一意に人物が決まってから、その人物の登録キーを返す。
+  // マスタに無いときは、空白差を除いた完全一致の登録キーが1件のときだけ。
+  // User ID の部分一致や、他人キーへの fallback はしない。
+  function resolveLineKey(queryName, masterNames, lineKeys) {
+    masterNames = masterNames || [];
+    lineKeys = lineKeys || [];
+    if (!queryName) return '';
+    var person = matchUniquePerson(queryName, masterNames);
+    if (person) {
+      var keys = [];
+      for (var i = 0; i < lineKeys.length; i++) {
+        if (samePersonName(lineKeys[i], person)) keys.push(lineKeys[i]);
+      }
+      return keys.length === 1 ? keys[0] : '';
+    }
+    var exact = [];
+    var compact = normalizePersonName(queryName);
+    for (var j = 0; j < lineKeys.length; j++) {
+      if (normalizePersonName(lineKeys[j]) === compact) exact.push(lineKeys[j]);
+    }
+    return exact.length === 1 ? exact[0] : '';
+  }
+
+  function interpretLineHttpStatus(status) {
+    var n = Number(status);
+    return n >= 200 && n < 300 ? 'ok' : 'fail';
+  }
+
+  function publicLineError(status, body) {
+    var n = Number(status);
+    var reason = 'LINE API送信失敗';
+    if (n) reason += ' (' + n + ')';
+    var msg = '';
+    try {
+      var json = JSON.parse(String(body || ''));
+      if (json && typeof json.message === 'string') msg = json.message;
+      else if (json && typeof json.error === 'string') msg = json.error;
+    } catch (e) {
+      msg = '';
+    }
+    msg = String(msg || '');
+    if (/bearer|token|secret|authorization|proxy/i.test(msg)) msg = '';
+    msg = msg.replace(/U[0-9a-fA-F]{16,}/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (msg) reason += ': ' + msg;
+    return reason;
   }
 
   function isKanaReading(s) {
@@ -211,19 +282,45 @@
 
   function targetsNamed(targets, rawName) {
     var hits = [];
-    var norm = normalizePersonName(rawName);
-    if (!norm) return hits;
+    if (!normalizePersonName(rawName)) return hits;
     for (var i = 0; i < targets.length; i++) {
-      if (normalizePersonName(targets[i].name) === norm) hits.push(targets[i]);
+      if (samePersonName(targets[i].name, rawName)) hits.push(targets[i]);
     }
     return hits;
   }
 
-  function kanjiHits(text, targets) {
+  function personSurfaceNames(displayName, catalog) {
+    var tokens = nameTokens(displayName);
+    var surfaces = [];
+    if (tokens.length === 2) {
+      surfaces.push(tokens[0] + ' ' + tokens[1]);
+      surfaces.push(tokens[1] + ' ' + tokens[0]);
+      return surfaces;
+    }
+    var compact = normalizePersonName(displayName);
+    if (compact.length >= 2) surfaces.push(compact);
+    var expanded = matchUniquePerson(displayName, catalog || []);
+    var expandedTokens = nameTokens(expanded);
+    if (expandedTokens.length === 2) {
+      surfaces.push(expandedTokens[0] + ' ' + expandedTokens[1]);
+      surfaces.push(expandedTokens[1] + ' ' + expandedTokens[0]);
+    }
+    return surfaces;
+  }
+
+  function textMatchesPerson(text, displayName, catalog) {
+    var surfaces = personSurfaceNames(displayName, catalog);
+    for (var i = 0; i < surfaces.length; i++) {
+      if (textHasPersonName(text, surfaces[i])) return true;
+    }
+    return false;
+  }
+
+  function kanjiHits(text, targets, catalog) {
     var hits = [];
     for (var i = 0; i < targets.length; i++) {
       if (!targets[i].name || isKanaReading(targets[i].name)) continue;
-      if (textHasPersonName(text, targets[i].name)) hits.push(targets[i]);
+      if (textMatchesPerson(text, targets[i].name, catalog)) hits.push(targets[i]);
     }
     return hits;
   }
@@ -272,13 +369,13 @@
     };
   }
 
-  function assignOne(file, targets, readings) {
+  function assignOne(file, targets, readings, catalog) {
     file = file || {};
     if (file.error === 'not_pdf') return resultOf(file, 'not_pdf', null);
     if (file.error === 'read_error' || file.error === 'bad_magic') return resultOf(file, 'read_error', null);
 
     var text = String(file.text || '');
-    var kanji = kanjiHits(text, targets);
+    var kanji = kanjiHits(text, targets, catalog);
     if (kanji.length > 1) return resultOf(file, 'ambiguous', null);
     var textTarget = kanji.length === 1 ? kanji[0] : null;
     if (!textTarget) {
@@ -291,7 +388,7 @@
     var fileHits = bracket ? targetsNamed(targets, bracket) : [];
     var fileTarget = fileHits.length === 1 ? fileHits[0] : null;
     if (fileHits.length > 1) return resultOf(file, 'ambiguous', null);
-    if (textTarget && fileTarget && normalizePersonName(textTarget.name) !== normalizePersonName(fileTarget.name)) {
+    if (textTarget && fileTarget && !samePersonName(textTarget.name, fileTarget.name)) {
       return resultOf(file, 'ambiguous', null);
     }
     if (textTarget) return resultOf(file, 'matched', textTarget);
@@ -306,17 +403,25 @@
   // 1件に戻したあと再度呼ぶと、残った一致は送信可に戻る。PDFの中身は結合しない。
   function applyDuplicatePdfBlock(results) {
     results = results || [];
+    var reps = [];
+    function repOf(name) {
+      for (var r = 0; r < reps.length; r++) {
+        if (samePersonName(name, reps[r])) return reps[r];
+      }
+      reps.push(name);
+      return name;
+    }
     var counts = {};
     for (var i = 0; i < results.length; i++) {
       var row = results[i];
       if (!row || row.code !== 'matched' || !row.targetName) continue;
-      var key = normalizePersonName(row.targetName);
+      var key = repOf(row.targetName);
       counts[key] = (counts[key] || 0) + 1;
     }
     for (var j = 0; j < results.length; j++) {
       var item = results[j];
       if (!item || item.code !== 'matched' || !item.targetName) continue;
-      var dup = counts[normalizePersonName(item.targetName)] >= 2;
+      var dup = counts[repOf(item.targetName)] >= 2;
       item.sendable = !dup;
       item.duplicateTarget = dup;
       item.duplicateWarning = dup ? DUPLICATE_PDF_WARNING : '';
@@ -326,9 +431,10 @@
 
   function assignBillingPdfs(files, targets, options) {
     var readings = (options && options.readings) || {};
+    var catalog = (options && options.masterNames) || [];
     var list = files || [];
     var out = [];
-    for (var i = 0; i < list.length; i++) out.push(assignOne(list[i], targets || [], readings));
+    for (var i = 0; i < list.length; i++) out.push(assignOne(list[i], targets || [], readings, catalog));
     return applyDuplicatePdfBlock(out);
   }
 
@@ -384,6 +490,10 @@
     parseBillingRows: parseBillingRows,
     normalizePersonName: normalizePersonName,
     samePersonName: samePersonName,
+    matchUniquePerson: matchUniquePerson,
+    resolveLineKey: resolveLineKey,
+    interpretLineHttpStatus: interpretLineHttpStatus,
+    publicLineError: publicLineError,
     textHasPersonName: textHasPersonName,
     classifyPdfUpload: classifyPdfUpload,
     extractPdfText: extractPdfText,

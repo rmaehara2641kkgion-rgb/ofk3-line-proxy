@@ -24,7 +24,7 @@
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
-  <script src="/billing-reconcile-core.js?v=20261006-2"></script>
+  <script src="/billing-reconcile-core.js?v=20261007-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -11494,6 +11494,7 @@ var driverDB = {
     // ===== 請求照合機能 =====
     var billingData = [];
     var billingSent = {};
+    var billingSendError = {};
 
     function handleDropFile(event, type) {
       var file = event.dataTransfer.files[0];
@@ -11525,6 +11526,7 @@ var driverDB = {
     function parseBillingData(rows) {
       billingData = [];
       billingSent = {};
+      billingSendError = {};
       if (window.BillingReconcile) billingData = BillingReconcile.parseBillingRows(rows);
 
       renderBillingTable();
@@ -11558,19 +11560,22 @@ var driverDB = {
 
       tbody.innerHTML = billingData.map(function(d, i) {
         totalAmount += d.total;
-        var userId = findLineUserId(d.driverKey, d.name);
+        var userId = billingLineUserId(d);
         var hasLine = userId && userId.indexOf('U') === 0;
         if (hasLine) lineCount++;
         if (d.selected) selectedCount++;
 
         var sent = billingSent[d.name];
+        var sendFail = billingSendError[d.name];
         var statusHtml = sent
-          ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">送信済</span>'
-          : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
+          ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">LINE送信成功</span>'
+          : sendFail
+            ? '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">LINE API送信失敗</span><div class="text-xs text-red-700">' + escapeHtmlBilling(sendFail) + '</div>'
+            : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
 
         var lineHtml = hasLine
           ? '<span class="text-xs text-green-600">✅ 登録済</span>'
-          : '<span class="text-xs text-gray-400">未登録</span>';
+          : '<span class="text-xs text-gray-400">LINE送信先未解決</span>';
 
         var tidWarn = billingTidMismatchWarning(d);
         return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
@@ -11608,6 +11613,31 @@ var driverDB = {
         if (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[key]) names.push(driverJapaneseNames[key]);
       }
       return names;
+    }
+
+    function billingMasterNames() {
+      var names = [];
+      if (typeof driverDB === 'undefined') return names;
+      for (var key in driverDB) names.push(key);
+      return names;
+    }
+
+    function billingLineKeys() {
+      var keys = [];
+      if (typeof lineMapping === 'undefined') return keys;
+      for (var key in lineMapping) {
+        if (lineMapping[key]) keys.push(key);
+      }
+      return keys;
+    }
+
+    function billingLineUserId(row) {
+      if (!row || !row.name || !window.BillingReconcile || typeof lineMapping === 'undefined') return '';
+      var key = BillingReconcile.resolveLineKey(row.name, billingMasterNames(), billingLineKeys());
+      if (!key) return '';
+      var id = lineMapping[key];
+      if (!id || String(id).indexOf('U') !== 0) return '';
+      return id;
     }
 
     function billingTidMismatchWarning(row) {
@@ -11790,7 +11820,10 @@ var driverDB = {
           driverJapaneseNames: typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : {},
           driverNameAliases: typeof driverNameAliases !== 'undefined' ? driverNameAliases : {}
         });
-        var assigned = BillingReconcile.assignBillingPdfs(prepared, billingData, { readings: readings });
+        var assigned = BillingReconcile.assignBillingPdfs(prepared, billingData, {
+          readings: readings,
+          masterNames: billingMasterNames()
+        });
         billingPdfResults = assigned.map(function(a, idx) {
           var row = {
             filename: a.filename,
@@ -11806,7 +11839,7 @@ var driverDB = {
           if (a.targetName) {
             for (var t = 0; t < billingData.length; t++) {
               if (billingData[t].name === a.targetName) {
-                var uid = findLineUserId(billingData[t].driverKey, billingData[t].name);
+                var uid = billingLineUserId(billingData[t]);
                 row.lineLinked = !!(uid && String(uid).indexOf('U') === 0);
                 break;
               }
@@ -11862,8 +11895,10 @@ var driverDB = {
 
     function billingPdfDecision(r) {
       if (r.duplicateTarget) return 'LINE送信禁止';
-      if (r.code === 'ambiguous') return '自動送信禁止';
+      if (r.code === 'ambiguous') return '候補者複数';
+      if (r.code === 'unmatched' || r.code === 'extract_failed') return 'PDF対象者特定失敗';
       if (r.code === 'matched' && r.lineLinked && r.sendable) return '送信可能';
+      if (r.code === 'matched' && !r.lineLinked) return 'LINE送信先未解決';
       return 'LINE送信禁止';
     }
 
@@ -11906,7 +11941,7 @@ var driverDB = {
         html += '<div class="text-xs py-2 border-b border-border">';
         html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
         html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
-        if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE未登録') + '</div>';
+        if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE送信先未解決') + '</div>';
         if (r.duplicateWarning) html += '<div class="text-amber-700">→ ' + escapeHtmlBilling(r.duplicateWarning) + '</div>';
         if (r.code === 'matched' && r.targetName) {
           for (var t = 0; t < billingData.length; t++) {
@@ -12073,7 +12108,7 @@ var driverDB = {
       var targets = billingData.filter(function(d) {
         if (!d.selected) return false;
         if (billingSent[d.name]) return false;
-        var userId = findLineUserId(d.driverKey, d.name);
+        var userId = billingLineUserId(d);
         return userId && userId.indexOf('U') === 0;
       });
 
@@ -12090,7 +12125,7 @@ var driverDB = {
       var successCount = 0;
       for (var i = 0; i < targets.length; i++) {
         var d = targets[i];
-        var userId = findLineUserId(d.driverKey, d.name);
+        var userId = billingLineUserId(d);
         var msg = buildBillingMessage(d);
 
         // PDF添付がある場合はアップロードしてURLを追加
@@ -12105,24 +12140,38 @@ var driverDB = {
         var lineMessages = [{ type: 'text', text: msg }];
 
         try {
-          await fetch(proxyUrl, {
+          var res = await fetch(proxyUrl, {
             method: 'POST',
             mode: 'cors',
             credentials: 'omit',
             headers: getProxyHeaders(),
             body: JSON.stringify({ to: userId, messages: lineMessages })
           });
+          var raw = '';
+          try { raw = await res.text(); } catch (readErr) { raw = ''; }
+          if (!res.ok || !window.BillingReconcile || BillingReconcile.interpretLineHttpStatus(res.status) !== 'ok') {
+            billingSendError[d.name] = window.BillingReconcile
+              ? BillingReconcile.publicLineError(res.status, raw)
+              : 'LINE API送信失敗';
+            var failEntry = document.createElement('div');
+            failEntry.className = 'text-xs py-1 text-red-600';
+            failEntry.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' ' + billingSendError[d.name];
+            logEl.insertBefore(failEntry, logEl.firstChild);
+            continue;
+          }
+          delete billingSendError[d.name];
           billingSent[d.name] = true;
           successCount++;
           var pdfNote = pdfUrl ? ' +PDF' : '';
           var entry = document.createElement('div');
           entry.className = 'text-xs py-1 text-green-600';
-          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + pdfNote + ' 送信完了';
+          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + pdfNote + ' LINE送信成功';
           logEl.insertBefore(entry, logEl.firstChild);
         } catch(e) {
+          billingSendError[d.name] = 'LINE API送信失敗';
           var entry2 = document.createElement('div');
           entry2.className = 'text-xs py-1 text-red-600';
-          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' 送信失敗: ' + e.message;
+          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' LINE API送信失敗';
           logEl.insertBefore(entry2, logEl.firstChild);
         }
 
