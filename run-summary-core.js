@@ -50,7 +50,14 @@
    * 既存コード（rolling60h-core.js / assign-support-core.js）で実在が確認されている
    * 「勤務だが今回の集計列に含めない」記号。UNKNOWN_SHIFT とは別に件数を可視化する。
    */
-  var OTHER_KNOWN_CODES = ['C2', '研修', '唐津', '嘉', '嘉麻'];
+  var OTHER_KNOWN_CODES = ['C2', '唐津', '嘉', '嘉麻'];
+
+  /**
+   * 集計列へ読み替える派生コード（正式な集計ルール。月を問わず適用する）。
+   * キーは NFKC 正規化＋英字大文字化後の表記（全角「研Ｃ１」や「c319」も対象）。
+   *   研修 → ○ / 研C1 → C1 / C319・C320 → C3
+   */
+  var CODE_ALIASES = { '研修': 'MARU', '研C1': 'C1', C319: 'C3', C320: 'C3' };
 
   /** 非稼働（運行回数に含めない）判定 */
   function isNonWorkingCode(s) {
@@ -61,13 +68,17 @@
 
   /**
    * シフト表セル1件を分類する。
-   * @return {{category:'TARGET'|'BLANK'|'NON_WORKING'|'OTHER'|'UNKNOWN_SHIFT', code:string, raw:string}}
+   * @return {{category:'TARGET'|'BLANK'|'NON_WORKING'|'OTHER'|'UNKNOWN_SHIFT', code:string, raw:string, convertedFrom?:string}}
    */
   function classifyShiftCell(value) {
     var raw = value === null || value === undefined ? '' : String(value).trim();
     if (!raw) return { category: 'BLANK', code: '', raw: '' };
     var compact = raw.replace(/[\s　]+/g, '');
     if (isNonWorkingCode(compact)) return { category: 'NON_WORKING', code: compact, raw: raw };
+    var aliasKey = nfkc(compact).toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(CODE_ALIASES, aliasKey)) {
+      return { category: 'TARGET', code: CODE_ALIASES[aliasKey], raw: raw, convertedFrom: aliasKey };
+    }
     var rc = rollingCore();
     var code = rc ? rc.normalizeRollingShiftCode(compact) : compact;
     if (TARGET_KEYS.indexOf(code) >= 0) return { category: 'TARGET', code: code, raw: raw };
@@ -103,6 +114,19 @@
   // ===========================================================================
   // 3. 日付ユーティリティ
   // ===========================================================================
+
+  /** 0始まり列番号＋1始まり行番号 → Excelのセル番地（例: 'AB12'）。列不明なら '' */
+  function cellAddress(col, row) {
+    if (typeof col !== 'number' || col < 0) return '';
+    var s = '';
+    var n = col + 1;
+    while (n > 0) {
+      var m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s + row;
+  }
 
   function pad2(n) {
     return (n < 10 ? '0' : '') + n;
@@ -311,7 +335,7 @@
       var cells = [];
       for (var i = 0; i < dateKeys.length; i++) {
         var v = dataRow[colByDate[dateKeys[i]]];
-        cells.push({ date: dateKeys[i], value: v === undefined ? '' : v });
+        cells.push({ date: dateKeys[i], col: colByDate[dateKeys[i]], value: v === undefined ? '' : v });
       }
       var countVal = countCol >= 0 ? dataRow[countCol] : null;
       records.push({
@@ -463,6 +487,7 @@
     var warnings = [];
     var persons = groupPersons(records || [], warnings);
     var unknownShifts = [];
+    var convertedCodes = []; // 研修→○ 等の読み替え実績（原体のセル位置つき）
     var otherCodes = {};
     var nonWorkingCount = 0;
     var outOfMonthCells = 0;
@@ -492,7 +517,7 @@
             return;
           }
           if (cls.category === UNKNOWN_SHIFT) {
-            unknownShifts.push({ type: UNKNOWN_SHIFT, company: p.company, name: p.name, date: cell.date, raw: cls.raw, sheet: rec.sheet, row: rec.row });
+            unknownShifts.push({ type: UNKNOWN_SHIFT, company: p.company, name: p.name, date: cell.date, raw: cls.raw, sheet: rec.sheet, row: rec.row, cell: cellAddress(cell.col, rec.row) });
             return;
           }
           var dk = cell.date + '|' + cls.code;
@@ -503,6 +528,9 @@
           }
           seen[dk] = rec.sheet + '!' + rec.row;
           p.counts[cls.code]++;
+          if (cls.convertedFrom) {
+            convertedCodes.push({ company: p.company, name: p.name, date: cell.date, raw: cls.raw, code: cls.code, sheet: rec.sheet, row: rec.row, cell: cellAddress(cell.col, rec.row) });
+          }
           (p.shiftDays[cell.date] = p.shiftDays[cell.date] || []).push(cls.code);
         });
       });
@@ -559,6 +587,7 @@
       affiliations: affiliations,
       persons: persons,
       unknownShifts: unknownShifts,
+      convertedCodes: convertedCodes,
       otherCodes: otherCodes,
       nonWorkingCount: nonWorkingCount,
       outOfMonthCells: outOfMonthCells,
@@ -618,12 +647,17 @@
   }
 
   function buildUnknownAoa(result) {
-    var aoa = [['種別', '所属', 'ドライバー名', '日付', 'シフト表の値', 'シート', '行']];
+    var aoa = [['種別', '所属', 'ドライバー名', '日付', 'シフト表の値', 'シート', 'セル', '集計先']];
+    var labelOf = {};
+    TARGET_CODES.forEach(function (c) { labelOf[c.key] = c.label; });
     result.unknownShifts.forEach(function (u) {
-      aoa.push([UNKNOWN_SHIFT, u.company, u.name, u.date, u.raw, u.sheet, u.row]);
+      aoa.push([UNKNOWN_SHIFT, u.company, u.name, u.date, u.raw, u.sheet, u.cell || String(u.row), '（集計しない）']);
+    });
+    (result.convertedCodes || []).forEach(function (x) {
+      aoa.push(['読み替え', x.company, x.name, x.date, x.raw, x.sheet, x.cell || String(x.row), labelOf[x.code]]);
     });
     Object.keys(result.otherCodes).forEach(function (k) {
-      aoa.push(['集計対象外コード', '', '', '', k + '（' + result.otherCodes[k] + '件）', '', '']);
+      aoa.push(['集計対象外コード', '', '', '', k + '（' + result.otherCodes[k] + '件）', '', '', '（集計しない）']);
     });
     return aoa;
   }
@@ -631,6 +665,7 @@
   var RunSummaryCore = {
     TARGET_CODES: TARGET_CODES,
     OTHER_KNOWN_CODES: OTHER_KNOWN_CODES,
+    CODE_ALIASES: CODE_ALIASES,
     UNKNOWN_SHIFT: UNKNOWN_SHIFT,
     classifyShiftCell: classifyShiftCell,
     normalizeDisplayName: normalizeDisplayName,

@@ -318,12 +318,22 @@
     if (r.unknownShifts.length) {
       html += '<div class="text-red-600 font-bold">⚠ UNKNOWN_SHIFT（未知のシフトコード）: ' + r.unknownShifts.length + '件 — 集計に含めていません</div><ul class="ml-4 list-disc text-red-600">';
       r.unknownShifts.slice(0, 50).forEach(function (u) {
-        html += '<li>' + esc(u.company + '　' + u.name + '　' + u.date + '　「' + u.raw + '」（' + u.sheet + ' ' + u.row + '行）') + '</li>';
+        html += '<li>' + esc(u.company + '　' + u.name + '　' + u.date + '　「' + u.raw + '」（' + u.sheet + '!' + (u.cell || u.row + '行') + '）') + '</li>';
       });
       if (r.unknownShifts.length > 50) html += '<li>…ほか' + (r.unknownShifts.length - 50) + '件（Excel出力で全件確認できます）</li>';
       html += '</ul>';
     } else {
       html += '<div class="text-emerald-600">✓ UNKNOWN_SHIFT なし</div>';
+    }
+    var conv = r.convertedCodes || [];
+    if (conv.length) {
+      var labelOf = {};
+      core().TARGET_CODES.forEach(function (c) { labelOf[c.key] = c.label; });
+      html += '<details><summary class="cursor-pointer text-ink-lighter">読み替え（研修→○ / 研C1→C1 / C319・C320→C3）: ' + conv.length + '件</summary><ul class="ml-4 list-disc">';
+      conv.forEach(function (x) {
+        html += '<li>' + esc(x.company + '　' + x.name + '　' + x.date + '　「' + x.raw + '」→' + labelOf[x.code] + '（' + x.sheet + '!' + x.cell + '）') + '</li>';
+      });
+      html += '</ul></details>';
     }
     var others = Object.keys(r.otherCodes);
     if (others.length) {

@@ -60,7 +60,19 @@ function testClassify() {
   eq(c(null).category, 'BLANK', 'null');
   eq(c('  ').category, 'BLANK', '空白のみ');
   eq(c('C2').category, 'OTHER', 'C2は集計対象外（既知）');
-  eq(c('研修').category, 'OTHER', '研修は集計対象外（既知）');
+  eq(c('唐津').category, 'OTHER', '唐津は集計対象外');
+  eq(c('嘉').category, 'OTHER', '嘉は集計対象外');
+  // 正式な集計ルール: 研修→○ / 研C1→C1 / C319・C320→C3（全角・小文字も同じ）
+  eq(c('研修').code, 'MARU', '研修→○');
+  eq(c('研修').category, 'TARGET', '研修は集計対象');
+  eq(c('研C1').code, 'C1', '研C1→C1');
+  eq(c('研Ｃ１').code, 'C1', '全角 研Ｃ１→C1');
+  eq(c('C319').code, 'C3', 'C319→C3');
+  eq(c('C320').code, 'C3', 'C320→C3');
+  eq(c('ｃ３２０').code, 'C3', '全角小文字 ｃ３２０→C3');
+  eq(c('C321').category, 'UNKNOWN_SHIFT', '定義外の C3xx は推測しない');
+  eq(c('研C3').category, 'UNKNOWN_SHIFT', '定義外の 研xx は推測しない');
+  eq(c('C319').convertedFrom, 'C319', '読み替え元を保持');
   eq(c('Z9').category, 'UNKNOWN_SHIFT', '未知コード');
   eq(c('C1+C3').category, 'UNKNOWN_SHIFT', '複合表記は推測で分割しない');
 }
@@ -74,7 +86,7 @@ function testSummary() {
       // 同一人物の空白表記揺れ（重複行）→ 二重計上しない
       { company: '', name: ' 中村 次郎 ', tid: 'A2', cells: { 2: 'Bike', 7: 'B2' } },
       { company: '', name: '必要台数', cells: { 1: 5, 2: 5 } },
-      { company: 'GDS', name: '佐藤  花子', count: 99, cells: { 1: '〇', 2: 'X?', 10: '研修', 11: 'C2' } },
+      { company: 'GDS', name: '佐藤  花子', count: 99, cells: { 1: '〇', 2: 'X?', 10: '研修', 11: 'C2', 12: '研Ｃ１', 13: 'C319', 14: 'c320', 15: '唐津', 16: '嘉' } },
       { company: '', name: '休み 太郎', cells: { 1: '休', 2: '休' } },
       // 同姓同名だが所属が違う → 統合しない
       { company: 'AE物流', name: '平田太郎', cells: { 3: '○' } },
@@ -109,13 +121,20 @@ function testSummary() {
   assert(res.warnings.some((w) => w.type === 'DUPLICATE_SHIFT_SAME_DAY'), '同日重複の警告');
 
   // GDS
-  eq(aff.GDS.total, 1, 'GDS: 〇のみ集計');
+  eq(aff.GDS.total, 5, 'GDS: 〇・研修・研C1・C319・C320 を集計（C2・唐津・嘉は除外）');
+  eq(JSON.stringify(aff.GDS.counts), JSON.stringify(counts({ MARU: 2, C1: 1, C3: 2 })), 'GDS内訳（読み替え後）');
+  eq(res.convertedCodes.length, 4, '読み替え実績4件');
+  eq(res.convertedCodes.map((x) => x.raw + '@' + x.sheet + '!' + x.cell + '→' + x.code).join(','),
+    '研修@メイン!M9→MARU,研Ｃ１@メイン!O9→C1,C319@メイン!P9→C3,c320@メイン!Q9→C3', '読み替えのセル位置');
   eq(aff.GDS.headcount, 1, 'GDS構成人数（全日休の人は数えない）');
   eq(aff.GDS.zeroShiftDrivers.length, 1, '全日休の人は zeroShiftDrivers');
   eq(res.unknownShifts.length, 1, 'UNKNOWN_SHIFT 1件');
   eq(res.unknownShifts[0].raw, 'X?', 'UNKNOWN_SHIFT の値');
   eq(res.unknownShifts[0].date, '2026-09-02', 'UNKNOWN_SHIFT の日付');
-  eq(res.otherCodes['研修'], 1, '研修は対象外として件数表示');
+  eq(res.unknownShifts[0].cell, 'E9', 'UNKNOWN_SHIFT のセル位置');
+  eq(res.otherCodes['研修'], undefined, '研修は対象外コードではない');
+  eq(res.otherCodes['唐津'], 1, '唐津は対象外として件数表示');
+  eq(res.otherCodes['嘉'], 1, '嘉は対象外として件数表示');
   eq(res.otherCodes.C2, 1, 'C2は対象外として件数表示');
   assert(res.warnings.some((w) => w.type === 'COUNT_COLUMN_MISMATCH' && w.sheetCount === 99), '回数列との不一致を検知');
 
@@ -125,7 +144,7 @@ function testSummary() {
   assert(res.warnings.some((w) => w.type === 'SAME_NAME_MULTIPLE_COMPANIES'), '同名別所属の警告');
   assert(res.warnings.some((w) => w.type === 'SAME_NAME_DIFFERENT_TID'), '同名別TIDの警告');
 
-  eq(res.totals.total, 12, '全社合計');
+  eq(res.totals.total, 16, '全社合計');
   eq(res.totals.headcount, 6, '全社構成人数');
   let sum = 0;
   Object.keys(res.totals.counts).forEach((k) => (sum += res.totals.counts[k]));
@@ -141,7 +160,7 @@ function testSummary() {
   const hdr = aoa.find((r) => r[0] === '所属' && r[1] === '合計シフト');
   eq(hdr.join(','), '所属,合計シフト,○,❽,bike,b1,b2,C1,C3,構成人数', 'サマリーヘッダー');
   const totalRow = aoa.find((r) => r[0] === '全社合計');
-  eq(totalRow[1], 12, '全社合計行');
+  eq(totalRow[1], 16, '全社合計行');
   assert(aoa.some((r) => r[0] === 'JHS 合計' && r[2] === 8), '所属ブロック合計行');
   assert(aoa.some((r) => r[0] === '所属' && r[1] === 'ドライバー名'), '内訳ヘッダー');
   return res;
@@ -327,7 +346,26 @@ function testRealData() {
   const XLSX = require('xlsx');
   const wb = readWorkbook(XLSX, shiftFile);
   const res = Core.summarizeShiftWorkbook(wb.sheets, wb.order, { month: '2026-09', isNonDriverRow: AssignSupportCore.isShiftNonDriverRow });
-  console.log('INFO: 使用シート ' + res.sheetsUsed.map((m) => m.sheet).join(',') + ' / UNKNOWN_SHIFT ' + res.unknownShifts.length + '件 / 対象外コード ' + JSON.stringify(res.otherCodes));
+  console.log('INFO: 使用シート ' + res.sheetsUsed.map((m) => m.sheet + '（氏名列' + m.nameCol + '・社名列' + m.companyCol + '・日付行' + (m.dateRowIdx + 1) + '・' + m.dateRange.min + '〜' + m.dateRange.max + '）').join(',') +
+    ' / UNKNOWN_SHIFT ' + res.unknownShifts.length + '件 / 対象外コード ' + JSON.stringify(res.otherCodes));
+  res.unknownShifts.forEach((u) => console.log('  UNKNOWN_SHIFT: ' + [u.company, u.name, u.date, u.raw, u.sheet + '!' + u.cell].join(' | ')));
+  // 読み替え（研修→○ / 研C1→C1 / C319・C320→C3）を原体のセル位置つきで列挙し、完成版「日付別」の同じ人・同じ日と照合する
+  const labelOf = {};
+  Core.TARGET_CODES.forEach((c) => (labelOf[c.key] = c.label));
+  const byRaw = {};
+  res.convertedCodes.forEach((x) => (byRaw[x.raw] = (byRaw[x.raw] || 0) + 1));
+  console.log('INFO: 読み替え ' + res.convertedCodes.length + '件 ' + JSON.stringify(byRaw));
+  let goldenDaily = null;
+  if (fs.existsSync(expectedFile)) {
+    const ser = (n) => new Date(Math.round((n - 25569) * 864e5)).toISOString().slice(0, 10);
+    goldenDaily = {};
+    (readWorkbook(XLSX, expectedFile).sheets['日付別'] || []).slice(1).forEach((r) => (goldenDaily[Core.nameKey(r[2]) + '|' + ser(r[0])] = String(r[3])));
+  }
+  res.convertedCodes.forEach((x) => {
+    const g = goldenDaily ? goldenDaily[Core.nameKey(x.name) + '|' + x.date] : undefined;
+    console.log('  読み替え: ' + [x.company, x.name, x.date, x.sheet + '!' + x.cell, '「' + x.raw + '」→' + labelOf[x.code], '完成版=' + (g === undefined ? '(未照合)' : g)].join(' | '));
+    if (goldenDaily) assert(g === labelOf[x.code], '読み替え結果が完成版と不一致: ' + x.name + ' ' + x.date + ' ' + x.raw);
+  });
   if (fs.existsSync(expectedFile)) {
     const diffs = traceDailyDiffs(res, readWorkbook(XLSX, expectedFile));
     if (diffs.length) {
