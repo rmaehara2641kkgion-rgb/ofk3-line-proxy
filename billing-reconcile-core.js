@@ -344,6 +344,17 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
+  // 表示専用。マスタも送信先も書き換えない。
+  // masterNames が空なら不一致とは扱わない。1件でも同一人物なら警告しない。
+  function tidNameMismatch(billingName, masterNames) {
+    masterNames = masterNames || [];
+    if (!billingName || !masterNames.length) return false;
+    for (var i = 0; i < masterNames.length; i++) {
+      if (samePersonName(billingName, masterNames[i])) return false;
+    }
+    return true;
+  }
+
   var api = {
     parseBillingRows: parseBillingRows,
     normalizePersonName: normalizePersonName,
@@ -355,6 +366,7 @@
     assignBillingPdfs: assignBillingPdfs,
     collectNameReadings: collectNameReadings,
     matchUniqueTarget: matchUniqueTarget,
+    tidNameMismatch: tidNameMismatch,
     hasPdfMagic: hasPdfMagic
   };
 
