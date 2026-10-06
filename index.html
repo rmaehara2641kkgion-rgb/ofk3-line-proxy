@@ -24,6 +24,7 @@
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
+  <script src="/billing-reconcile-core.js?v=20261006-2"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1404,8 +1405,8 @@
               ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
               ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handlePdfUpload(event.dataTransfer.files)">
               <p class="text-sm text-ink-lighter">請求書PDFをまとめてドラッグ＆ドロップ</p>
-              <p class="text-xs text-ink-lighter mt-1">ファイル名の【】内でドライバーを自動照合</p>
-              <input type="file" accept=".pdf" multiple onchange="handlePdfUpload(this.files)" class="hidden" id="pdf-files-input">
+              <p class="text-xs text-ink-lighter mt-1">PDF本文の氏名で対象者へ自動振り分け（ファイル名の【】も照合）</p>
+              <input type="file" accept="application/pdf,.pdf" multiple onchange="handlePdfUpload(this)" class="hidden" id="pdf-files-input">
             </div>
             <div id="pdf-match-list" class="mt-3 space-y-1 max-h-48 overflow-y-auto"></div>
           </div>
@@ -11524,61 +11525,7 @@ var driverDB = {
     function parseBillingData(rows) {
       billingData = [];
       billingSent = {};
-      var startRow = 2;
-      for (var h = 0; h < Math.min(rows.length, 5); h++) {
-        if (rows[h] && rows[h].join && rows[h].join('').indexOf('宛名') >= 0) {
-          startRow = h + 1;
-          break;
-        }
-      }
-      for (var i = startRow; i < rows.length; i++) {
-        var row = rows[i];
-        if (!row || !row[0]) continue;
-
-        var driverKey = (row[0] || '').toString().trim();
-        var name = (row[2] || '').toString().trim();
-        if (!name) continue;
-
-        var workDays = 0;
-        for (var c = 3; c <= 10; c++) {
-          var v = parseInt(row[c]) || 0;
-          workDays += v;
-        }
-
-        var breakdown = [];
-        var labels = ['11B', '8B', 'B1', 'B2', 'biker', '嘉麻応援', 'C1', 'C3'];
-        for (var c2 = 3; c2 <= 10; c2++) {
-          var v2 = parseInt(row[c2]) || 0;
-          if (v2 > 0) breakdown.push(labels[c2 - 3] + ': ' + v2 + '日');
-        }
-
-        var sysUsageFlag = (row[11] || '').toString().trim();
-        var sundayBonus = (row[12] || '').toString().trim();
-        var charter = parseNum(row[13]);
-        var mileage = parseNum(row[14]);
-        var deduction = parseNum(row[15]);
-        var subtotal = parseNum(row[16]);
-        var sysUsageFee = parseNum(row[17]);
-        var tax = parseNum(row[18]);
-        var total = parseNum(row[19]);
-
-        billingData.push({
-          driverKey: driverKey,
-          name: name,
-          workDays: workDays,
-          breakdown: breakdown,
-          sysUsageFlag: sysUsageFlag,
-          sysUsageFee: sysUsageFee,
-          sundayBonus: sundayBonus,
-          charter: charter,
-          mileage: mileage,
-          deduction: deduction,
-          subtotal: subtotal,
-          tax: tax,
-          total: total,
-          selected: true
-        });
-      }
+      if (window.BillingReconcile) billingData = BillingReconcile.parseBillingRows(rows);
 
       renderBillingTable();
       document.getElementById('billing-summary').classList.remove('hidden');
@@ -11625,9 +11572,11 @@ var driverDB = {
           ? '<span class="text-xs text-green-600">✅ 登録済</span>'
           : '<span class="text-xs text-gray-400">未登録</span>';
 
+        var tidWarn = billingTidMismatchWarning(d);
         return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
           '<td class="px-3 py-2"><input type="checkbox" ' + (d.selected ? 'checked' : '') + ' onchange="toggleBillingSelect(' + i + ', this.checked)" class="cursor-pointer"></td>' +
-          '<td class="px-3 py-2 font-medium">' + d.name + '</td>' +
+          '<td class="px-3 py-2 font-medium">' + escapeHtmlBilling(String(d.name || '')) +
+            (tidWarn ? '<div class="text-xs text-amber-700">' + tidWarn + '</div>' : '') + '</td>' +
           '<td class="px-3 py-2 text-right">' + d.workDays + '日</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.charter) + '</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.mileage) + '</td>' +
@@ -11648,6 +11597,23 @@ var driverDB = {
 
     function toggleBillingSelect(index, checked) {
       billingData[index].selected = checked;
+    }
+
+    function billingMasterNamesForTid(tid) {
+      var names = [];
+      if (!tid || typeof transportIDs === 'undefined') return names;
+      for (var key in transportIDs) {
+        if (String(transportIDs[key] || '') !== String(tid)) continue;
+        names.push(key);
+        if (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[key]) names.push(driverJapaneseNames[key]);
+      }
+      return names;
+    }
+
+    function billingTidMismatchWarning(row) {
+      if (!row || !row.tid || !row.name || !window.BillingReconcile) return '';
+      if (!BillingReconcile.tidNameMismatch(row.name, billingMasterNamesForTid(row.tid))) return '';
+      return 'TIDとドライバーマスタの氏名が一致しません';
     }
 
     function findLineUserId(driverKey, name) {
@@ -11681,107 +11647,282 @@ var driverDB = {
 
     // PDF請求書マッチング
     var billingPdfMap = {}; // { driverName: { filename, base64, uploadedUrl } }
+    var billingPdfResults = [];
+    var billingPdfSeq = 0;
+    var billingPdfJsPromise = null;
 
-    function handlePdfUpload(files) {
-      if (!files || files.length === 0) return;
-      var processed = 0;
-      var matched = 0;
+    function ensureBillingPdfJs() {
+      if (billingPdfJsPromise) return billingPdfJsPromise;
+      billingPdfJsPromise = new Promise(function(resolve, reject) {
+        function ready(lib) {
+          lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          resolve(lib);
+        }
+        if (window.pdfjsLib) { ready(window.pdfjsLib); return; }
+        var s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        s.onload = function() {
+          if (!window.pdfjsLib) { reject(new Error('pdfjs missing')); return; }
+          ready(window.pdfjsLib);
+        };
+        s.onerror = function() { reject(new Error('pdfjs load failed')); };
+        document.head.appendChild(s);
+      });
+      return billingPdfJsPromise;
+    }
 
-      for (var i = 0; i < files.length; i++) {
-        (function(file) {
-          var reader = new FileReader();
-          reader.onload = function(e) {
-            processed++;
-            var base64 = e.target.result.split(',')[1]; // remove data:...;base64, prefix
-            var filename = file.name;
+    function billingPdfLinesFromContent(content) {
+      var lines = [];
+      var line = '';
+      var lastY = null;
+      var items = (content && content.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var y = item.transform ? item.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+          lines.push(line);
+          line = '';
+        }
+        line += item.str || '';
+        if (item.hasEOL) {
+          lines.push(line);
+          line = '';
+          lastY = null;
+        } else {
+          lastY = y;
+        }
+      }
+      if (line) lines.push(line);
+      return lines;
+    }
 
-            // ファイル名から名前を抽出: 【○○DA】 or 【○○】
-            var nameMatch = filename.match(/【(.+?)(?:DA|ＤＡ)?】/);
-            var extractedName = nameMatch ? nameMatch[1].replace(/[\s　]/g, '') : '';
+    function extractBillingPdfText(bytes) {
+      return ensureBillingPdfJs().then(function(pdfjsLib) {
+        var copy = new Uint8Array(bytes);
+        return pdfjsLib.getDocument({
+          data: copy,
+          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+          cMapPacked: true,
+          standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'
+        }).promise.then(function(pdf) {
+          var lines = [];
+          function readPage(n) {
+            if (n > pdf.numPages) return Promise.resolve(lines.join('\n'));
+            return pdf.getPage(n).then(function(page) {
+              return page.getTextContent().then(function(content) {
+                var pageLines = billingPdfLinesFromContent(content);
+                for (var i = 0; i < pageLines.length; i++) lines.push(pageLines[i]);
+                return readPage(n + 1);
+              });
+            });
+          }
+          return readPage(1);
+        });
+      }).then(function(text) {
+        return chooseBillingPdfText(text, bytes);
+      }).catch(function() {
+        try {
+          var fallback = BillingReconcile.extractPdfText(bytes);
+          if (fallback) return fallback;
+        } catch (e2) {}
+        return null;
+      });
+    }
 
-            if (extractedName) {
-              // billingDataから照合
-              var matchedDriver = findBillingDriverByName(extractedName);
-              if (matchedDriver) {
-                billingPdfMap[matchedDriver.name] = {
-                  filename: filename,
-                  base64: base64,
-                  uploadedUrl: null
-                };
-                matched++;
+    function billingPdfTextMentionsTarget(text) {
+      if (!text || !window.BillingReconcile || !billingData) return false;
+      var readings = BillingReconcile.collectNameReadings(billingData, {
+        driverJapaneseNames: typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : {},
+        driverNameAliases: typeof driverNameAliases !== 'undefined' ? driverNameAliases : {}
+      });
+      for (var i = 0; i < billingData.length; i++) {
+        if (BillingReconcile.textHasPersonName(text, billingData[i].name)) return true;
+        var extra = readings[billingData[i].name] || [];
+        for (var j = 0; j < extra.length; j++) {
+          if (BillingReconcile.textHasPersonName(text, extra[j])) return true;
+        }
+      }
+      return false;
+    }
+
+    function chooseBillingPdfText(primary, bytes) {
+      var fallback = '';
+      try { fallback = BillingReconcile.extractPdfText(bytes); } catch (e) { fallback = ''; }
+      if (billingPdfTextMentionsTarget(primary)) return primary;
+      if (billingPdfTextMentionsTarget(fallback)) return fallback;
+      if (primary && String(primary).replace(/\s/g, '')) return primary;
+      return fallback || primary || '';
+    }
+
+    function uint8ToBase64(bytes) {
+      var bin = '';
+      for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+
+    function billingTakeFiles(inputOrList) {
+      var list = inputOrList;
+      var inputEl = null;
+      if (inputOrList && inputOrList.tagName === 'INPUT') {
+        inputEl = inputOrList;
+        list = inputOrList.files;
+      }
+      var arr = [];
+      if (list && list.length) {
+        for (var i = 0; i < list.length; i++) arr.push(list[i]);
+      }
+      if (inputEl) inputEl.value = '';
+      return arr;
+    }
+
+    function handlePdfUpload(inputOrList) {
+      var files = billingTakeFiles(inputOrList);
+      if (!files.length) return;
+      if (!window.BillingReconcile) {
+        billingPdfResults = [{ filename: files[0].name || '', code: 'read_error', label: 'PDF読込失敗', targetName: '', sendable: false, base64: '', lineLinked: false }];
+        renderPdfMatchList();
+        return;
+      }
+      var seq = ++billingPdfSeq;
+      Promise.all(files.map(function(file) { return prepareBillingPdfFile(file); })).then(function(prepared) {
+        if (seq !== billingPdfSeq) return;
+        var readings = BillingReconcile.collectNameReadings(billingData, {
+          driverJapaneseNames: typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : {},
+          driverNameAliases: typeof driverNameAliases !== 'undefined' ? driverNameAliases : {}
+        });
+        var assigned = BillingReconcile.assignBillingPdfs(prepared, billingData, { readings: readings });
+        billingPdfResults = assigned.map(function(a, idx) {
+          var row = {
+            filename: a.filename,
+            code: a.code,
+            label: a.label,
+            targetName: a.targetName,
+            sendable: a.sendable,
+            duplicateTarget: !!a.duplicateTarget,
+            duplicateWarning: a.duplicateWarning || '',
+            base64: prepared[idx].base64 || '',
+            lineLinked: false
+          };
+          if (a.targetName) {
+            for (var t = 0; t < billingData.length; t++) {
+              if (billingData[t].name === a.targetName) {
+                var uid = findLineUserId(billingData[t].driverKey, billingData[t].name);
+                row.lineLinked = !!(uid && String(uid).indexOf('U') === 0);
+                break;
               }
             }
+          }
+          return row;
+        });
+        syncBillingPdfMapFromResults();
+        renderPdfMatchList();
+      }).catch(function() {
+        if (seq !== billingPdfSeq) return;
+        billingPdfResults = files.map(function(file) {
+          return { filename: file.name || '', code: 'read_error', label: 'PDF読込失敗', targetName: '', sendable: false, base64: '', lineLinked: false };
+        });
+        syncBillingPdfMapFromResults();
+        renderPdfMatchList();
+      });
+    }
 
-            if (processed === files.length) {
-              renderPdfMatchList();
-            }
-          };
-          reader.readAsDataURL(file);
-        })(files[i]);
+    function prepareBillingPdfFile(file) {
+      var filename = (file && file.name) || '';
+      return file.arrayBuffer().then(function(buf) {
+        var bytes = new Uint8Array(buf);
+        var kind = BillingReconcile.classifyPdfUpload({ name: filename, type: file.type || '' }, bytes);
+        if (!kind.ok) return { filename: filename, text: '', base64: '', error: kind.reason };
+        return extractBillingPdfText(bytes).then(function(text) {
+          if (text === null) return { filename: filename, text: '', base64: '', error: 'read_error' };
+          var b64 = '';
+          try { b64 = uint8ToBase64(bytes); } catch (e) {
+            return { filename: filename, text: '', base64: '', error: 'read_error' };
+          }
+          return { filename: filename, text: text || '', base64: b64, error: '' };
+        });
+      }).catch(function() {
+        return { filename: filename, text: '', base64: '', error: 'read_error' };
+      });
+    }
+
+    function syncBillingPdfMapFromResults() {
+      var prev = billingPdfMap;
+      var next = {};
+      for (var i = 0; i < billingPdfResults.length; i++) {
+        var r = billingPdfResults[i];
+        if (!r.sendable || !r.targetName || !r.base64) continue;
+        next[r.targetName] = {
+          filename: r.filename,
+          base64: r.base64,
+          uploadedUrl: (prev[r.targetName] && prev[r.targetName].uploadedUrl) || null
+        };
       }
+      billingPdfMap = next;
+    }
+
+    function billingPdfDecision(r) {
+      if (r.duplicateTarget) return 'LINE送信禁止';
+      if (r.code === 'ambiguous') return '自動送信禁止';
+      if (r.code === 'matched' && r.lineLinked && r.sendable) return '送信可能';
+      return 'LINE送信禁止';
+    }
+
+    function removeBillingPdfResult(index) {
+      billingPdfResults.splice(index, 1);
+      if (window.BillingReconcile) BillingReconcile.applyDuplicatePdfBlock(billingPdfResults);
+      syncBillingPdfMapFromResults();
+      renderPdfMatchList();
     }
 
     function findBillingDriverByName(name) {
-      if (!billingData) return null;
-      var clean = name.replace(/[\s　]/g, '');
+      if (!billingData || !name) return null;
+      if (window.BillingReconcile) return BillingReconcile.matchUniqueTarget(billingData, name);
+      var clean = String(name).replace(/[\s　]/g, '');
+      var found = null;
       for (var i = 0; i < billingData.length; i++) {
-        var d = billingData[i];
-        var dClean = d.name.replace(/[\s　]/g, '');
-        if (dClean === clean) return d;
-        if (clean.length >= 2 && (dClean.indexOf(clean) >= 0 || clean.indexOf(dClean) >= 0)) return d;
-      }
-      // driverJapaneseNamesからも探す
-      for (var key in driverJapaneseNames) {
-        var jpClean = (driverJapaneseNames[key] || '').replace(/[\s　]/g, '');
-        if (jpClean === clean) {
-          // このkeyに対応するbillingDataを探す
-          for (var j = 0; j < billingData.length; j++) {
-            if (billingData[j].name.replace(/[\s　]/g, '') === key.replace(/[\s　]/g, '')) return billingData[j];
-            if (billingData[j].driverKey === key) return billingData[j];
-          }
+        if (String(billingData[i].name || '').replace(/[\s　]/g, '') === clean) {
+          if (found) return null;
+          found = billingData[i];
         }
       }
-      return null;
+      return found;
     }
 
     function renderPdfMatchList() {
       var listEl = document.getElementById('pdf-match-list');
       var countEl = document.getElementById('pdf-match-count');
       if (!listEl) return;
-
-      var keys = Object.keys(billingPdfMap);
-      if (keys.length === 0) {
+      if (!billingPdfResults.length) {
         listEl.innerHTML = '';
         if (countEl) countEl.textContent = '';
         return;
       }
-
+      var ready = 0;
       var html = '';
-      keys.forEach(function(name) {
-        var pdf = billingPdfMap[name];
-        var hasLine = false;
-        for (var i = 0; i < billingData.length; i++) {
-          if (billingData[i].name === name) {
-            var uid = findLineUserId(billingData[i].driverKey, name);
-            hasLine = uid && uid.indexOf('U') === 0;
-            break;
+      for (var i = 0; i < billingPdfResults.length; i++) {
+        var r = billingPdfResults[i];
+        var decision = billingPdfDecision(r);
+        if (r.code === 'matched' && r.lineLinked && r.sendable) ready++;
+        html += '<div class="text-xs py-2 border-b border-border">';
+        html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
+        html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
+        if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE未登録') + '</div>';
+        if (r.duplicateWarning) html += '<div class="text-amber-700">→ ' + escapeHtmlBilling(r.duplicateWarning) + '</div>';
+        if (r.code === 'matched' && r.targetName) {
+          for (var t = 0; t < billingData.length; t++) {
+            if (billingData[t].name === r.targetName) {
+              var tidWarn = billingTidMismatchWarning(billingData[t]);
+              if (tidWarn) html += '<div class="text-amber-700">→ ' + tidWarn + '</div>';
+              break;
+            }
           }
         }
-        var lineIcon = hasLine
-          ? '<span class="text-green-600 text-xs">✅</span>'
-          : '<span class="text-red-500 text-xs">⚠ LINE未登録</span>';
-        var uploadIcon = pdf.uploadedUrl
-          ? '<span class="text-green-600 text-xs">📤済</span>'
-          : '<span class="text-gray-400 text-xs">未送信</span>';
-        html += '<div class="flex items-center gap-2 text-xs py-1 border-b border-border">'
-          + '<span class="font-medium">' + name + '</span>'
-          + '<span class="text-ink-lighter truncate flex-1" title="' + pdf.filename + '">' + pdf.filename + '</span>'
-          + lineIcon + ' ' + uploadIcon
-          + '<button onclick="delete billingPdfMap[\'' + name.replace(/'/g, "\\'") + '\']; renderPdfMatchList();" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>'
-          + '</div>';
-      });
+        html += '<div>→ ' + decision + '</div>';
+        html += '<button type="button" onclick="removeBillingPdfResult(' + i + ')" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>';
+        html += '</div>';
+      }
       listEl.innerHTML = html;
-      if (countEl) countEl.textContent = keys.length + '件マッチ';
+      if (countEl) countEl.textContent = '送信可能 ' + ready + ' / ' + billingPdfResults.length + '件';
     }
 
     async function uploadPdfToServer(name) {
