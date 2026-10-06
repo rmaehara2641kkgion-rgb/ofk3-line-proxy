@@ -404,4 +404,138 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   console.log('  ok - ui blocks duplicate pdfs before the send map');
 }
 
+// 姓名順が逆でも、2要素が一意なら同一人物。姓だけ・名だけでは不一致
+{
+  const pairs = [
+    ['鴛海 剛', '剛 鴛海'],
+    ['鴛海　剛', '剛 鴛海'],
+    ['鴛海剛', '剛 鴛海'],
+    ['剛鴛海', '鴛海 剛'],
+    ['持田 裕司', '裕司 持田'],
+    ['持田　裕司', '裕司 持田'],
+    ['持田裕司', '裕司 持田'],
+    ['裕司持田', '持田 裕司']
+  ];
+  pairs.forEach(function (pair) {
+    assert.equal(Core.samePersonName(pair[0], pair[1]), true, pair.join(' / '));
+  });
+  assert.equal(Core.samePersonName('鴛海 剛', '鴛海　剛'), true);
+  assert.equal(Core.samePersonName('持田 裕司', '持田裕司'), true);
+  assert.equal(Core.samePersonName('鴛海', '鴛海 剛'), false);
+  assert.equal(Core.samePersonName('剛', '剛 鴛海'), false);
+  assert.equal(Core.samePersonName('持田', '持田 裕司'), false);
+  assert.equal(Core.samePersonName('裕司', '裕司 持田'), false);
+  assert.equal(Core.samePersonName('鴛海 剛', '鴛海 次郎'), false);
+  console.log('  ok - family and given order match only as a full name');
+
+  const oshiumi = [{ name: '剛 鴛海', driverKey: '' }, { name: '永浦 康明', driverKey: 'N' }];
+  const pdfO = Core.assignBillingPdfs(
+    [{ filename: '鴛海.pdf', text: '支払確認書\n鴛海 剛 様', error: '' }],
+    oshiumi,
+    { masterNames: ['剛 鴛海'] }
+  );
+  assert.equal(pdfO[0].sendable, true);
+  assert.equal(pdfO[0].targetName, '剛 鴛海');
+  const mochida = [{ name: '裕司 持田', driverKey: '' }];
+  const pdfM = Core.assignBillingPdfs(
+    [{ filename: '持田.pdf', text: '持田 裕司', error: '' }],
+    mochida,
+    { masterNames: ['裕司 持田'] }
+  );
+  assert.equal(pdfM[0].sendable, true);
+  assert.equal(pdfM[0].targetName, '裕司 持田');
+  const compact = Core.assignBillingPdfs(
+    [{ filename: 'c.pdf', text: '鴛海剛', error: '' }],
+    oshiumi,
+    {}
+  );
+  assert.equal(compact[0].targetName, '剛 鴛海');
+  assert.equal(compact[0].sendable, true);
+  const surname = Core.assignBillingPdfs(
+    [{ filename: 's.pdf', text: '鴛海 様', error: '' }],
+    oshiumi,
+    { masterNames: ['剛 鴛海'] }
+  );
+  assert.equal(surname[0].sendable, false);
+  assert.equal(surname[0].targetName, '');
+  const given = Core.assignBillingPdfs(
+    [{ filename: 'g.pdf', text: '剛 様', error: '' }],
+    oshiumi,
+    {}
+  );
+  assert.equal(given[0].sendable, false);
+  const crowded = [
+    { name: '剛 鴛海', driverKey: '' },
+    { name: '次郎 鴛海', driverKey: '' }
+  ];
+  const still = Core.assignBillingPdfs(
+    [{ filename: 'one.pdf', text: '鴛海 剛 様', error: '' }],
+    crowded,
+    {}
+  );
+  assert.equal(still[0].targetName, '剛 鴛海');
+  assert.equal(still[0].sendable, true);
+  const bothOrders = [
+    { name: '剛 鴛海', driverKey: 'a' },
+    { name: '鴛海 剛', driverKey: 'b' }
+  ];
+  const ambiguous = Core.assignBillingPdfs(
+    [{ filename: 'two.pdf', text: '鴛海 剛 様', error: '' }],
+    bothOrders,
+    {}
+  );
+  assert.equal(ambiguous[0].sendable, false);
+  assert.equal(ambiguous[0].code, 'ambiguous');
+  console.log('  ok - pdf assigns reversed names only when unique');
+
+  assert.equal(Core.resolveLineKey('鴛海 剛', ['剛 鴛海'], ['剛 鴛海']), '剛 鴛海');
+  assert.equal(Core.resolveLineKey('鴛海　剛', ['剛 鴛海'], ['剛 鴛海']), '剛 鴛海');
+  assert.equal(Core.resolveLineKey('鴛海剛', ['剛 鴛海'], ['剛 鴛海']), '剛 鴛海');
+  assert.equal(Core.resolveLineKey('剛鴛海', ['鴛海 剛'], ['鴛海 剛']), '鴛海 剛');
+  assert.equal(Core.resolveLineKey('剛 鴛海', ['剛 鴛海'], ['鴛海 剛']), '鴛海 剛');
+  assert.equal(Core.resolveLineKey('持田 裕司', ['裕司 持田'], ['裕司 持田']), '裕司 持田');
+  assert.equal(Core.resolveLineKey('持田　裕司', ['裕司 持田'], ['裕司 持田']), '裕司 持田');
+  assert.equal(Core.resolveLineKey('持田裕司', ['裕司 持田'], ['裕司 持田']), '裕司 持田');
+  assert.equal(Core.resolveLineKey('裕司持田', ['持田 裕司'], ['持田 裕司']), '持田 裕司');
+  assert.equal(Core.resolveLineKey('鴛海', ['剛 鴛海'], ['剛 鴛海']), '');
+  assert.equal(Core.resolveLineKey('剛', ['剛 鴛海'], ['剛 鴛海']), '');
+  assert.equal(Core.resolveLineKey('持田', ['裕司 持田'], ['裕司 持田']), '');
+  assert.equal(Core.resolveLineKey('鴛海 剛', ['剛 鴛海', '次郎 鴛海'], ['剛 鴛海']), '剛 鴛海');
+  assert.equal(Core.resolveLineKey('鴛海 剛', ['剛 鴛海', '鴛海 剛'], ['剛 鴛海']), '');
+  assert.equal(Core.resolveLineKey('鴛海 剛', ['剛 鴛海'], ['剛 鴛海', '鴛海 剛']), '');
+  assert.equal(Core.resolveLineKey('鴛海 剛', ['剛 鴛海'], ['裕司 持田']), '');
+  assert.equal(Core.resolveLineKey('金子 昌巧', [], ['金子 昌巧']), '金子 昌巧');
+  assert.equal(Core.resolveLineKey('金子 昌巧', [], ['昌巧 金子']), '');
+  console.log('  ok - line key follows a unique master person');
+
+  assert.equal(Core.interpretLineHttpStatus(200), 'ok');
+  assert.equal(Core.interpretLineHttpStatus(201), 'ok');
+  assert.equal(Core.interpretLineHttpStatus(400), 'fail');
+  assert.equal(Core.interpretLineHttpStatus(503), 'fail');
+  const httpErr = Core.publicLineError(400, '{"message":"invalid request"}');
+  assert.match(httpErr, /LINE API送信失敗/);
+  assert.match(httpErr, /400/);
+  assert.match(httpErr, /invalid request/);
+  const secret = Core.publicLineError(401, '{"message":"Bearer abcdefghijklmnopqrstuvwxyz"}');
+  assert.doesNotMatch(secret, /abcdefghijklmnopqrstuvwxyz/);
+  const uid = Core.publicLineError(400, '{"message":"user U0123456789abcdef0123456789abcdef"}');
+  assert.doesNotMatch(uid, /U0123456789abcdef0123456789abcdef/);
+  const sendStart2 = indexSrc.indexOf('async function sendAllBillingLine');
+  const sendFn2 = indexSrc.slice(sendStart2, indexSrc.indexOf('// ===== 配送MAP機能 =====', sendStart2));
+  const fetchAt = sendFn2.indexOf('fetch(proxyUrl');
+  const okAt = sendFn2.indexOf('res.ok');
+  const sentAt = sendFn2.indexOf('billingSent[d.name] = true');
+  assert.ok(fetchAt > 0 && okAt > fetchAt && sentAt > okAt);
+  assert.match(sendFn2, /billingLineUserId\(d\)/);
+  assert.match(sendFn2, /LINE API送信失敗/);
+  assert.match(indexSrc, /PDF対象者特定失敗/);
+  assert.match(indexSrc, /候補者複数/);
+  assert.match(indexSrc, /LINE送信先未解決/);
+  assert.match(indexSrc, /LINE送信成功/);
+  const lineFnStart = indexSrc.indexOf('function findLineUserId');
+  const lineFn = indexSrc.slice(lineFnStart, indexSrc.indexOf('function ', lineFnStart + 10));
+  assert.match(lineFn, /cleanKey\.indexOf\(cleanName\)/);
+  console.log('  ok - http status decides billing send success');
+}
+
 console.log('billing-reconcile tests passed');
