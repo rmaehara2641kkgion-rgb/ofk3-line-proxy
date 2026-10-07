@@ -584,4 +584,38 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   console.log('  ok - preview mark matches sendability');
 }
 
+{
+  const ready = Core.testSendAllowed({ code: 'matched', lineLinked: true, sendable: true, duplicateTarget: false });
+  assert.equal(ready.ok, true);
+  const driverUnlinked = Core.testSendAllowed({ code: 'matched', lineLinked: false, sendable: true, duplicateTarget: false });
+  assert.equal(driverUnlinked.ok, true);
+  assert.equal(Core.listSendState({ code: 'matched', lineLinked: false, sendable: true, duplicateTarget: false }).mark, '×');
+  assert.equal(Core.testSendAllowed({ code: 'unmatched', sendable: false }).ok, false);
+  assert.equal(Core.testSendAllowed({ code: 'extract_failed', sendable: false }).ok, false);
+  assert.equal(Core.testSendAllowed({ code: 'ambiguous', sendable: false }).ok, false);
+  assert.equal(Core.testSendAllowed({ code: 'matched', lineLinked: true, sendable: false, duplicateTarget: true }).ok, false);
+
+  const testStart = indexSrc.indexOf('async function sendBillingLineTest');
+  const testFn = indexSrc.slice(testStart, indexSrc.indexOf('async function sendAllBillingLine', testStart));
+  const uploadStart = indexSrc.indexOf('async function billingUploadPdfForTest');
+  const uploadFn = indexSrc.slice(uploadStart, testStart);
+  assert.match(testFn, /【テスト送信】/);
+  assert.match(testFn, /billingAdminLineUserId\(\)/);
+  assert.match(testFn, /to: adminId/);
+  assert.match(testFn, /テスト送信です。ドライバー本人には送信されません/);
+  assert.match(testFn, /管理者LINE IDが設定されていません/);
+  assert.match(testFn, /res\.ok/);
+  assert.doesNotMatch(testFn, /billingSent/);
+  assert.doesNotMatch(testFn, /billingSendError/);
+  assert.doesNotMatch(testFn, /billingData\[/);
+  assert.doesNotMatch(testFn, /lineMapping\[/);
+  assert.doesNotMatch(uploadFn, /uploadedUrl\s*=/);
+  const realStart = indexSrc.indexOf('async function sendAllBillingLine');
+  const realFn = indexSrc.slice(realStart, indexSrc.indexOf('// ===== 配送MAP機能 =====', realStart));
+  assert.match(realFn, /billingSent\[d\.name\] = true/);
+  assert.match(realFn, /billingLineUserId\(d\)/);
+  assert.doesNotMatch(realFn, /adminId/);
+  console.log('  ok - billing test send does not mark production sent');
+}
+
 console.log('billing-reconcile tests passed');
