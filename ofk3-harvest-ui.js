@@ -23,10 +23,18 @@
     return;
   }
 
+  var FleetCols = (typeof window !== 'undefined') ? window.HarvestCollectorsFleet : null;
+
   var hub = Core.getDefaultHub();
   if (!hub.listIds().length) {
     try { Cols.registerCortexCollectors(hub); } catch (e) {
       try { console.error('OFK3Harvest: collector registration failed', e); } catch (e2) {}
+    }
+  }
+  // 台数照合 (fleetCapacity)。harvest-collectors-fleet.js が未読込でも既存Collectorの動作は変えない。
+  if (FleetCols && hub.listIds().indexOf(FleetCols.COLLECTOR_ID) < 0) {
+    try { FleetCols.registerFleetCollector(hub); } catch (e) {
+      try { console.error('OFK3Harvest: fleet collector registration failed', e); } catch (e2) {}
     }
   }
 
@@ -87,6 +95,11 @@
         if (parts.length) notes.push('Bag状態内訳: ' + parts.join(' / '));
       }
       notes.push('完了済みStopは Bag なし(captured_null)が正常で、異常とは扱いません。');
+    }
+    if (state.id === 'fleetCapacity') {
+      var def = hub.getCollector(state.id);
+      if (def && def.trigger && def.trigger.instruction) notes.push('操作: ' + esc(def.trigger.instruction));
+      notes.push('cortexCount / inputCount は取得元の値をそのまま保持します。不足判定や重要度の付与は行いません。');
     }
     return notes.join('<br>');
   }

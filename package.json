@@ -22,7 +22,7 @@
     "test:dashboard-map": "node tests/dashboard-map-cortex-overlay.test.mjs",
     "test:gds-fleet-audit": "node tests/gds-fleet-audit-core.test.mjs",
     "test:driver-ability": "node tests/driver-ability-import.test.mjs",
-    "test:harvest": "node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs",
+    "test:harvest": "node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs && node tests/harvest-collectors-fleet.test.mjs",
     "test:line-unlinked": "node tests/line-unlinked-and-qr-order.test.mjs",
     "test:billing": "node tests/billing-reconcile.test.mjs",
     "test:contact-compliance": "node tests/contact-compliance-core.test.mjs && node tests/cc-export-ui.test.mjs",

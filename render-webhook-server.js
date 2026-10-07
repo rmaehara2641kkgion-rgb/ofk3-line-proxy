@@ -244,6 +244,11 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (hvColBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvColBodyPos) + '  <script src="/harvest-collectors-cortex.js?v=20261002-1"></script>\n' + html.slice(hvColBodyPos);
     }
+    if (html.indexOf('/harvest-collectors-fleet.js') < 0) {
+      var hvFleetBodyPos = html.lastIndexOf('</body>');
+      if (hvFleetBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, hvFleetBodyPos) + '  <script src="/harvest-collectors-fleet.js?v=20261007-1"></script>\n' + html.slice(hvFleetBodyPos);
+    }
     if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
       var hvUiBodyPos = html.lastIndexOf('</body>');
       if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));

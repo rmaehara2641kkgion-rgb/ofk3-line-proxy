@@ -9,6 +9,8 @@ function read(name) { return readFileSync(join(root, name), 'utf8'); }
 function assert(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); }
 
 const FILES = ['harvest-core.js', 'harvest-collectors-cortex.js', 'ofk3-harvest-ui.js'];
+const FLEET_FILE = 'harvest-collectors-fleet.js';
+const STATIC_FILES = FILES.concat([FLEET_FILE]);
 const serverSrc = read('render-webhook-server.js');
 const injectSrc = read('inject-tenko-audit.js');
 const html = read('index.html');
@@ -16,7 +18,7 @@ const pkgJson = JSON.parse(read('package.json'));
 const cortexUiSrc = read('ofk3-cortex-priority-ui.js');
 
 // ===== Files exist + static safety =====
-FILES.forEach(function (f) {
+STATIC_FILES.forEach(function (f) {
   assert(existsSync(join(root, f)), f + ' exists');
   const src = read(f);
   assert(src.indexOf('`') < 0, f + ': no template literals');
@@ -47,7 +49,7 @@ assert(html.indexOf('harvest-core.js') < 0 && html.indexOf('ofk3-harvest-ui.js')
 }
 
 // ===== Server injection / inject script / package.json =====
-FILES.forEach(function (f) {
+STATIC_FILES.forEach(function (f) {
   assert(serverSrc.indexOf("html.indexOf('/" + f + "') < 0") >= 0, 'server guards duplicate injection for ' + f);
   assert(serverSrc.indexOf('<script src="/' + f + '?v=') >= 0, 'server injects ' + f);
   assert(injectSrc.indexOf('<script src="/' + f + '?v=') >= 0, 'inject-tenko-audit tags ' + f);
@@ -57,19 +59,21 @@ FILES.forEach(function (f) {
   const a = serverSrc.indexOf('/harvest-core.js?v=');
   const b = serverSrc.indexOf('/harvest-collectors-cortex.js?v=');
   const c = serverSrc.indexOf('/ofk3-harvest-ui.js?v=');
-  assert(a > 0 && a < b && b < c, 'server script order: core, collectors, ui');
+  const bf = serverSrc.indexOf('/harvest-collectors-fleet.js?v=');
+  assert(a > 0 && a < b && b < bf && bf < c, 'server script order: core, collectors, fleet collector, ui');
   assert(a > serverSrc.indexOf('/ofk3-cortex-priority-ui.js?v=') && a > serverSrc.indexOf('/ofk3-time-window-board.js?v='), 'HARVEST scripts after existing OFK3 scripts');
   const ia = injectSrc.indexOf('/harvest-core.js?v=');
   const ib = injectSrc.indexOf('/harvest-collectors-cortex.js?v=');
   const ic = injectSrc.indexOf('/ofk3-harvest-ui.js?v=');
-  assert(ia > 0 && ia < ib && ib < ic, 'inject script order');
+  const ibf = injectSrc.indexOf('/harvest-collectors-fleet.js?v=');
+  assert(ia > 0 && ia < ib && ib < ibf && ibf < ic, 'inject script order');
   // existing injections remain
   ['/ofk3-cortex-priority-ui.js', '/ofk3-time-window-board.js', '/gds-fleet-audit-core.js', '/ofk3-gds-fleet-audit-ui.js'].forEach(function (s) {
     assert(serverSrc.indexOf(s) >= 0 && injectSrc.indexOf(s) >= 0, 'existing injection kept: ' + s);
   });
   assert(serverSrc.indexOf('?v=20260923-driveraid') >= 0, 'time-window cache bust untouched');
 }
-assert(pkgJson.scripts['test:harvest'] === 'node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs', 'test:harvest script');
+assert(pkgJson.scripts['test:harvest'] === 'node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs && node tests/harvest-collectors-fleet.test.mjs', 'test:harvest script');
 assert(pkgJson.scripts['test:all'].indexOf('npm run test:harvest') >= 0, 'test:all includes test:harvest');
 assert(pkgJson.scripts['test:cortex-13'].indexOf('cortex-bag-enrichment.test.mjs') >= 0, 'test:cortex-13 unchanged');
 
@@ -246,6 +250,49 @@ async function flush() {
   // close
   overlay._l.forEach(function (l) { if (l.type === 'click') l.fn({ target: overlay }); });
   assert(overlay.style.display === 'none', 'overlay closes on backdrop click');
+}
+
+// ===== Fleet collector registered through the UI (P1) =====
+{
+  const dom = makeDom();
+  const events = [];
+  const win = {
+    OFK3GdsFleetAudit: {
+      getState: function () {
+        return {
+          cortex: { ok: true, fileName: 'cortex.csv', byDate: { '2026-09-13': { block6_5: 3, block4_5: 2, eightB: 10, bike2h: 1, bike3h: 0 } }, meta: { ofk3Rows: 4, totalRows: 9, warnings: [] } },
+          input: { ok: true, fileName: 'input.xlsm', byDate: { '2026-09-13': { block6_5: 3, block4_5: 1, eightB: 10, bike2h: 1, bike3h: 0 } }, meta: { ofk3Rows: 5, headerRowIndex: 3, warnings: [] } },
+          lastCompare: { summary: { alert: 1 } }
+        };
+      }
+    },
+    dispatchEvent: function (ev) { events.push(ev); return true; }
+  };
+  const ctx = {
+    window: win, document: dom.document, console, alert: function () {},
+    setTimeout, Intl, Date, Promise, JSON, Object, Array, String, Number, isFinite, Math,
+    CustomEvent: function (name, init) { this.type = name; this.detail = init && init.detail; },
+    module: undefined
+  };
+  win.window = win;
+  vm.createContext(ctx);
+  STATIC_FILES.slice(0, 2).concat([FLEET_FILE, 'ofk3-harvest-ui.js']).forEach(function (f) { vm.runInContext(read(f), ctx, { filename: f }); });
+  const hub = win.OFK3Harvest.getHub();
+  assert(hub.listIds().join(',') === 'timeWindow,bag,fleetCapacity', 'fleetCapacity registered after the P0 collectors');
+  win.OFK3Harvest.open();
+  const content = dom.document.getElementById('ofk3-harvest-content');
+  click(content, { 'data-hv-act': 'run', 'data-hv-id': 'fleetCapacity' });
+  await flush();
+  assert(hub.getState('fleetCapacity').status === 'ok', 'fleetCapacity ok through UI');
+  assert(content.innerHTML.indexOf('cortexCount') >= 0, 'UI notes cortexCount / inputCount are source values');
+  ['shortage', 'severity', 'critical', 'warning', 'alert'].forEach(function (w) {
+    assert(content.innerHTML.indexOf(w) < 0, 'UI does not render ' + w);
+  });
+  assert(content.innerHTML.indexOf('不足判定は行いません') >= 0, 'UI states no shortage judgement');
+  click(content, { 'data-hv-act': 'handoff', 'data-hv-id': 'fleetCapacity' });
+  assert(events.length === 1 && events[0].detail.source === 'fleetCapacity', 'fleet handoff dispatched');
+  assert(events[0].detail.payloadReference.provenance.cortex.fileName === 'cortex.csv', 'handoff carries provenance');
+  assert(events[0].detail.schemaVersion === '0.1', 'handoff schema unchanged');
 }
 
 // ===== Degrades silently when core is missing (script 404) =====
