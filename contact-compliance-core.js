@@ -53,6 +53,12 @@
 
   var CC_UNKNOWN_DA_LABEL = '未特定';
 
+  var CC_LOGIC_LABEL = 'CC Logic Ver.' + CC_LOGIC_VERSION;
+
+  // CC率の評価色分け閾値。Amazon正式基準が未確認のため現時点は null（色分けしない）。
+  // 正式基準が判明したら例: [{ min: 95, level: 'good' }, { min: 85, level: 'warn' }, { min: 0, level: 'bad' }]
+  var CC_RATE_LEVEL_THRESHOLDS = null;
+
   // 取込必須列（Amazon Contact Compliance ファイルのヘッダー名）。列順には依存しない。
   var CC_REQUIRED_COLUMNS = [
     { key: 'eventDate', header: 'Event Date' },
@@ -201,6 +207,22 @@
   function formatCcRate(rate) {
     if (rate === null || rate === undefined || !isFinite(rate)) return '-';
     return rate.toFixed(2) + '%';
+  }
+
+  // CC_RATE_LEVEL_THRESHOLDS 未設定（現状）または rate=null のときは null（評価しない）
+  function getCcRateLevel(rate, thresholds) {
+    var list = thresholds === undefined ? CC_RATE_LEVEL_THRESHOLDS : thresholds;
+    if (!list || rate === null || rate === undefined || !isFinite(rate)) return null;
+    for (var i = 0; i < list.length; i++) {
+      if (rate >= list[i].min) return list[i].level;
+    }
+    return null;
+  }
+
+  // Excel出力用: 画面表示（formatCcRate の toFixed(2)）と同じ小数2桁の数値。0件は null。
+  function roundCcRate(rate) {
+    if (rate === null || rate === undefined || !isFinite(rate)) return null;
+    return parseFloat(rate.toFixed(2));
   }
 
   function getCcReasonLabel(reason) {
@@ -374,6 +396,94 @@
     };
   }
 
+  // analyzeCcRows() の結果 → Excel 5シート分の行データ（配列の配列）。判定・集計は再実行しない。
+  // CC率は roundCcRate の数値（buildCcExportWorkbook が表示形式 0.00"%" を付ける）。0件は '-'。
+  // rateColumn / rateCells: CC率セルの位置（0始まり）。driverSort: DA別の並び（画面の選択と揃える）。
+  function buildCcExportSheets(result, driverSort) {
+    var s = result.summary;
+    function rateCell(rate) {
+      var v = roundCcRate(rate);
+      return v === null ? '-' : v;
+    }
+    var reasonCodes = CC_ELIGIBLE_REASONS.slice();
+    var reasonDesc = [];
+    for (var rc = 0; rc < reasonCodes.length; rc++) reasonDesc.push(getCcReasonLabel(reasonCodes[rc]) + '(' + reasonCodes[rc] + ')');
+
+    var summaryRows = [
+      ['項目', '値'],
+      ['Logic Version', CC_LOGIC_LABEL],
+      ['CC率', rateCell(s.rate)],
+      ['CC対象件数', s.total],
+      ['Compliant件数', s.compliant],
+      ['Non-Compliant件数', s.nonCompliant],
+      ['取込行数', result.records.length],
+      ['対象外行数', s.notEligible],
+      ['対象理由', reasonDesc.join(' / ')],
+      ['判定条件', 'Call Event または Text Event が存在 = Compliant（両方あっても1件）'],
+      ['集計単位', 'Amazonファイルの対象行1行 = 1件（dedupeなし）']
+    ];
+
+    var reasonRows = [['配送理由', 'Shipment Reason', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
+    for (var i = 0; i < result.byReason.length; i++) {
+      var r = result.byReason[i];
+      reasonRows.push([r.reasonLabel, r.reason, r.total, r.compliant, r.nonCompliant, rateCell(r.rate)]);
+    }
+
+    var driverRows = [['DA名', 'Transporter ID', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
+    var drivers = sortCcDriverStats(result.byDriver, driverSort || 'nonCompliantDesc');
+    for (var d = 0; d < drivers.length; d++) {
+      var ds = drivers[d];
+      driverRows.push([ds.driverName, ds.transporterId, ds.total, ds.compliant, ds.nonCompliant, rateCell(ds.rate)]);
+    }
+
+    var dateRows = [['Event Date', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
+    for (var t = 0; t < result.byDate.length; t++) {
+      var dr = result.byDate[t];
+      dateRows.push([dr.eventDate, dr.total, dr.compliant, dr.nonCompliant, rateCell(dr.rate)]);
+    }
+
+    var ncRows = [['Event Date', 'DA名', 'Transporter ID', 'Scannable ID', 'Destination Address ID',
+      'Shipment Reason', '配送理由（日本語）', 'Call Event', 'Text Event', '判定']];
+    for (var n = 0; n < result.nonCompliant.length; n++) {
+      var nc = result.nonCompliant[n];
+      ncRows.push([nc.eventDate, nc.driverName, nc.transporterId, nc.scannableId, nc.destinationAddressId,
+        nc.shipmentReason, nc.shipmentReasonLabel, nc.callEvent, nc.textEvent, 'Non-Compliant']);
+    }
+
+    return [
+      { name: 'CCサマリー', rows: summaryRows, rateCells: [[2, 1]], widths: [20, 60] },
+      { name: '理由別', rows: reasonRows, rateColumn: 5, widths: [20, 34, 10, 12, 14, 10] },
+      { name: 'DA別', rows: driverRows, rateColumn: 5, widths: [22, 18, 10, 12, 14, 10] },
+      { name: '日別', rows: dateRows, rateColumn: 4, widths: [14, 10, 12, 14, 10] },
+      { name: 'Non-Compliant明細', rows: ncRows, widths: [12, 22, 18, 16, 22, 32, 20, 18, 18, 14] }
+    ];
+  }
+
+  var CC_RATE_NUMBER_FORMAT = '0.00"%"';
+
+  // buildCcExportSheets → SheetJS ワークブック。XLSX はブラウザのグローバル / Node の require('xlsx') を渡す。
+  function buildCcExportWorkbook(XLSX, result, driverSort) {
+    var wb = XLSX.utils.book_new();
+    var sheets = buildCcExportSheets(result, driverSort);
+    for (var i = 0; i < sheets.length; i++) {
+      var sh = sheets[i];
+      var ws = XLSX.utils.aoa_to_sheet(sh.rows);
+      var cells = (sh.rateCells || []).slice();
+      if (sh.rateColumn !== undefined) {
+        for (var r = 1; r < sh.rows.length; r++) cells.push([r, sh.rateColumn]);
+      }
+      for (var c = 0; c < cells.length; c++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: cells[c][0], c: cells[c][1] })];
+        if (cell && cell.t === 'n') cell.z = CC_RATE_NUMBER_FORMAT;
+      }
+      var cols = [];
+      for (var w = 0; w < sh.widths.length; w++) cols.push({ wch: sh.widths[w] });
+      ws['!cols'] = cols;
+      XLSX.utils.book_append_sheet(wb, ws, sh.name);
+    }
+    return wb;
+  }
+
   var ContactComplianceCore = {
     CC_LOGIC_VERSION: CC_LOGIC_VERSION,
     CC_ELIGIBLE_REASONS: CC_ELIGIBLE_REASONS,
@@ -381,6 +491,8 @@
     CC_STATUS: CC_STATUS,
     CC_STATUS_LABELS_JA: CC_STATUS_LABELS_JA,
     CC_UNKNOWN_DA_LABEL: CC_UNKNOWN_DA_LABEL,
+    CC_LOGIC_LABEL: CC_LOGIC_LABEL,
+    CC_RATE_LEVEL_THRESHOLDS: CC_RATE_LEVEL_THRESHOLDS,
     CC_REQUIRED_COLUMNS: CC_REQUIRED_COLUMNS,
     normalizeCcHeader: normalizeCcHeader,
     ccMapColumns: ccMapColumns,
@@ -392,6 +504,10 @@
     getCcStatus: getCcStatus,
     calcCcRate: calcCcRate,
     formatCcRate: formatCcRate,
+    getCcRateLevel: getCcRateLevel,
+    roundCcRate: roundCcRate,
+    buildCcExportSheets: buildCcExportSheets,
+    buildCcExportWorkbook: buildCcExportWorkbook,
     getCcReasonLabel: getCcReasonLabel,
     calculateCcSummary: calculateCcSummary,
     groupCcByReason: groupCcByReason,

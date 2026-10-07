@@ -199,7 +199,101 @@ function testWk40Ofk3RealData() {
   assert(result.byDriver.every(function (d) { return d.driverName === '未特定'; }), 'マスタ無しなら全員未特定');
 }
 
-var tests = [testStatusJudgment, testZeroEligible, testUnknownDriver, testAggregations, testParseRows, testWk40Ofk3RealData];
+// ---- CC率の評価色分け: 正式基準が未確認のため既定では評価しない ----
+function testRateLevelDisabledByDefault() {
+  assert(Cc.CC_RATE_LEVEL_THRESHOLDS === null, '閾値は未設定（null）');
+  [0, 50, 78.78, 85, 95, 100, null].forEach(function (r) {
+    assert(Cc.getCcRateLevel(r) === null, '既定では評価なし: ' + r);
+  });
+  var t = [{ min: 90, level: 'good' }, { min: 0, level: 'bad' }];
+  assert(Cc.getCcRateLevel(95, t) === 'good' && Cc.getCcRateLevel(10, t) === 'bad', '閾値を渡せば評価できる（将来用）');
+  assert(Cc.getCcRateLevel(null, t) === null, '0件は評価しない');
+}
+
+function loadWk40Rows() {
+  var csv = readFileSync(path.join(__dirname, 'fixtures/contact-compliance/wk40-ofk3-contact-compliance-sanitized.csv'), 'utf8');
+  var wb = XLSX.read(csv, { type: 'string', raw: true });
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true });
+}
+
+function sheetAoa(wb, name) {
+  assert(wb.SheetNames.indexOf(name) >= 0, 'シート ' + name + ' がある: ' + wb.SheetNames);
+  return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: true });
+}
+
+function cellText(wb, name, r, c) {
+  var cell = wb.Sheets[name][XLSX.utils.encode_cell({ r: r, c: c })];
+  return cell ? (cell.w !== undefined ? cell.w : String(cell.v)) : '';
+}
+
+// ---- Excel出力（5シート）: 画面と同じ analyzeCcRows 結果から作り、書き出し→読み戻しで一致を確認 ----
+function testExcelExportWk40() {
+  var result = Cc.analyzeCcRows(loadWk40Rows(), function (tid) { return tid === 'A8JSA661WQ3ZH' ? 'テスト 太郎' : ''; });
+  var buf = XLSX.write(Cc.buildCcExportWorkbook(XLSX, result, 'nonCompliantDesc'), { type: 'buffer', bookType: 'xlsx' });
+  var wb = XLSX.read(buf, { type: 'buffer' });
+  assert(wb.SheetNames.join() === 'CCサマリー,理由別,DA別,日別,Non-Compliant明細', 'シート構成: ' + wb.SheetNames);
+
+  var sum = {};
+  sheetAoa(wb, 'CCサマリー').forEach(function (row, i) { sum[row[0]] = { v: row[1], i: i }; });
+  assert(sum['Logic Version'].v === 'CC Logic Ver.1', 'Logic Version');
+  assert(sum['CC対象件数'].v === 575 && sum['Compliant件数'].v === 453 && sum['Non-Compliant件数'].v === 122, 'Excel件数 575/453/122');
+  assert(sum['CC率'].v === 78.78, 'Excel CC率の値 78.78: ' + sum['CC率'].v);
+  var excelRateText = cellText(wb, 'CCサマリー', sum['CC率'].i, 1);
+  assert(excelRateText === '78.78%', 'Excel CC率の表示 78.78%: ' + excelRateText);
+  // 画面表示（formatCcRate）と完全一致
+  assert(excelRateText === Cc.formatCcRate(result.summary.rate), '画面とExcelのCC率表示が一致');
+  console.log('  Excel CCサマリー: ' + sum['CC対象件数'].v + ' / ' + sum['Compliant件数'].v + ' / '
+    + sum['Non-Compliant件数'].v + ' / ' + excelRateText + '  (screen: ' + Cc.formatCcRate(result.summary.rate) + ')');
+
+  var reason = sheetAoa(wb, '理由別');
+  assert(reason[0].join() === '配送理由,Shipment Reason,対象件数,Compliant,Non-Compliant,CC率', '理由別ヘッダー');
+  assert(reason.length === 5, '4理由');
+  var expectReason = [['不在', 'CUSTOMER_UNAVAILABLE', 336, 278, 58], ['配達先アクセス不可', 'INACCESSIBLE_DELIVERY_LOCATION', 173, 122, 51],
+    ['住所不明', 'ADDRESS_NOT_FOUND', 27, 17, 10], ['安全な置き場所なし', 'NO_SECURE_LOCATION', 39, 36, 3]];
+  for (var i = 0; i < 4; i++) {
+    assert(reason[i + 1].slice(0, 5).join() === expectReason[i].join(), '理由別 ' + reason[i + 1]);
+    assert(cellText(wb, '理由別', i + 1, 5) === Cc.formatCcRate(result.byReason[i].rate), '理由別CC率表示一致');
+  }
+
+  var da = sheetAoa(wb, 'DA別');
+  assert(da[0].join() === 'DA名,Transporter ID,対象件数,Compliant,Non-Compliant,CC率', 'DA別ヘッダー');
+  assert(da.length === 61, 'DA 60名');
+  var daTotal = 0, daNc = 0;
+  for (var d = 1; d < da.length; d++) {
+    daTotal += da[d][2]; daNc += da[d][4];
+    var screen = result.byDriver.filter(function (x) { return x.transporterId === da[d][1]; })[0];
+    assert(screen && screen.driverName === da[d][0] && screen.total === da[d][2] && screen.nonCompliant === da[d][4], 'DA行一致 ' + da[d]);
+    assert(cellText(wb, 'DA別', d, 5) === Cc.formatCcRate(screen.rate), 'DA CC率表示一致 ' + da[d][1]);
+  }
+  assert(daTotal === 575 && daNc === 122, 'DA別合計 575/122');
+  assert(da[1][0] === 'テスト 太郎' && da[1][1] === 'A8JSA661WQ3ZH', 'DA名照合（マスタあり）');
+  assert(da.filter(function (r) { return r[0] === '未特定'; }).length === 59, 'マスタ無しは未特定');
+  var asc = sheetAoa(XLSX.read(XLSX.write(Cc.buildCcExportWorkbook(XLSX, result, 'rateAsc'), { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' }), 'DA別');
+  assert(asc[1][5] === 0 && asc[60][5] === 100, 'DA別は画面の並び順指定に従う（CC率昇順）');
+
+  var date = sheetAoa(wb, '日別');
+  assert(date[0].join() === 'Event Date,対象件数,Compliant,Non-Compliant,CC率', '日別ヘッダー');
+  assert(date.length === 8 && date[1][0] === '2026-09-27' && date[1][1] === 60 && date[1][3] === 24, '日別 ' + date[1]);
+  assert(cellText(wb, '日別', 1, 4) === '60.00%', '日別CC率表示');
+
+  var nc = sheetAoa(wb, 'Non-Compliant明細');
+  assert(nc[0].join() === 'Event Date,DA名,Transporter ID,Scannable ID,Destination Address ID,Shipment Reason,配送理由（日本語）,Call Event,Text Event,判定', 'NC明細ヘッダー');
+  assert(nc.length === 123, 'NC明細122件');
+  assert(nc.slice(1).every(function (r) { return r[9] === 'Non-Compliant' && r[7] === '' && r[8] === ''; }), '判定=Non-Compliant、Call/Textなし');
+  assert(nc.slice(1).every(function (r) { return Cc.CC_ELIGIBLE_REASONS.indexOf(r[5]) >= 0 && r[6] === Cc.getCcReasonLabel(r[5]); }), '理由コードと日本語');
+}
+
+function testExcelExportZero() {
+  var result = Cc.analyzeCcRows([['Event Date', 'Scannable ID', 'Destination Address ID', 'Transporter ID', 'Shipment Reason', 'Call Event', 'Text Event'],
+    ['2026-09-27', 'S', 'D', 'T', 'DELIVERED_TO_FRONT_DOOR', CALL, '']]);
+  var sheets = Cc.buildCcExportSheets(result);
+  assert(sheets[0].rows[2][1] === '-', '0件のCC率は "-"');
+  var wb = Cc.buildCcExportWorkbook(XLSX, result);
+  assert(wb.SheetNames.length === 5, '0件でも5シート');
+}
+
+var tests = [testStatusJudgment, testZeroEligible, testUnknownDriver, testAggregations, testParseRows, testWk40Ofk3RealData,
+  testRateLevelDisabledByDefault, testExcelExportWk40, testExcelExportZero];
 for (var i = 0; i < tests.length; i++) {
   tests[i]();
   console.log('PASS ' + tests[i].name);

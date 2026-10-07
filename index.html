@@ -25,7 +25,7 @@
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script src="/billing-reconcile-core.js?v=20261007-1"></script>
-  <script src="/contact-compliance-core.js?v=20261007-1"></script>
+  <script src="/contact-compliance-core.js?v=20261007-2"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1566,6 +1566,7 @@
           <div class="flex items-baseline justify-between flex-wrap gap-2 mb-2">
             <h3 class="text-sm font-medium">📞 Contact Compliance</h3>
             <span class="text-xs text-ink-lighter" id="cc-v1-logic-note"></span>
+            <button type="button" class="btn-secondary text-xs px-3 py-1.5 rounded" id="cc-v1-export-btn" onclick="exportCcV1Result()">CC Ver.1 Excel出力</button>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
             <div class="card p-3 text-center">
@@ -18162,8 +18163,7 @@ var driverDB = {
           // Amazon Contact Compliance 生データのCSV（ヘッダーに Transporter ID を含む）
           var rawCsvRows = csvTextToRows(text);
           if (isCcAmazonRawRows(rawCsvRows)) {
-            processCcData(rawCsvRows);
-            showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
+            showCcRawImportResult(processCcData(rawCsvRows), fname);
             return;
           }
           alert('Contact Compliance CSV形式を認識できませんでした。\nContactCompliance分析_*.csv を確認してください');
@@ -18186,8 +18186,7 @@ var driverDB = {
           alert('Contact Compliance形式のシートが見つかりません。\n・Amazon生データ\n・ContactCompliance分析_*.csv\n・ContactCompliance_累計*.xlsx\nを確認してください');
           return;
         }
-        processCcData(sheetData);
-        showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
+        showCcRawImportResult(processCcData(sheetData), fname);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -18227,17 +18226,22 @@ var driverDB = {
       if (err) { err.innerHTML = html; err.classList.remove('hidden'); }
     }
 
+    // CC率の評価色。Amazon正式基準が未確認のため ContactComplianceCore.CC_RATE_LEVEL_THRESHOLDS は null で、
+    // getCcRateLevel は常に null（数値のみ表示・色分けなし）。正式基準の設定後にここの色が使われる。
+    var CC_V1_RATE_LEVEL_COLORS = { good: '#16a34a', warn: '#d97706', bad: '#dc2626' };
+
     function ccV1RateHtml(rate) {
-      var text = ContactComplianceCore.formatCcRate(rate);
-      var color = rate == null ? '#6b7280' : (rate >= 95 ? '#16a34a' : (rate >= 85 ? '#d97706' : '#dc2626'));
-      return '<span style="color:' + color + ';">' + text + '</span>';
+      var text = escapeHtml(ContactComplianceCore.formatCcRate(rate));
+      var color = CC_V1_RATE_LEVEL_COLORS[ContactComplianceCore.getCcRateLevel(rate)];
+      return color ? '<span style="color:' + color + ';">' + text + '</span>' : text;
     }
 
     // Amazon生データ（2次元配列）から CC Ver.1 を算出して描画する。DA名は既存マスタ照合（buildTidToNameLookup）を再利用。
+    // 戻り値: { ok: true } / { ok: false, missing: [不足列], reason }（通知は呼び出し側でまとめて出す）
     function renderCcV1FromRows(rows) {
       if (typeof ContactComplianceCore === 'undefined') {
         showCcV1Error('Contact Compliance 判定モジュール（contact-compliance-core.js）を読み込めませんでした。ページを再読み込みしてください。');
-        return;
+        return { ok: false, missing: [], reason: 'module' };
       }
       var tidToName = buildTidToNameLookup();
       var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; });
@@ -18254,14 +18258,35 @@ var driverDB = {
         }
         msg += '</span>';
         showCcV1Error(msg);
-        // Transporter ID 不足時は既存処理（processCcData）側でも警告が出るため二重alertにしない
-        if (missing.indexOf('Transporter ID') < 0) alert('Contact Compliance を算出できません。\n不足列: ' + missing.join(', '));
-        return;
+        return { ok: false, missing: missing, reason: 'missing_columns' };
       }
       ccV1Result = result;
       var err = document.getElementById('cc-v1-error');
       if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
       renderCcV1();
+      return { ok: true, missing: [] };
+    }
+
+    // Amazon生データ取込の結果通知。従来指標（べき架電／実架電）と CC Ver.1 の成否を分けて表示し、
+    // 失敗した処理を成功のように見せない。両方成功時は従来どおり showCcImportMessage を使う。
+    function showCcRawImportResult(status, fname) {
+      var period = extractReportPeriodLabel('', fname);
+      if (status.legacyOk && status.v1.ok) {
+        showCcImportMessage({ kind: 'normal', period: period, drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
+        return;
+      }
+      var v1Line = status.v1.ok
+        ? '\u30fbCC Logic Ver.1\uff1a\u7b97\u51fa\u5b8c\u4e86'
+        : ('\u30fbCC Logic Ver.1\uff1a\u5fc5\u9808\u5217\u4e0d\u8db3\u306e\u305f\u3081\u7b97\u51fa\u4e0d\u53ef'
+          + (status.v1.missing && status.v1.missing.length ? ('\n\u3000\u4e0d\u8db3\u5217: ' + status.v1.missing.join(', ')) : ''));
+      if (status.legacyOk) {
+        alert('\u26a0\ufe0f Contact Compliance \u4e00\u90e8\u306e\u307f\u8aad\u307f\u8fbc\u307f\uff1a' + period + '\n'
+          + '\u30fb\u5f93\u6765\u6307\u6a19\uff08\u3079\u304d\u67b6\u96fb\uff0f\u5b9f\u67b6\u96fb\uff09\uff1a\u8aad\u307f\u8fbc\u307f\u6210\u529f / '
+          + Object.keys(groupCcDriverStats(ccResultData)).length + '\u540d\n' + v1Line);
+      } else {
+        alert('\u274c Contact Compliance \u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\uff1a' + period + '\n'
+          + '\u30fb\u5f93\u6765\u6307\u6a19\uff08\u3079\u304d\u67b6\u96fb\uff0f\u5b9f\u67b6\u96fb\uff09\uff1aTransportID\u5217\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\n' + v1Line);
+      }
     }
 
     function renderCcV1() {
@@ -18328,6 +18353,15 @@ var driverDB = {
       document.getElementById('cc-v1').classList.remove('hidden');
     }
 
+    // CC Ver.1 Excel出力（5シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
+    // 画面と同じ ccV1Result から作る（Excel側で判定・集計をやり直さない）。DA別は画面の並び順に合わせる。
+    function exportCcV1Result() {
+      if (!ccV1Result) return;
+      var sel = document.getElementById('cc-v1-driver-sort');
+      var wb = ContactComplianceCore.buildCcExportWorkbook(XLSX, ccV1Result, sel ? sel.value : 'nonCompliantDesc');
+      XLSX.writeFile(wb, 'ContactCompliance_Ver1_' + getTodayJst() + '.xlsx');
+    }
+
     function renderCcV1DriverTable() {
       if (!ccV1Result) return;
       var sel = document.getElementById('cc-v1-driver-sort');
@@ -18347,16 +18381,16 @@ var driverDB = {
       document.getElementById('cc-v1-driver-tbody').innerHTML = html;
     }
 
+    // 戻り値: { legacyOk: 従来指標の取込成否, v1: renderCcV1FromRows の結果 }。通知は showCcRawImportResult。
     function processCcData(rows) {
-      renderCcV1FromRows(rows);
+      var v1Status = renderCcV1FromRows(rows);
       var headerIdx = findAnalysisHeaderRow(rows, 'cc');
       if (headerIdx < 0) headerIdx = 0;
       var header = rows[headerIdx];
       var colMap = mapAnalysisHeaderColumns(header);
       if (colMap.tid === undefined) {
         console.error('[CC] TransportID column not found. Detected headers:', header);
-        alert('TransportID列が見つかりません');
-        return;
+        return { legacyOk: false, v1: v1Status };
       }
       var tidToName = buildTidToNameLookup();
       var results = [];
@@ -18418,6 +18452,7 @@ var driverDB = {
 
       ccResultData = results;
       renderCcResultsUI();
+      return { legacyOk: true, v1: v1Status };
     }
 
     function renderCcResultsUI() {
