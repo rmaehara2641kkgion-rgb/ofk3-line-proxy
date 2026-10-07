@@ -497,6 +497,17 @@
     return { mark: '×', sendable: false, decision: 'LINE送信禁止' };
   }
 
+  // 管理者宛て確認用。本送信の ○/× は変えない。
+  // 請求内容が一致しているときは、ドライバー本人のLINE未解決だけでは止めない。
+  function testSendAllowed(row) {
+    row = row || {};
+    if (row.duplicateTarget || row.code === 'ambiguous' || row.code === 'unmatched' || row.code === 'extract_failed' || row.code === 'read_error' || row.code === 'not_pdf') {
+      return { ok: false, reason: listSendState(row).decision };
+    }
+    if (row.code === 'matched' && row.sendable) return { ok: true, reason: '' };
+    return { ok: false, reason: listSendState(row).decision };
+  }
+
   var api = {
     parseBillingRows: parseBillingRows,
     normalizePersonName: normalizePersonName,
@@ -515,7 +526,8 @@
     matchUniqueTarget: matchUniqueTarget,
     tidNameMismatch: tidNameMismatch,
     hasPdfMagic: hasPdfMagic,
-    listSendState: listSendState
+    listSendState: listSendState,
+    testSendAllowed: testSendAllowed
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

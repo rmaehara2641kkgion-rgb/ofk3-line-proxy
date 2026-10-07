@@ -24,7 +24,7 @@
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
-  <script src="/billing-reconcile-core.js?v=20261007-2"></script>
+  <script src="/billing-reconcile-core.js?v=20261007-3"></script>
   <script src="/contact-compliance-core.js?v=20261007-2"></script>
   <script>
     tailwind.config = {
@@ -1390,8 +1390,10 @@
 
         <div id="billing-actions" class="hidden mb-4 space-y-3">
           <div class="flex gap-2 flex-wrap">
-            <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
+            <button onclick="sendBillingLineTest()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-bold hover:bg-blue-700 cursor-pointer">🧪 自分にテスト送信</button>
+            <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE本送信</button>
             <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
+            <p class="w-full text-xs text-ink-lighter">テスト送信は管理者のLINEだけに届きます。ドライバー本人には送信されません。</p>
           </div>
 
           <!-- PDF一括アップロード -->
@@ -11772,20 +11774,25 @@ var driverDB = {
       if (!window.BillingReconcile || !BillingReconcile.listSendState) {
         return { mark: lineLinked ? '○' : '×', sendable: lineLinked, decision: lineLinked ? '送信可能' : 'LINE送信先未解決' };
       }
+      return BillingReconcile.listSendState(billingPersonPreviewInput(row, lineLinked, related));
+    }
+
+    function billingPersonPreviewInput(row, lineLinked, related) {
       if (!related) {
-        return BillingReconcile.listSendState({
-          code: 'matched',
-          lineLinked: lineLinked,
-          sendable: true,
-          duplicateTarget: false
-        });
+        return { code: 'matched', lineLinked: lineLinked, sendable: true, duplicateTarget: false };
       }
-      return BillingReconcile.listSendState({
+      return {
         code: related.code,
         lineLinked: lineLinked,
         sendable: related.sendable,
         duplicateTarget: !!related.duplicateTarget
-      });
+      };
+    }
+
+    function billingAdminLineUserId() {
+      var raw = (lineSettings && lineSettings.adminLineId) ? String(lineSettings.adminLineId).split(',')[0].trim() : '';
+      if (raw.indexOf('U') === 0 && raw.length > 20) return raw;
+      return '';
     }
 
     function billingTidMismatchWarning(row) {
@@ -12249,6 +12256,109 @@ var driverDB = {
       var blob = new Blob([Uint8Array.from(atob(pdf.base64), function(c) { return c.charCodeAt(0); })], { type: 'application/pdf' });
       var url = URL.createObjectURL(blob);
       window.open(url, '_blank');
+    }
+
+    async function billingUploadPdfForTest(pdf) {
+      if (!pdf || !pdf.base64) return '';
+      if (pdf.uploadedUrl) return pdf.uploadedUrl;
+      try {
+        var resp = await fetch('/pdf-upload', {
+          method: 'POST',
+          headers: getProxyHeaders(),
+          body: JSON.stringify({ filename: pdf.filename, data: pdf.base64 })
+        });
+        var result = await resp.json();
+        if (result && result.status === 'ok' && result.url) return result.url;
+      } catch (e) {}
+      return '';
+    }
+
+    async function sendBillingLineTest() {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) { alert('LINE設定でProxy URLを設定してください'); return; }
+      var adminId = billingAdminLineUserId();
+      if (!adminId) {
+        alert('管理者LINE IDが設定されていません。\n設定画面で管理者LINE IDを入力してください。\n\nテスト送信です。ドライバー本人には送信されません。');
+        return;
+      }
+      if (!window.BillingReconcile || !BillingReconcile.testSendAllowed) {
+        alert('テスト送信の判定を読み込めませんでした。');
+        return;
+      }
+
+      var targets = [];
+      var blocked = [];
+      (billingData || []).forEach(function(d) {
+        if (!d.selected) return;
+        var related = null;
+        var results = billingPdfResults || [];
+        for (var i = 0; i < results.length; i++) {
+          var item = results[i];
+          if (!item || !item.targetName) continue;
+          var same = item.targetName === d.name || (BillingReconcile.samePersonName && BillingReconcile.samePersonName(item.targetName, d.name));
+          if (!same) continue;
+          if (!related || item.duplicateTarget || item.sendable === false) related = item;
+        }
+        var gate = BillingReconcile.testSendAllowed(billingPersonPreviewInput(d, !!billingLineUserId(d), related));
+        if (gate.ok) targets.push(d);
+        else blocked.push((d.name || '') + '（' + (gate.reason || '送信不可') + '）');
+      });
+
+      if (!targets.length) {
+        alert('テスト送信できる請求がありません。\nテスト送信です。ドライバー本人には送信されません。' + (blocked.length ? '\n\n不可:\n' + blocked.join('\n') : ''));
+        return;
+      }
+      if (!confirm('テスト送信です。ドライバー本人には送信されません。\n\n管理者のLINEへ ' + targets.length + '件送ります。\n\n' + targets.map(function(d) { return '・' + d.name + '（' + formatYen(d.total) + '）'; }).join('\n') + (blocked.length ? '\n\n送らない:\n' + blocked.join('\n') : ''))) return;
+
+      document.getElementById('billing-send-log').classList.remove('hidden');
+      var logEl = document.getElementById('billing-log-entries');
+      var successCount = 0;
+      for (var t = 0; t < targets.length; t++) {
+        var d = targets[t];
+        var msg = '【テスト送信】\n' + buildBillingMessage(d);
+        var pdf = billingPdfMap[d.name];
+        if (pdf && pdf.base64) {
+          var pdfUrl = await billingUploadPdfForTest(pdf);
+          if (!pdfUrl) {
+            var pdfFail = document.createElement('div');
+            pdfFail.className = 'text-xs py-1 text-red-600';
+            pdfFail.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' PDF取得失敗';
+            logEl.insertBefore(pdfFail, logEl.firstChild);
+            continue;
+          }
+          msg += '\n\n📎 請求書PDF:\n' + pdfUrl;
+        }
+        try {
+          var res = await fetch(proxyUrl, {
+            method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
+            headers: getProxyHeaders(),
+            body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: msg }] })
+          });
+          var raw = '';
+          try { raw = await res.text(); } catch (readErr) { raw = ''; }
+          if (!res.ok || BillingReconcile.interpretLineHttpStatus(res.status) !== 'ok') {
+            var failEntry = document.createElement('div');
+            failEntry.className = 'text-xs py-1 text-red-600';
+            failEntry.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' ' + BillingReconcile.publicLineError(res.status, raw);
+            logEl.insertBefore(failEntry, logEl.firstChild);
+            continue;
+          }
+          successCount++;
+          var entry = document.createElement('div');
+          entry.className = 'text-xs py-1 text-blue-700';
+          entry.textContent = new Date().toLocaleTimeString() + ' 🧪 テスト送信成功 ' + d.name + ' → 管理者LINE（本人には未送信）';
+          logEl.insertBefore(entry, logEl.firstChild);
+        } catch (e) {
+          var entry2 = document.createElement('div');
+          entry2.className = 'text-xs py-1 text-red-600';
+          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' LINE API送信失敗';
+          logEl.insertBefore(entry2, logEl.firstChild);
+        }
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+      alert('テスト送信完了: ' + successCount + '/' + targets.length + '件\nドライバー本人には送信していません。');
     }
 
     async function sendAllBillingLine() {
