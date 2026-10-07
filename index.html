@@ -25,6 +25,7 @@
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script src="/billing-reconcile-core.js?v=20261007-1"></script>
+  <script src="/contact-compliance-core.js?v=20261007-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1557,9 +1558,125 @@
         <!-- ===== Contact Compliance Section ===== -->
         <hr class="my-6 border-border">
 
-        <!-- CC Summary -->
+        <!-- CC Logic Ver.1 取込エラー（必須列不足など） -->
+        <div id="cc-v1-error" class="hidden mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700"></div>
+
+        <!-- CC Logic Ver.1（Amazon生データから算出: 4理由 × Call or Text） -->
+        <div id="cc-v1" class="hidden mb-6">
+          <div class="flex items-baseline justify-between flex-wrap gap-2 mb-2">
+            <h3 class="text-sm font-medium">📞 Contact Compliance</h3>
+            <span class="text-xs text-ink-lighter" id="cc-v1-logic-note"></span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">CC率</div>
+              <div class="text-2xl font-bold" id="cc-v1-rate">-</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">対象</div>
+              <div class="text-lg font-bold" id="cc-v1-total">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">適合</div>
+              <div class="text-lg font-bold text-emerald-600" id="cc-v1-compliant">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">非適合</div>
+              <div class="text-lg font-bold text-red-600" id="cc-v1-noncompliant">0</div>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">持ち戻り理由別</h4>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">理由</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-reason-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+            <h4 class="text-xs font-medium text-ink-lighter">DA別</h4>
+            <label class="text-xs text-ink-lighter">並び順
+              <select id="cc-v1-driver-sort" class="ml-1 text-xs border border-border rounded px-1 py-0.5" onchange="renderCcV1DriverTable()">
+                <option value="nonCompliantDesc">非適合件数が多い順</option>
+                <option value="rateAsc">CC率が低い順</option>
+                <option value="totalDesc">対象件数が多い順</option>
+              </select>
+            </label>
+          </div>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">DA名</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Transporter ID</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-driver-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">日別</h4>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Event Date</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-date-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">非適合明細（Contactなしで持ち戻り）<span id="cc-v1-nc-count"></span></h4>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto" style="max-height:480px; overflow-y:auto;">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Event Date</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DA名</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Transporter ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Scannable ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Destination Address ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Shipment Reason</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">理由</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Call Event</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Text Event</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">判定</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-nc-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- CC Summary（従来の架電実績指標: べき架電/実架電。協力会社ダッシュボード・累計取込と共通） -->
         <div id="cc-summary" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">📞 Contact Compliance サマリー</h3>
+          <h3 class="text-sm font-medium mb-2">📞 架電実績サマリー（従来指標：べき架電／実架電）</h3>
           <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div class="card p-3 text-center">
               <div class="text-xs text-ink-lighter">総レコード</div>
@@ -17579,6 +17696,9 @@ var driverDB = {
         el = document.getElementById(ccIds[fi]);
         if (el) el.classList.toggle('hidden', view !== 'cc');
       }
+      // CC Ver.1 はAmazon生データ取込時のみ結果がある（累計・分析CSV取込時は非表示のまま）
+      el = document.getElementById('cc-v1');
+      if (el) el.classList.toggle('hidden', view !== 'cc' || !ccV1Result);
       var btnF = document.getElementById('btn-view-ftds');
       var btnC = document.getElementById('btn-view-cc');
       if (btnF) {
@@ -18032,10 +18152,18 @@ var driverDB = {
         if (fnameLower.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importCcExportCsv(text)) {
+            clearCcV1();
             var ccDrivers = ccResultData.length > 0
               ? Object.keys(groupCcDriverStats(ccResultData)).length
               : Object.keys(exportedQualityCounts || {}).length;
             showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: ccDrivers });
+            return;
+          }
+          // Amazon Contact Compliance 生データのCSV（ヘッダーに Transporter ID を含む）
+          var rawCsvRows = csvTextToRows(text);
+          if (isCcAmazonRawRows(rawCsvRows)) {
+            processCcData(rawCsvRows);
+            showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
             return;
           }
           alert('Contact Compliance CSV形式を認識できませんでした。\nContactCompliance分析_*.csv を確認してください');
@@ -18048,6 +18176,7 @@ var driverDB = {
           var cumRows = getSheetRows(wb, cumSheet);
           var cumInfo = importCcCumulativeRows(cumRows, { sheetName: cumSheet, fileName: fname });
           if (cumInfo) {
+            clearCcV1();
             showCcImportMessage(cumInfo);
             return;
           }
@@ -18073,7 +18202,153 @@ var driverDB = {
       return stats;
     }
 
+    // ===== CC Logic Ver.1（判定・集計は contact-compliance-core.js。ここは取込とDOM描画のみ） =====
+    var ccV1Result = null;
+
+    function isCcAmazonRawRows(rows) {
+      if (!rows || rows.length < 2 || typeof ContactComplianceCore === 'undefined') return false;
+      var hdr = ContactComplianceCore.ccFindHeaderRow(rows);
+      return hdr >= 0 && mapAnalysisHeaderColumns(rows[hdr]).tid !== undefined;
+    }
+
+    function clearCcV1() {
+      ccV1Result = null;
+      var box = document.getElementById('cc-v1');
+      if (box) box.classList.add('hidden');
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
+    }
+
+    function showCcV1Error(html) {
+      ccV1Result = null;
+      var box = document.getElementById('cc-v1');
+      if (box) box.classList.add('hidden');
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.innerHTML = html; err.classList.remove('hidden'); }
+    }
+
+    function ccV1RateHtml(rate) {
+      var text = ContactComplianceCore.formatCcRate(rate);
+      var color = rate == null ? '#6b7280' : (rate >= 95 ? '#16a34a' : (rate >= 85 ? '#d97706' : '#dc2626'));
+      return '<span style="color:' + color + ';">' + text + '</span>';
+    }
+
+    // Amazon生データ（2次元配列）から CC Ver.1 を算出して描画する。DA名は既存マスタ照合（buildTidToNameLookup）を再利用。
+    function renderCcV1FromRows(rows) {
+      if (typeof ContactComplianceCore === 'undefined') {
+        showCcV1Error('Contact Compliance 判定モジュール（contact-compliance-core.js）を読み込めませんでした。ページを再読み込みしてください。');
+        return;
+      }
+      var tidToName = buildTidToNameLookup();
+      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; });
+      if (result.error) {
+        var missing = result.missing || [];
+        var msg = '<b>Contact Compliance を算出できません：必須列が不足しています。</b>';
+        if (missing.length) {
+          msg += '<br>不足列：';
+          for (var mi = 0; mi < missing.length; mi++) msg += (mi ? '、' : '') + '<code>' + escapeHtml(missing[mi]) + '</code>';
+        }
+        msg += '<br><span class="text-xs">必須列：';
+        for (var ci = 0; ci < ContactComplianceCore.CC_REQUIRED_COLUMNS.length; ci++) {
+          msg += (ci ? ' / ' : '') + escapeHtml(ContactComplianceCore.CC_REQUIRED_COLUMNS[ci].header);
+        }
+        msg += '</span>';
+        showCcV1Error(msg);
+        // Transporter ID 不足時は既存処理（processCcData）側でも警告が出るため二重alertにしない
+        if (missing.indexOf('Transporter ID') < 0) alert('Contact Compliance を算出できません。\n不足列: ' + missing.join(', '));
+        return;
+      }
+      ccV1Result = result;
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
+      renderCcV1();
+    }
+
+    function renderCcV1() {
+      var res = ccV1Result;
+      if (!res) return;
+      var s = res.summary;
+      document.getElementById('cc-v1-rate').innerHTML = ccV1RateHtml(s.rate);
+      document.getElementById('cc-v1-total').textContent = s.total;
+      document.getElementById('cc-v1-compliant').textContent = s.compliant;
+      document.getElementById('cc-v1-noncompliant').textContent = s.nonCompliant;
+      document.getElementById('cc-v1-logic-note').textContent =
+        'CC Logic Ver.' + res.logicVersion + '（対象: 不在・配達先アクセス不可・住所不明・安全な置き場所なし ／ Call または Text あり＝適合）'
+        + ' 取込 ' + res.records.length + '行・対象外 ' + s.notEligible + '行';
+
+      var reasonHtml = '';
+      for (var i = 0; i < res.byReason.length; i++) {
+        var r = res.byReason[i];
+        reasonHtml += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2">' + escapeHtml(r.reasonLabel) + ' <span class="text-xs text-ink-lighter font-mono">' + escapeHtml(r.reason) + '</span></td>' +
+          '<td class="px-3 py-2 text-center">' + r.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + r.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (r.nonCompliant ? ' text-red-600' : '') + '">' + r.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(r.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-reason-tbody').innerHTML = reasonHtml;
+
+      renderCcV1DriverTable();
+
+      var dateHtml = '';
+      for (var d = 0; d < res.byDate.length; d++) {
+        var dr = res.byDate[d];
+        dateHtml += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2">' + escapeHtml(latFormatDate(dr.eventDate) || dr.eventDate) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + dr.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + dr.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (dr.nonCompliant ? ' text-red-600' : '') + '">' + dr.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(dr.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-date-tbody').innerHTML = dateHtml;
+
+      var ncHtml = '';
+      for (var n = 0; n < res.nonCompliant.length; n++) {
+        var nc = res.nonCompliant[n];
+        var unk = nc.driverName === ContactComplianceCore.CC_UNKNOWN_DA_LABEL;
+        ncHtml += '<tr class="border-b border-border">' +
+          '<td class="px-2 py-1.5 text-xs whitespace-nowrap">' + escapeHtml(latFormatDate(nc.eventDate) || nc.eventDate) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs' + (unk ? ' text-red-600' : '') + '">' + escapeHtml(nc.driverName) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.transporterId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.scannableId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.destinationAddressId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.shipmentReason) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + escapeHtml(nc.shipmentReasonLabel) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + (escapeHtml(nc.callEvent) || '-') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + (escapeHtml(nc.textEvent) || '-') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-bold text-red-600">' + escapeHtml(nc.statusLabel) + '</td>' +
+          '</tr>';
+      }
+      if (!ncHtml) ncHtml = '<tr><td colspan="10" class="text-center py-4 text-ink-lighter text-xs">非適合はありません</td></tr>';
+      document.getElementById('cc-v1-nc-tbody').innerHTML = ncHtml;
+      document.getElementById('cc-v1-nc-count').textContent = '：' + res.nonCompliant.length + '件';
+
+      document.getElementById('cc-v1').classList.remove('hidden');
+    }
+
+    function renderCcV1DriverTable() {
+      if (!ccV1Result) return;
+      var sel = document.getElementById('cc-v1-driver-sort');
+      var list = ContactComplianceCore.sortCcDriverStats(ccV1Result.byDriver, sel ? sel.value : 'nonCompliantDesc');
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var ds = list[i];
+        html += '<tr class="border-b border-border' + (ds.identified ? '' : ' bg-red-50') + '">' +
+          '<td class="px-3 py-2' + (ds.identified ? '' : ' text-red-600 font-medium') + '">' + escapeHtml(ds.driverName) + '</td>' +
+          '<td class="px-3 py-2 text-xs font-mono">' + escapeHtml(ds.transporterId || '-') + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ds.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ds.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (ds.nonCompliant ? ' text-red-600' : '') + '">' + ds.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(ds.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-driver-tbody').innerHTML = html;
+    }
+
     function processCcData(rows) {
+      renderCcV1FromRows(rows);
       var headerIdx = findAnalysisHeaderRow(rows, 'cc');
       if (headerIdx < 0) headerIdx = 0;
       var header = rows[headerIdx];
