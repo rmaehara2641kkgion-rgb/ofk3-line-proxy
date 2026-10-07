@@ -112,9 +112,15 @@
       '<div id="rolling-undefined-detail" class="text-xs text-ink-lighter mb-3"></div>' +
       '<div id="rolling-duplicate-detail" class="text-xs text-orange-500 mb-3"></div>' +
       '<div id="rolling-period-detail" class="text-xs text-ink-lighter mb-3"></div>' +
+      '<style id="rolling-name-sticky-style">' +
+      '#wh60-rolling-subpanel .rolling-grid-scroll{overflow-x:auto;max-width:100%;min-width:0;}' +
+      '#wh60-rolling-subpanel .rolling-grid-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;}' +
+      '#wh60-rolling-subpanel .rolling-name-col{position:sticky;left:0;z-index:2;background-color:#fff!important;background-image:none!important;border-right:1px solid #cbd5e1;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;}' +
+      '#wh60-rolling-subpanel thead .rolling-name-col{z-index:4;}' +
+      '</style>' +
       '<div class="card p-4">' +
       '  <h3 class="text-sm font-bold mb-3">ドライバー×日付 シフト表（Rolling超過期間ハイライト）</h3>' +
-      '  <div class="overflow-x-auto" id="rolling-grid-wrap">' +
+      '  <div class="rolling-grid-scroll" id="rolling-grid-wrap">' +
       '    <div id="rolling-grid-empty" class="text-center text-ink-lighter py-8">月間シフト表とAmazon実績を読み込んでください</div>' +
       '  </div>' +
       '</div>' +
@@ -480,9 +486,9 @@
       cursor = RollingCore.addDays(cursor, 1);
     }
 
-    var html = '<table class="w-full text-xs" style="border-collapse:separate;border-spacing:0;">';
+    var html = '<table class="rolling-grid-table text-xs">';
     html += '<thead><tr class="text-left text-ink-lighter border-b border-gray-700">';
-    html += '<th class="p-2 sticky left-0 bg-inherit" style="min-width:140px;">ドライバー</th>';
+    html += '<th class="p-2 rolling-name-col" style="min-width:140px;">ドライバー</th>';
     dateList.forEach(function (d) {
       html += '<th class="p-1 text-center" style="min-width:34px;">' + d.slice(5).replace('-', '/') + '</th>';
     });
@@ -511,8 +517,11 @@
         return !w.complete;
       }).length;
 
+      var nameTitle = driver.meta.name;
+      if (overWindowCount > 0) nameTitle += ' (超過期間' + overWindowCount + '件)';
+      if (incompleteWindowCount > 0) nameTitle += ' (判定対象外' + incompleteWindowCount + '件)';
       html += '<tr class="border-b border-gray-800">';
-      html += '<td class="p-2 sticky left-0 bg-inherit font-medium">' + driver.meta.name +
+      html += '<td class="p-2 rolling-name-col font-medium" title="' + escapeAttr(nameTitle) + '">' + driver.meta.name +
         (overWindowCount > 0 ? ' <span class="text-red-400 text-[10px]">(超過期間' + overWindowCount + '件)</span>' : '') +
         (incompleteWindowCount > 0 ? ' <span class="text-gray-400 text-[10px]" title="隣接月データ不足のため判定対象外">(判定対象外' + incompleteWindowCount + '件)</span>' : '') +
         '</td>';
