@@ -13,7 +13,9 @@ const tags = [
   '<script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>',
   '<script src="/harvest-core.js?v=20261002-1"></script>',
   '<script src="/harvest-collectors-cortex.js?v=20261002-1"></script>',
-  '<script src="/ofk3-harvest-ui.js?v=20261002-1"></script>'
+  '<script src="/ofk3-harvest-ui.js?v=20261002-1"></script>',
+  '<script src="/inoichi-core.js?v=20261003-1"></script>',
+  '<script src="/ofk3-inoichi-ui.js?v=20261003-1"></script>'
 ];
 
 try {
@@ -48,6 +50,12 @@ try {
   }
   if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
     insert += '  ' + tags[8] + '\n';
+  }
+  if (html.indexOf('/inoichi-core.js') < 0) {
+    insert += '  ' + tags[9] + '\n';
+  }
+  if (html.indexOf('/ofk3-inoichi-ui.js') < 0) {
+    insert += '  ' + tags[10] + '\n';
   }
 
   if (insert) {

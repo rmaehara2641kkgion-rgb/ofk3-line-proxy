@@ -249,6 +249,16 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvUiBodyPos) + '  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>\n' + html.slice(hvUiBodyPos);
     }
+    if (html.indexOf('/inoichi-core.js') < 0) {
+      var inoCoreBodyPos = html.lastIndexOf('</body>');
+      if (inoCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoCoreBodyPos) + '  <script src="/inoichi-core.js?v=20261003-1"></script>\n' + html.slice(inoCoreBodyPos);
+    }
+    if (html.indexOf('/ofk3-inoichi-ui.js') < 0) {
+      var inoUiBodyPos = html.lastIndexOf('</body>');
+      if (inoUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoUiBodyPos) + '  <script src="/ofk3-inoichi-ui.js?v=20261003-1"></script>\n' + html.slice(inoUiBodyPos);
+    }
     res.type('html').send(html);
   } catch (e) {
     next(e);
