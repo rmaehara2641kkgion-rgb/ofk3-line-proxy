@@ -528,14 +528,60 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   assert.ok(fetchAt > 0 && okAt > fetchAt && sentAt > okAt);
   assert.match(sendFn2, /billingLineUserId\(d\)/);
   assert.match(sendFn2, /LINE API送信失敗/);
-  assert.match(indexSrc, /PDF対象者特定失敗/);
-  assert.match(indexSrc, /候補者複数/);
+  const coreSrc = readFileSync(join(root, 'billing-reconcile-core.js'), 'utf8');
+  assert.match(coreSrc, /PDF対象者特定失敗/);
+  assert.match(coreSrc, /候補者複数/);
   assert.match(indexSrc, /LINE送信先未解決/);
   assert.match(indexSrc, /LINE送信成功/);
   const lineFnStart = indexSrc.indexOf('function findLineUserId');
   const lineFn = indexSrc.slice(lineFnStart, indexSrc.indexOf('function ', lineFnStart + 10));
   assert.match(lineFn, /cleanKey\.indexOf\(cleanName\)/);
   console.log('  ok - http status decides billing send success');
+}
+
+{
+  const mochida = Core.listSendState({ code: 'matched', lineLinked: true, sendable: true, duplicateTarget: false });
+  assert.equal(mochida.mark, '○');
+  assert.equal(mochida.sendable, true);
+  assert.equal(mochida.decision, '送信可能');
+  const oshiumi = Core.listSendState({ code: 'matched', lineLinked: true, sendable: true, duplicateTarget: false });
+  assert.equal(oshiumi.mark, '○');
+  assert.equal(oshiumi.sendable, true);
+  const unlinked = Core.listSendState({ code: 'matched', lineLinked: false, sendable: true, duplicateTarget: false });
+  assert.equal(unlinked.mark, '×');
+  assert.equal(unlinked.sendable, false);
+  assert.equal(unlinked.decision, 'LINE送信先未解決');
+  const multi = Core.listSendState({ code: 'ambiguous', lineLinked: true, sendable: false });
+  assert.equal(multi.mark, '×');
+  assert.equal(multi.sendable, false);
+  assert.equal(multi.decision, '候補者複数');
+  const dup = Core.listSendState({ code: 'matched', lineLinked: true, sendable: false, duplicateTarget: true });
+  assert.equal(dup.mark, '×');
+  assert.equal(dup.sendable, false);
+  const missed = Core.listSendState({ code: 'unmatched', lineLinked: false, sendable: false });
+  assert.equal(missed.mark, '×');
+  assert.equal(missed.sendable, false);
+  assert.equal(missed.decision, 'PDF対象者特定失敗');
+
+  const tableStart = indexSrc.indexOf('function renderBillingTable');
+  const tableFn = indexSrc.slice(tableStart, indexSrc.indexOf('function toggleBillingSelect', tableStart));
+  assert.match(tableFn, /billingPersonListState\(d\)/);
+  assert.match(tableFn, /preview\.mark/);
+  const personStart = indexSrc.indexOf('function billingPersonListState');
+  const personFn = indexSrc.slice(personStart, indexSrc.indexOf('function billingTidMismatchWarning', personStart));
+  assert.match(personFn, /BillingReconcile\.listSendState/);
+  assert.match(personFn, /billingLineUserId\(row\)/);
+  const pdfStart = indexSrc.indexOf('function renderPdfMatchList');
+  const pdfFn = indexSrc.slice(pdfStart, indexSrc.indexOf('async function uploadPdfToServer', pdfStart));
+  assert.match(pdfFn, /listSendState\(r\)/);
+  assert.match(pdfFn, /state\.mark/);
+  assert.match(pdfFn, />削除</);
+  assert.doesNotMatch(pdfFn, />✕</);
+  const sendStart = indexSrc.indexOf('async function sendAllBillingLine');
+  const sendFn = indexSrc.slice(sendStart, indexSrc.indexOf('// ===== 配送MAP機能 =====', sendStart));
+  assert.match(sendFn, /billingLineUserId\(d\)/);
+  assert.doesNotMatch(sendFn, /listSendState/);
+  console.log('  ok - preview mark matches sendability');
 }
 
 console.log('billing-reconcile tests passed');
