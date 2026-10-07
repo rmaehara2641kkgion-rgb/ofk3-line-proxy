@@ -24,7 +24,7 @@
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
-  <script src="/billing-reconcile-core.js?v=20261007-1"></script>
+  <script src="/billing-reconcile-core.js?v=20261007-2"></script>
   <script src="/contact-compliance-core.js?v=20261007-2"></script>
   <script>
     tailwind.config = {
@@ -11678,9 +11678,6 @@ var driverDB = {
 
       tbody.innerHTML = billingData.map(function(d, i) {
         totalAmount += d.total;
-        var userId = billingLineUserId(d);
-        var hasLine = userId && userId.indexOf('U') === 0;
-        if (hasLine) lineCount++;
         if (d.selected) selectedCount++;
 
         var sent = billingSent[d.name];
@@ -11691,9 +11688,9 @@ var driverDB = {
             ? '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">LINE API送信失敗</span><div class="text-xs text-red-700">' + escapeHtmlBilling(sendFail) + '</div>'
             : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
 
-        var lineHtml = hasLine
-          ? '<span class="text-xs text-green-600">✅ 登録済</span>'
-          : '<span class="text-xs text-gray-400">LINE送信先未解決</span>';
+        var preview = billingPersonListState(d);
+        if (preview.sendable) lineCount++;
+        var lineHtml = '<span class="billing-send-mark ' + (preview.sendable ? 'text-green-600' : 'text-red-600') + ' font-bold">' + preview.mark + '</span>';
 
         var tidWarn = billingTidMismatchWarning(d);
         return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
@@ -11756,6 +11753,39 @@ var driverDB = {
       var id = lineMapping[key];
       if (!id || String(id).indexOf('U') !== 0) return '';
       return id;
+    }
+
+    function billingPersonListState(row) {
+      var lineLinked = !!billingLineUserId(row);
+      var related = null;
+      var results = billingPdfResults || [];
+      for (var i = 0; i < results.length; i++) {
+        var item = results[i];
+        if (!item || !item.targetName || !row || !row.name) continue;
+        var same = item.targetName === row.name;
+        if (!same && window.BillingReconcile && BillingReconcile.samePersonName) {
+          same = BillingReconcile.samePersonName(item.targetName, row.name);
+        }
+        if (!same) continue;
+        if (!related || item.duplicateTarget || item.sendable === false) related = item;
+      }
+      if (!window.BillingReconcile || !BillingReconcile.listSendState) {
+        return { mark: lineLinked ? '○' : '×', sendable: lineLinked, decision: lineLinked ? '送信可能' : 'LINE送信先未解決' };
+      }
+      if (!related) {
+        return BillingReconcile.listSendState({
+          code: 'matched',
+          lineLinked: lineLinked,
+          sendable: true,
+          duplicateTarget: false
+        });
+      }
+      return BillingReconcile.listSendState({
+        code: related.code,
+        lineLinked: lineLinked,
+        sendable: related.sendable,
+        duplicateTarget: !!related.duplicateTarget
+      });
     }
 
     function billingTidMismatchWarning(row) {
@@ -12012,12 +12042,8 @@ var driverDB = {
     }
 
     function billingPdfDecision(r) {
-      if (r.duplicateTarget) return 'LINE送信禁止';
-      if (r.code === 'ambiguous') return '候補者複数';
-      if (r.code === 'unmatched' || r.code === 'extract_failed') return 'PDF対象者特定失敗';
-      if (r.code === 'matched' && r.lineLinked && r.sendable) return '送信可能';
-      if (r.code === 'matched' && !r.lineLinked) return 'LINE送信先未解決';
-      return 'LINE送信禁止';
+      if (!window.BillingReconcile || !BillingReconcile.listSendState) return 'LINE送信禁止';
+      return BillingReconcile.listSendState(r).decision;
     }
 
     function removeBillingPdfResult(index) {
@@ -12054,9 +12080,13 @@ var driverDB = {
       var html = '';
       for (var i = 0; i < billingPdfResults.length; i++) {
         var r = billingPdfResults[i];
-        var decision = billingPdfDecision(r);
-        if (r.code === 'matched' && r.lineLinked && r.sendable) ready++;
-        html += '<div class="text-xs py-2 border-b border-border">';
+        var state = (window.BillingReconcile && BillingReconcile.listSendState)
+          ? BillingReconcile.listSendState(r)
+          : { mark: '×', sendable: false, decision: billingPdfDecision(r) };
+        var decision = state.decision;
+        if (state.sendable) ready++;
+        html += '<div class="text-xs py-2 border-b border-border flex items-start justify-between gap-3">';
+        html += '<div class="min-w-0">';
         html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
         html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
         if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE送信先未解決') + '</div>';
@@ -12071,7 +12101,9 @@ var driverDB = {
           }
         }
         html += '<div>→ ' + decision + '</div>';
-        html += '<button type="button" onclick="removeBillingPdfResult(' + i + ')" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>';
+        html += '<button type="button" onclick="removeBillingPdfResult(' + i + ')" class="text-ink-lighter hover:text-red-600 cursor-pointer">削除</button>';
+        html += '</div>';
+        html += '<div class="billing-send-mark shrink-0 text-base font-bold ' + (state.sendable ? 'text-green-600' : 'text-red-600') + '">' + state.mark + '</div>';
         html += '</div>';
       }
       listEl.innerHTML = html;
@@ -22383,7 +22415,7 @@ var driverDB = {
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
-  <script src="/rolling60h-ui.js?v=20260904-1"></script>
+  <script src="/rolling60h-ui.js?v=20261007-1"></script>
   <script src="/cortex-13-priority-core.js?v=20260921-3"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
   <script src="/ofk3-cortex-priority-ui.js?v=20260927-1"></script>

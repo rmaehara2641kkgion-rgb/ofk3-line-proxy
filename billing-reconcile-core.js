@@ -486,6 +486,17 @@
     return true;
   }
 
+  // 送信前一覧の文言と ○/× は同じ結果を返す。送信処理自体は変えない。
+  function listSendState(row) {
+    row = row || {};
+    if (row.duplicateTarget) return { mark: '×', sendable: false, decision: 'LINE送信禁止' };
+    if (row.code === 'ambiguous') return { mark: '×', sendable: false, decision: '候補者複数' };
+    if (row.code === 'unmatched' || row.code === 'extract_failed') return { mark: '×', sendable: false, decision: 'PDF対象者特定失敗' };
+    if (row.code === 'matched' && row.lineLinked && row.sendable) return { mark: '○', sendable: true, decision: '送信可能' };
+    if (row.code === 'matched' && !row.lineLinked) return { mark: '×', sendable: false, decision: 'LINE送信先未解決' };
+    return { mark: '×', sendable: false, decision: 'LINE送信禁止' };
+  }
+
   var api = {
     parseBillingRows: parseBillingRows,
     normalizePersonName: normalizePersonName,
@@ -503,7 +514,8 @@
     collectNameReadings: collectNameReadings,
     matchUniqueTarget: matchUniqueTarget,
     tidNameMismatch: tidNameMismatch,
-    hasPdfMagic: hasPdfMagic
+    hasPdfMagic: hasPdfMagic,
+    listSendState: listSendState
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
