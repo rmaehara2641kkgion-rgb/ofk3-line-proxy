@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -9,6 +10,11 @@ const root = join(__dirname, '..');
 
 function assert(cond, msg) {
   if (!cond) throw new Error('FAIL: ' + msg);
+}
+
+// Source-structure checks match '\n'; a core.autocrlf=true checkout yields CRLF.
+function readSource(...parts) {
+  return readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 }
 
 // 2026-09-18 13:00 JST = 04:00Z
@@ -268,16 +274,42 @@ suite(PhaseCore, 'phase1-core');
 
 // Runner: separate phase, native click only, tour untouched.
 (function () {
-  const runner = readFileSync(join(root, 'cortex-capture-extension', 'phase1-runner.js'), 'utf8');
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
   function body(name) {
     const start = runner.indexOf('  function ' + name + '(');
     assert(start >= 0, 'runner has ' + name);
     const end = runner.indexOf('\n  }\n', start);
-    return runner.slice(start, end);
+    assert(end > start, 'runner ' + name + ' body end found');
+    const text = runner.slice(start, end);
+    assert(text.indexOf('\n  function ', 1) < 0, 'runner ' + name + ' body is a single function');
+    return text;
   }
   ['runNextRoute', 'waitForCurrentRoute', 'restoreRouteListThenContinue', 'finishCurrentAndContinue',
     'clickRoute', 'beginPoc', 'visibleTargetRoute'].forEach(function (name) {
     assert(!/bag/i.test(body(name)), 'tour function ' + name + ' has no Bag logic');
+  });
+  // Bag is reached through its own entry: button -> startBagPhase -> Core.runBagEngine(createBagDriver).
+  assert(runner.indexOf("mk('Bag取得', function () { startBagPhase(); })") >= 0, 'Bag取得 button calls startBagPhase');
+  const startBag = body('startBagPhase');
+  assert(/if \(sessionBusy \|\| \(tour && tour\.status === 'running'\)\)[\s\S]{0,120}return;/.test(startBag),
+    'startBagPhase refuses while the tour runs');
+  assert(startBag.indexOf('Core.selectBagTargets(detailsList, store.trDetailsByTrId)') >= 0, 'startBagPhase selects Bag targets');
+  assert(startBag.indexOf('Core.snapshotNormalCapture(store)') >= 0, 'startBagPhase freezes normal capture');
+  assert(startBag.indexOf('Core.runBagEngine({') >= 0 && startBag.indexOf('driver: createBagDriver(ctx, runId)') >= 0,
+    'startBagPhase runs the Bag engine with the DOM driver');
+  assert(startBag.indexOf('routeIdleMs: BAG_ROUTE_IDLE_MS') >= 0 && startBag.indexOf('routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS') >= 0,
+    'Bag engine receives the progress watchdog and hard max');
+  assert(startBag.indexOf('finishBagPhase(aborted)') >= 0, 'Bag engine completion finishes the Bag phase');
+  const driverSrc = runner.slice(runner.indexOf('  function createBagDriver('), runner.indexOf('  function finishBagPhase('));
+  ['ensureStop: function', 'Core.runStopOpenAttempts(', 'waitStopTrDetails(', 'Core.readStopDomBag('].forEach(function (s) {
+    assert(driverSrc.indexOf(s) >= 0, 'Bag driver has ' + s);
+  });
+  [[RootCore, 'root core'], [PhaseCore, 'phase1-core']].forEach(function (pair) {
+    const engine = pair[0].runBagEngine.toString();
+    ['driver.openRoute(', 'driver.ensureStop(', 'driver.readStopDomBag(', 'driver.findPackage(', 'driver.clickPackage(',
+      'driver.waitTrDetails(', 'driver.leaveStop('].forEach(function (s) {
+      assert(engine.indexOf(s) >= 0, pair[1] + ' runBagEngine calls ' + s);
+    });
   });
   const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
   assert(bag.length > 1000, 'bag block present');
@@ -292,8 +324,2533 @@ suite(PhaseCore, 'phase1-core');
   assert((runner.match(/setInterval\(/g) || []).length === 1, 'no new setInterval');
   assert(runner.indexOf("mk('Bag取得'") >= 0, 'panel has Bag取得 button');
   assert(runner.indexOf('startBagPhase();') >= 0 && !/function beginPoc[\s\S]{0,4000}startBagPhase/.test(runner.slice(runner.indexOf('function beginPoc'), runner.indexOf('function start()'))), 'bag not auto-started by the tour');
-  const all = runner + readFileSync(join(root, 'cortex-capture-extension', 'phase1-core.js'), 'utf8');
+  const all = runner + readSource('cortex-capture-extension', 'phase1-core.js');
   assert(!/fetch\s*\(\s*['"`][^'"`]*trDetails/.test(all), 'no direct trDetails fetch');
   assert(all.indexOf('document.cookie') < 0 && all.indexOf('setRequestHeader') < 0, 'no auth reuse');
   console.log('ok: runner bag phase isolated from tour');
+})();
+
+// ---------------- v2: Route -> Stop -> Package engine ----------------
+// Fake driver models a Cortex Route detail: stops (collapsed/expanded), package cards, trDetails.
+function fakeWorld(spec) {
+  // spec.routes: { code: { openFails, backFails, stops: { seq: { expanded, expandFails, missing,
+  //   labelCount, packages: [{ da, ref, clickable, tr: [[trId, bagName]], dup }] } } } }
+  const log = { stopClicks: [], packageClicks: [], opened: [], back: 0, progress: [] };
+  const trMap = {};
+  let current = null;
+  function stopOf(stop) { return current && current.stops[stop.stop]; }
+  function daVisible(st, da) {
+    return !!(st && st.expanded && st.packages.some((p) => p.da === da));
+  }
+  const driver = {
+    openRoute(route, cb) {
+      const r = spec.routes[route.routeCode];
+      if (r.throwOnOpen) throw new Error('boom');
+      if (r.hang) return; // never calls back -> watchdog
+      if (r.openBlocked) { cb({ ok: false, blocked: true, detail: 'Route click: covered by div#popover' }); return; }
+      if (r.openCode) { cb({ ok: false, code: r.openCode, detail: 'no detail page' }); return; }
+      if (r.openFails) { cb({ ok: false, detail: 'Route詳細が開きませんでした' }); return; }
+      current = r; log.opened.push(route.routeCode); cb({ ok: true });
+    },
+    ensureStop(stop, pending, onState, cb) {
+      const st = stopOf(stop);
+      if (st && pending.some((t) => daVisible(st, t.scannableId))) { cb({ ok: true, clicked: false }); return; }
+      if (!st || st.missing) { cb({ ok: false, status: 'stop_not_found' }); return; }
+      if ((st.labelCount || 1) > 1) { cb({ ok: false, status: 'stop_ambiguous' }); return; }
+      onState('Stop #' + stop.stop + '展開中');
+      log.stopClicks.push(stop.stop);
+      if (st.expandFails) { cb({ ok: false, clicked: true, status: 'stop_expand_failed' }); return; }
+      st.expanded = true;
+      (st.onOpenTr || []).forEach(([trId, bagName]) => {
+        Core2.mergeTrDetailsMaps(trMap, { [trId]: { trId, bagName, bagScannableId: bagName ? 's' : null } });
+      });
+      cb({ ok: true, clicked: true });
+    },
+    findPackage(target, stop, cb) {
+      const st = stopOf(stop);
+      const hits = st && st.expanded ? st.packages.filter((p) => p.da === target.scannableId) : [];
+      const count = hits.reduce((n, p) => n + (p.dup ? 2 : 1), 0);
+      if (!count) { cb({ ok: false, status: 'package_dom_not_found' }); return; }
+      if (count > 1) { cb({ ok: false, status: 'dom_ambiguous' }); return; }
+      if (hits[0].clickable === false) { cb({ ok: false, status: 'package_click_target_not_found' }); return; }
+      cb({ ok: true, handle: hits[0] });
+    },
+    clickPackage(target, handle, cb) {
+      log.packageClicks.push(handle.da);
+      (handle.tr || []).forEach(([trId, bagName]) => {
+        Core2.mergeTrDetailsMaps(trMap, { [trId]: { trId, bagName, bagScannableId: bagName ? 's' : null } });
+      });
+      cb({ ok: true });
+    },
+    waitTrDetails(target, cb) { cb(Core2.hasTrDetails(trMap, target.referenceId)); },
+    restoreAfterPackage(target, cb) { cb({ ok: true }); },
+    leaveStop(stop, cb) {
+      const st = stopOf(stop);
+      log.leaves = (log.leaves || []).concat(stop.stop);
+      if (st && st.leave === 'leftOpen') { cb({ ok: true, leftOpen: true, detail: 'aria-expanded=true' }); return; }
+      if (st && st.leave === 'fail') { cb({ ok: false, detail: 'Route detail lost' }); return; }
+      cb({ ok: true });
+    },
+    returnToList(cb) {
+      log.back += 1;
+      if (current && current.backFailsOnce) { current.backFailsOnce = false; cb({ ok: false, detail: 'flaky' }); return; }
+      cb(current && current.backFails ? { ok: false, detail: 'list not shown' } : { ok: true });
+    }
+  };
+  return { driver, trMap, log };
+}
+
+function routeTargets(spec) {
+  const out = [];
+  Object.keys(spec.routes).forEach((code) => {
+    const stops = spec.routes[code].stops;
+    Object.keys(stops).forEach((seq) => {
+      stops[seq].packages.filter((p) => !p.noise).forEach((p) => {
+        const status = stops[seq].status;
+        out.push({ routeId: 'R-' + code, routeCode: code, stop: Number(seq), scannableId: p.da, referenceId: p.ref,
+          stopStatus: status || null, stopPriority: status ? (Core2.isCompleteStopStatus(status) ? 1 : 0) : undefined });
+      });
+    });
+  });
+  return Core2.groupBagTargetsByRoute(out.sort((a, b) => a.routeCode.localeCompare(b.routeCode) || a.stop - b.stop));
+}
+
+function runEngine(spec, extra) {
+  const w = fakeWorld(spec);
+  const routes = routeTargets(spec);
+  const all = [].concat(...routes.map((r) => r.targets));
+  const run = Core2.createBagRun(all);
+  let aborted = null;
+  const timers = [];
+  w.log.lines = [];
+  Core2.runBagEngine(Object.assign({
+    run, routes, driver: w.driver,
+    getTrMap: () => w.trMap,
+    onProgress: (p) => w.log.progress.push(Core2.formatBagProgress(p)),
+    log: (line) => w.log.lines.push(line),
+    // manual timers: the watchdog only fires when the test flushes them
+    schedule: (fn) => { timers.push(fn); return timers.length - 1; },
+    cancel: (id) => { timers[id] = null; },
+    done: (a) => { aborted = a; }
+  }, extra || {}));
+  // flush watchdogs (each fire may start the next Route, which may schedule another)
+  for (let k = 0; k < timers.length && aborted === null; k++) { const fn = timers[k]; if (fn) { timers[k] = null; fn(); } }
+  const summary = Core2.summarizeBagRun(run, w.trMap);
+  return { run, summary, aborted, log: w.log, trMap: w.trMap };
+}
+
+let Core2 = RootCore;
+function v2Suite(label) {
+  // 1. several 13:00 packages in one Stop -> one Stop click
+  // 14. one Response with several trDetails -> no extra package click
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 5: { packages: [
+      { da: 'DA0000000001', ref: 'tr-a', tr: [['tr-a', 'JP_OB-AT-5597_NVY'], ['tr-b', null]] },
+      { da: 'DA0000000002', ref: 'tr-b' },
+      { da: 'DA0000000003', ref: 'tr-c', tr: [['tr-c', 'JP_OB-AM-1956_YLO']] }
+    ] } } } } });
+    assert(r.log.stopClicks.join(',') === '5', label + ' v2-1: one Stop click, got ' + r.log.stopClicks);
+    assert(r.log.packageClicks.join(',') === 'DA0000000001,DA0000000003', label + ' v2-14: tr-b skipped');
+    assert(r.summary.byReferenceId['tr-b'] === 'captured_null' && r.summary.counts.captured === 2, label + ' v2-14: statuses');
+    assert(r.summary.clicks === 2 && r.summary.stopClicks === 1, label + ' v2-1: counters');
+  })();
+
+  // 2. Stop already expanded -> no Stop click
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 16: { expanded: true, packages: [
+      { da: 'DA0000000016', ref: 'tr-16', tr: [['tr-16', 'JP_OB-AT-0016_GRN']] }
+    ] } } } } });
+    assert(r.log.stopClicks.length === 0 && r.summary.counts.captured === 1, label + ' v2-2: no Stop re-click');
+  })();
+
+  // 3. "#1" never matches Stop 11 (and vice versa)
+  (function () {
+    assert(Core2.parseStopLabel('#1') === 1 && Core2.parseStopLabel('#11') === 11, label + ' v2-3: parse');
+    assert(Core2.parseStopLabel('Stop 16') === 16 && Core2.parseStopLabel('Stop #16') === 16 &&
+      Core2.parseStopLabel('ストップ 16') === 16, label + ' v2-3: formats');
+    assert(Core2.parseStopLabel('16') === null && Core2.parseStopLabel('#1 東京都') === null &&
+      Core2.parseStopLabel('565') === null && Core2.parseStopLabel('#1a') === null, label + ' v2-3: no loose match');
+    const keys = Core2.matchStopLabelEntries([
+      { text: '#11', key: 'a' }, { text: ' #1 ', key: 'b' }, { text: '1', key: 'c' }, { text: '#111', key: 'd' }
+    ], 1);
+    assert(keys.join(',') === 'b', label + ' v2-3: only exact #1, got ' + keys);
+    assert(Core2.matchStopLabelEntries([{ text: '#1', key: 'x' }], 11).length === 0, label + ' v2-3: 11 != 1');
+  })();
+
+  // 4. DA found after Stop expand; 5. expand failure; 6. Stop missing; 7. no click target
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: {
+      3: { packages: [{ da: 'DA0000000030', ref: 'tr-30', tr: [['tr-30', 'JP_OB-AT-0030_RED']] }] },
+      7: { expandFails: true, packages: [{ da: 'DA0000000070', ref: 'tr-70' }] },
+      9: { missing: true, packages: [{ da: 'DA0000000090', ref: 'tr-90' }] },
+      12: { packages: [{ da: 'DA0000000120', ref: 'tr-120', clickable: false }] },
+      13: { labelCount: 2, packages: [{ da: 'DA0000000130', ref: 'tr-130' }] }
+    } } } });
+    const s = r.summary.byReferenceId;
+    assert(s['tr-30'] === 'captured', label + ' v2-4: DA after expand');
+    assert(s['tr-70'] === 'stop_expand_failed', label + ' v2-5: stop_expand_failed');
+    assert(s['tr-90'] === 'stop_not_found', label + ' v2-6: stop_not_found');
+    assert(s['tr-120'] === 'package_click_target_not_found', label + ' v2-7: click target missing');
+    assert(s['tr-130'] === 'stop_ambiguous', label + ' v2: stop_ambiguous');
+    assert(r.log.packageClicks.join(',') === 'DA0000000030', label + ' v2-7: nothing else clicked');
+    assert(r.summary.stopClicks === 3, label + ' v2-5: failed expand click still counted');
+  })();
+
+  // 8 / 9. one Route failing -> route_aborted, next Route continues; list not restorable -> stop
+  (function () {
+    const r = runEngine({ routes: {
+      DCX41: { openFails: true, stops: { 3: { packages: [{ da: 'DA0000000041', ref: 'tr-41' }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000042', ref: 'tr-42', tr: [['tr-42', 'JP_OB-AT-0042_BLK']] }] } } }
+    } });
+    assert(r.summary.byReferenceId['tr-41'] === 'route_aborted', label + ' v2-8: route_aborted');
+    assert(r.summary.byReferenceId['tr-42'] === 'captured', label + ' v2-9: next Route continued');
+    assert(r.aborted === '', label + ' v2-9: whole phase not aborted');
+    const rr = r.summary.routeResults;
+    assert(rr[0].status === 'route_aborted' && rr[1].status === 'done', label + ' v2-8: routeResults');
+
+    const r2 = runEngine({ routes: {
+      DCX41: { backFails: true, stops: { 3: { packages: [{ da: 'DA0000000041', ref: 'tr-41', tr: [['tr-41', null]] }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000042', ref: 'tr-42' }] } } }
+    } });
+    assert(/Route一覧へ戻れませんでした/.test(r2.aborted), label + ' v2-8: stops only when list is not restorable');
+    assert(r2.summary.byReferenceId['tr-41'] === 'captured_null' && r2.summary.byReferenceId['tr-42'] === 'not_attempted',
+      label + ' v2-8: later Route untouched');
+  })();
+
+  // 11 (engine): each package clicked at most once even when trDetails never arrives
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 4: { packages: [
+      { da: 'DA0000000401', ref: 'tr-401' }, { da: 'DA0000000402', ref: 'tr-402' }
+    ] } } } } });
+    assert(r.log.packageClicks.join(',') === 'DA0000000401,DA0000000402', label + ' v2: one click each');
+    assert(r.summary.counts.timeout === 2, label + ' v2: timeouts recorded');
+  })();
+
+  // 15. progress shows Route / Stop / Package / state
+  (function () {
+    const r = runEngine({ routes: { DCX40: { stops: { 5: { packages: [
+      { da: 'DA0000000001', ref: 'tr-a', tr: [['tr-a', 'JP_OB-AT-5597_NVY']] }
+    ] } } } } });
+    const all = r.log.progress.join('\n---\n');
+    assert(/Route 1\/1 DCX40/.test(all) && /Stop 1\/1 \(#5\)/.test(all) && /Package 1\/1 DA0000000001/.test(all),
+      label + ' v2-15: route/stop/package lines');
+    ['Routeを開いています', 'Stop #5探索中', 'Stop #5展開中', 'DA0000000001探索中', '荷物番号クリック',
+      'trDetails待機中', '状態: captured', 'Route一覧へ復帰中'].forEach((s) => {
+      assert(all.indexOf(s) >= 0, label + ' v2-15: state ' + s);
+    });
+    assert(/Stop click 1/.test(Core2.formatBagSummary(r.summary)), label + ' v2-15: summary Stop click');
+  })();
+
+  // package card token + stopNeedsExpand
+  (function () {
+    assert(Core2.isPackageNumberText('DA0012405022') && !Core2.isPackageNumberText('250-7121269-8569466') &&
+      !Core2.isPackageNumberText('565'), label + ' v2: package number token');
+    assert(Core2.stopNeedsExpand([{ scannableId: 'DA1' }], {}) === true, label + ' v2: needs expand');
+    assert(Core2.stopNeedsExpand([{ scannableId: 'DA1' }, { scannableId: 'DA2' }], { DA2: [{}] }) === false,
+      label + ' v2: partially visible -> no click');
+    const g = Core2.groupBagTargetsByStop([{ stop: 19 }, { stop: 5 }, { stop: 19 }]);
+    assert(g.length === 2 && g[0].stop === 5 && g[1].targets.length === 2, label + ' v2: grouped by Stop');
+  })();
+
+  console.log('ok: bag v2 engine (' + label + ')');
+}
+v2Suite('root core');
+Core2 = PhaseCore;
+v2Suite('phase1-core');
+
+// ---------------- v3: Route-level fault tolerance ----------------
+function v3Suite(label) {
+  // UI blocked on one Route -> recorded, next Route continues, nothing left not_attempted
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { stops: { 2: { packages: [{ da: 'DA0000000402', ref: 'tr-402', tr: [['tr-402', 'JP_OB-AT-0402_NVY']] }] } } },
+      DCX41: { openBlocked: true, stops: { 3: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }, { da: 'DA0000000412', ref: 'tr-412' }] } } },
+      DCX42: { stops: { 5: { packages: [{ da: 'DA0000000425', ref: 'tr-425', tr: [['tr-425', null]] }] } } }
+    } });
+    const s = r.summary;
+    assert(r.aborted === '', label + ' v3: not aborted');
+    assert(s.byReferenceId['tr-411'] === 'ui_blocked' && s.byReferenceId['tr-412'] === 'ui_blocked', label + ' v3: ui_blocked recorded');
+    assert(s.byReferenceId['tr-425'] === 'captured_null', label + ' v3: next Route processed');
+    assert(s.counts.not_attempted === 0 && s.attempted === s.targetCount, label + ' v3: all classified');
+    assert(s.groups.uiBlocked === 2 && s.groups.captured === 1 && s.groups.null === 1, label + ' v3: groups');
+    assert(r.log.lines.some((l) => /^\[Bag\] DCX41 UI blocked .*-> continue$/.test(l)), label + ' v3: log line, got ' + r.log.lines.join(' | '));
+    const text = Core2.formatBagSummary(s);
+    ['対象 4', '試行済み 4', '未試行 0', 'captured 1', 'null 1', 'not found 0', 'ambiguous 0', 'click失敗 0',
+      'timeout 0', 'UI blocked 2', '失敗Route: DCX41 UI blocked'].forEach((k) => {
+      assert(text.indexOf(k) >= 0, label + ' v3: summary has ' + k + ' / ' + text);
+    });
+  })();
+
+  // driver exception / hanging Route -> only that Route fails (watchdog), then continue
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { throwOnOpen: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401' }] } } },
+      DCX41: { hang: true, stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }] } } },
+      DCX42: { stops: { 1: { packages: [{ da: 'DA0000000421', ref: 'tr-421', tr: [['tr-421', 'JP_OB-AT-0421_RED']] }] } } }
+    } });
+    assert(r.aborted === '', label + ' v3: exception/hang not fatal, got ' + r.aborted);
+    assert(r.summary.byReferenceId['tr-401'] === 'route_aborted' && /exception: boom/.test(r.run.results['tr-401'].detail),
+      label + ' v3: exception -> route_aborted');
+    assert(r.summary.byReferenceId['tr-411'] === 'route_aborted' && /watchdog/.test(r.run.results['tr-411'].detail),
+      label + ' v3: watchdog -> route_aborted');
+    assert(r.summary.byReferenceId['tr-421'] === 'captured', label + ' v3: continued after both');
+    assert(r.summary.counts.not_attempted === 0, label + ' v3: none left');
+  })();
+
+  // return to list: one flaky failure is retried; persistent failure is the only fatal case
+  (function () {
+    const r = runEngine({ routes: {
+      DCX40: { backFailsOnce: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401', tr: [['tr-401', null]] }] } } },
+      DCX41: { stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411', tr: [['tr-411', null]] }] } } }
+    } });
+    assert(r.aborted === '' && r.summary.counts.not_attempted === 0, label + ' v3: flaky list return retried');
+    const r2 = runEngine({ routes: {
+      DCX40: { backFails: true, stops: { 1: { packages: [{ da: 'DA0000000401', ref: 'tr-401', tr: [['tr-401', null]] }] } } },
+      DCX41: { stops: { 1: { packages: [{ da: 'DA0000000411', ref: 'tr-411' }] } } }
+    } });
+    assert(/Route一覧へ戻れませんでした（DCX40）/.test(r2.aborted), label + ' v3: fatal reason explicit');
+    assert(r2.summary.attempted + r2.summary.counts.not_attempted === r2.summary.targetCount, label + ' v3: totals add up');
+    assert(r2.log.lines.some((l) => /DCX40 .*-> abort/.test(l)), label + ' v3: fatal log');
+  })();
+
+  // 175 targets over 18 Routes with mixed failures: finishes, every target classified, no loop
+  (function () {
+    const routes = {};
+    let n = 0;
+    for (let ri = 0; ri < 18; ri++) {
+      const code = 'DCX' + (40 + ri);
+      const stops = {};
+      for (let si = 1; si <= 10 && n < 175; si++) {
+        const pkgs = [];
+        for (let pi = 0; pi < 1 + (si % 2) && n < 175; pi++, n++) {
+          const da = 'DA' + String(1000000000 + n);
+          const kind = n % 7;
+          pkgs.push({ da, ref: 'tr-' + n, clickable: kind !== 5,
+            tr: kind === 0 ? [['tr-' + n, 'JP_OB-AT-' + n + '_NVY']] : kind === 1 ? [['tr-' + n, null]] : [] });
+        }
+        stops[si] = { packages: pkgs, expandFails: si === 9, missing: si === 10 };
+      }
+      routes[code] = { stops, openBlocked: code === 'DCX41', openFails: code === 'DCX50' };
+    }
+    const r = runEngine({ routes });
+    const s = r.summary;
+    assert(s.targetCount === 175, label + ' v3-175: target count ' + s.targetCount);
+    assert(r.aborted === '', label + ' v3-175: finished');
+    assert(s.counts.not_attempted === 0 && s.attempted === 175, label + ' v3-175: 未試行 0');
+    const g = s.groups;
+    const sum = g.captured + g.null + g.notFound + g.ambiguous + g.clickFailed + g.timeout + g.uiBlocked + g.otherError + g.notAttempted;
+    assert(sum === 175, label + ' v3-175: groups add up to 175, got ' + sum);
+    assert(g.uiBlocked > 0 && g.captured > 0 && g.null > 0 && g.timeout > 0, label + ' v3-175: mixed outcomes');
+    const withTargets = Object.keys(routes).filter((c) => Object.keys(routes[c].stops).some((k) => routes[c].stops[k].packages.length)).length;
+    assert(withTargets >= 11 && r.run.routeResults.length === withTargets, label + ' v3-175: every Route with targets visited once');
+    assert(r.log.lines.filter((l) => /-> continue$/.test(l)).length === withTargets, label + ' v3-175: one continue log per Route');
+    const clicked = new Set(r.log.packageClicks);
+    assert(clicked.size === r.log.packageClicks.length, label + ' v3-175: no package clicked twice');
+  })();
+
+  console.log('ok: bag v3 route fault tolerance (' + label + ')');
+}
+Core2 = RootCore;
+v3Suite('root core');
+Core2 = PhaseCore;
+v3Suite('phase1-core');
+
+// ---------------- v3.1: explicit route_aborted reasons + Stop diagnostics ----------------
+function v31Suite(label) {
+  (function () {
+    let clock = 0;
+    const r = runEngine({ routes: {
+      DCX43: { openCode: 'route_detail_not_detected', stops: { 1: { packages: [{ da: 'DA0000000431', ref: 'tr-431' }] } } },
+      DCX44: { openFails: true, stops: { 1: { packages: [{ da: 'DA0000000441', ref: 'tr-441' }] } } },
+      DCX45: { stops: { 1: { packages: [{ da: 'DA0000000451', ref: 'tr-451' }] }, 2: { packages: [{ da: 'DA0000000452', ref: 'tr-452' }] } } }
+    } }, { now: () => (clock += 50000), routeBudgetMs: 90000 });
+    const fatal = runEngine({ routes: {
+      DCX46: { backFails: true, stops: { 1: { packages: [{ da: 'DA0000000461', ref: 'tr-461', tr: [['tr-461', null]] }] } } }
+    } });
+    const byCode = {};
+    r.summary.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX43.reasonCode === 'route_detail_not_detected', label + ' v3.1: detail not detected code');
+    assert(byCode.DCX44.reasonCode === 'route_open_failed', label + ' v3.1: default open code');
+    assert(byCode.DCX45.reasonCode === 'route_budget_exceeded', label + ' v3.1: budget code, got ' + byCode.DCX45.reasonCode);
+    assert(fatal.summary.routeResults[0].reasonCode === 'list_return_failed', label + ' v3.1: list return code');
+    const text = Core2.formatBagSummary(r.summary);
+    assert(/DCX43 route_aborted\(route_detail_not_detected\)/.test(text) && /DCX44 route_aborted\(route_open_failed\)/.test(text),
+      label + ' v3.1: reasons in summary: ' + text);
+    assert(r.log.lines.some((l) => /\[Bag\] DCX43 route_aborted\(route_detail_not_detected\).*-> continue/.test(l)), label + ' v3.1: reason in log');
+    assert(r.summary.attempted + r.summary.counts.not_attempted === r.summary.targetCount, label + ' v3.1: totals');
+  })();
+  console.log('ok: bag v3.1 route reasons (' + label + ')');
+}
+Core2 = RootCore;
+v31Suite('root core');
+Core2 = PhaseCore;
+v31Suite('phase1-core');
+
+// v3.1 runner: split Stop labels, bounded Stop wait, route diagnostics JSON
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(/for \(var d = 0; el && d < 3; d \+= 1, el = el\.parentElement\)/.test(bag), 'v3.1 label may span child elements (bounded ancestors)');
+  assert(bag.indexOf('if (t.length > 20) break;') >= 0, 'v3.1 only short texts can be labels');
+  assert(bag.indexOf('BAG_STOP_APPEAR_TIMEOUT_MS = 6000') >= 0 && bag.indexOf('BAG_STOP_APPEAR_TIMEOUT_MS, runId') >= 0,
+    'v3.1 bounded condition wait for Stops');
+  ['url: hrefNow()', 'title:', 'routeCode:', 'headings:', 'controls:', 'stopLabelCandidates:', 'targetStopProbes:',
+    'routeDetailBasis:', 'iframes:', 'shadowHosts:', 'outline:'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'v3.1 diagnostics field ' + k);
+  });
+  assert(bag.indexOf("'[text:' + t.length + ']'") >= 0, 'v3.1 long texts are not stored');
+  assert(bag.indexOf('routeDiagnostics: bagRun.routeDiagnostics') >= 0, 'v3.1 diagnostics JSON includes route snapshots');
+  assert(bag.indexOf("code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected'") >= 0 && bag.indexOf("code: 'route_card_not_found'") >= 0,
+    'v3.1 runner reports route reason codes');
+  assert(bag.indexOf('fetch(') < 0 && bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v3.1 no requests/watchers');
+  console.log('ok: v3.1 runner Stop detection + diagnostics');
+})();
+
+// ---------------- v3.2: real Cortex Stop markers <svg class="stop-K"><text>N</text></svg> ----------------
+function v32Suite(C, label) {
+  const K = C.STOP_MARKER_KIND;
+  // 1. text labels unchanged
+  assert(C.parseStopLabel('#16') === 16 && C.parseStopLabel('Stop 16') === 16 && C.parseStopLabel('ストップ 16') === 16,
+    label + ' v3.2-1: text labels');
+  // 2. split label (joined text of the ancestor) unchanged
+  assert(C.parseStopLabel('Stop16') === 16 && C.parseStopLabel('# 16') === 16, label + ' v3.2-2: split label text');
+  // 3. svg stop marker: class token stop-<digits>, visible digits = Stop number (class suffix ignored)
+  assert(C.isStopMarkerSvgClass('stop-2') && C.isStopMarkerSvgClass('marker stop-15 active'), label + ' v3.2-3: marker class');
+  assert(!C.isStopMarkerSvgClass('stop-icon') && !C.isStopMarkerSvgClass('nonstop-2') && !C.isStopMarkerSvgClass('stop-2a') &&
+    !C.isStopMarkerSvgClass('stops-2') && !C.isStopMarkerSvgClass(''), label + ' v3.2-3: no loose class');
+  assert(C.parseStopMarkerText('3') === 3 && C.parseStopMarkerText(' 16 ') === 16, label + ' v3.2-3: marker digits');
+  assert(C.parseStopMarkerText('3a') === null && C.parseStopMarkerText('#3') === null && C.parseStopMarkerText('') === null,
+    label + ' v3.2-3: marker digits only');
+  // diagnostics 2026-09-24: stop-2 shows 3, stop-3 shows 4, stop-5 shows 6
+  const markers = [{ text: '3', key: 's2', kind: K }, { text: '4', key: 's3', kind: K }, { text: '6', key: 's5', kind: K }];
+  assert(C.matchStopLabelEntries(markers, 3).join() === 's2' && C.matchStopLabelEntries(markers, 4).join() === 's3' &&
+    C.matchStopLabelEntries(markers, 6).join() === 's5', label + ' v3.2-3: visible number, not class suffix');
+  assert(C.matchStopLabelEntries(markers, 2).length === 0 && C.matchStopLabelEntries(markers, 5).length === 0,
+    label + ' v3.2-3: class suffix never used');
+  // 4. plain numbers (span/p/div, Driver Aid, counts, Route numbers) are not Stop labels
+  const plain = [{ text: '3', key: 'span3' }, { text: '565', key: 'aid' }, { text: '28', key: 'route' }, { text: '12', key: 'count' }];
+  assert(C.matchStopLabelEntries(plain, 3).length === 0 && C.matchStopLabelEntries(plain, 565).length === 0 &&
+    C.matchStopLabelEntries(plain, 28).length === 0, label + ' v3.2-4: plain numbers ignored');
+  assert(C.matchStopLabelEntries(plain.concat(markers), 3).join() === 's2', label + ' v3.2-4: only the svg marker for 3');
+  // 5. exact number: 1 vs 11
+  const oneEleven = [{ text: '1', key: 'm1', kind: K }, { text: '11', key: 'm11', kind: K }, { text: '#11', key: 't11' }];
+  assert(C.matchStopLabelEntries(oneEleven, 1).join() === 'm1', label + ' v3.2-5: 1 != 11');
+  // priority: a text label wins over an svg marker for the same number
+  assert(C.matchStopLabelEntries(oneEleven, 11).join() === 't11', label + ' v3.2: text label has priority');
+  // two markers with the same number stay ambiguous (no guess)
+  assert(C.matchStopLabelEntries([{ text: '7', key: 'a', kind: K }, { text: '7', key: 'b', kind: K }], 7).length === 2,
+    label + ' v3.2: duplicate markers reported, not picked');
+  console.log('ok: v3.2 svg Stop markers (' + label + ')');
+}
+v32Suite(RootCore, 'root core');
+v32Suite(PhaseCore, 'phase1-core');
+
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("own.closest('svg')") >= 0 && bag.indexOf("Core.isStopMarkerSvgClass(svg.getAttribute && svg.getAttribute('class'))") >= 0,
+    'v3.2 marker requires an enclosing svg with a stop-K class token');
+  assert(bag.indexOf('Core.parseStopMarkerText(svg.textContent) == null') >= 0, 'v3.2 whole svg text must be digits');
+  assert(/BAG_BUILD = 'Bag v3\.([2-9]|1[0-9])'/.test(bag), 'v3.x build label');
+  console.log('ok: v3.2 runner marker wiring');
+})();
+
+// v3.2-diag: Stop click evidence (hit-test relation, marker ancestry, state after click); decision unchanged
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  ["'same-stop-marker'", "'other-stop-marker:'", "'same-stop-block'", "'dialog'", 'centerStack', 'hitAncestors', 'svgRect',
+    'plainNumberContext(stop.stop)', 'clickDiag.afterClick = stopClickState(das)', 'clickDiag.afterWait = stopClickState(das)',
+    "'target_da_not_shown'", 'stopClickDiagnostics: bagRun.stopClickDiagnostics'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'diag has ' + k);
+  });
+  // the hit-test decision itself is unchanged
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'hit-test decision unchanged');
+  assert(/function hitAllowed\(hit, el, container\) \{\n    if \(!hit \|\| inPanel\(hit\)\) return false;\n    if \(hit === el \|\| el\.contains\(hit\)\) return true;\n    if \(container && \(hit === container \|\| container\.contains\(hit\)\)\) return true;/.test(bag),
+    'hitAllowed unchanged');
+  // (build label / manifest version are checked by the v3.3 block)
+  console.log('ok: v3.2-diag Stop click diagnostics');
+})();
+
+// ---------------- v3.3: click the Stop list button, never the Mapbox markers ----------------
+function v33Suite(C, label) {
+  const L = C.STOP_LIST_KIND, K = C.STOP_MARKER_KIND;
+  // Stop number of a stops-list-item header: span "N" < p "N" < div "N" only
+  assert(C.stopListRowNumber([{ text: '5', chain: ['5', '5'] }]) === 5, label + ' v3.3: row number');
+  assert(C.stopListRowNumber([{ text: '11', chain: ['11', '11'] }, { text: '2', chain: ['2/2', '2/2 配達'] }]) === 11,
+    label + ' v3.3: package count "2/2" is not the Stop number');
+  assert(C.stopListRowNumber([{ text: '998', chain: ['998', '/998'] }]) === null, label + ' v3.3: Driver Aid ignored');
+  assert(C.stopListRowNumber([{ text: '5', chain: ['5', '5'] }, { text: '7', chain: ['7', '7'] }]) === null,
+    label + ' v3.3: two candidates in one row -> no guess');
+  assert(C.stopListRowNumber([{ text: '5a', chain: ['5a', '5a'] }, { text: '', chain: [] }]) === null, label + ' v3.3: digits only');
+  // Stop 1 vs 11 and priority list > text > marker; markers excluded on the click path
+  const entries = [
+    { text: '1', key: 'row1', kind: L }, { text: '11', key: 'row11', kind: L },
+    { text: '1', key: 'map1', kind: K }, { text: '11', key: 'map11', kind: K }, { text: '#1', key: 'txt1' }
+  ];
+  assert(C.matchStopLabelEntries(entries, 1).join() === 'row1', label + ' v3.3: list row wins, 1 != 11');
+  assert(C.matchStopLabelEntries(entries, 11).join() === 'row11', label + ' v3.3: 11 row');
+  assert(C.matchStopLabelEntries([{ text: '4', key: 'map4', kind: K }], 4, { excludeMarkers: true }).length === 0,
+    label + ' v3.3: Mapbox marker never a click target');
+  assert(C.matchStopLabelEntries([{ text: '#4', key: 't4' }, { text: '4', key: 'm4', kind: K }], 4, { excludeMarkers: true }).join() === 't4',
+    label + ' v3.3: text label still usable');
+  // summary bar / general numbers are not Stop list rows (plain entries never parse as bare digits)
+  assert(C.matchStopLabelEntries([{ text: '3', key: 'summary' }], 3, { excludeMarkers: true }).length === 0, label + ' v3.3: summary number ignored');
+  console.log('ok: v3.3 Stop list rows (' + label + ')');
+}
+v33Suite(RootCore, 'root core');
+v33Suite(PhaseCore, 'phase1-core');
+
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("var MAPBOX_SELECTOR = '.mapboxgl-map, .mapboxgl-marker, .mapboxgl-canvas-container';") >= 0, 'v3.3 Mapbox selector');
+  assert(bag.indexOf("base.querySelectorAll('div.stops-list-item')") >= 0, 'v3.3 rows are div.stops-list-item');
+  assert(bag.indexOf("el.closest('[role=\"button\"][aria-expanded]')") >= 0, 'v3.3 number must sit inside the row header button');
+  assert(bag.indexOf('{ excludeMarkers: true }') >= 0, 'v3.3 markers excluded from click candidates');
+  assert(bag.indexOf("if (inMapbox(el)) continue;") >= 0 && bag.indexOf('!inMapbox(r)') >= 0, 'v3.3 nothing inside Mapbox is a label');
+  assert(bag.indexOf('clickListButton(function () {') >= 0 && bag.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0,
+    'v3.3/v3.5 clicks the row button only at points inside it (self / non-interactive child)');
+  // v3.7: the aria-expanded / target DA checks moved into Core.stopOpenSignal (still the first two signals).
+  assert(bag.indexOf("ariaExpanded: t ? t.button.getAttribute('aria-expanded') === 'true' : false") >= 0 &&
+    bag.indexOf('Core.stopOpenSignal(observation())') >= 0, 'v3.3 aria-expanded recorded and used for expansion');
+  assert(bag.indexOf('ariaExpandedBefore') >= 0 && bag.indexOf('ariaExpandedAfter') >= 0 && bag.indexOf('rowElementsAfter') >= 0, 'v3.3 list diagnostics');
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.3 hit-test safety kept');
+  // (build label / manifest version are checked by the v3.4 block)
+  console.log('ok: v3.3 runner Stop list click wiring');
+})();
+
+// ---------------- v3.4: close the opened Stop row; undo history only when an entry was added ----------------
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(leave.indexOf('ctx.openedListTarget') >= 0 && leave.indexOf('clickListButton(currentTarget') >= 0,
+    'v3.4/v3.5 leaveStop clicks the row button re-read from the current DOM');
+  assert(leave.indexOf("t.button.getAttribute('aria-expanded') === 'false'") >= 0, 'v3.4 close confirmed by aria-expanded=false');
+  assert(leave.indexOf('historyBackTo(') < 0 && leave.indexOf('restoreHistory(ctx.stopHref, ctx.stopHistoryLen') >= 0,
+    'v3.4 no blind history.back on leave');
+  ['ariaExpandedBeforeLeave', 'ariaExpandedAfterLeave', 'urlBefore', 'urlAfter', 'selectedStopIdBefore', 'selectedStopIdAfter',
+    'targetDaVisibleBefore', 'targetDaVisibleAfter', 'leaveMethod'].forEach((k) => assert(leave.indexOf(k) >= 0, 'v3.4 leave diag ' + k));
+  const restore = bag.slice(bag.indexOf('  function restoreHistory('), bag.indexOf('  function selectedStopIdOf('));
+  assert(restore.indexOf('if (historyLength() > beforeLen)') >= 0 && restore.indexOf("method: 'url_replaced'") >= 0,
+    'v3.4 history.back only when the click pushed an entry');
+  assert(bag.indexOf('restoreHistory(ctx.packageHref, ctx.packageHistoryLen') >= 0, 'v3.4 package restore uses the same rule');
+  assert(bag.indexOf('captureSource: Core.classifyCaptureSource({') >= 0 && bag.indexOf('stopStatus: st ? st.status || null') >= 0,
+    'v3.4/v3.5 per-target capture source + stop status');
+  assert(bag.indexOf('stopLeaveDiagnostics: bagRun.stopLeaveDiagnostics') >= 0 && bag.indexOf('targetDiagnostics: targetDiagnostics()') >= 0, 'v3.4 diag JSON');
+  // Stop list click path from v3.3 unchanged
+  assert(bag.indexOf('clickListButton(function () {') >= 0 && bag.indexOf('{ excludeMarkers: true }') >= 0,
+    'v3.4 keeps the v3.3 Stop list click');
+  assert(bag.indexOf("if (hitAllowed(hit, cur.el, cur.container)) point = pts[i];") >= 0, 'v3.4 hit-test safety kept');
+  // (build label / manifest version are checked by the v3.5 block)
+  console.log('ok: v3.4 Stop leave + history rules');
+})();
+
+// v3.4 engine: several Stops in one Route are opened and left one after another (fake driver)
+(function () {
+  Core2 = RootCore;
+  const r = runEngine({ routes: { DCX30: { stops: {
+    3: { packages: [{ da: 'DA0000000303', ref: 'tr-303', tr: [['tr-303', 'JP_OB-AT-0303_NVY']] }] },
+    6: { packages: [{ da: 'DA0000000306', ref: 'tr-306', tr: [['tr-306', null]] }] },
+    11: { packages: [{ da: 'DA0000000311', ref: 'tr-311', tr: [['tr-311', 'JP_OB-AT-0311_RED']] }] }
+  } } } });
+  assert(r.log.stopClicks.join(',') === '3,6,11', 'v3.4 Stops 3 -> 6 -> 11 in one Route');
+  assert(r.summary.counts.route_aborted === 0 && r.summary.counts.not_attempted === 0, 'v3.4 no route_aborted / 未試行');
+  assert(r.summary.counts.captured === 2 && r.summary.counts.captured_null === 1 && r.summary.clicks === 3, 'v3.4 package clicks + captured');
+  console.log('ok: v3.4 engine multi-Stop Route');
+})();
+
+// ---------------- v3.5: recoverable Stop close failures, incomplete Stops first, capture source ----------------
+function v35Suite(label) {
+  // recoverable leave failure -> that Stop recorded, next Stops still processed; incomplete Stops first
+  (function () {
+    const r = runEngine({ routes: { DCX29: { stops: {
+      2: { status: 'COMPLETE', leave: 'leftOpen', packages: [{ da: 'DA0000002902', ref: 'tr-2902' }], onOpenTr: [['tr-2902', null]] },
+      7: { status: 'COMPLETE', packages: [{ da: 'DA0000002907', ref: 'tr-2907' }], onOpenTr: [['tr-2907', null]] },
+      15: { status: 'NOT_STARTED', leave: 'leftOpen', packages: [{ da: 'DA0000002915', ref: 'tr-2915' }, { da: 'DA0000002916', ref: 'tr-2916' }],
+        onOpenTr: [['tr-2915', 'JP_OB-AT-2915_NVY'], ['tr-2916', 'JP_OB-AT-2916_RED']] },
+      20: { status: 'IN_PROGRESS', packages: [{ da: 'DA0000002920', ref: 'tr-2920', tr: [['tr-2920', 'JP_OB-AT-2920_YLO']] }] }
+    } } } });
+    assert(r.log.stopClicks.join(',') === '15,20,2,7', label + ' v3.5: incomplete Stops (15,20) first, got ' + r.log.stopClicks);
+    assert(r.summary.counts.route_aborted === 0 && r.summary.counts.not_attempted === 0, label + ' v3.5: no route_aborted / 未試行');
+    assert(r.summary.byReferenceId['tr-2915'] === 'captured' && r.summary.byReferenceId['tr-2916'] === 'captured',
+      label + ' v3.5: Stop open alone captured both packages of the incomplete Stop');
+    assert(r.summary.byReferenceId['tr-2920'] === 'captured' && r.summary.clicks === 1, label + ' v3.5: one real package click');
+    assert(r.run.clickedRefs['tr-2920'] && !r.run.clickedRefs['tr-2915'], label + ' v3.5: clickedRefs only for real clicks');
+    assert(r.summary.byReferenceId['tr-2902'] === 'captured_null' && r.summary.byReferenceId['tr-2907'] === 'captured_null',
+      label + ' v3.5: completed Stops stay captured_null');
+    const rr = r.summary.routeResults[0];
+    assert(rr.status === 'done' && rr.leaveFailures.map((x) => x.stop).join(',') === '15,2', label + ' v3.5: leave failures recorded, Route done');
+    assert(/Stop閉じ失敗（Route継続） 2/.test(Core2.formatBagSummary(r.summary)), label + ' v3.5: summary shows left-open Stops');
+    assert(r.log.lines.some((l) => /Stop #15 could not be closed .*-> Route detail OK, continue/.test(l)), label + ' v3.5: leave log');
+  })();
+
+  // unrecoverable leave failure -> route_aborted (stop_leave_failed), next Route continues
+  (function () {
+    const r = runEngine({ routes: {
+      DCX44: { stops: {
+        4: { leave: 'fail', packages: [{ da: 'DA0000004404', ref: 'tr-4404', tr: [['tr-4404', null]] }] },
+        9: { packages: [{ da: 'DA0000004409', ref: 'tr-4409' }] }
+      } },
+      DCX46: { stops: { 2: { packages: [{ da: 'DA0000004602', ref: 'tr-4602', tr: [['tr-4602', 'JP_OB-AT-4602_NVY']] }] } } }
+    } });
+    const byCode = {};
+    r.summary.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX44.status === 'route_aborted' && byCode.DCX44.reasonCode === 'stop_leave_failed', label + ' v3.5: unrecoverable -> route_aborted');
+    assert(r.summary.byReferenceId['tr-4409'] === 'route_aborted' && r.summary.byReferenceId['tr-4602'] === 'captured',
+      label + ' v3.5: next Route still processed');
+  })();
+
+  // route time extension: only on request, capped, and pushes the watchdog
+  (function () {
+    const w = fakeWorld({ routes: { DCX45: { stops: { 1: { packages: [{ da: 'DA0000004501', ref: 'tr-4501', tr: [['tr-4501', null]] }] } } } } });
+    const routes = routeTargets({ routes: { DCX45: { stops: { 1: { packages: [{ da: 'DA0000004501', ref: 'tr-4501' }] } } } } });
+    const granted = [];
+    // extendRoute is called asynchronously by the runner (after waits), so the handle exists by then.
+    const run2 = Core2.createBagRun([].concat(...routes.map((x) => x.targets)));
+    let h2 = null;
+    const drv2 = Object.assign({}, w.driver, {
+      openRoute(route, cb) { setImmediate(() => { granted.length = 0; granted.push(h2.extendRoute(30000), h2.extendRoute(40000), h2.extendRoute(5000)); w.driver.openRoute(route, cb); }); }
+    });
+    h2 = Core2.runBagEngine({ run: run2, routes, driver: drv2, getTrMap: () => ({}), routeExtensionCapMs: 60000,
+      schedule: () => 1, cancel: () => {}, done: () => {
+        assert(granted.join(',') === '30000,30000,0', label + ' v3.5: extension capped at 60 s, got ' + granted);
+        assert(run2.routeResults[0].extendedMs === 60000, label + ' v3.5: extendedMs recorded');
+        console.log('ok: v3.5 route extension cap (' + label + ')');
+      } });
+  })();
+
+  // capture source classification (diagnostics)
+  (function () {
+    const C = Core2;
+    assert(C.classifyCaptureSource({ hasTr: false }) === null, label + ' cs: none');
+    assert(C.classifyCaptureSource({ hasTr: true, clicked: true, priorFailureStatus: 'timeout' }) === 'package_click', label + ' cs: real click');
+    assert(C.classifyCaptureSource({ hasTr: true, preexisting: true }) === 'preexisting', label + ' cs: preexisting');
+    assert(C.classifyCaptureSource({ hasTr: true, priorFailureStatus: 'package_click_target_not_found' }) === 'after_failed_package_lookup',
+      label + ' cs: after failed lookup');
+    assert(C.classifyCaptureSource({ hasTr: true }) === 'cortex_stop_open', label + ' cs: Stop open');
+    assert(C.isCompleteStopStatus('COMPLETE') && !C.isCompleteStopStatus('NOT_STARTED') && !C.isCompleteStopStatus(null), label + ' cs: status');
+  })();
+  console.log('ok: v3.5 engine (' + label + ')');
+}
+Core2 = RootCore;
+v35Suite('root core');
+Core2 = PhaseCore;
+v35Suite('phase1-core');
+
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(leave.indexOf('var t = freshListTarget(stop.stop);') >= 0, 'v3.5 close re-reads the row from the current DOM');
+  assert(leave.indexOf('BAG_STOP_CLOSE_TIMEOUT_MS') >= 0 && /if \(n === 0\) \{ retry\(ad\); return; \}/.test(leave), 'v3.5 one retry only');
+  assert(leave.indexOf('var usable = routeDetailUsable();') >= 0 && leave.indexOf("thenHistory('left_open'") >= 0, 'v3.5 continue only when Route detail usable');
+  ['routeCode', 'stop: stop.stop', 'ariaExpandedBeforeLeave', 'ariaExpandedAfterLeave', 'selectedStopIdBefore', 'selectedStopIdAfter',
+    'urlBefore', 'urlAfter', 'buttonConnected', 'retryCount', 'leaveMethod', 'leaveResult', 'elapsedMs'].forEach((k) => {
+    assert(leave.indexOf(k) >= 0, 'v3.5 leave diag ' + k);
+  });
+  const click = bag.slice(bag.indexOf('  function clickListButton('), bag.indexOf('  function pageBrief()'));
+  assert(click.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0, 'v3.5 clicks only self / non-interactive child');
+  assert(click.indexOf('diag.buttonRect') >= 0 && click.indexOf('diag.clicked') >= 0 && click.indexOf("interactive: rel === 'interactive_child'") >= 0,
+    'v3.5 click diag: rect, point, elementFromPoint, interactive child');
+  assert(bag.indexOf("if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId))") >= 0, 'v3.5 Route retry only by exact routeId');
+  assert(bag.indexOf('clickRec.routeDetailsObserved') >= 0 && bag.indexOf('clickRec.domChanged') >= 0 && bag.indexOf('cardAria') >= 0, 'v3.5 Route click diag');
+  assert(bag.indexOf('clickDiag.extendedWait = true;') >= 0 && bag.indexOf('selectedStopIdAfter') >= 0, 'v3.5 Stop open diag + conditional wait');
+  assert(bag.indexOf('actualPackageClick: clicked') >= 0 && bag.indexOf('priorFailureDetail') >= 0, 'v3.5 target diag');
+  assert(bag.indexOf("'package_click' : 'without_package_click'") < 0, 'v3.5 old misleading captureSource removed');
+  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('clickDiag.cortexTrDetails') >= 0,
+    'v3.6 bounded 3 s wait for Cortex own trDetails after a Stop opens');
+  assert(bag.indexOf("BAG_BUILD = 'Bag v3.12'") >= 0, 'v3.12 build label');
+  const manifest = JSON.parse(readFileSync(join(root, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
+  assert(manifest.version === '1.6.17', 'manifest 1.6.17');
+  console.log('ok: v3.5 runner wiring');
+})();
+
+// v2 runner: Stop/Package driver lives only in the Bag block; tour untouched; no requests.
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf('BAG_ROUTE_OPEN_ATTEMPTS = 3') >= 0 && bag.indexOf('attempt < BAG_ROUTE_OPEN_ATTEMPTS') >= 0,
+    'v3 bounded Route open retries');
+  assert(bag.indexOf('blocked: !!res.covered') >= 0 && bag.indexOf('bagEngine.failRoute(') >= 0, 'v3 UI blocked + timer exceptions per Route');
+  ['runBagEngine', 'findStopLabels', 'packageCardOf', 'packageClickTarget', 'elementFromPoint',
+    'closeNewDialogs', 'formatBagProgress', 'Core.BAG_STATUS.STOP_EXPAND_FAILED'].forEach((s) => {
+    assert(bag.indexOf(s) >= 0, 'v2 runner has ' + s);
+  });
+  const outside = runner.replace(bag, '');
+  ['runBagEngine', 'findStopLabels', 'packageCardOf', 'ensureStop'].forEach((s) => {
+    assert(outside.indexOf(s) < 0, 'v2 Bag code not outside the Bag block: ' + s);
+  });
+  assert(bag.indexOf('fetch(') < 0 && bag.indexOf('XMLHttpRequest') < 0 && bag.indexOf('setRequestHeader') < 0,
+    'v2 no request creation');
+  assert(bag.indexOf('MutationObserver') < 0 && bag.indexOf('setInterval') < 0, 'v2 no persistent watchers');
+  assert(runner.indexOf("mk('Bag診断保存'") >= 0, 'v2 diagnostics download button');
+  console.log('ok: v2 runner isolation');
+})();
+
+// ---------------- Unfinished Bag Test v1 (diagnostic mode, Stop open only) ----------------
+function ubtDetails(code, stops) {
+  return {
+    rmsRouteDetails: {
+      routeId: 'R-' + code, routeCode: code,
+      stops: stops.map((st) => ({
+        sequenceNumber: st.seq, status: st.status,
+        tasks: st.pk.map(([da, ref]) => ({ taskType: 'DROP_OFF', referenceId: ref, domainMap: { scannableId: da } }))
+      }))
+    }
+  };
+}
+
+// Same override as the runner: Stop open only, the package path can never click.
+function ubtRun(C, detailsList, world, preTr) {
+  const sel = C.selectUnfinishedBagTargets(detailsList, preTr || {}, { maxRoutes: 3, maxStops: 5, maxPackages: 20 });
+  const w = fakeWorld(world);
+  Object.assign(w.trMap, preTr || {});
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  let violations = 0;
+  let finished = null;
+  const driver = Object.assign({}, w.driver, {
+    findPackage(target, stop, cb) { cb({ ok: false, status: 'no_trdetails_after_stop_open', detail: 'no trDetails' }); },
+    clickPackage(target, handle, cb) { violations += 1; cb({ ok: false, detail: 'disabled' }); }
+  });
+  C.runBagEngine({ run, routes, driver, getTrMap: () => w.trMap, schedule: () => 1, cancel: () => {}, done: (a) => { finished = a; } });
+  const res = C.summarizeUnfinishedBagTest({
+    targets: sel.targets, trMap: w.trMap, results: run.results, clickedRefs: run.clickedRefs || {},
+    preexisting: {}, trSeenAt: {}, stopDiags: {}, selection: sel, selectedDay: '2026-09-24',
+    responses: [{ path: '/operations/execution/api/tasks/trDetails', status: 200, topKeys: ['trDetails'], rowKeys: ['trId', 'bagName'],
+      bagLikeFields: { bagName: [null] }, trIds: ['tr-null'] }],
+    packageClicks: (run.clicks || 0) + violations, aborted: finished || ''
+  });
+  return { sel, res, log: w.log, violations, run, finished };
+}
+
+function ubtSuite(label) {
+  const C = Core2;
+  // 1. NOT_STARTED + 2. IN_PROGRESS + 3. three packages in one Stop + 4. null bag + 5. no trDetails + 7. COMPLETE excluded
+  (function () {
+    const details = [
+      ubtDetails('DCX10', [
+        { seq: 1, status: 'COMPLETE', pk: [['DA1', 'tr-done']] },
+        { seq: 2, status: 'NOT_STARTED', pk: [['DA2', 'tr-2a'], ['DA3', 'tr-2b'], ['DA4', 'tr-2c']] },
+        { seq: 3, status: 'IN_PROGRESS', pk: [['DA5', 'tr-null']] },
+        { seq: 4, status: 'NOT_STARTED', pk: [['DA6', 'tr-none']] }
+      ])
+    ];
+    const world = { routes: { DCX10: { stops: {
+      1: { packages: [{ da: 'DA1', ref: 'tr-done' }] },
+      2: { packages: [{ da: 'DA2', ref: 'tr-2a' }, { da: 'DA3', ref: 'tr-2b' }, { da: 'DA4', ref: 'tr-2c' }],
+        onOpenTr: [['tr-2a', 'JP_OB-AT-0001_NVY'], ['tr-2b', 'JP_OB-AT-0001_NVY'], ['tr-2c', 'JP_OB-AM-0002_YLO']] },
+      3: { packages: [{ da: 'DA5', ref: 'tr-null' }], onOpenTr: [['tr-null', null]] },
+      4: { packages: [{ da: 'DA6', ref: 'tr-none' }] }
+    } } } };
+    const r = ubtRun(C, details, world);
+    assert(r.sel.completeStopsSkipped === 1 && r.sel.unfinishedStopsFound === 3, label + ' ubt-7: COMPLETE excluded');
+    assert(r.sel.targets.every((t) => t.referenceId !== 'tr-done'), label + ' ubt-7: no COMPLETE target');
+    assert(r.log.stopClicks.indexOf(1) < 0, label + ' ubt-7: COMPLETE Stop never opened');
+    const s2 = r.res.stops.find((s) => s.stopNumber === 2);
+    assert(s2.stopStatus === 'NOT_STARTED' && s2.packagesExpected === 3 && s2.trDetailsReceivedCount === 3 &&
+      s2.bagNonNullCount === 3 && s2.bagNullCount === 0 && s2.referenceIds.length === 3 &&
+      s2.bagNames.join(',') === 'JP_OB-AT-0001_NVY,JP_OB-AT-0001_NVY,JP_OB-AM-0002_YLO', label + ' ubt-1/3: NOT_STARTED 3 packages aggregated');
+    const p2 = r.res.packages.find((p) => p.referenceId === 'tr-2a');
+    assert(p2.captureSource === 'cortex_stop_open' && p2.actualPackageClick === false && p2.receivedAfterStopOpen === true &&
+      p2.trDetailsReceived === true && p2.status === 'captured' && p2.scannableId === 'DA2' && p2.stopStatus === 'NOT_STARTED',
+    label + ' ubt-1: package record');
+    const s3 = r.res.stops.find((s) => s.stopNumber === 3);
+    assert(s3.stopStatus === 'IN_PROGRESS' && s3.bagNullCount === 1 && s3.status === 'bag_null', label + ' ubt-2/4: IN_PROGRESS null');
+    const pn = r.res.packages.find((p) => p.referenceId === 'tr-null');
+    assert(pn.status === 'captured_null' && pn.nullDiagnostics.length === 1 && pn.nullDiagnostics[0].rowKeys.indexOf('bagName') >= 0,
+      label + ' ubt-4: null diagnostics');
+    const p4 = r.res.packages.find((p) => p.referenceId === 'tr-none');
+    assert(p4.status === 'no_trdetails_after_stop_open' && !p4.trDetailsReceived, label + ' ubt-5: no trDetails');
+    assert(r.res.stops.find((s) => s.stopNumber === 4).status === 'no_trdetails_after_stop_open', label + ' ubt-5: stop status');
+    assert(r.res.stopOpenOnlyBagConfirmed === true && r.res.testStatus === 'confirmed' &&
+      r.res.confirmed[0].confirmedRouteCode === 'DCX10' && r.res.confirmed[0].confirmedBagName, label + ' ubt: confirmed fields');
+    assert(r.res.packageClicks === 0 && r.violations === 0 && r.log.packageClicks.length === 0, label + ' ubt-10: package click 0');
+    assert(r.res.bagCaptured === 3 && r.res.bagNull === 1 && r.res.noTrDetails === 1 && r.res.unfinishedStopsTested === 3,
+      label + ' ubt: counts');
+    const text = C.formatUnfinishedBagTest(r.res);
+    assert(text.indexOf('未完了Bagテスト') === 0 && text.indexOf('Unfinished Bag Test v1') >= 0 && text.indexOf('Bag取得完了') < 0,
+      label + ' ubt: own summary text');
+  })();
+
+  // 6. zero unfinished Stops
+  (function () {
+    const r = ubtRun(C, [ubtDetails('DCX20', [{ seq: 1, status: 'COMPLETE', pk: [['DA1', 'tr-1']] }])], { routes: {} });
+    assert(r.sel.targets.length === 0 && r.res.testStatus === 'no_unfinished_stops' && !r.res.stopOpenOnlyBagConfirmed,
+      label + ' ubt-6: no_unfinished_stops');
+    assert(C.formatUnfinishedBagTest(r.res).indexOf('未完了Stop 0 — Bag検証未実施') >= 0, label + ' ubt-6: UI text');
+  })();
+
+  // 8. a Stop open failure continues with the next unfinished Stop
+  (function () {
+    const details = [ubtDetails('DCX30', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA1', 'tr-f1'], ['DA2', 'tr-f2']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA3', 'tr-ok']] }
+    ])];
+    const world = { routes: { DCX30: { stops: {
+      1: { expandFails: true, packages: [{ da: 'DA1', ref: 'tr-f1' }, { da: 'DA2', ref: 'tr-f2' }] },
+      2: { packages: [{ da: 'DA3', ref: 'tr-ok' }], onOpenTr: [['tr-ok', 'JP_OB-AT-0003_RED']] }
+    } } } };
+    const r = ubtRun(C, details, world);
+    assert(r.log.stopClicks.join(',') === '1,2', label + ' ubt-8: next Stop tried, got ' + r.log.stopClicks);
+    assert(r.res.packages.find((p) => p.referenceId === 'tr-f1').status === 'stop_expand_failed', label + ' ubt-8: failure recorded');
+    assert(r.res.packages.find((p) => p.referenceId === 'tr-ok').status === 'captured' && r.res.packageClicks === 0, label + ' ubt-8: continued');
+  })();
+
+  // caps: 3 routes / 5 stops / 20 packages
+  (function () {
+    const many = [];
+    for (let i = 1; i <= 5; i++) {
+      many.push(ubtDetails('DCX5' + i, [1, 2, 3, 4].map((seq) => ({ seq, status: 'NOT_STARTED',
+        pk: [0, 1, 2].map((k) => ['DA' + i + seq + k, 'tr-' + i + '-' + seq + '-' + k]) }))));
+    }
+    const sel = C.selectUnfinishedBagTargets(many, {}, { maxRoutes: 3, maxStops: 5, maxPackages: 20 });
+    const routes = new Set(sel.targets.map((t) => t.routeCode));
+    const stops = new Set(sel.targets.map((t) => t.routeCode + '#' + t.stop));
+    assert(routes.size <= 3 && stops.size <= 5 && sel.targets.length <= 20 && sel.targets.length > 0, label + ' ubt: caps');
+    assert(C.selectUnfinishedBagTargets(many, {}).limits.maxPackages === 20, label + ' ubt: default caps');
+  })();
+  console.log('ok: Unfinished Bag Test v1 (' + label + ')');
+}
+Core2 = RootCore;
+ubtSuite('root core');
+Core2 = PhaseCore;
+ubtSuite('phase1-core');
+
+// 9/10. runner wiring: separate button; normal Bag v3.5 unchanged; the test driver cannot click packages.
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  assert(runner.indexOf("mk('未完了Bagテスト'") >= 0 && runner.indexOf("mk('Bag取得'") >= 0, 'ubt: separate button');
+  assert(runner.indexOf("BAG_BUILD = 'Bag v3.12'") >= 0 && runner.indexOf("UNFINISHED_BAG_TEST_VERSION") >= 0, 'ubt: Bag v3.12 + test v1');
+  const t = runner.slice(runner.indexOf('  function startUnfinishedBagTest()'), runner.indexOf('  function stopBagPhase()'));
+  const findPkg = t.slice(t.indexOf('findPackage: function'), t.indexOf('clickPackage: function'));
+  assert(findPkg.indexOf("status: 'no_trdetails_after_stop_open'") >= 0 && findPkg.indexOf('safeCdpClick') < 0 &&
+    findPkg.indexOf('base.') < 0, 'ubt-10: findPackage never reaches the package DOM');
+  const clickPkg = t.slice(t.indexOf('clickPackage: function'), t.indexOf('setBagStatus(', t.indexOf('clickPackage: function')));
+  assert(clickPkg.indexOf('packageClickViolations') >= 0 && clickPkg.indexOf('Cdp') < 0 && clickPkg.indexOf('base.') < 0,
+    'ubt-10: clickPackage disabled');
+  assert(t.indexOf('UNFINISHED_TEST_TR_WAIT_MS') >= 0 && runner.indexOf('UNFINISHED_TEST_TR_WAIT_MS = 3000') >= 0, 'ubt: 3 s wait');
+  const start = runner.slice(runner.indexOf('  function startBagPhase()'), runner.indexOf('  function onReady('));
+  assert(start.indexOf('unfinished') < 0 && start.indexOf('driver: createBagDriver(ctx, runId)') >= 0, 'ubt-9: startBagPhase unchanged');
+  assert(runner.indexOf('unfinishedBagTest: lastUnfinishedTest') >= 0, 'ubt: diagnostics JSON block');
+  assert(t.indexOf('fetch(') < 0 && t.indexOf('XMLHttpRequest') < 0, 'ubt: no request creation');
+  console.log('ok: Unfinished Bag Test v1 runner wiring');
+})();
+
+// ---------------- Bag v3.6: Stop open is the first capture path ----------------
+function v36Details(code, stops) {
+  return details(code, stops.map((st) => Object.assign(stop(st.seq, st.pk.map(([da, ref]) => task({ scannableId: da, referenceId: ref }))),
+    { status: st.status })));
+}
+function v36Run(C, detailsList, world, override) {
+  const sel = C.selectBagTargets(detailsList, {});
+  const w = fakeWorld(world);
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  let aborted = null;
+  const driver = Object.assign({}, w.driver, override ? override(w) : {});
+  C.runBagEngine({ run, routes, driver, getTrMap: () => w.trMap, schedule: () => 1, cancel: () => {}, done: (a) => { aborted = a; } });
+  return { sel, run, log: w.log, aborted, trMap: w.trMap, summary: C.summarizeBagRun(run, w.trMap) };
+}
+function v36Suite(label) {
+  const C = Core2;
+  // 1/2/3/4/7/13: status categories, order, Stop-open capture, null never falls back, click 0
+  (function () {
+    const d = [v36Details('DCX60', [
+      { seq: 1, status: 'COMPLETE', pk: [['DA0000006001', 'tr-601']] },
+      { seq: 2, status: 'ARRIVED', pk: [['DA0000006002', 'tr-602']] },
+      { seq: 3, status: 'IN_PROGRESS', pk: [['DA0000006003', 'tr-603']] },
+      { seq: 4, status: 'NOT_STARTED', pk: [['DA0000006004', 'tr-604']] }
+    ])];
+    const world = { routes: { DCX60: { stops: {
+      1: { packages: [{ da: 'DA0000006001', ref: 'tr-601', tr: [['tr-601', 'SHOULD_NOT_CLICK']] }], onOpenTr: [['tr-601', null]] },
+      2: { packages: [{ da: 'DA0000006002', ref: 'tr-602' }], onOpenTr: [['tr-602', 'JP_OB-AT-0602_RED']] },
+      3: { packages: [{ da: 'DA0000006003', ref: 'tr-603' }], onOpenTr: [['tr-603', 'JP_OB-AT-0603_NVY']] },
+      4: { packages: [{ da: 'DA0000006004', ref: 'tr-604' }], onOpenTr: [['tr-604', 'JP_OB-AT-0604_YLO']] }
+    } } } };
+    const r = v36Run(C, d, world);
+    assert(r.sel.targets.length === 4, label + ' v3.6-14: COMPLETE stays a 13:00 target');
+    assert(r.log.stopClicks.join(',') === '4,3,2,1', label + ' v3.6-13: NOT_STARTED, IN_PROGRESS, other, COMPLETE, got ' + r.log.stopClicks);
+    const b = r.summary.byReferenceId;
+    assert(b['tr-604'] === 'captured' && b['tr-603'] === 'captured' && b['tr-602'] === 'captured', label + ' v3.6-1/2: captured by Stop open');
+    assert(b['tr-601'] === 'captured_null', label + ' v3.6-3: COMPLETE null');
+    assert(r.log.packageClicks.length === 0 && r.summary.clicks === 0, label + ' v3.6-4/7: package click 0, null not retried');
+    const so = r.summary.stopOpen;
+    assert(so.stopOpenBagCaptured === 3 && so.stopOpenBagNull === 1 && so.stopOpenNoTrDetails === 0 && so.stopOpenTrDetailsReceived === 4 &&
+      so.capturedByStopOpen === 3 && so.capturedByPackageClick === 0 && so.packageFallbackTargets === 0 && so.actualPackageClicks === 0,
+    label + ' v3.6: stopOpen summary ' + JSON.stringify(so));
+    assert(r.summary.byStopStatus.COMPLETE.captured_null === 1 && r.summary.byStopStatus.NOT_STARTED.captured === 1 &&
+      r.summary.byStopStatus.OTHER.captured === 1 && r.summary.byStopStatus.IN_PROGRESS.captured === 1, label + ' v3.6: byStopStatus');
+    assert(C.stopStatusCategory('complete') === 'COMPLETE' && C.stopStatusCategory('') === 'UNKNOWN' && C.stopStatusPriority('NOT_STARTED') === 0 &&
+      C.stopStatusPriority('IN_PROGRESS') === 1 && C.stopStatusPriority('ARRIVED') === 2 && C.stopStatusPriority('COMPLETE') === 3, label + ' v3.6: categories');
+    const text = C.formatBagSummary(r.summary);
+    assert(text.indexOf('Stop-open取得 3 / Stop-open null 1 / trDetailsなし 0') >= 0 && text.indexOf('package fallback 0 / package click 0') >= 0 &&
+      text.indexOf('click 0 / Stop click 4') >= 0 && text.indexOf('Bag取得完了') === 0, label + ' v3.6: panel text');
+  })();
+
+  // 5/6/8: one Stop, 3 packages, one open; only the package without trDetails falls back
+  (function () {
+    const d = [v36Details('DCX61', [{ seq: 15, status: 'NOT_STARTED', pk: [['DA0000006101', 'tr-a'], ['DA0000006102', 'tr-b'], ['DA0000006103', 'tr-c']] }])];
+    const all = { routes: { DCX61: { stops: { 15: {
+      packages: [{ da: 'DA0000006101', ref: 'tr-a' }, { da: 'DA0000006102', ref: 'tr-b' }, { da: 'DA0000006103', ref: 'tr-c' }],
+      onOpenTr: [['tr-a', 'BAG_A'], ['tr-b', 'BAG_A'], ['tr-c', 'BAG_B']] } } } } };
+    const r1 = v36Run(C, d, all);
+    assert(r1.log.stopClicks.join(',') === '15' && r1.summary.counts.captured === 3 && r1.summary.clicks === 0 && r1.log.packageClicks.length === 0,
+      label + ' v3.6-5: one Stop click, 3 captured, 0 package click');
+    const part = { routes: { DCX61: { stops: { 15: {
+      packages: [{ da: 'DA0000006101', ref: 'tr-a' }, { da: 'DA0000006102', ref: 'tr-b' }, { da: 'DA0000006103', ref: 'tr-c', tr: [['tr-c', 'BAG_B']] }],
+      onOpenTr: [['tr-a', 'BAG_A'], ['tr-b', null]] } } } } };
+    const r2 = v36Run(C, d, part);
+    assert(r2.log.stopClicks.length === 1 && r2.log.packageClicks.join(',') === 'DA0000006103', label + ' v3.6-6/8: only no-trDetails package clicked');
+    const so = r2.summary.stopOpen;
+    assert(so.stopOpenBagCaptured === 1 && so.stopOpenBagNull === 1 && so.stopOpenNoTrDetails === 1 && so.packageFallbackTargets === 1 &&
+      so.packageFallbackAttempted === 1 && so.actualPackageClicks === 1 && so.capturedByPackageClick === 1 && so.capturedByStopOpen === 1,
+    label + ' v3.6-6: fallback stats ' + JSON.stringify(so));
+    assert(r2.summary.byReferenceId['tr-b'] === 'captured_null' && r2.summary.byReferenceId['tr-c'] === 'captured', label + ' v3.6-7: null kept, fallback captured');
+    assert(r2.run.clickedRefs['tr-c'] && !r2.run.clickedRefs['tr-a'] && !r2.run.clickedRefs['tr-b'], label + ' v3.6: actualPackageClick only for tr-c');
+  })();
+
+  // 9: click counted only when really dispatched
+  (function () {
+    const d = [v36Details('DCX62', [{ seq: 1, status: 'NOT_STARTED', pk: [['DA0000006201', 'tr-x']] }, { seq: 2, status: 'NOT_STARTED', pk: [['DA0000006202', 'tr-y']] }])];
+    const world = { routes: { DCX62: { stops: { 1: { packages: [{ da: 'DA0000006201', ref: 'tr-x' }] }, 2: { packages: [{ da: 'DA0000006202', ref: 'tr-y' }] } } } } };
+    const r = v36Run(C, d, world, () => ({
+      clickPackage(target, handle, cb) {
+        if (target.referenceId === 'tr-x') cb({ ok: false, detail: 'element lost' }); // nothing dispatched
+        else cb({ ok: false, clicked: true, detail: 'CDP error' }); // dispatched, then failed
+      }
+    }));
+    assert(r.summary.clicks === 1 && r.run.clickedRefs['tr-y'] && !r.run.clickedRefs['tr-x'], label + ' v3.6-9: clicks ' + r.summary.clicks);
+    assert(r.summary.byReferenceId['tr-x'] === 'click_failed' && r.summary.stopOpen.packageFallbackTargets === 2, label + ' v3.6-9: statuses');
+  })();
+
+  // 10/11/12: Stop close outcomes (the retry-once itself lives in the runner, asserted in wiring)
+  (function () {
+    const d = [v36Details('DCX63', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA0000006301', 'tr-1']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA0000006302', 'tr-2']] },
+      { seq: 3, status: 'NOT_STARTED', pk: [['DA0000006303', 'tr-3']] }
+    ])];
+    const world = (leave1, leave2) => ({ routes: { DCX63: { stops: {
+      1: { leave: leave1, packages: [{ da: 'DA0000006301', ref: 'tr-1' }], onOpenTr: [['tr-1', 'B1']] },
+      2: { leave: leave2, packages: [{ da: 'DA0000006302', ref: 'tr-2' }], onOpenTr: [['tr-2', 'B2']] },
+      3: { packages: [{ da: 'DA0000006303', ref: 'tr-3' }], onOpenTr: [['tr-3', 'B3']] }
+    } } } });
+    const ok = v36Run(C, d, world('leftOpen'));
+    assert(ok.log.stopClicks.join(',') === '1,2,3' && ok.summary.counts.captured === 3 && ok.run.routeResults[0].status === 'done' &&
+      ok.run.routeResults[0].leaveFailures.length === 1, label + ' v3.6-10/11: recoverable close failure -> next Stop');
+    const bad = v36Run(C, d, world(undefined, 'fail'));
+    assert(bad.log.stopClicks.join(',') === '1,2' && bad.run.routeResults[0].reasonCode === 'stop_leave_failed' &&
+      bad.summary.byReferenceId['tr-1'] === 'captured' && bad.summary.byReferenceId['tr-3'] === 'route_aborted', label + ' v3.6-12: unrecoverable -> Route abort');
+  })();
+  console.log('ok: Bag v3.6 Stop-open first (' + label + ')');
+}
+Core2 = RootCore;
+v36Suite('root core');
+Core2 = PhaseCore;
+v36Suite('phase1-core');
+
+// 14: the 13:00 target set does not depend on Stop status
+(function () {
+  [RootCore, PhaseCore].forEach((C, k) => {
+    const base = fixture();
+    const withStatus = fixture();
+    withStatus.rmsRouteDetails.stops.forEach((st, i) => { st.status = ['COMPLETE', 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETE', 'ARRIVED'][i]; });
+    const a = C.selectBagTargets([base], {}).targets.map((t) => t.referenceId).sort().join(',');
+    const b = C.selectBagTargets([withStatus], {}).targets.map((t) => t.referenceId).sort().join(',');
+    assert(a === b && a === 'tr-a,tr-b,tr-d', 'v3.6-14: same 13:00 targets (' + k + '): ' + a + ' / ' + b);
+  });
+  console.log('ok: v3.6 13:00 target set unchanged');
+})();
+
+// runner wiring v3.6: close retry kept, null never falls back, click only when dispatched, state separation
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const leave = bag.slice(bag.indexOf('      leaveStop: function (stop, cb) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(/if \(n === 0\) \{ retry\(ad\); return; \}/.test(leave) && leave.indexOf('var usable = routeDetailUsable();') >= 0, 'v3.6-10: v3.5 close retry kept');
+  assert(bag.indexOf("waitCortexTr('present', cb)") >= 0 && bag.indexOf("waitCortexTr('already_open', cb)") >= 0, 'v3.6: already-open Stops wait too');
+  assert(bag.indexOf('clicked: !!res.dispatched') >= 0 && bag.indexOf('dispatched: true') >= 0, 'v3.6-9: dispatch reported');
+  ['stopStatusCategory', 'trDetailsReceived', 'receivedAfterStopOpen', 'elapsedAfterStopOpenMs', 'stopOpenResult', 'packageFallback'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0, 'v3.6 target diag ' + k);
+  });
+  const fin = bag.slice(bag.indexOf('  function finishUnfinishedTest('), bag.indexOf('  function startUnfinishedBagTest('));
+  assert(fin.indexOf('bagStatusByReferenceId') < 0 && fin.indexOf('bagRun = unfinishedTest.previousBagRun;') >= 0, 'v3.6-18: test never mixes into the normal Bag state');
+  console.log('ok: v3.6 runner wiring');
+})();
+
+// ---------------- Bag v3.7: Stop-open retry v2 + Stop-level diagnostics ----------------
+// Fake Stop list row for Core.runStopOpenAttempts: every resolve() re-renders the row (new button
+// object, the old one disconnected), like Cortex re-rendering the list.
+function fakeStopDom(C, spec) {
+  spec = spec || {};
+  const state = { aria: false, sel: spec.selBefore == null ? null : spec.selBefore, da: false, pkg: false };
+  const trMap = spec.trMap || {};
+  const pending = spec.pending || [{ referenceId: 'tr-1', scannableId: 'DA0000007001' }];
+  const baseline = {};
+  pending.forEach((t) => { if (C.hasTrDetails(trMap, t.referenceId)) baseline[t.referenceId] = true; });
+  const log = { resolves: [], clicks: [], clickedIds: [], buttons: [] };
+  let gen = 0;
+  function obs() {
+    return {
+      ariaExpanded: state.aria, targetDaVisible: state.da,
+      targetTrDetailsReceived: C.targetTrDetailsArrived(trMap, pending, baseline).length,
+      selectedStopIdBefore: spec.selBefore == null ? null : spec.selBefore, selectedStopIdAfter: state.sel, targetPackageDom: state.pkg
+    };
+  }
+  function open(kind) {
+    if (kind === 'aria') state.aria = true;
+    else if (kind === 'da') state.da = true;
+    else if (kind === 'selected') state.sel = 'stop-xyz';
+    else if (kind === 'package') state.pkg = true;
+    else if (kind === 'tr') C.mergeTrDetailsMaps(trMap, { [pending[0].referenceId]: { trId: pending[0].referenceId, bagName: 'BAG_T', bagScannableId: 's' } });
+    else if (kind === 'unrelated') C.mergeTrDetailsMaps(trMap, { 'tr-other-stop': { trId: 'tr-other-stop', bagName: 'BAG_X', bagScannableId: 's' } });
+  }
+  const o = {
+    maxAttempts: spec.maxAttempts,
+    resolve(n, strategy, cb) {
+      log.resolves.push(strategy);
+      log.buttons.forEach((b) => { b.connected = false; });
+      if ((spec.missingOn || []).indexOf(n) >= 0) { cb(null, { candidateCount: 0 }); return; }
+      const btn = { id: ++gen, connected: true };
+      log.buttons.push(btn);
+      if ((spec.staleOn || []).indexOf(n) >= 0) btn.connected = false;
+      cb(btn, { candidateCount: 1 });
+    },
+    click(n, target, rec, cb) {
+      assert(target.connected !== false, 'v3.7: never clicks a disconnected button');
+      log.clicks.push(n);
+      log.clickedIds.push(target.id);
+      if (spec.covered) { cb({ ok: false, covered: true, detail: 'covered by div#popover' }); return; }
+      if (spec.opensOn === n) open(spec.signal || 'aria');
+      if (spec.lateAfter === n) spec.lateOpen = true;
+      cb({ ok: true });
+    },
+    observe(n, rec, cb) {
+      const s = C.stopOpenSignal(obs());
+      if (!s && spec.lateOpen) { spec.lateOpen = false; open(spec.signal || 'aria'); }
+      cb(s);
+    },
+    isOpen() { return C.stopOpenSignal(obs()); }
+  };
+  let final = null;
+  o.done = (f) => { final = f; };
+  C.runStopOpenAttempts(o);
+  return { final, log, trMap };
+}
+
+function retryWorld(spec) {
+  const w = fakeWorld(spec);
+  const C = Core2;
+  w.log.ensureCalls = [];
+  const cur = () => w.current;
+  const base = w.driver;
+  const openRoute = base.openRoute;
+  w.driver.openRoute = function (route, cb) {
+    openRoute(route, (res) => { if (res.ok) w.current = spec.routes[route.routeCode]; cb(res); });
+  };
+  w.driver.ensureStop = function (stop, pending, onState, cb) {
+    w.log.ensureCalls.push(stop.stop);
+    const st = cur().stops[stop.stop];
+    if (st.expanded) { cb({ ok: true, clicked: false, stopDiag: { openResult: 'already_open', clickAttempts: [] } }); return; }
+    const baseline = {};
+    pending.forEach((t) => { if (C.hasTrDetails(w.trMap, t.referenceId)) baseline[t.referenceId] = true; });
+    function sig() {
+      return C.stopOpenSignal({
+        ariaExpanded: !!st.expanded,
+        targetTrDetailsReceived: C.targetTrDetailsArrived(w.trMap, pending, baseline).length
+      });
+    }
+    C.runStopOpenAttempts({
+      resolve: (n, strategy, done) => done({ connected: true }, { candidateCount: 1 }),
+      click: (n, target, rec, done) => {
+        if (st.covered) { done({ ok: false, covered: true, detail: 'covered by div#popover' }); return; }
+        w.log.stopClicks.push(stop.stop);
+        if (st.opensOn === n) {
+          if (!st.trOnly) st.expanded = true;
+          (st.onOpenTr || []).forEach(([trId, bagName]) => {
+            C.mergeTrDetailsMaps(w.trMap, { [trId]: { trId, bagName, bagScannableId: bagName ? 's' : null } });
+          });
+        }
+        done({ ok: true });
+      },
+      observe: (n, rec, done) => done(sig()),
+      isOpen: sig,
+      done: (f) => {
+        const stopDiag = { openResult: f.opened ? 'opened' : 'stop_expand_failed', clickAttempts: f.attempts,
+          openedBy: f.openedBy, openedAttempt: f.openedAttempt };
+        if (f.blocked) { cb({ ok: false, blocked: true, status: 'stop_expand_failed', detail: f.detail, clicked: false, stopDiag }); return; }
+        if (f.opened) { cb({ ok: true, clicked: f.clickCount > 0, clickCount: f.clickCount, stopDiag }); return; }
+        cb({ ok: false, clicked: f.clickCount > 0, clickCount: f.clickCount, status: 'stop_expand_failed', detail: f.detail, stopDiag });
+      }
+    });
+  };
+  return w;
+}
+
+function v37Run(C, detailsList, spec) {
+  const sel = C.selectBagTargets(detailsList, {});
+  const w = retryWorld(spec);
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  let aborted = null;
+  const findCalls = [];
+  const findPackage = w.driver.findPackage;
+  w.driver.findPackage = (t, stop, cb) => { findCalls.push(t.referenceId); findPackage(t, stop, cb); };
+  C.runBagEngine({ run, routes, driver: w.driver, getTrMap: () => w.trMap, schedule: () => 1, cancel: () => {}, done: (a) => { aborted = a; } });
+  const summary = C.summarizeBagRun(run, w.trMap);
+  return { sel, run, log: w.log, aborted, trMap: w.trMap, summary, findCalls,
+    stops: C.buildStopProcessingDiagnostics(run, w.trMap) };
+}
+
+function v37Suite(label) {
+  const C = Core2;
+  assert(C.STOP_OPEN_MAX_ATTEMPTS === 3 && C.STOP_OPEN_STRATEGIES.join(',') === 'initial,row_refind,route_refind', label + ' v3.7: 1 + 2 retries');
+
+  // 1. first open succeeds
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 1 });
+    assert(r.final.opened && r.final.openedAttempt === 1 && r.final.openedBy === 'aria_expanded' && r.log.clicks.join(',') === '1',
+      label + ' v3.7-1: first open ' + JSON.stringify(r.final));
+  })();
+  // 2. fail -> retry1 (row re-find) succeeds
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 2 });
+    assert(r.final.opened && r.final.openedAttempt === 2 && r.log.clicks.join(',') === '1,2' &&
+      r.log.resolves.join(',') === 'initial,row_refind' && r.final.attempts[0].result === 'not_opened',
+    label + ' v3.7-2: retry1 success ' + JSON.stringify(r.final));
+  })();
+  // 3. retry1 fails -> retry2 (Route re-find) succeeds
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 3, signal: 'da' });
+    assert(r.final.opened && r.final.openedAttempt === 3 && r.final.openedBy === 'target_da' &&
+      r.log.resolves.join(',') === 'initial,row_refind,route_refind' && r.log.clicks.length === 3, label + ' v3.7-3: retry2 success');
+  })();
+  // 4. all three fail -> stop_expand_failed; never more than 3 clicks even if asked for more
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 0, maxAttempts: 10 });
+    assert(!r.final.opened && !r.final.blocked && r.final.attempts.length === 3 && r.final.clickCount === 3 && r.log.clicks.length === 3,
+      label + ' v3.7-4: 3 attempts max ' + JSON.stringify(r.final));
+    const one = fakeStopDom(C, { opensOn: 0, maxAttempts: 1 });
+    assert(one.log.clicks.length === 1 && !one.final.opened, label + ' v3.7: maxAttempts 1 (package-fallback reopen) = v3.6 single click');
+  })();
+  // 5/6. each attempt re-finds the button; a stale element is never clicked
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 0 });
+    const ids = r.log.clickedIds;
+    assert(r.log.resolves.length === 3 && new Set(ids).size === 3, label + ' v3.7-5: fresh element per attempt ' + ids);
+    const s = fakeStopDom(C, { opensOn: 3, staleOn: [2] });
+    assert(s.log.clicks.join(',') === '1,3' && s.final.attempts[1].result === 'stale_element' && s.final.attempts[1].clicked === false &&
+      s.final.opened && s.final.openedAttempt === 3, label + ' v3.7-6: stale button skipped ' + JSON.stringify(s.final.attempts));
+    const m = fakeStopDom(C, { opensOn: 3, missingOn: [2] });
+    assert(m.final.attempts[1].result === 'button_not_found' && m.final.opened, label + ' v3.7: missing row on retry1 -> retry2');
+  })();
+  // 7. selectedStopId change proves the open
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 1, signal: 'selected', selBefore: null });
+    assert(r.final.opened && r.final.openedBy === 'selected_stop_id', label + ' v3.7-7: selectedStopId ' + JSON.stringify(r.final));
+    assert(C.stopOpenSignal({ selectedStopIdBefore: 'a', selectedStopIdAfter: 'a' }) === '' &&
+      C.stopOpenSignal({ selectedStopIdBefore: 'a', selectedStopIdAfter: null }) === '' &&
+      C.stopOpenSignal({ selectedStopIdBefore: 'a', selectedStopIdAfter: 'b' }) === 'selected_stop_id', label + ' v3.7-7: only a new non-empty id');
+    assert(C.stopOpenSignal({ ariaExpanded: 'false' }) === '' && C.stopOpenSignal({}) === '', label + ' v3.7: no signal');
+  })();
+  // 8. this Stop's target trDetails proves the open
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 1, signal: 'tr' });
+    assert(r.final.opened && r.final.openedBy === 'target_tr_details' && r.log.clicks.length === 1, label + ' v3.7-8: target trDetails');
+    const pkg = fakeStopDom(C, { opensOn: 2, signal: 'package' });
+    assert(pkg.final.opened && pkg.final.openedBy === 'target_package_dom', label + ' v3.7: row package DOM');
+  })();
+  // 9. unrelated trDetails (another referenceId, or a row that was already there) never proves the open
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 1, signal: 'unrelated' });
+    assert(!r.final.opened && r.log.clicks.length === 3, label + ' v3.7-9: unrelated trDetails ignored');
+    const pre = {};
+    C.mergeTrDetailsMaps(pre, { 'tr-1': { trId: 'tr-1', bagName: null, bagScannableId: null } });
+    const p = fakeStopDom(C, { opensOn: 0, trMap: pre });
+    assert(!p.final.opened, label + ' v3.7-9: trDetails present before the open is not proof');
+    const t = [{ referenceId: 'tr-a' }, { referenceId: 'tr-b' }];
+    const m = { 'tr-a': { bagName: 'X' }, 'tr-z': { bagName: 'Y' } };
+    assert(C.targetTrDetailsArrived(m, t, {}).join(',') === 'tr-a' && C.targetTrDetailsArrived(m, t, { 'tr-a': true }).length === 0,
+      label + ' v3.7-9: targetTrDetailsArrived');
+  })();
+  // late open: visible only after the observe window -> no second click (would collapse the row)
+  (function () {
+    const r = fakeStopDom(C, { opensOn: 0, lateAfter: 1 });
+    assert(r.final.opened && r.final.lateDetected && r.final.openedAttempt === 1 && r.log.clicks.length === 1,
+      label + ' v3.7: late open detected before retry, no extra click ' + JSON.stringify(r.final));
+  })();
+  // 19. covered -> blocked, no retry (v3.6 ui_blocked kept)
+  (function () {
+    const r = fakeStopDom(C, { covered: true });
+    assert(r.final.blocked && !r.final.opened && r.final.attempts.length === 1 && r.final.clickCount === 0, label + ' v3.7-19: covered -> no retry');
+  })();
+
+  // 10/11. one Stop, 3 packages: ensureStop once, opened on retry1, all 3 captured, 0 package click
+  (function () {
+    const d = [v36Details('DCX70', [{ seq: 15, status: 'NOT_STARTED', pk: [['DA0000007101', 'tr-a'], ['DA0000007102', 'tr-b'], ['DA0000007103', 'tr-c']] }])];
+    const spec = { routes: { DCX70: { stops: { 15: { opensOn: 2,
+      packages: [{ da: 'DA0000007101', ref: 'tr-a' }, { da: 'DA0000007102', ref: 'tr-b' }, { da: 'DA0000007103', ref: 'tr-c' }],
+      onOpenTr: [['tr-a', 'BAG_A'], ['tr-b', 'BAG_A'], ['tr-c', 'BAG_B']] } } } } };
+    const r = v37Run(C, d, spec);
+    assert(r.log.ensureCalls.join(',') === '15' && r.log.stopClicks.join(',') === '15,15', label + ' v3.7-10: one Stop open (1 retry) ' + r.log.stopClicks);
+    assert(r.summary.counts.captured === 3 && r.summary.clicks === 0 && r.log.packageClicks.length === 0 && r.findCalls.length === 0,
+      label + ' v3.7-11: 3 captured by one open');
+    const so = r.summary.stopOpen;
+    assert(so.uniqueTargetStops === 1 && so.successfulStopOpens === 1 && so.failedStopOpens === 0 && so.stopOpenRetry1 === 1 &&
+      so.stopOpenRetry1Success === 1 && so.stopOpenRetry2 === 0 && so.trDetailsReceivedAfterRetry === 3 && so.bagCapturedAfterRetry === 3 &&
+      so.stopOpenBagCaptured === 3 && so.capturedByStopOpen === 3, label + ' v3.7: summary ' + JSON.stringify(so));
+    assert(r.summary.stopClicks === 2, label + ' v3.7: Stop click counts every dispatched click');
+    const rec = r.stops[0];
+    assert(rec.routeCode === 'DCX70' && rec.stopNumber === 15 && rec.targetCount === 3 && rec.targetReferenceIds.join(',') === 'tr-a,tr-b,tr-c' &&
+      rec.clickAttemptCount === 2 && rec.clickAttempts.length === 2 && rec.openResult === 'opened' && rec.openedAttempt === 2 &&
+      rec.closeResult === 'closed' && rec.trDetailsReceivedCount === 3 && rec.bagCapturedCount === 3 && rec.noTrDetailsCount === 0 &&
+      rec.stopStatus === 'NOT_STARTED' && typeof rec.elapsedMs === 'number', label + ' v3.7-12: stopProcessingDiagnostics ' + JSON.stringify(rec));
+    const text = C.formatBagSummary(r.summary);
+    assert(text.indexOf('Stop成功 1/1 / retry救済 1') >= 0 && text.indexOf('Stop-open取得 3 / Stop-open null 0 / trDetailsなし 0') >= 0 &&
+      text.indexOf('package fallback 0 / package click 0') >= 0, label + ' v3.7: panel ' + text);
+  })();
+
+  // 12/13/14. null -> captured_null without fallback; trDetails-less only -> fallback; failed Stop -> no fallback
+  (function () {
+    const d = [v36Details('DCX71', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA0000007201', 'tr-null'], ['DA0000007202', 'tr-none']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA0000007203', 'tr-f1'], ['DA0000007204', 'tr-f2'], ['DA0000007205', 'tr-f3']] },
+      { seq: 3, status: 'NOT_STARTED', pk: [['DA0000007206', 'tr-g1'], ['DA0000007207', 'tr-g2']] }
+    ])];
+    const spec = { routes: { DCX71: { stops: {
+      1: { opensOn: 1, packages: [{ da: 'DA0000007201', ref: 'tr-null' }, { da: 'DA0000007202', ref: 'tr-none', tr: [['tr-none', 'BAG_PK']] }],
+        onOpenTr: [['tr-null', null]] },
+      2: { opensOn: 0, packages: [{ da: 'DA0000007203', ref: 'tr-f1' }, { da: 'DA0000007204', ref: 'tr-f2' }, { da: 'DA0000007205', ref: 'tr-f3' }] },
+      3: { opensOn: 0, packages: [{ da: 'DA0000007206', ref: 'tr-g1' }, { da: 'DA0000007207', ref: 'tr-g2' }] }
+    } } } };
+    const r = v37Run(C, d, spec);
+    const b = r.summary.byReferenceId;
+    assert(b['tr-null'] === 'captured_null' && r.findCalls.indexOf('tr-null') < 0, label + ' v3.7-12/13: null kept, no fallback');
+    assert(r.findCalls.join(',') === 'tr-none' && r.log.packageClicks.join(',') === 'DA0000007202' && b['tr-none'] === 'captured',
+      label + ' v3.7-14: only the trDetails-less package falls back ' + r.findCalls);
+    assert(['tr-f1', 'tr-f2', 'tr-f3', 'tr-g1', 'tr-g2'].every((ref) => b[ref] === 'stop_expand_failed'), label + ' v3.7: failed Stops');
+    assert(r.log.ensureCalls.join(',') === '1,2,3' && r.log.stopClicks.filter((s) => s === 2).length === 3 &&
+      r.log.stopClicks.filter((s) => s === 3).length === 3, label + ' v3.7: a failed Stop is tried 3 times once, not per package ' + r.log.stopClicks);
+    const so = r.summary.stopOpen;
+    assert(so.stopExpandFailedPackages === 5 && so.stopExpandFailedStops === 2 && so.failedStopOpens === 2 && so.successfulStopOpens === 1 &&
+      so.stopOpenRetry1 === 2 && so.stopOpenRetry2 === 2 && so.stopOpenRetry1Success === 0 && so.stopOpenRetry2Success === 0,
+    label + ' v3.7: Stop-level failure counts ' + JSON.stringify(so));
+    assert(C.formatBagSummary(r.summary).indexOf('Stop展開失敗 5 package / 2 Stop') >= 0 &&
+      C.formatBagSummary(r.summary).indexOf('Stop成功 1/3 / retry救済 0') >= 0, label + ' v3.7: package / Stop split in panel');
+    assert(r.run.routeResults[0].status === 'done' && r.summary.counts.route_aborted === 0, label + ' v3.7-18: failed Stops never abort the Route');
+    const failed = r.stops.filter((s) => s.openResult === 'stop_expand_failed');
+    assert(failed.length === 2 && failed[0].clickAttemptCount === 3 && failed[0].closeResult === '' && failed[0].failureReason,
+      label + ' v3.7: failed Stop record ' + JSON.stringify(failed[0]));
+    // 15. actual click evidence per fallback target
+    const fb = r.run.fallbackDiagnostics['tr-none'];
+    assert(fb && fb.packageDomFound === true && fb.clickTargetFound === true && fb.actualClickAttempted === true && fb.result === 'captured' &&
+      Object.keys(r.run.fallbackDiagnostics).length === 1, label + ' v3.7-15: fallback diagnostics ' + JSON.stringify(fb));
+  })();
+
+  // 8 (engine). trDetails without any DOM change counts as opened; captured by Stop open
+  (function () {
+    const d = [v36Details('DCX72', [{ seq: 4, status: 'NOT_STARTED', pk: [['DA0000007301', 'tr-t']] }])];
+    const spec = { routes: { DCX72: { stops: { 4: { opensOn: 1, trOnly: true, packages: [{ da: 'DA0000007301', ref: 'tr-t' }], onOpenTr: [['tr-t', 'BAG_T']] } } } } };
+    const r = v37Run(C, d, spec);
+    assert(r.summary.byReferenceId['tr-t'] === 'captured' && r.stops[0].openedBy === 'target_tr_details' && r.log.stopClicks.length === 1 &&
+      r.summary.stopOpen.capturedByStopOpen === 1, label + ' v3.7-8: trDetails-proven open ' + JSON.stringify(r.stops[0]));
+  })();
+
+  // 19 (engine). covered Stop row -> UI blocked Route, no retry click
+  (function () {
+    const d = [v36Details('DCX73', [{ seq: 1, status: 'NOT_STARTED', pk: [['DA0000007401', 'tr-u']] }])];
+    const r = v37Run(C, d, { routes: { DCX73: { stops: { 1: { covered: true, packages: [{ da: 'DA0000007401', ref: 'tr-u' }] } } } } });
+    assert(r.run.routeResults[0].status === 'ui_blocked' && r.log.stopClicks.length === 0 && r.summary.byReferenceId['tr-u'] === 'ui_blocked',
+      label + ' v3.7-19: UI blocked kept');
+  })();
+
+  // fallback lookup classification
+  (function () {
+    const p = C.packageLookupFallbackPatch;
+    assert(p({ ok: false, status: 'package_dom_not_found', candidateCount: 0 }).failureReason === 'package_dom_not_found' &&
+      p({ ok: false, status: 'package_click_target_not_found', candidateCount: 1 }).packageDomFound === true &&
+      p({ ok: false, status: 'package_click_target_not_found' }).clickTargetFound === false &&
+      p({ ok: false, status: 'dom_ambiguous', candidateCount: 2 }).failureReason === 'package_ambiguous' &&
+      p({ ok: true, candidateCount: 1 }).clickTargetFound === true, label + ' v3.7: fallback classification');
+  })();
+
+  // null diagnostics: row shape only, raw null kept, no inference
+  (function () {
+    const s = C.trDetailsRowShape({ trId: 'tr-1', bagName: null, bagScannableId: null, address: 'x', tote: 'T1' });
+    assert(s.hasBagName && s.bagNameRaw === null && s.keys.join(',') === 'trId,bagName,bagScannableId,address,tote' &&
+      Object.keys(s.bagFields).join(',') === 'bagName,bagScannableId,tote' && s.bagFields.address === undefined, label + ' v3.7: row shape ' + JSON.stringify(s));
+    assert(C.trDetailsRowShape({ trId: 'tr-2' }).bagNameRaw === 'missing' && C.trDetailsRowShape(null) === null, label + ' v3.7: missing bagName field');
+  })();
+  console.log('ok: Bag v3.7 Stop-open retry v2 (' + label + ')');
+}
+Core2 = RootCore;
+v37Suite('root core');
+Core2 = PhaseCore;
+v37Suite('phase1-core');
+
+// 20. 13:00 target count unchanged on the real sanitized Route (v3.7 did not touch selection)
+(function () {
+  const real = JSON.parse(readFileSync(join(root, 'tests', 'fixtures', 'cortex-13-priority', 'dcx47-sanitized.json'), 'utf8'));
+  [RootCore, PhaseCore].forEach((C) => {
+    const sel = C.selectBagTargets([real], {});
+    assert(sel.priorityCount === 13 && sel.priorityCount === C.extractFromRouteDetails(real).packages.length, 'v3.7-20: 13:00 packages 13 (as v3.6)');
+  });
+  console.log('ok: v3.7 13:00 target set unchanged');
+})();
+
+// runner wiring v3.7
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf('Core.STOP_OPEN_MAX_ATTEMPTS') >= 0, 'v3.7: retry via Core');
+  // 5/6: every attempt re-reads the DOM (row button / whole Route); the click resolver re-finds when disconnected
+  assert(ensure.indexOf("if (strategy === 'row_refind') {") >= 0 && ensure.indexOf('stopListRowInfo(row)') >= 0 &&
+    ensure.indexOf("row.querySelectorAll('[role=\"button\"][aria-expanded]')") >= 0, 'v3.7-5: retry1 re-reads the same row');
+  assert(ensure.indexOf('scrollSearch(function () {\n              var labels = findStopLabels(stop.stop);') >= 0, 'v3.7-5: retry2 re-searches the Route');
+  assert(ensure.indexOf('if (chosen && chosen.button.isConnected) return adopt(chosen);') >= 0 && ensure.indexOf('connected: t1.button.isConnected') >= 0,
+    'v3.7-6: stale element never reused');
+  // 16: Mapbox markers never clicked: labels via findStopLabels (excludeMarkers) / stopListTargetOf only
+  assert(ensure.indexOf('STOP_MARKER_KIND') < 0 && ensure.indexOf('svg') < 0 && ensure.indexOf('mapbox') < 0 &&
+    bag.indexOf("return Core.matchStopLabelEntries(entries, seq, { excludeMarkers: true })") >= 0 &&
+    bag.indexOf('if (!row || inMapbox(row)) return null;') >= 0, 'v3.7-16: Mapbox excluded');
+  assert(ensure.indexOf('usedLabels') >= 0 && bag.indexOf('function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater)') >= 0,
+    'v3.7: retry prefers a different safe point');
+  assert(ensure.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") < 0 && bag.indexOf("if (rel === 'self' || rel === 'child') chosen = p;") >= 0,
+    'v3.7-19: safe hit-test shared, unchanged');
+  // package-fallback reopen stays a single v3.6 click
+  assert(bag.indexOf('driver.searchPackage(target, cb);\n          }, { maxAttempts: 1, noExtendedWait: true, note: note });') >= 0, 'v3.7: fallback reopen single click');
+  ['stopProcessingDiagnostics', 'packageFallbackDiagnostics', 'bagNullDiagnostics', 'recordBagTrRows', 'BAG_STOP_CLICK_FAIL_DIAG_MAX'].forEach((k) => {
+    assert(bag.indexOf(k) >= 0 || runner.indexOf(k) >= 0, 'v3.7 diag ' + k);
+  });
+  // v3.6 Stop-open capture path intact: trDetails wait after an open, then the engine records stop_open
+  // (v3.8: the wait moved into waitStopTrDetails; normal 3 s still ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS)
+  assert(ensure.indexOf('waitStopTrDetails(ctx, runId, pending, openStarted, noExtraWait, function (tw) {') >= 0 && ensure.indexOf("waitCortexTr('already_open', cb)") >= 0 &&
+    bag.indexOf('normalMs: ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,') >= 0, 'v3.7: v3.6 Cortex trDetails wait kept');
+  // 21: UBT v1 still reads the same click-diag keys
+  const fin = bag.slice(bag.indexOf('  function finishUnfinishedTest('), bag.indexOf('  function startUnfinishedBagTest('));
+  ['d.result', 'd.expandedBy', 'd.stopList.ariaExpandedAfter', 'd.stopList.selectedStopIdAfter', 'd.cortexTrDetails', 'd.clicked'].forEach((k) => {
+    assert(fin.indexOf(k) >= 0, 'v3.7-21: UBT reads ' + k);
+  });
+  ['clickDiag.result', 'clickDiag.expandedBy', 'clickDiag.stopList.ariaExpandedAfter', 'clickDiag.stopList.selectedStopIdAfter', 'clickDiag.cortexTrDetails', 'clickDiag.clicked'].forEach((k) => {
+    assert(ensure.indexOf(k) >= 0, 'v3.7-21: ensureStop still writes ' + k);
+  });
+  console.log('ok: v3.7 runner wiring');
+})();
+
+// ---------------- Bag v3.8: normal 3 s + extended 3 s trDetails wait ----------------
+// Fake clock: wait() polls every 150 ms like waitBag; trDetails rows arrive at fixed times.
+function trClock(C, events) {
+  let t = 0;
+  const trMap = {};
+  const arrival = {};
+  const evs = (events || []).map((e) => Object.assign({}, e));
+  function apply() {
+    evs.forEach((e) => {
+      if (e.done || e.at > t) return;
+      e.done = true;
+      C.mergeTrDetailsMaps(trMap, { [e.ref]: { trId: e.ref, bagName: e.bag || null, bagScannableId: e.bag ? 's' : null } });
+      arrival[e.ref] = e.at;
+    });
+  }
+  return {
+    trMap,
+    now: () => t,
+    advance: (ms) => { t += ms; apply(); },
+    receivedAtOf: (ref) => (arrival[ref] == null ? null : arrival[ref]),
+    wait(check, ms, cb) {
+      const end = t + ms;
+      apply();
+      while (!check() && t < end) { t = Math.min(end, t + 150); apply(); }
+      cb(check());
+    }
+  };
+}
+
+function trWaitDirect(C, pending, events, opts) {
+  const clk = trClock(C, events);
+  const baseline = {};
+  (opts && opts.pre || []).forEach((ref) => {
+    C.mergeTrDetailsMaps(clk.trMap, { [ref]: { trId: ref, bagName: 'PRE', bagScannableId: 's' } });
+    baseline[ref] = true;
+  });
+  let res = null;
+  C.runTargetTrWait({
+    pending, trMap: () => clk.trMap, baseline, startedAt: clk.now(), now: clk.now, receivedAtOf: clk.receivedAtOf,
+    normalMs: 3000, extendedMs: opts && opts.extendedMs != null ? opts.extendedMs : 3000, wait: clk.wait, done: (r) => { res = r; }
+  });
+  return { res, clk };
+}
+
+// Engine run where every Stop opens on the first click and then uses Core.runTargetTrWait.
+function v38Run(C, detailsList, eventsByStop, extra) {
+  const sel = C.selectBagTargets(detailsList, {});
+  const routes = C.groupBagTargetsByRoute(sel.targets);
+  const run = C.createBagRun(sel.targets);
+  const log = { ensure: [], stopClicks: 0, find: [], clicks: [] };
+  let clk = trClock(C, []);
+  const trMap = {};
+  (extra && extra.pre || []).forEach(([ref, bag]) => C.mergeTrDetailsMaps(trMap, { [ref]: { trId: ref, bagName: bag, bagScannableId: 's' } }));
+  const driver = {
+    openRoute: (route, cb) => cb({ ok: true }),
+    ensureStop(stop, pending, onState, cb) {
+      log.ensure.push(stop.stop);
+      log.stopClicks += 1;
+      clk = trClock(C, eventsByStop[stop.stop] || []);
+      Object.keys(trMap).forEach((k) => { clk.trMap[k] = trMap[k]; });
+      const baseline = {};
+      pending.forEach((t) => { if (C.hasTrDetails(clk.trMap, t.referenceId)) baseline[t.referenceId] = true; });
+      C.runTargetTrWait({
+        pending, trMap: () => clk.trMap, baseline, startedAt: clk.now(), now: clk.now, receivedAtOf: clk.receivedAtOf,
+        normalMs: 3000, extendedMs: 3000, wait: clk.wait,
+        done: (r) => {
+          C.recordTrWait(run, r);
+          Object.keys(clk.trMap).forEach((k) => { trMap[k] = clk.trMap[k]; });
+          log.waited = (log.waited || []).concat(r.waitedMs);
+          cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+        }
+      });
+    },
+    findPackage(t, stop, cb) { log.find.push(t.referenceId); cb({ ok: false, status: 'package_dom_not_found', candidateCount: 0 }); },
+    clickPackage(t, h, cb) { log.clicks.push(t.referenceId); cb({ ok: true }); },
+    waitTrDetails: (t, cb) => cb(false),
+    restoreAfterPackage: (t, cb) => cb({ ok: true }),
+    leaveStop: (stop, cb) => cb({ ok: true }),
+    returnToList: (cb) => cb({ ok: true })
+  };
+  C.runBagEngine({ run, routes, driver, getTrMap: () => trMap, schedule: () => 1, cancel: () => {}, done: () => {} });
+  return { run, log, trMap, summary: C.summarizeBagRun(run, trMap) };
+}
+
+function v38Suite(label) {
+  const C = Core2;
+  assert(C.TR_WAIT_NORMAL_MS === 3000 && C.TR_WAIT_EXTENDED_MS === 3000, label + ' v3.8: 3 s + 3 s');
+  const one = (seq, ref, da) => [v36Details('DCX80', [{ seq, status: 'NOT_STARTED', pk: [[da, ref]] }])];
+
+  // A. arrives at 1 s -> normal, captured, no extended wait, wait ends right away
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-a' }], [{ at: 1000, ref: 'tr-a', bag: 'BAG_A' }]);
+    const r = d.res.records['tr-a'];
+    assert(r.waitPhase === 'normal' && !r.delayedRescue && r.trDetailsLatencyMs === 1000 && !d.res.extendedUsed && d.res.allArrived &&
+      d.res.waitedMs < 1200, label + ' v3.8-A: ' + JSON.stringify(d.res));
+    const e = v38Run(C, one(1, 'tr-a', 'DA0000008001'), { 1: [{ at: 1000, ref: 'tr-a', bag: 'BAG_A' }] });
+    assert(e.summary.byReferenceId['tr-a'] === 'captured' && e.log.find.length === 0 && e.summary.stopOpen.trWaitNormalReceived === 1 &&
+      e.summary.stopOpen.trWaitExtendedRescued === 0, label + ' v3.8-A engine');
+  })();
+
+  // B. arrives at 4.5 s -> extended, delayedRescue, captured, no package fallback
+  (function () {
+    const e = v38Run(C, one(2, 'tr-b', 'DA0000008002'), { 2: [{ at: 4500, ref: 'tr-b', bag: 'BAG_B' }] });
+    const r = e.run.trWait['tr-b'];
+    assert(r.waitPhase === 'extended' && r.delayedRescue === true && r.trDetailsLatencyMs === 4500 && r.targetTrDetailsReceivedAt === 4500,
+      label + ' v3.8-B record ' + JSON.stringify(r));
+    assert(e.summary.byReferenceId['tr-b'] === 'captured' && e.log.find.length === 0 && e.log.clicks.length === 0 &&
+      e.summary.stopOpen.stopOpenBagCaptured === 1 && e.summary.stopOpen.trWaitExtendedRescued === 1 && e.summary.stopOpen.trWaitExtendedCaptured === 1 &&
+      e.log.waited[0] < 4700, label + ' v3.8-B: rescued by the extended wait, ends on arrival');
+  })();
+
+  // C. arrives at 5 s with bagName null -> captured_null, no fallback
+  (function () {
+    const e = v38Run(C, one(3, 'tr-c', 'DA0000008003'), { 3: [{ at: 5000, ref: 'tr-c', bag: null }] });
+    assert(e.summary.byReferenceId['tr-c'] === 'captured_null' && e.log.find.length === 0 && e.run.trWait['tr-c'].delayedRescue === true &&
+      e.summary.stopOpen.stopOpenBagNull === 1 && e.summary.stopOpen.trWaitExtendedNull === 1, label + ' v3.8-C: null kept, no fallback');
+  })();
+
+  // D. nothing after 6 s -> package fallback
+  (function () {
+    const e = v38Run(C, one(4, 'tr-d', 'DA0000008004'), {});
+    const r = e.run.trWait['tr-d'];
+    assert(r.noTrDetailsAfterWait && r.targetTrDetailsReceivedAt === null && r.trDetailsLatencyMs === null && r.waitPhase === 'extended' &&
+      !r.delayedRescue && e.log.waited[0] === 6000, label + ' v3.8-D record ' + JSON.stringify(r));
+    assert(e.log.find.join(',') === 'tr-d' && e.summary.byReferenceId['tr-d'] === 'package_dom_not_found' &&
+      e.summary.stopOpen.stopOpenNoTrDetails === 1 && e.summary.stopOpen.trWaitNoTrDetailsAfterExtended === 1, label + ' v3.8-D: fallback after 6 s only');
+  })();
+
+  // E. one Stop, 3 targets arriving at 0.5 / 2 / 4 s -> one open, 2 normal + 1 extended
+  (function () {
+    const d = [v36Details('DCX81', [{ seq: 7, status: 'NOT_STARTED', pk: [['DA0000008101', 'tr-e1'], ['DA0000008102', 'tr-e2'], ['DA0000008103', 'tr-e3']] }])];
+    const e = v38Run(C, d, { 7: [{ at: 500, ref: 'tr-e1', bag: 'B1' }, { at: 2000, ref: 'tr-e2', bag: 'B1' }, { at: 4000, ref: 'tr-e3', bag: null }] });
+    assert(e.log.ensure.join(',') === '7' && e.log.stopClicks === 1 && e.log.find.length === 0, label + ' v3.8-E: one open for 3 targets');
+    const w = e.run.trWait;
+    assert(w['tr-e1'].waitPhase === 'normal' && w['tr-e2'].waitPhase === 'normal' && w['tr-e3'].delayedRescue &&
+      e.summary.counts.captured === 2 && e.summary.counts.captured_null === 1 && e.log.waited[0] < 4200, label + ' v3.8-E ' + JSON.stringify(w));
+  })();
+
+  // F. unrelated referenceId arriving never ends the wait nor counts as the target
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-f' }], [{ at: 500, ref: 'tr-other', bag: 'X' }]);
+    assert(!d.res.allArrived && d.res.records['tr-f'].noTrDetailsAfterWait && d.res.waitedMs === 6000 && !d.res.records['tr-other'],
+      label + ' v3.8-F: unrelated trDetails ignored ' + JSON.stringify(d.res));
+  })();
+
+  // G. preexisting trDetails is not a Stop-open arrival
+  (function () {
+    const d = trWaitDirect(C, [{ referenceId: 'tr-g' }, { referenceId: 'tr-g2' }], [{ at: 800, ref: 'tr-g2', bag: 'B' }], { pre: ['tr-g'] });
+    assert(d.res.records['tr-g'].waitPhase === 'preexisting' && d.res.records['tr-g'].delayedRescue === false &&
+      d.res.records['tr-g'].trDetailsLatencyMs === null && d.res.records['tr-g2'].waitPhase === 'normal', label + ' v3.8-G ' + JSON.stringify(d.res.records));
+    const s = C.summarizeTrWait({ targets: [{ referenceId: 'tr-g' }, { referenceId: 'tr-g2' }], trWait: d.res.records }, d.clk.trMap);
+    assert(s.trWaitNormalReceived === 1 && s.trWaitExtendedRescued === 0, label + ' v3.8-G: preexisting not counted');
+    // Unfinished Bag Test v1: extendedMs 0 keeps the single 3 s wait
+    const u = trWaitDirect(C, [{ referenceId: 'tr-u' }], [{ at: 4500, ref: 'tr-u', bag: 'B' }], { extendedMs: 0 });
+    assert(!u.res.extendedUsed && u.res.waitedMs === 3000 && u.res.records['tr-u'].noTrDetailsAfterWait, label + ' v3.8: UBT v1 single wait');
+  })();
+
+  // panel line + mixed day
+  (function () {
+    const d = [v36Details('DCX82', [
+      { seq: 1, status: 'NOT_STARTED', pk: [['DA0000008201', 'tr-p1']] },
+      { seq: 2, status: 'NOT_STARTED', pk: [['DA0000008202', 'tr-p2']] },
+      { seq: 3, status: 'NOT_STARTED', pk: [['DA0000008203', 'tr-p3']] }
+    ])];
+    const e = v38Run(C, d, { 1: [{ at: 300, ref: 'tr-p1', bag: 'B' }], 2: [{ at: 3600, ref: 'tr-p2', bag: 'B' }] });
+    const text = C.formatBagSummary(e.summary);
+    assert(text.indexOf('通常待機取得 1 / 追加待機救済 1 (Bag 1 / null 0) / 6秒待機後trDetailsなし 1') >= 0 &&
+      text.indexOf('Stop-open取得 2 / Stop-open null 0 / trDetailsなし 1') >= 0 && text.indexOf('package fallback 1 / package click 0') >= 0,
+    label + ' v3.8: panel ' + text);
+  })();
+  console.log('ok: Bag v3.8 trDetails wait (' + label + ')');
+}
+Core2 = RootCore;
+v38Suite('root core');
+Core2 = PhaseCore;
+v38Suite('phase1-core');
+
+// H + runner wiring v3.8: Stop retry untouched, both wait paths use the two-phase wait, UBT keeps 3 s
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  assert(bag.indexOf("BAG_STOP_OPEN_TR_EXTRA_MS = 3000") >= 0 && bag.indexOf("extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS") >= 0 && bag.indexOf("{ maxAttempts: 1, noExtendedWait: true, note: note }") >= 0 && bag.indexOf("routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS") >= 0,
+    'v3.8: extra 3 s, UBT keeps its single wait');
+  assert((bag.match(/waitStopTrDetails\(ctx, runId, pending, (started|openStarted), noExtraWait, function \(tw\)/g) || []).length === 2, 'v3.8: both Stop-open wait paths');
+  assert(bag.indexOf('shape.receivedAtMs = Date.parse(at);') >= 0, 'v3.8: arrival time from the trDetails hook');
+  ['stopOpenedAt', 'targetTrDetailsReceivedAt', 'trDetailsLatencyMs', 'waitPhase', 'delayedRescue', 'finalStatus'].forEach((k) => {
+    assert(bag.indexOf(k + ':') >= 0, 'v3.8 target diag ' + k);
+  });
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.8-H: v3.7 retry kept');
+  console.log('ok: v3.8 runner wiring');
+})();
+
+// ---------------- Bag v3.9: Bag label read from the opened Stop's DOM (target package block only) ----------------
+// Fake DOM: textContent glues children with no separator, exactly like the browser.
+function h(tag, opts, kids) {
+  const n = { tag, cls: (opts && opts.cls) || '', own: (opts && opts.text) || '', children: kids || [], parent: null, hidden: !!(opts && opts.hidden),
+    stopNo: opts && opts.stopNo };
+  n.children.forEach((c) => { c.parent = n; });
+  return n;
+}
+const fullText = (n) => n.own + n.children.map(fullText).join('');
+function fakeAcc(root) {
+  return {
+    root, children: (n) => n.children, parent: (n) => n.parent, ownText: (n) => n.own, text: fullText,
+    skip: (n) => n.cls.indexOf('mapboxgl') >= 0 || n.tag === 'svg',
+    isStopRow: (n) => n.cls === 'stops-list-item', stopRowNumber: (n) => (n.stopNo == null ? null : n.stopNo),
+    visible: (n) => { for (let c = n; c; c = c.parent) if (c.hidden) return false; return true; }
+  };
+}
+// package card: DA / order number / bag label as sibling spans
+function pkg(da, order, bag, extra) {
+  const kids = [h('span', { text: da }), h('span', { text: order })];
+  if (bag) kids.push(h('div', {}, [h('span', { text: bag.split(' ')[0] }), h('span', { text: bag.split(' ')[1] })]));
+  (extra || []).forEach((e) => kids.push(e));
+  return h('div', { cls: 'pkg' }, kids);
+}
+function stopRow(no, content) {
+  return h('div', { cls: 'stops-list-item', stopNo: no }, [h('div', { cls: 'hdr' }, [h('span', { text: String(no) }), h('span', { text: '岐阜県岐阜市1-2-3 ハイツ 203' })])].concat(content));
+}
+function page(rows, extra) {
+  return h('body', {}, [h('div', { cls: 'mapboxgl-map' }, [h('svg', {}, [h('text', { text: '9' })]), h('div', { text: 'DA5045998642' })])].concat(rows).concat(extra || []));
+}
+
+function v39Suite(label) {
+  const C = Core2;
+  // label recognition: color + number; no address / order / time / DA / Stop numbers
+  (function () {
+    ['黄色 5838', '紺色 5316', 'オレンジ 1395', 'オレンジ6392', 'Navy 4635', 'グリーン 0237'].forEach((t) => {
+      assert(C.parseBagLabelText(t), label + ' v3.9 label ' + t);
+    });
+    assert(C.parseBagLabelText('JP_OB-AT-4635_GRN').number === '4635', label + ' v3.9: raw bagName form');
+    ['503-8532329-1049464', 'DA5045998642', '10:00-13:00', '#9', '9', '岐阜県岐阜市1-2-3', 'ハイツ 203', '黄色 58', '黄色 583812', '123 5838', '黄色マンション 101']
+      .forEach((t) => { assert(!C.parseBagLabelText(t), label + ' v3.9 not a label: ' + t); });
+    assert(C.packageTokensOf('DA0012555685249-3490061-0492649').join() === 'DA0012555685249', label + ' v3.9: glued text is never tokenised by readStopDomBag (own text only)');
+  })();
+
+  // 1. normal Stop, 1 package, DA + Bag in the DOM
+  (function () {
+    const r = C.readStopDomBag(fakeAcc(page([stopRow(24, [pkg('DA0012561627', '249-8068041-3177440', '紺色 5316')])])), 'DA0012561627', 24);
+    assert(r.ok && r.bag.text === '紺色 5316' && r.bag.number === '5316' && r.scope === 'stop_row' && r.candidateCount === 1 &&
+      r.containerExcerpt.indexOf('DA0012561627') >= 0 && r.containerExcerpt.indexOf('ハイツ') < 0, label + ' v3.9-1: ' + JSON.stringify(r));
+  })();
+
+  // 2. same Stop, 2 packages with the same Bag -> each read from its own block
+  // 4. multi-destination Stop: two destination groups inside one Stop row
+  (function () {
+    const dom = page([stopRow(9, [
+      h('div', { cls: 'dest' }, [h('div', { text: '宛先A 様' }), pkg('DA5045998642', '503-8532329-1049464', '黄色 5838')]),
+      h('div', { cls: 'dest' }, [h('div', { text: '宛先B 様' }), pkg('DA0012555685', '249-3490061-0492649', '黄色 5838')])
+    ])]);
+    const a = C.readStopDomBag(fakeAcc(dom), 'DA5045998642', 9);
+    const b = C.readStopDomBag(fakeAcc(dom), 'DA0012555685', 9);
+    assert(a.ok && b.ok && a.bag.text === '黄色 5838' && b.bag.text === '黄色 5838' && a.candidateCount === 1,
+      label + ' v3.9-2/4: DA1/DA2 each from own block (Mapbox copy of the DA ignored) ' + JSON.stringify([a, b]));
+    assert(a.containerExcerpt.indexOf('DA0012555685') < 0 && b.containerExcerpt.indexOf('DA5045998642') < 0, label + ' v3.9-4: blocks never mix destinations');
+  })();
+
+  // 3. same Stop, different Bags -> never swapped
+  (function () {
+    const dom = page([stopRow(15, [pkg('DA0012565181', '249-1111111-1111111', 'オレンジ 1395'), pkg('DA0012565182', '249-2222222-2222222', 'オレンジ 6392')])]);
+    const a = C.readStopDomBag(fakeAcc(dom), 'DA0012565181', 15);
+    const b = C.readStopDomBag(fakeAcc(dom), 'DA0012565182', 15);
+    assert(a.bag.text === 'オレンジ 1395' && b.bag.text === 'オレンジ 6392', label + ' v3.9-3: ' + a.bag.text + ' / ' + b.bag.text);
+  })();
+
+  // 5. target DA not in the DOM; DA of another Stop row is rejected
+  (function () {
+    const dom = page([stopRow(3, [pkg('DA0012500001', '249-1-1', '黄色 1111')]), stopRow(4, [pkg('DA0012500002', '249-2-2', '黄色 2222')])]);
+    const r = C.readStopDomBag(fakeAcc(dom), 'DA0012599999', 3);
+    assert(!r.ok && r.reason === 'target_not_found' && !r.daFound, label + ' v3.9-5: not found');
+    const o = C.readStopDomBag(fakeAcc(dom), 'DA0012500002', 3);
+    assert(!o.ok && o.reason === 'target_other_stop', label + ' v3.9-5: DA under another Stop row never used');
+  })();
+
+  // 6. DA present, no Bag label in its block -> other packages' Bags are never used
+  (function () {
+    const dom = page([stopRow(21, [pkg('DA0012550496', '249-3-3', '緑 4635'), pkg('DA0012563201', '249-4-4', null), pkg('DA2422197169', '249-5-5', '緑 4635')])]);
+    const r = C.readStopDomBag(fakeAcc(dom), 'DA0012563201', 21);
+    assert(!r.ok && r.reason === 'bag_not_found' && r.daFound && r.labels.length === 0, label + ' v3.9-6: ' + JSON.stringify(r));
+    // Bag shown only once for a group of two packages -> not attributed to either
+    const grp = page([stopRow(5, [h('div', {}, [h('span', { text: '黄色 7777' }), pkg('DA0012570001', '249-6-6', null), pkg('DA0012570002', '249-7-7', null)])])]);
+    assert(C.readStopDomBag(fakeAcc(grp), 'DA0012570001', 5).reason === 'bag_not_found', label + ' v3.9-6: shared header never attributed');
+    // two different labels inside one block -> ambiguous, not captured
+    const two = page([stopRow(6, [pkg('DA0012580001', '249-8-8', '黄色 1000', [h('div', {}, [h('span', { text: '赤 2000' })])])])]);
+    assert(C.readStopDomBag(fakeAcc(two), 'DA0012580001', 6).reason === 'bag_ambiguous', label + ' v3.9: two labels -> ambiguous');
+  })();
+
+  // engine: trDetails -> Stop DOM -> package fallback
+  function v39Run(eventsTr, domBags) {
+    const d = [v36Details('DCX50', [
+      { seq: 9, status: 'NOT_STARTED', pk: [['DA5045998642', 'tr-1'], ['DA0012555685', 'tr-2']] },
+      { seq: 24, status: 'NOT_STARTED', pk: [['DA0012561627', 'tr-3'], ['DA0012561628', 'tr-4']] }
+    ])];
+    const sel = C.selectBagTargets(d, {});
+    const run = C.createBagRun(sel.targets);
+    const trMap = {};
+    const log = { dom: [], find: [], clicks: 0 };
+    const driver = {
+      openRoute: (r, cb) => cb({ ok: true }),
+      ensureStop(stop, pending, onState, cb) {
+        (eventsTr[stop.stop] || []).forEach(([ref, bag]) => C.mergeTrDetailsMaps(trMap, { [ref]: { trId: ref, bagName: bag, bagScannableId: bag ? 's' : null } }));
+        cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+      },
+      readStopDomBag(t, stop, cb) {
+        log.dom.push(t.referenceId);
+        const b = domBags[t.scannableId];
+        cb(b ? { ok: true, daFound: true, bag: { text: b, number: b.split(' ')[1] }, candidateCount: 1 } : { ok: false, reason: b === null ? 'bag_not_found' : 'target_not_found', daFound: b === null });
+      },
+      findPackage(t, stop, cb) { log.find.push(t.referenceId); cb({ ok: true, handle: t, candidateCount: 1 }); },
+      clickPackage(t, hd, cb) { log.clicks += 1; C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'JP_OB-AT-9999_RED', bagScannableId: 's' } }); cb({ ok: true }); },
+      waitTrDetails: (t, cb) => cb(C.hasTrDetails(trMap, t.referenceId)),
+      restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => cb({ ok: true }),
+      returnToList: (cb) => cb({ ok: true })
+    };
+    C.runBagEngine({ run, routes: C.groupBagTargetsByRoute(sel.targets), driver, getTrMap: () => trMap, schedule: () => 1, cancel: () => {}, done: () => {} });
+    return { run, log, trMap, summary: C.summarizeBagRun(run, trMap) };
+  }
+  // 1/2/5/6/7/8/10 via the engine
+  (function () {
+    // Stop 9: no trDetails, both DAs in the DOM with 黄色 5838. Stop 24: tr-3 trDetails bag; tr-4 no trDetails, DA shown without Bag.
+    const r = v39Run({ 24: [['tr-3', 'JP_OB-AT-5316_NVY']] }, { DA5045998642: '黄色 5838', DA0012555685: '黄色 5838', DA0012561628: null });
+    const b = r.summary.byReferenceId;
+    assert(b['tr-1'] === 'captured' && b['tr-2'] === 'captured' && r.log.dom.join(',') === 'tr-1,tr-2,tr-4', label + ' v3.9-1/2: stop_dom captured ' + r.log.dom);
+    assert(r.log.dom.indexOf('tr-3') < 0 && C.bagSourceOf(r.run, r.trMap, 'tr-3') === 'cortex_stop_open', label + ' v3.9-7: trDetails bag -> no DOM read');
+    assert(C.bagSourceOf(r.run, r.trMap, 'tr-1') === 'stop_dom' && !r.trMap['tr-1'], label + ' v3.9: bagSource stop_dom, no fake trDetails row');
+    assert(r.log.find.join(',') === 'tr-4' && r.log.clicks === 1 && C.bagSourceOf(r.run, r.trMap, 'tr-4') === 'package_click', label + ' v3.9-6: DOM Bag missing -> package fallback');
+    const so = r.summary.stopOpen;
+    assert(so.capturedByStopDom === 2 && so.capturedByStopOpen === 1 && so.capturedByPackageClick === 1 && so.stopDomAttempts === 3 &&
+      so.stopDomCaptured === 2 && so.stopDomBagNotFound === 1 && so.stopDomTargetNotFound === 0 && so.packageFallbackTargets === 1 &&
+      so.actualPackageClicks === 1, label + ' v3.9: summary ' + JSON.stringify(so));
+    const text = C.formatBagSummary(r.summary);
+    assert(text.indexOf('Stop-DOM取得 2 / DOM対象なし 0 / DOM Bagなし 1') >= 0 && text.indexOf('package fallback 1 / package click 1') >= 0, label + ' v3.9: panel ' + text);
+  })();
+  (function () {
+    // 8. trDetails bagName null -> captured_null, no DOM read even if the DOM shows a Bag nearby
+    const r = v39Run({ 9: [['tr-1', null], ['tr-2', 'JP_OB-AO-5838_YLO']], 24: [['tr-3', 'B'], ['tr-4', 'B']] }, { DA5045998642: '黄色 5838' });
+    assert(r.summary.byReferenceId['tr-1'] === 'captured_null' && r.log.dom.length === 0 && r.log.find.length === 0 && r.log.clicks === 0,
+      label + ' v3.9-8: null kept, no DOM / fallback');
+    // 10. DOM captures everything -> package click 0
+    const all = v39Run({}, { DA5045998642: '黄色 5838', DA0012555685: '黄色 5838', DA0012561627: '紺色 5316', DA0012561628: '紺色 5316' });
+    assert(all.summary.counts.captured === 4 && all.log.clicks === 0 && all.summary.stopOpen.actualPackageClicks === 0 && all.log.find.length === 0 &&
+      all.summary.stopOpen.packageFallbackTargets === 0, label + ' v3.9-10: package click 0');
+    // 5. DA not in DOM -> fallback
+    const nf = v39Run({}, {});
+    assert(nf.log.find.length === 4 && nf.summary.stopOpen.stopDomTargetNotFound === 4, label + ' v3.9-5 engine: fallback when DA not in DOM');
+  })();
+  // export: DOM Bag only for packages without trDetails
+  (function () {
+    const dd = details('DCX50', [stop(9, [task({ scannableId: 'DA5045998642', referenceId: 'tr-1' }), task({ scannableId: 'DA0012555685', referenceId: 'tr-2' })])]);
+    const tr = { 'tr-2': { trId: 'tr-2', bagName: null, bagScannableId: null } };
+    const ix = C.extractPackageAssistIndex(dd, tr, null, { 'tr-1': { text: '黄色 5838', number: '5838' }, 'tr-2': { text: '黄色 5838', number: '5838' } }).index;
+    const r1 = ix.find((x) => x.referenceId === 'tr-1');
+    const r2 = ix.find((x) => x.referenceId === 'tr-2');
+    assert(r1.bagDisplay === '黄色 5838' && r1.bagSource === 'stop_dom' && r1.bagName === null && r1.bagStatus === 'captured', label + ' v3.9: export stop_dom');
+    assert(r2.bagDisplay === null && r2.bagStatus === 'captured_null' && r2.bagSource === 'trDetails', label + ' v3.9: trDetails null never replaced by DOM');
+  })();
+  console.log('ok: Bag v3.9 Stop-DOM Bag (' + label + ')');
+}
+Core2 = RootCore;
+v39Suite('root core');
+Core2 = PhaseCore;
+v39Suite('phase1-core');
+
+// runner wiring v3.9
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
+  assert(dom.indexOf('Core.readStopDomBag(stopDomAccessor(), target.scannableId, stop.stop)') >= 0 && dom.indexOf('Cdp') < 0 && dom.indexOf('click') < 0,
+    'v3.9: DOM read only, no click');
+  const acc = bag.slice(bag.indexOf('  function stopDomAccessor() {'), bag.indexOf('  // Bag v3.8: wait for this Stop'));
+  assert(acc.indexOf('inMapbox(n)') >= 0 && acc.indexOf("tag === 'svg'") >= 0 && acc.indexOf('inPanel(n)') >= 0 && acc.indexOf('nodeType === 3') >= 0,
+    'v3.9-16: Mapbox / svg / panel never read; own text nodes only');
+  assert(bag.indexOf('readStopDomBag: null,') >= 0, 'v3.9: Unfinished Bag Test v1 keeps Stop-open only');
+  ['trDetailsBagName', 'stopDomAttempted', 'stopDomTargetDaFound', 'stopDomBagFound', 'stopDomBagText', 'stopDomCandidateCount',
+    'stopDomPackageContainerText', 'bagSource', 'fallbackReason', 'stopDomDiagnostics'].forEach((k) => {
+    assert(bag.indexOf(k + ':') >= 0, 'v3.9 diag ' + k);
+  });
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.9-9: v3.7 retry kept');
+  console.log('ok: v3.9 runner wiring');
+})();
+
+// ---------------- Bag v3.10: progress-based watchdog, hard maximum, Route timing ----------------
+function v310Suite(label) {
+  const C = Core2;
+  const mk = (code, n) => [v36Details(code, Array.from({ length: n }, (_, i) => ({ seq: i + 1, status: 'NOT_STARTED', pk: [['DA00000091' + String(i).padStart(2, '0'), 'tr-' + code + '-' + i]] })))];
+  function world(clockStep, hangAtStop) {
+    const trMap = {};
+    let clock = 0;
+    const pendingCb = [];
+    const driver = {
+      openRoute: (r, cb) => { clock += clockStep; cb({ ok: true }); },
+      ensureStop(stop, pending, onState, cb) {
+        clock += clockStep;
+        if (hangAtStop && stop.stop === hangAtStop) { pendingCb.push(cb); return; }
+        pending.forEach((t) => C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'B', bagScannableId: 's' } }));
+        cb({ ok: true, clicked: true, clickCount: 1, trWaitMs: 1000, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+      },
+      findPackage: (t, s, cb) => cb({ ok: false, status: 'package_dom_not_found' }),
+      clickPackage: (t, x, cb) => cb({ ok: false }), waitTrDetails: (t, cb) => cb(false), restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => { clock += clockStep; cb({ ok: true }); }, returnToList: (cb) => cb({ ok: true })
+    };
+    return { trMap, driver, now: () => clock, pendingCb, advance: (ms) => { clock += ms; } };
+  }
+  function runIt(details, w, extra) {
+    const sel = C.selectBagTargets(details, {});
+    const run = C.createBagRun(sel.targets);
+    const timers = [];
+    let aborted = null;
+    const h = C.runBagEngine(Object.assign({ run, routes: C.groupBagTargetsByRoute(sel.targets), driver: w.driver, getTrMap: () => w.trMap, now: w.now,
+      schedule: (fn) => { timers.push(fn); return timers.length - 1; }, cancel: (id) => { timers[id] = null; }, done: (a) => { aborted = a; } }, extra || {}));
+    return { run, timers, h, get aborted() { return aborted; }, summary: () => C.summarizeBagRun(run, w.trMap) };
+  }
+  function flush(r, max) {
+    for (let k = 0, n = 0; k < r.timers.length && n < (max || 50); k++) { const fn = r.timers[k]; if (fn) { r.timers[k] = null; n += 1; fn(); } }
+  }
+
+  // A. 30 Stops, 20 s per step (well over the 120 s soft budget) but progressing -> completes
+  (function () {
+    const w = world(20000);
+    const r = runIt(mk('DCX90', 30), w, { routeBudgetMs: 120000, routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    flush(r);
+    const rr = r.run.routeResults[0];
+    const s = r.summary();
+    assert(rr.status === 'done' && s.counts.captured === 30 && rr.softBudgetExceededAtMs != null && rr.routeElapsedMs > 120000,
+      label + ' v3.10-A: progressing Route not cut by the soft budget ' + JSON.stringify({ st: rr.status, el: rr.routeElapsedMs, sb: rr.softBudgetExceededAtMs }));
+    assert(s.routeStats.done === 1 && s.routeStats.aborted === 0 && s.bagTiming.maxRouteMs === rr.routeElapsedMs && s.bagTiming.maxRouteCode === 'DCX90',
+      label + ' v3.10: route stats / timing');
+    assert(rr.stopOpenCount === 30 && rr.targetStopCount === 30 && rr.targetPackageCount === 30 && rr.normalWaitCount === 30 &&
+      rr.timing.trDetailsWaitTotalMs === 30000 && rr.timing.stopOpenTotalMs === 30 * 20000 - 30000 && rr.timing.stopCloseTotalMs === 30 * 20000 &&
+      rr.progressEvents > 60, label + ' v3.10: timing breakdown ' + JSON.stringify(rr.timing));
+    assert(C.formatBagSummary(s).indexOf('Route完了 1/1 / Route中断 0') >= 0, label + ' v3.10: panel Route line');
+  })();
+
+  // B. Route stalls (a driver callback never comes) -> watchdog after an idle window; next Route continues
+  (function () {
+    const w = world(1000, 3);
+    const details = mk('DCX91', 5).concat(mk('DCX92', 2));
+    const r = runIt(details, w, { routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    // the armed watchdog fires with no progress since it was armed
+    w.advance(90000);
+    flush(r);
+    const byCode = {};
+    r.run.routeResults.forEach((x) => { byCode[x.routeCode] = x; });
+    assert(byCode.DCX91.status === 'route_aborted' && byCode.DCX91.reasonCode === 'watchdog' && byCode.DCX91.idleMsAtAbort >= 90000,
+      label + ' v3.10-B: stalled Route -> watchdog ' + JSON.stringify(byCode.DCX91 && { s: byCode.DCX91.status, r: byCode.DCX91.reasonCode }));
+    assert(byCode.DCX92.status === 'done', label + ' v3.10-B: next Route continues');
+    const s = r.summary();
+    assert(s.counts.captured === 2 + 2 && s.routeStats.byReason.watchdog === 1 && C.formatBagSummary(s).indexOf('中断内訳: watchdog 1') >= 0,
+      label + ' v3.10-B: summary ' + JSON.stringify(s.routeStats));
+    // a late callback of the aborted Route is ignored
+    w.pendingCb.forEach((cb) => cb({ ok: true, clicked: true }));
+    assert(r.run.routeResults.filter((x) => x.routeCode === 'DCX91').length === 1, label + ' v3.10-B: late callback ignored');
+  })();
+
+  // watchdog re-arms while progress continues (no abort although its first window elapsed)
+  (function () {
+    const w = world(1000, 2);
+    const r = runIt(mk('DCX93', 3), w, { routeIdleMs: 90000, routeHardMaxMs: 3600000 });
+    w.advance(60000);
+    const cb = w.pendingCb.shift();
+    cb({ ok: true, clicked: true, clickCount: 1, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [] } });
+    flush(r);
+    assert(r.run.routeResults[0].status === 'done', label + ' v3.10: progress re-arms the watchdog ' + r.run.routeResults[0].reasonCode);
+  })();
+
+  // C. hard maximum: progressing but endless -> aborted at the hard max
+  (function () {
+    const w = world(60000);
+    const r = runIt(mk('DCX94', 40), w, { routeIdleMs: 90000, routeHardMaxMs: 600000 });
+    flush(r);
+    const rr = r.run.routeResults[0];
+    assert(rr.status === 'route_aborted' && rr.reasonCode === 'route_budget_exceeded' && /hard max/.test(rr.detail) &&
+      r.summary().counts.captured < 40, label + ' v3.10-C: hard max ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, d: rr.detail }));
+    // hard max also fires from the watchdog timer when a step itself runs past it
+    const w2 = world(1000, 2);
+    const r2 = runIt(mk('DCX95', 3), w2, { routeIdleMs: 90000, routeHardMaxMs: 100000 });
+    // one very long step (progress arrives, but past the hard max) -> the next boundary aborts
+    w2.advance(150000);
+    w2.pendingCb.shift()({ ok: true, clicked: true, stopDiag: { openResult: 'opened', clickAttempts: [] } });
+    const rr2 = r2.run.routeResults[0];
+    assert(rr2.status === 'route_aborted' && rr2.reasonCode === 'route_budget_exceeded', label + ' v3.10-C: hard max at the next boundary ' + rr2.reasonCode);
+    // and the watchdog timer itself enforces it while a step is still running
+    const w3 = world(1000, 2);
+    const r3 = runIt(mk('DCX96', 3), w3, { routeIdleMs: 90000, routeHardMaxMs: 100000 });
+    w3.advance(40000);
+    w3.pendingCb.shift()({ ok: true, clicked: true, stopDiag: { openResult: 'opened', clickAttempts: [] } });
+    assert(r3.run.routeResults[0].status === 'done', label + ' v3.10-C: under the hard max -> done');
+  })();
+  console.log('ok: Bag v3.10 watchdog / hard max (' + label + ')');
+}
+Core2 = RootCore;
+v310Suite('root core');
+Core2 = PhaseCore;
+v310Suite('phase1-core');
+
+// runner wiring v3.10: DOM read without scroll sweep, miss diagnostics, no click, waits unchanged
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const dom = bag.slice(bag.indexOf('      readStopDomBag: function (target, stop, cb) {'), bag.indexOf('      searchPackage: function (target, cb) {'));
+  assert(dom.indexOf('scrollSearch') < 0 && dom.indexOf("first.pass = 'current_view'") >= 0 && dom.indexOf("second.pass = 'row_into_view'") >= 0,
+    'v3.10: DOM read = current view + opened row only');
+  assert(dom.indexOf('Cdp') < 0 && dom.indexOf('click') < 0 && dom.indexOf('res.missDiag = stopDomMissDiag(ctx, target, stop, res)') >= 0, 'v3.10-H: miss diag, no click');
+  const miss = bag.slice(bag.indexOf('  function stopDomMissDiag('), bag.indexOf('  // Bag v3.9: live-DOM accessor'));
+  ['targetDaVisibleByExistingDetector', 'detectorMismatch', 'existingDetectorEvidence', 'exactDirectTextMatchCount', 'substringMatchCount',
+    'suffixMatchCount', 'daTokensInScope', 'packageLikeBlockCount', 'ariaExpanded', 'selectedStopId', 'dataAttributes', 'ariaAttributes', 'roles', 'classes', 'tags']
+    .forEach((k) => assert(miss.indexOf(k) >= 0, 'v3.10-H/I miss diag ' + k));
+  assert(miss.indexOf('collectExactDaElements([da])') >= 0, 'v3.10-I: compared with the existing target-DA detector');
+  assert(miss.indexOf('.textContent') < 0 && miss.indexOf('aria-label') < 0, 'v3.10: no free text / aria-label values stored');
+  assert(bag.indexOf('BAG_STOP_OPEN_TR_WAIT_MS = 3000') >= 0 && bag.indexOf('BAG_STOP_OPEN_TR_EXTRA_MS = 3000') >= 0, 'v3.10: trDetails wait unchanged (3 s + 3 s)');
+  assert(bag.indexOf('routeIdleMs: BAG_ROUTE_IDLE_MS') >= 0 && bag.indexOf('routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS') >= 0 && bag.indexOf("if (note) note('tr_details');") >= 0,
+    'v3.10: idle / hard max wired, trDetails arrival is progress (v3.11: of its own Route)');
+  const ensure = bag.slice(bag.indexOf('      ensureStop: function (stop, pending, onState, cb, openOpts) {'), bag.indexOf('      findPackage: function (target, stop, cb) {'));
+  assert(ensure.indexOf('Core.runStopOpenAttempts({') >= 0 && ensure.indexOf("if (strategy === 'row_refind') {") >= 0, 'v3.10-D: v3.7 retry kept');
+  console.log('ok: v3.10 runner wiring');
+})();
+
+// ---------------- Bag v3.11: watchdog fires on a real stall only (sub-step progress), abort context ----------------
+function v311Suite(label) {
+  const C = Core2;
+  const IDLE = 90000;
+  // One virtual clock for engine timers and driver steps, run in due-time order.
+  function clockWorld() {
+    let clock = 0;
+    let seq = 0;
+    const q = [];
+    return {
+      now: () => clock,
+      schedule(fn, ms) { const t = { id: ++seq, due: clock + Math.max(0, ms || 0), fn }; q.push(t); return t.id; },
+      cancel(id) { const k = q.findIndex((t) => t.id === id); if (k >= 0) q.splice(k, 1); },
+      pending: () => q.length,
+      runAll(limitMs) {
+        for (let n = 0; q.length && n < 500000; n++) {
+          q.sort((a, b) => a.due - b.due || a.id - b.id);
+          if (limitMs != null && q[0].due > limitMs) break;
+          const t = q.shift();
+          clock = Math.max(clock, t.due);
+          t.fn();
+        }
+      }
+    };
+  }
+  // planFor(stop, route) -> { steps: [[afterMs, progressKind|null], ...], tail, hang, status }
+  function mkDriver(w, trMap, planFor) {
+    let routeNote = null;
+    let routeCode = '';
+    const d = {
+      beginRoute(api) { routeNote = api.noteProgress; routeCode = api.routeCode; },
+      openRoute: (r, cb) => { w.schedule(() => cb({ ok: true }), 2000); },
+      ensureStop(stop, pending, onState, cb) {
+        const note = routeNote; // bound at step start, like the runner's routeNote()
+        const p = planFor(stop, routeCode) || {};
+        let at = 0;
+        (p.steps || []).forEach(([dt, kind]) => { at += dt; w.schedule(() => { if (kind) note(kind); }, at); });
+        if (p.hang) return;
+        at += p.tail == null ? 1000 : p.tail;
+        w.schedule(() => {
+          if (p.status) { cb({ ok: false, status: p.status, detail: 'fixture' }); return; }
+          pending.forEach((t) => C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'B', bagScannableId: 's' } }));
+          cb({ ok: true, clicked: true, clickCount: 1, trWaitMs: 1000, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+        }, at);
+      },
+      findPackage: (t, s, cb) => cb({ ok: false, status: 'package_dom_not_found' }),
+      clickPackage: (t, x, cb) => cb({ ok: false }), waitTrDetails: (t, cb) => cb(false), restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => { w.schedule(() => cb({ ok: true }), 1000); },
+      returnToList: (cb) => { w.schedule(() => cb({ ok: true }), 1000); }
+    };
+    return d;
+  }
+  function mkRoute(code, n, perStop, codeNum) {
+    const stops = [];
+    for (let i = 0; i < Math.ceil(n / perStop); i++) {
+      const pk = [];
+      for (let k = 0; k < perStop && i * perStop + k < n; k++) {
+        const j = i * perStop + k;
+        pk.push(['DA' + String(codeNum).padStart(4, '0') + String(j).padStart(6, '0'), 'tr-' + code + '-' + j]);
+      }
+      stops.push({ seq: i + 1, status: 'NOT_STARTED', pk });
+    }
+    return [v36Details(code, stops)];
+  }
+  function go(details, planFor, extra) {
+    const w = clockWorld();
+    const trMap = {};
+    const sel = C.selectBagTargets(details, {});
+    const run = C.createBagRun(sel.targets);
+    let doneMsg = null;
+    const h = C.runBagEngine(Object.assign({
+      run, routes: C.groupBagTargetsByRoute(sel.targets), driver: mkDriver(w, trMap, planFor), getTrMap: () => trMap,
+      now: w.now, schedule: w.schedule, cancel: w.cancel, routeIdleMs: IDLE, routeHardMaxMs: 900000, routeBudgetMs: 120000,
+      pageContext: () => ({ visibilityState: 'hidden' }), done: (a) => { doneMsg = a; }
+    }, extra || {}));
+    return { w, trMap, run, h, sel, get done() { return doneMsg; }, summary: () => C.summarizeBagRun(run, trMap),
+      rr: (code) => run.routeResults.find((x) => x.routeCode === code) };
+  }
+
+  // 1. long Route, every Stop step 116 s (> 90 s idle window) with real sub-step progress -> not cut
+  (function () {
+    const plan = () => ({ steps: [[30000, 'stop_found'], [30000, 'stop_click'], [30000, 'stop_opened'], [25000, 'tr_details']], tail: 1000 });
+    const r = go(mkRoute('DCX60', 6, 1, 60), plan);
+    r.w.runAll();
+    const rr = r.rr('DCX60');
+    assert(rr.status === 'done' && r.summary().counts.captured === 6 && rr.routeElapsedMs > 6 * 116000 && rr.maxIdleMs <= 30000 && r.done === '',
+      label + ' v3.11-1: long progressing Route not cut ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, el: rr.routeElapsedMs, mi: rr.maxIdleMs }));
+    // The same Stop steps reporting only their completion (v3.10 granularity) -> cut by the watchdog.
+    const r0 = go(mkRoute('DCX61', 6, 1, 61), () => ({ steps: [[115000, null]], tail: 1000 }));
+    r0.w.runAll();
+    const rr0 = r0.rr('DCX61');
+    assert(rr0.status === 'route_aborted' && rr0.reasonCode === 'watchdog' && rr0.abortContext.phase === 'ensureStop' && rr0.abortContext.stop === 1,
+      label + ' v3.11-1: one silent 116 s step still counts as a stall ' + JSON.stringify(rr0.abortContext));
+    // 8. no timer left once the run is over
+    assert(r.w.pending() === 0 && r0.w.pending() === 0, label + ' v3.11-8: no timer left after the run ' + r.w.pending() + '/' + r0.w.pending());
+  })();
+
+  // 2. lastProgressAt moves on every Stop: 80 s silent steps (< 90 s) never add up to an abort
+  (function () {
+    const r = go(mkRoute('DCX62', 8, 1, 62), () => ({ steps: [], tail: 80000 }));
+    r.w.runAll();
+    const rr = r.rr('DCX62');
+    assert(rr.status === 'done' && rr.routeElapsedMs > 8 * 80000 && rr.maxIdleMs === 80000 && rr.maxIdlePhase === 'ensureStop' && rr.maxIdleEndKind === 'ensureStop_done',
+      label + ' v3.11-2: per-Stop progress ' + JSON.stringify({ s: rr.status, mi: rr.maxIdleMs, p: rr.maxIdlePhase, k: rr.maxIdleEndKind }));
+    assert(rr.progressKinds.ensureStop_done === 8 && rr.progressKinds.leaveStop_done === 8 && rr.progressKinds.openRoute_done === 1 &&
+      rr.progressEvents === 17, label + ' v3.11-2: progress kinds ' + JSON.stringify(rr.progressKinds));
+  })();
+
+  // 3. real stall -> fires exactly one idle window after the last progress, with the running phase
+  (function () {
+    const r = go(mkRoute('DCX63', 5, 1, 63), (stop) => (stop.stop === 3 ? { steps: [[40000, 'stop_click']], hang: true } : { tail: 5000 }));
+    r.w.runAll();
+    const rr = r.rr('DCX63');
+    const ac = rr.abortContext;
+    assert(rr.status === 'route_aborted' && rr.reasonCode === 'watchdog' && rr.idleMsAtAbort === IDLE && ac.sinceLastProgressMs === IDLE &&
+      ac.lastProgressKind === 'stop_click' && ac.phase === 'ensureStop' && ac.stop === 3 && ac.phaseElapsedMs === 40000 + IDLE &&
+      ac.page && ac.page.visibilityState === 'hidden' && /実行中: ensureStop Stop #3/.test(rr.detail),
+      label + ' v3.11-3: stall -> watchdog with context ' + JSON.stringify({ d: rr.detail, ac }));
+    assert(r.w.pending() === 0, label + ' v3.11-8: watchdog timer released on abort');
+  })();
+
+  // 4/5. captured Bags kept; earlier results kept; only untouched packages become route_aborted
+  (function () {
+    const r = go(mkRoute('DCX64', 6, 1, 64), (stop) => (stop.stop === 2 ? { status: 'stop_not_found' } : stop.stop === 4 ? { hang: true } : { tail: 3000 }));
+    r.w.runAll();
+    const rr = r.rr('DCX64');
+    const s = r.summary();
+    const st = (j) => s.byReferenceId['tr-DCX64-' + j];
+    assert(rr.reasonCode === 'watchdog' && st(0) === 'captured' && st(2) === 'captured' && st(1) === 'stop_not_found' &&
+      st(3) === 'route_aborted' && st(4) === 'route_aborted' && st(5) === 'route_aborted',
+      label + ' v3.11-4/5: statuses ' + JSON.stringify(s.byReferenceId));
+    assert(rr.abortContext.capturedBeforeAbort === 2 && rr.abortContext.markedRemaining === 3 && s.counts.captured === 2 && s.counts.route_aborted === 3,
+      label + ' v3.11-5: counts ' + JSON.stringify({ ac: rr.abortContext, c: s.counts }));
+  })();
+
+  // 6. retry1: click, 6 s observe, retry start, slow re-find -> 157 s step with progress, no misfire
+  (function () {
+    const r = go(mkRoute('DCX65', 3, 1, 65), (stop) => (stop.stop === 2
+      ? { steps: [[10000, 'stop_click'], [7000, 'stop_retry'], [80000, 'stop_click'], [53000, 'stop_opened'], [6000, 'tr_details']], tail: 1000 }
+      : { tail: 3000 }));
+    r.w.runAll();
+    const rr = r.rr('DCX65');
+    assert(rr.status === 'done' && rr.progressKinds.stop_retry === 1 && rr.maxIdleMs === 80000,
+      label + ' v3.11-6: no misfire during retry1 ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, mi: rr.maxIdleMs }));
+  })();
+
+  // 7. trDetails wait: arrivals are progress while the Stop step is still waiting
+  (function () {
+    const r = go(mkRoute('DCX66', 3, 3, 66), () => ({ steps: [[5000, 'stop_click'], [3000, 'stop_opened'], [85000, 'tr_details'], [85000, 'tr_details']], tail: 3000 }));
+    r.w.runAll();
+    const rr = r.rr('DCX66');
+    assert(rr.status === 'done' && r.summary().counts.captured === 3 && rr.progressKinds.tr_details === 2 && rr.routeElapsedMs > 180000,
+      label + ' v3.11-7: no misfire during the trDetails wait ' + JSON.stringify({ s: rr.status, r: rr.reasonCode }));
+  })();
+
+  // 8. manual stop during a Route: dispose() leaves no watchdog timer
+  (function () {
+    const r = go(mkRoute('DCX67', 3, 1, 67), () => ({ hang: true }));
+    r.w.runAll(30000);
+    assert(r.w.pending() === 1, label + ' v3.11-8: watchdog armed while the Route runs');
+    r.run.stopRequested = true;
+    r.h.dispose();
+    r.h.dispose();
+    assert(r.w.pending() === 0, label + ' v3.11-8: dispose() cancels the watchdog');
+  })();
+
+  // 9. no leak into the next Route: a step of an aborted Route keeps reporting, the next Route ignores it
+  (function () {
+    const details = mkRoute('DCX70', 2, 1, 70).concat(mkRoute('DCX71', 2, 1, 71));
+    const r = go(details, (stop, code) => (code === 'DCX70'
+      ? { steps: [[10000, 'stop_click'], [120000, 'stop_click'], [30000, 'stop_click'], [30000, 'stop_click']], hang: true }
+      : { hang: true }));
+    r.w.runAll();
+    const a = r.rr('DCX70');
+    const b = r.rr('DCX71');
+    assert(a.reasonCode === 'watchdog' && b.reasonCode === 'watchdog' && b.idleMsAtAbort === IDLE && b.abortContext.lastProgressKind === 'openRoute_done' &&
+      !b.progressKinds.stop_click && b.routeElapsedMs < 100000,
+      label + ' v3.11-9: next Route unaffected by stale progress ' + JSON.stringify({ b: b.abortContext, k: b.progressKinds, el: b.routeElapsedMs }));
+    assert(a.progressKinds.stop_click === 1 && a.progressEvents === a.abortContext.progressEvents, label + ' v3.11-9: aborted Route ignores late progress');
+    assert(b.maxIdleMs <= IDLE && b.progressEvents === 1 && r.w.pending() === 0, label + ' v3.11-9: fresh per-Route state, no timer left');
+  })();
+
+  // synthetic: 22 Routes / 168 packages, long Routes with sub-step progress, one real stall
+  (function () {
+    let details = [];
+    const sizes = [];
+    for (let i = 0; i < 22; i++) {
+      const n = i < 14 ? 8 : 7;
+      sizes.push(n);
+      details = details.concat(mkRoute('DCX' + (100 + i), n, 2, 100 + i));
+    }
+    const r = go(details, (stop, code) => {
+      const i = Number(code.slice(3)) - 100;
+      if (i === 10 && stop.stop === 2) return { hang: true };
+      if (i % 4 === 0) return { steps: [[25000, 'stop_found'], [25000, 'stop_click'], [25000, 'stop_opened'], [25000, 'tr_details']], tail: 2000 };
+      return { steps: [[4000, 'stop_click']], tail: 5000 };
+    });
+    r.w.runAll();
+    const s = r.summary();
+    const bad = r.run.routeResults.filter((x) => x.status !== 'done');
+    assert(r.sel.targets.length === 168 && r.run.routeResults.length === 22 && bad.length === 1 && bad[0].routeCode === 'DCX110' &&
+      bad[0].reasonCode === 'watchdog' && bad[0].abortContext.capturedBeforeAbort === 2 && bad[0].abortContext.markedRemaining === 6 &&
+      s.counts.captured === 162 && s.counts.route_aborted === 6 &&
+      s.routeStats.done === 21 && s.routeStats.byReason.watchdog === 1 && r.w.pending() === 0 && r.done === '',
+      label + ' v3.11 synthetic 22/168 ' + JSON.stringify({ t: r.sel.targets.length, c: s.counts, rs: s.routeStats, bad: bad.map((x) => x.routeCode + ':' + x.reasonCode) }));
+    const longest = r.run.routeResults.filter((x) => /^DCX1(00|04|08|12|16|20)$/.test(x.routeCode));
+    assert(longest.length === 6 && longest.every((x) => x.status === 'done' && x.routeElapsedMs > 400000 && x.maxIdleMs <= 25000),
+      label + ' v3.11 synthetic: long Routes done ' + JSON.stringify(longest.map((x) => [x.routeCode, x.status, x.routeElapsedMs])));
+  })();
+  console.log('ok: Bag v3.11 stall-only watchdog (' + label + ')');
+}
+Core2 = RootCore;
+v311Suite('root core');
+Core2 = PhaseCore;
+v311Suite('phase1-core');
+
+// runner wiring v3.11: Route-bound sub-step progress, no heartbeat timer, timeouts unchanged
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const drv = bag.slice(bag.indexOf('  function createBagDriver(ctx, runId) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(drv.indexOf('beginRoute: function (api) {') >= 0 && drv.indexOf('ctx.routeProgress = api && typeof api.noteProgress') >= 0 &&
+    drv.indexOf('function routeNote() {') >= 0, 'v3.11: Route-bound progress hook');
+  ['openRoute: function (route, cb) {\n        var note = routeNote();', 'var note = (openOpts && openOpts.note) || routeNote();',
+    'findPackage: function (target, stop, cb) {\n        var note = routeNote();', 'leaveStop: function (stop, cb) {\n        var note = routeNote();',
+    'restoreAfterPackage: function (target, cb) {\n        var note = routeNote();', "{ maxAttempts: 1, noExtendedWait: true, note: note }"]
+    .forEach((k) => assert(drv.indexOf(k) >= 0, 'v3.11: note bound at step start: ' + k.split('\n')[0]));
+  ['route_card_found', 'route_click_retry', 'route_click', 'route_retry', 'route_detail', 'stop_found', 'stop_retry', 'stop_click', 'stop_opened',
+    'package_search_miss', 'package_reopen', 'package_history_restored', 'stop_close_click', 'stop_close_retry']
+    .forEach((k) => assert(drv.indexOf("note('" + k + "')") >= 0, 'v3.11: sub-step progress ' + k));
+  assert((drv.match(/\}, note\);/g) || []).length === 2 && bag.indexOf("if (note) note('tr_details');") >= 0, 'v3.11: both trDetails waits report to their Route');
+  assert(runner.indexOf('bagEngine.noteProgress(') < 0 && bag.indexOf('setInterval') < 0, 'v3.11: no global progress call, no heartbeat interval');
+  assert((bag.match(/pageContext: bagPageContext,/g) || []).length === 2 && bag.indexOf("visibilityState: document.visibilityState") >= 0, 'v3.11: page context wired');
+  assert((bag.match(/if \(bagEngine && typeof bagEngine\.dispose === 'function'\) bagEngine\.dispose\(\);/g) || []).length === 2, 'v3.11: dispose at both phase ends');
+  ['BAG_ROUTE_IDLE_MS = 90000', 'BAG_ROUTE_HARD_MAX_MS = 900000', 'BAG_ROUTE_BUDGET_MS = 120000', 'BAG_STOP_OPEN_TR_WAIT_MS = 3000',
+    'BAG_STOP_OPEN_TR_EXTRA_MS = 3000', 'BAG_STOP_EXPAND_TIMEOUT_MS = 3000', 'BAG_STOP_CLOSE_TIMEOUT_MS = 5000', 'BAG_ROUTE_RETRY_WAIT_MS = 15000']
+    .forEach((k) => assert(bag.indexOf(k) >= 0, 'v3.11: timeout unchanged ' + k));
+  const eng = (s) => s.slice(s.indexOf('  function runBagEngine(opts) {'), s.indexOf('  // ---- Unfinished Bag Test v1'));
+  const e0 = eng(readSource('cortex-13-priority-core.js'));
+  assert(e0.length > 1000 && e0 === eng(readSource('cortex-capture-extension', 'cortex-13-priority-core.js')) &&
+    e0 === eng(readSource('cortex-capture-extension', 'phase1-core.js')), 'v3.11: engine identical in all three copies');
+  console.log('ok: v3.11 runner wiring');
+})();
+
+// ---------------- Bag v3.12: openRoute in a hidden tab, Route-bound cancellation ----------------
+// The runner's own route-operation block (bagRouteOp .. afterBagLayout) runs in a vm against a
+// virtual browser: one clock, Chrome-like timer throttling while hidden (>= 1 s, optional intensive
+// 1-minute alignment), requestAnimationFrame paused while hidden. The driver follows the runner's
+// openRoute order (find card -> scrollIntoView -> afterBagLayout -> CDP click -> wait detail ->
+// one retry) on top of those real primitives, under the real engine.
+function v312LoadOps(env) {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const a = runner.indexOf('  var bagRouteOp = null;');
+  const b = runner.indexOf('  function hrefNow() {');
+  assert(a > 0 && b > a, 'v3.12: route-op block found in the runner');
+  const src = 'var Date = __VDate; var BAG_LAYOUT_FALLBACK_MS = 1000; var bagRun = null; var bagTimer = 0; var bagEngine = null;\n' +
+    'function bagActive() { return !!(bagRun && !bagRun.ended); }\n' + runner.slice(a, b) +
+    '\nthis.ops = { bagStartRouteOp: bagStartRouteOp, bagCancelRouteOp: bagCancelRouteOp, bagLater: bagLater, afterBagLayout: afterBagLayout,' +
+    ' bagOpAlive: bagOpAlive, bagOpEnter: bagOpEnter, bagOpLeave: bagOpLeave, bagOpDom: bagOpDom, bagOpSnapshot: bagOpSnapshot,' +
+    ' current: function () { return bagRouteOp; }, setRun: function (r) { bagRun = r; }, setEngine: function (e) { bagEngine = e; } };';
+  const ctx = vm.createContext(env);
+  vm.runInContext(src, ctx, { filename: 'phase1-runner.js#bag-route-ops' });
+  return ctx.ops;
+}
+
+function v312Browser(o) {
+  o = o || {};
+  let clock = 0;
+  let seq = 0;
+  const q = [];
+  let visible = o.hidden ? false : true;
+  let hiddenSince = o.hidden ? (o.hiddenSince != null ? o.hiddenSince : 0) : null;
+  const raf = [];
+  let frameArmed = false;
+  const stats = { rafRequested: 0, rafRun: 0, maxTimerDelay: 0 };
+  function push(fn, due) { const t = { id: ++seq, due, fn }; q.push(t); return t.id; }
+  // Page timers (content script setTimeout): throttled while hidden, like Chrome.
+  function throttled(fn, ms) {
+    let due = clock + Math.max(0, ms || 0);
+    if (!visible) {
+      due = Math.max(due, clock + 1000);
+      if (o.intensive && clock - hiddenSince >= 300000) due = Math.ceil(due / 60000) * 60000;
+    }
+    stats.maxTimerDelay = Math.max(stats.maxTimerDelay, due - clock - (ms || 0));
+    return push(fn, due);
+  }
+  // Network / CDP replies / user actions: not page timers, never throttled.
+  function raw(fn, ms) { return push(fn, clock + Math.max(0, ms || 0)); }
+  function cancel(id) { const k = q.findIndex((t) => t.id === id); if (k >= 0) q.splice(k, 1); }
+  function armFrame() {
+    if (frameArmed || !visible || o.rafStalled || !raf.length) return;
+    frameArmed = true;
+    raw(frame, 16);
+  }
+  function frame() {
+    frameArmed = false;
+    if (!visible || o.rafStalled) return;
+    raf.splice(0).forEach((f) => { stats.rafRun += 1; f(); });
+    armFrame();
+  }
+  function setVisible(v) {
+    if (v === visible) return;
+    visible = v;
+    hiddenSince = v ? null : clock;
+    if (v) armFrame();
+  }
+  class VDate extends Date {
+    constructor(...a) { super(...(a.length ? a : [clock])); }
+    static now() { return clock; }
+  }
+  const doc = {
+    get visibilityState() { return visible ? 'visible' : 'hidden'; },
+    hasFocus: () => visible,
+    getElementById: () => null
+  };
+  const env = {
+    __VDate: VDate, document: doc, console,
+    setTimeout: (fn, ms) => throttled(fn, ms), clearTimeout: cancel,
+    requestAnimationFrame: (fn) => { stats.rafRequested += 1; raf.push(fn); armFrame(); return stats.rafRequested; }
+  };
+  return {
+    env, doc, stats, now: () => clock, schedule: throttled, cancel, raw, setVisible,
+    visibleAt: (t, v) => push(() => setVisible(v), t),
+    pending: () => q.length,
+    pendingRaf: () => raf.length,
+    runAll(limitMs) {
+      for (let n = 0; q.length && n < 2000000; n++) {
+        q.sort((x, y) => x.due - y.due || x.id - y.id);
+        if (limitMs != null && q[0].due > limitMs) break;
+        const t = q.shift();
+        clock = Math.max(clock, t.due);
+        t.fn();
+      }
+    }
+  };
+}
+
+function v312Suite(label) {
+  const C = Core2;
+  const IDLE = 90000;
+  function mkRoute(code, n, perStop, codeNum) {
+    const stops = [];
+    for (let i = 0; i < Math.ceil(n / perStop); i++) {
+      const pk = [];
+      for (let k = 0; k < perStop && i * perStop + k < n; k++) {
+        const j = i * perStop + k;
+        pk.push(['DA' + String(codeNum).padStart(4, '0') + String(j).padStart(6, '0'), 'tr-' + code + '-' + j]);
+      }
+      stops.push({ seq: i + 1, status: 'NOT_STARTED', pk });
+    }
+    return [v36Details(code, stops)];
+  }
+
+  // page: detailMs(code, attempt) -> ms until route-details after the click lands (null = never);
+  //       cdpMs(code, attempt) -> CDP reply delay (Infinity = never); stopHang(code, stop).
+  function go(details, page, bo, legacyLayout) {
+    const B = v312Browser(bo);
+    const ops = v312LoadOps(B.env);
+    const trMap = {};
+    const shown = {};
+    const clicks = [];
+    const events = [];
+    let cur = '';
+    let note = null;
+    const layout = legacyLayout
+      ? (fn) => B.env.requestAnimationFrame(() => B.env.requestAnimationFrame(fn))
+      : ops.afterBagLayout;
+    function cdpClick(code, attempt, done) {
+      const op = ops.current();
+      clicks.push({ code, attempt, at: B.now(), current: cur, opId: op.id, visibilityState: B.doc.visibilityState });
+      const d = page.detailMs ? page.detailMs(code, attempt) : 400;
+      if (d != null) B.raw(() => { shown[code] = true; }, d);
+      const reply = page.cdpMs ? page.cdpMs(code, attempt) : 30;
+      ops.bagOpEnter(op);
+      if (reply === Infinity) return;
+      B.raw(() => {
+        const alive = ops.bagOpAlive(op);
+        ops.bagOpLeave(op, alive);
+        if (!alive) { events.push('stale_cdp_reply:' + code); return; }
+        ops.bagOpDom(op, 'cdp_click');
+        done();
+      }, reply);
+    }
+    const driver = {
+      beginRoute(api) { note = api.noteProgress; cur = api.routeCode; ops.bagStartRouteOp(api.routeCode, 'route'); events.push('begin:' + cur); },
+      endRoute(info) {
+        events.push('end:' + info.routeCode + ':' + info.status);
+        const ended = ops.bagCancelRouteOp(info.reasonCode || info.status);
+        if (ended) ended.endStatus = info.status + (info.reasonCode ? '(' + info.reasonCode + ')' : '');
+        ops.bagStartRouteOp(info.routeCode + ' returnToList', 'return');
+        cur = '';
+      },
+      openRoute(route, cb) {
+        const op = ops.current();
+        const n = note;
+        const code = route.routeCode;
+        let attempt = 0;
+        let retried = false;
+        function tryOpen() {
+          attempt += 1;
+          ops.bagLater(() => {
+            op.routeCardFoundAt = B.now() - op.startedAt;
+            n('route_card_found');
+            const tryRec = { attempt, at: B.now() - op.startedAt, visibilityState: B.doc.visibilityState, hasFocus: B.doc.hasFocus() };
+            op.routeClickAttemptCount += 1;
+            op.routeClickAttemptAt.push(tryRec.at);
+            op.routeClickAttempts.push(tryRec);
+            layout(() => {
+              cdpClick(code, attempt, () => {
+                n('route_click');
+                const started = B.now();
+                (function poll() {
+                  if (shown[code]) {
+                    op.routeDetailDetectedAt = B.now() - op.startedAt;
+                    n('route_detail');
+                    ops.bagLater(() => cb({ ok: true }), 300);
+                    return;
+                  }
+                  if (B.now() - started >= 15000) {
+                    if (!retried) {
+                      retried = true;
+                      op.routeRetryCount += 1;
+                      n('route_retry');
+                      ops.bagLater(tryOpen, 600);
+                      return;
+                    }
+                    const hidden = B.doc.visibilityState === 'hidden';
+                    cb({ ok: false, code: hidden ? 'route_hidden_blocked' : 'route_detail_not_detected', detail: 'sim' });
+                    return;
+                  }
+                  ops.bagLater(poll, 150);
+                })();
+              });
+            });
+          }, 220);
+        }
+        tryOpen();
+      },
+      ensureStop(stop, pending, onState, cb) {
+        const n = note;
+        const code = cur;
+        ops.bagLater(() => {
+          n('stop_click');
+          if (page.stopHang && page.stopHang(code, stop.stop)) return;
+          ops.bagLater(() => {
+            pending.forEach((t) => C.mergeTrDetailsMaps(trMap, { [t.referenceId]: { trId: t.referenceId, bagName: 'B', bagScannableId: 's' } }));
+            cb({ ok: true, clicked: true, clickCount: 1, trWaitMs: 1000, stopDiag: { openResult: 'opened', openedAttempt: 1, clickAttempts: [{ attempt: 1, clicked: true }] } });
+          }, 1200);
+        }, 300);
+      },
+      findPackage: (t, s, cb) => cb({ ok: false, status: 'package_dom_not_found' }),
+      clickPackage: (t, x, cb) => cb({ ok: false }), waitTrDetails: (t, cb) => cb(false), restoreAfterPackage: (t, cb) => cb({ ok: true }),
+      leaveStop: (s, cb) => { ops.bagLater(() => cb({ ok: true }), 500); },
+      returnToList: (cb) => { events.push('return'); ops.bagLater(() => cb({ ok: true }), 800); }
+    };
+    const sel = C.selectBagTargets(details, {});
+    const run = C.createBagRun(sel.targets);
+    ops.setRun(run);
+    let doneMsg = null;
+    const h = C.runBagEngine({
+      run, routes: C.groupBagTargetsByRoute(sel.targets), driver, getTrMap: () => trMap,
+      now: B.now, schedule: B.schedule, cancel: B.cancel, routeIdleMs: IDLE, routeHardMaxMs: 900000, routeBudgetMs: 120000,
+      pageContext: () => ({ visibilityState: B.doc.visibilityState, routeOperation: ops.bagOpSnapshot(ops.current()) }),
+      done: (a) => { doneMsg = a; ops.bagCancelRouteOp('phase_end'); } // finishBagPhase
+    });
+    ops.setEngine(h);
+    return { B, ops, run, h, trMap, clicks, events, sel, get done() { return doneMsg; },
+      summary: () => C.summarizeBagRun(run, trMap),
+      rr: (code) => run.routeResults.find((x) => x.routeCode === code),
+      op: (code) => run.routeOperations.find((x) => x.kind === 'route' && x.routeCode === code) };
+  }
+  const noStale = (r) => r.clicks.every((c) => c.code === c.current);
+
+  // 1. foreground: double rAF as before, one click, Route done
+  (function () {
+    const r = go(mkRoute('DCX80', 4, 2, 80), {});
+    r.B.runAll();
+    const rr = r.rr('DCX80');
+    const op = r.op('DCX80');
+    assert(rr.status === 'done' && r.summary().counts.captured === 4 && op.layoutVia.raf === 1 && !op.layoutVia.timer_hidden &&
+      op.routeClickAttemptCount === 1 && op.routeRetryCount === 0 && op.routeDetailDetectedAt > op.routeCardFoundAt &&
+      op.routeClickAttempts[0].visibilityState === 'visible' && op.routeClickAttempts[0].hasFocus === true &&
+      op.cancellationCompleted && r.B.pending() === 0 && r.done === '',
+      label + ' v3.12-1: foreground success ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, via: op.layoutVia }));
+  })();
+
+  // 2. hidden from the start: v3.11 (rAF only) waits for the watchdog exactly like DCX44-46;
+  //    v3.12 clicks through the hidden-tab timer and finishes the Route
+  (function () {
+    const old = go(mkRoute('DCX81', 4, 2, 81), {}, { hidden: true }, true);
+    old.B.runAll();
+    const o = old.rr('DCX81');
+    assert(o.status === 'route_aborted' && o.reasonCode === 'watchdog' && o.abortContext.phase === 'openRoute' &&
+      o.abortContext.lastProgressKind === 'route_card_found' && old.clicks.length === 0 && old.B.pendingRaf() === 1,
+      label + ' v3.12-2: v3.11 layout reproduces the field abort ' + JSON.stringify(o.abortContext));
+    const r = go(mkRoute('DCX81', 4, 2, 81), {}, { hidden: true });
+    r.B.runAll();
+    const rr = r.rr('DCX81');
+    const op = r.op('DCX81');
+    assert(rr.status === 'done' && r.summary().counts.captured === 4 && op.layoutVia.timer_hidden === 1 && !op.layoutVia.raf &&
+      r.B.stats.rafRequested === 0 && op.routeClickAttempts[0].visibilityState === 'hidden' && op.routeClickAttempts[0].hasFocus === false &&
+      r.clicks.length === 1 && r.B.pending() === 0,
+      label + ' v3.12-2: hidden success ' + JSON.stringify({ s: rr.status, r: rr.reasonCode, via: op.layoutVia, raf: r.B.stats }));
+    // visible but rAF stalled (occluded window): the timer fallback clicks once
+    const s = go(mkRoute('DCX82', 2, 2, 82), {}, { rafStalled: true });
+    s.B.runAll();
+    const sop = s.op('DCX82');
+    assert(s.rr('DCX82').status === 'done' && sop.layoutVia.timer_fallback === 1 && !sop.layoutVia.raf && s.clicks.length === 1,
+      label + ' v3.12-2: stalled rAF -> timer fallback ' + JSON.stringify(sop.layoutVia));
+  })();
+
+  // 3. first click lost, retry succeeds; DCX44 case: visible at the first click, hidden before the retry
+  (function () {
+    const r = go(mkRoute('DCX83', 2, 2, 83), { detailMs: (c, a) => (a === 1 ? null : 500) });
+    r.B.runAll();
+    const op = r.op('DCX83');
+    const rr = r.rr('DCX83');
+    assert(rr.status === 'done' && op.routeRetryCount === 1 && op.routeClickAttemptCount === 2 && op.routeClickAttemptAt.length === 2 &&
+      rr.progressKinds.route_retry === 1 && r.clicks.length === 2,
+      label + ' v3.12-3: retry success ' + JSON.stringify({ s: rr.status, op: op.routeClickAttemptAt }));
+    const h = go(mkRoute('DCX44', 2, 2, 44), { detailMs: (c, a) => (a === 1 ? null : 500) });
+    h.B.visibleAt(5000, false);
+    h.B.runAll();
+    const hop = h.op('DCX44');
+    assert(h.rr('DCX44').status === 'done' && hop.routeClickAttempts[0].visibilityState === 'visible' &&
+      hop.routeClickAttempts[1].visibilityState === 'hidden' && hop.layoutVia.raf === 1 && hop.layoutVia.timer_hidden === 1,
+      label + ' v3.12-3: hidden between the clicks ' + JSON.stringify({ s: h.rr('DCX44').status, a: hop.routeClickAttempts, via: hop.layoutVia }));
+    const o = go(mkRoute('DCX44', 2, 2, 44), { detailMs: (c, a) => (a === 1 ? null : 500) }, null, true);
+    o.B.visibleAt(5000, false);
+    o.B.runAll();
+    assert(o.rr('DCX44').reasonCode === 'watchdog' && o.rr('DCX44').abortContext.lastProgressKind === 'route_card_found' && o.clicks.length === 1,
+      label + ' v3.12-3: same timeline under v3.11 = field DCX44 ' + JSON.stringify(o.rr('DCX44').abortContext));
+  })();
+
+  // 4. detail never arrives: a real stall (CDP reply never comes) -> watchdog ends that Route only;
+  //    clicks dispatched + full waits without a transition -> route_detail_not_detected / route_hidden_blocked
+  (function () {
+    const details = mkRoute('DCX84', 2, 2, 84).concat(mkRoute('DCX85', 2, 2, 85));
+    const r = go(details, { cdpMs: (c) => (c === 'DCX84' ? Infinity : 30) }, { hidden: true });
+    r.B.runAll();
+    const a = r.rr('DCX84');
+    const b = r.rr('DCX85');
+    assert(a.status === 'route_aborted' && a.reasonCode === 'watchdog' && a.abortContext.phase === 'openRoute' &&
+      a.abortContext.lastProgressKind === 'route_card_found' && a.idleMsAtAbort >= IDLE && a.idleMsAtAbort < IDLE + 2000 &&
+      a.abortContext.page.routeOperation.routeCode === 'DCX84' && a.abortContext.page.routeOperation.routeClickAttemptCount === 1 &&
+      b.status === 'done' && r.summary().counts.captured === 2 && r.summary().counts.route_aborted === 2,
+      label + ' v3.12-4: watchdog only on the stalled Route ' + JSON.stringify({ a: a.abortContext, b: b.status }));
+    const n = go(mkRoute('DCX86', 2, 2, 86).concat(mkRoute('DCX87', 2, 2, 87)), { detailMs: (c) => (c === 'DCX86' ? null : 400) }, { hidden: true });
+    n.B.runAll();
+    const nv = go(mkRoute('DCX86', 2, 2, 86), { detailMs: () => null });
+    nv.B.runAll();
+    assert(n.rr('DCX86').reasonCode === 'route_hidden_blocked' && n.op('DCX86').routeClickAttemptCount === 2 && n.rr('DCX87').status === 'done' &&
+      nv.rr('DCX86').reasonCode === 'route_detail_not_detected',
+      label + ' v3.12-4/E: hidden_blocked only after 2 dispatched clicks + full waits ' +
+      JSON.stringify([n.rr('DCX86').reasonCode, n.rr('DCX87').status, nv.rr('DCX86').reasonCode]));
+  })();
+
+  // 5. after an abort the old openRoute is fully stopped: its late CDP reply, retry and poll never run,
+  //    the next Route opens normally; a parked rAF from a visible->hidden switch never clicks twice
+  (function () {
+    const details = mkRoute('DCX88', 2, 2, 88).concat(mkRoute('DCX89', 4, 2, 89));
+    const r = go(details, { cdpMs: (c) => (c === 'DCX88' ? 200000 : 30) }, { hidden: true });
+    r.B.runAll();
+    const a = r.rr('DCX88');
+    const aop = r.op('DCX88');
+    const bop = r.op('DCX89');
+    const abortAt = a.startedAt + a.abortContext.routeElapsedMs;
+    assert(a.reasonCode === 'watchdog' && r.rr('DCX89').status === 'done' && r.events.indexOf('stale_cdp_reply:DCX88') >= 0 &&
+      r.clicks.filter((c) => c.code === 'DCX88').every((c) => c.at < abortAt) && noStale(r) &&
+      aop.cancellationRequested && aop.cancellationCompleted && aop.staleCallbacksSkipped === 1 && aop.inflight === 0 && aop.endStatus === 'route_aborted(watchdog)',
+      label + ' v3.12-5: stale openRoute fully stopped ' + JSON.stringify({ ev: r.events, op: { c: aop.cancellationCompleted, s: aop.staleCallbacksSkipped } }));
+    // Route ended while its detail poll is running (runner exception path): the poll and its retry click stop
+    const f = go(mkRoute('DCX96', 2, 2, 96).concat(mkRoute('DCX97', 2, 2, 97)), { detailMs: (c) => (c === 'DCX96' ? null : 400) });
+    f.B.raw(() => f.h.failRoute('exception: test'), 5000);
+    f.B.runAll();
+    const fop = f.op('DCX96');
+    assert(f.rr('DCX96').reasonCode === 'exception' && f.rr('DCX97').status === 'done' && noStale(f) &&
+      f.clicks.filter((c) => c.code === 'DCX96').length === 1 && fop.routeRetryCount === 0 && fop.staleCallbacksSkipped === 1 && fop.cancellationCompleted,
+      label + ' v3.12-5: poll of an ended Route stops ' + JSON.stringify({ c: f.clicks.map((c) => c.code + '/' + c.current), op: fop.staleCallbacksSkipped }));
+    const ret = r.run.routeOperations.find((x) => x.kind === 'return' && x.routeCode === 'DCX88 returnToList');
+    assert(ret && ret.previousRouteOperationStillAlive === true && ret.previousRouteOperationInflight === 1 && bop.previousRouteOperationStillAlive === false,
+      label + ' v3.12-5: previousRouteOperationStillAlive recorded ' + JSON.stringify({ ret: ret && ret.previousRouteOperationInflight }));
+    const p = go(mkRoute('DCX90', 2, 2, 90).concat(mkRoute('DCX91', 2, 2, 91)), {});
+    p.B.visibleAt(229, false); // after the card lookup, before the two frames
+    p.B.visibleAt(120000, true);
+    p.B.runAll();
+    const pop = p.op('DCX90');
+    assert(p.rr('DCX90').status === 'done' && p.rr('DCX91').status === 'done' && p.clicks.length === 2 && noStale(p) &&
+      pop.layoutVia.timer_fallback === 1 && p.B.stats.rafRun >= 2 && p.B.pendingRaf() === 0,
+      label + ' v3.12-5: parked rAF runs later without a second click ' + JSON.stringify({ c: p.clicks.map((c) => c.code), via: pop.layoutVia }));
+  })();
+
+  // 7. captured Bags kept when the watchdog ends a Route mid-way
+  (function () {
+    const r = go(mkRoute('DCX92', 6, 1, 92), { stopHang: (c, s) => s === 4 }, { hidden: true });
+    r.B.runAll();
+    const s = r.summary();
+    const rr = r.rr('DCX92');
+    assert(rr.reasonCode === 'watchdog' && rr.abortContext.capturedBeforeAbort === 3 && rr.abortContext.markedRemaining === 3 &&
+      s.counts.captured === 3 && s.counts.route_aborted === 3,
+      label + ' v3.12-7: captured kept ' + JSON.stringify({ ac: rr.abortContext, c: s.counts }));
+  })();
+
+  // 6. 22 Routes, visibility toggling, retries, one real stall: no stale click, one watchdog
+  (function () {
+    let details = [];
+    for (let i = 0; i < 22; i++) details = details.concat(mkRoute('DCX' + (100 + i), i < 14 ? 8 : 7, 2, 100 + i));
+    const r = go(details, {
+      detailMs: (c, a) => (Number(c.slice(3)) % 5 === 1 && a === 1 ? null : 400),
+      cdpMs: (c, a) => (c === 'DCX110' ? (a === 1 ? 400000 : 30) : 30)
+    });
+    (function toggle(v) { if (r.done !== null) return; r.B.setVisible(v); r.B.raw(() => toggle(!v), 37000); })(true);
+    r.B.runAll();
+    const s = r.summary();
+    const bad = r.run.routeResults.filter((x) => x.status !== 'done');
+    const ops = r.run.routeOperations;
+    const begins = r.events.filter((e) => e.startsWith('begin:')).length;
+    const ends = r.events.filter((e) => e.startsWith('end:')).length;
+    assert(r.sel.targets.length === 168 && r.run.routeResults.length === 22 && bad.length === 1 && bad[0].routeCode === 'DCX110' &&
+      bad[0].reasonCode === 'watchdog' && s.counts.captured === 160 && s.counts.route_aborted === 8 && noStale(r) &&
+      begins === 22 && ends === 22 && ops.length === 44 && ops.every((x) => x.cancellationRequested) &&
+      ops.filter((x) => x.kind === 'route').every((x) => x.cancellationCompleted || x.routeCode === 'DCX110') &&
+      r.events.indexOf('stale_cdp_reply:DCX110') >= 0 && r.B.pending() === 0 && r.done === '',
+      label + ' v3.12-6: 22 Routes ' + JSON.stringify({ ns: noStale(r), be: [begins, ends], p: r.B.pending(),
+        cc: ops.filter((x) => !x.cancellationCompleted).map((x) => x.routeCode), st: r.events.filter((e) => e.startsWith('stale')), c: s.counts, bad: bad.map((x) => x.routeCode + ':' + x.reasonCode), ops: ops.length }));
+    const viaHidden = ops.filter((x) => x.layoutVia.timer_hidden).length;
+    const viaRaf = ops.filter((x) => x.layoutVia.raf).length;
+    assert(viaHidden > 0 && viaRaf > 0, label + ' v3.12-6: both visible and hidden Routes covered ' + viaHidden + '/' + viaRaf);
+  })();
+
+  // 8a. endRoute: once per Route, done or aborted, before the list return
+  (function () {
+    const r = go(mkRoute('DCX93', 2, 2, 93).concat(mkRoute('DCX94', 2, 2, 94)), { cdpMs: (c) => (c === 'DCX93' ? Infinity : 30) });
+    r.B.runAll();
+    const seqs = r.events.filter((e) => !e.startsWith('stale'));
+    assert(JSON.stringify(seqs) === JSON.stringify(['begin:DCX93', 'end:DCX93:route_aborted', 'return', 'begin:DCX94', 'end:DCX94:done', 'return']),
+      label + ' v3.12-8: endRoute order ' + JSON.stringify(seqs));
+  })();
+
+  // 9. why 90 s became 109 s: the watchdog is a page timer; hidden > 5 min, Chrome aligns it to whole
+  //    minutes, so it fires late. The idle it reports is measured, not assumed.
+  (function () {
+    const r = go(mkRoute('DCX95', 2, 2, 95), { cdpMs: () => Infinity }, { hidden: true, hiddenSince: -600000, intensive: true });
+    r.B.runAll();
+    const rr = r.rr('DCX95');
+    assert(rr.reasonCode === 'watchdog' && rr.idleMsAtAbort > IDLE && rr.idleMsAtAbort <= IDLE + 60000 && rr.abortContext.sinceLastProgressMs === rr.idleMsAtAbort &&
+      rr.abortContext.page.routeOperation.maxTimerLagMs > 0,
+      label + ' v3.12-9: intensive throttling delays the watchdog ' + JSON.stringify({ idle: rr.idleMsAtAbort, lag: rr.abortContext.page.routeOperation.maxTimerLagMs }));
+  })();
+  console.log('ok: Bag v3.12 hidden-tab openRoute + Route-bound cancellation (' + label + ')');
+}
+Core2 = RootCore;
+v312Suite('root core');
+Core2 = PhaseCore;
+v312Suite('phase1-core');
+
+// runner wiring v3.12
+(function () {
+  const runner = readSource('cortex-capture-extension', 'phase1-runner.js');
+  const bag = runner.slice(runner.indexOf('// ---- Bag enrichment phase ----'), runner.indexOf('  function onReady('));
+  const layout = bag.slice(bag.indexOf('  function afterBagLayout(fn) {'), bag.indexOf('  function hrefNow() {'));
+  assert(layout.indexOf("document.visibilityState === 'hidden'") >= 0 && layout.indexOf("typeof requestAnimationFrame === 'function' && !hidden") >= 0 &&
+    layout.indexOf("run(hidden ? 'timer_hidden'") >= 0 && layout.indexOf('if (settled) return;') >= 0, 'v3.12-B: no rAF dependence when hidden, runs once');
+  const later = bag.slice(bag.indexOf('  function bagLater(fn, ms) {'), bag.indexOf('  function bagLog('));
+  assert(later.indexOf('var op = bagRouteOp;') >= 0 && later.indexOf('if (!bagOpAlive(op)) { bagOpLeave(op, false); return; }') >= 0, 'v3.12-A: timers bound to the Route op');
+  ['  function safeCdpClick(resolve, runId, done, diag) {', '  function clickListButton(getTarget, runId, done, diag, skipLabels, preferLater) {',
+    '  function findBagRouteCard(route, runId, done) {'].forEach((k) => {
+    const body = bag.slice(bag.indexOf(k), bag.indexOf(k) + 6000);
+    assert(bag.indexOf(k) >= 0 && body.indexOf('var op = bagRouteOp;') >= 0 && body.indexOf('bagOpLeave(op, alive);') >= 0 &&
+      body.indexOf('|| !alive) return;') >= 0, 'v3.12-A: CDP reply guarded by the Route op: ' + k.trim());
+  });
+  const drv = bag.slice(bag.indexOf('  function createBagDriver(ctx, runId) {'), bag.indexOf('      returnToList: function (cb) {'));
+  assert(drv.indexOf("bagStartRouteOp(api && api.routeCode, 'route');") >= 0 && drv.indexOf('endRoute: function (info) {') >= 0 &&
+    drv.indexOf("bagStartRouteOp((info && info.routeCode) + ' returnToList', 'return');") >= 0, 'v3.12-A: begin/end Route op');
+  ['routeCardFoundAt', 'routeClickAttemptAt', 'routeClickAttemptCount', 'routeDetailDetectedAt', 'routeRetryCount', 'hasFocus', 'visibilityStateAfter',
+    "sub('find_route_card')", "sub('route_click')", "sub('wait_route_detail')", "sub('route_retry')"]
+    .forEach((k) => assert(drv.indexOf(k) >= 0 || bag.indexOf(k) >= 0, 'v3.12 diagnostics: ' + k));
+  ['cancellationRequested', 'cancellationCompleted', 'previousRouteOperationStillAlive', 'lastSuccessfulDomOperation', 'staleCallbacksSkipped', 'maxTimerLagMs']
+    .forEach((k) => assert(bag.indexOf(k) >= 0, 'v3.12 op field: ' + k));
+  assert(bag.indexOf('routeOperation: bagOpSnapshot(bagRouteOp)') >= 0 && bag.indexOf('routeOperations: (bagRun.routeOperations || []).map(bagOpSnapshot),') >= 0,
+    'v3.12: abort context + diagnostics JSON carry the Route operation');
+  assert((bag.match(/bagCancelRouteOp\('phase_end'\);\n {4}bagRouteOp = null;/g) || []).length === 2, 'v3.12: op cancelled at both phase ends');
+  assert(bag.indexOf("code: hiddenNow ? 'route_hidden_blocked' : 'route_detail_not_detected'") >= 0 &&
+    bag.indexOf("if (!routeRetried && routeListShown(ctx) && findRouteCardByRouteId(route.routeId))") >= 0, 'v3.12-E: hidden_blocked only after the retry path');
+  assert(bag.indexOf('setInterval') < 0 && bag.indexOf('MutationObserver') < 0 && (runner.match(/setInterval\(/g) || []).length === 1, 'v3.12: no heartbeat / watcher');
+  ['BAG_ROUTE_IDLE_MS = 90000', 'BAG_ROUTE_HARD_MAX_MS = 900000', 'BAG_ROUTE_RETRY_WAIT_MS = 15000', 'BAG_ROUTE_OPEN_ATTEMPTS']
+    .forEach((k) => assert(bag.indexOf(k) >= 0, 'v3.12: unchanged ' + k));
+  const core = readSource('cortex-13-priority-core.js');
+  assert((core.match(/driver\.endRoute\(/g) || []).length === 1 && core.indexOf("if (typeof driver.endRoute === 'function') {") > core.indexOf("setPhase('returnToList');"),
+    'v3.12: engine calls the optional endRoute hook once, at returnToList');
+  console.log('ok: v3.12 runner wiring');
 })();

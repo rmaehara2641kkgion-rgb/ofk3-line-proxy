@@ -22,6 +22,10 @@
   <script src="/lat-departure-core.js?v=20260823-1"></script>
   <script src="/lat-timeline-core.js?v=20260916-1"></script>
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
+  <script src="/line-unlinked-core.js?v=20261002-1"></script>
+  <script src="/qr-print-order-core.js?v=20261002-1"></script>
+  <script src="/billing-reconcile-core.js?v=20261007-3"></script>
+  <script src="/contact-compliance-core.js?v=20261007-2"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -751,6 +755,7 @@
           <span id="master-total">合計: 0名</span>
           <span id="master-linked">LINE紐付け済み: 0名</span>
           <span id="master-unlinked">未紐付け: 0名</span>
+          <button type="button" id="line-unlinked-open" onclick="openLineUnlinkedPanel()" class="text-xs px-2 py-1 rounded font-bold bg-emerald-600 text-white hover:bg-emerald-700">LINE未登録 <span id="line-unlinked-count">0</span>名</button>
         </div>
       </div>
 
@@ -777,7 +782,7 @@
         <!-- 登録/更新アップロード -->
         <section id="as-exp-upload-section" class="card p-4 mb-4 hidden">
           <h3 id="as-exp-upload-title" class="text-sm font-bold mb-2">エリア経験データを登録</h3>
-          <p class="text-xs text-ink-lighter mb-3">CSV / XLSX（TransportID 必須）。確定前に件数プレビューを表示します。</p>
+          <p class="text-xs text-ink-lighter mb-3">外部週次ツールの累積XLSX（areaExperience + importHistory シート）。選択時はプレビューのみで、確定するまでGASへ保存しません。スナップショットを置き換えても自動集計イベントは削除されません。</p>
           <div id="as-exp-dropzone" class="text-center py-6 border-2 border-dashed border-amber-300 rounded-lg cursor-pointer hover:border-amber-500 hover:bg-amber-50/50 transition-colors">
             <p class="text-sm font-medium">📂 エリア経験ファイルをドロップ / クリック</p>
             <p class="text-xs text-gray-400 mt-1">CSV, XLSX</p>
@@ -790,7 +795,14 @@
         <section class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-bold">ドライバー経験一覧</h3>
-            <input type="search" id="as-exp-search" placeholder="ドライバー名 / TransportID / エリア名" class="text-sm border rounded px-3 py-1.5 w-64 max-w-full">
+            <div class="flex items-center gap-2 flex-wrap justify-end">
+              <select id="as-exp-filter" class="text-sm border rounded px-2 py-1.5">
+                <option value="all">全員</option>
+                <option value="with">経験あり</option>
+                <option value="without">経験データなし</option>
+              </select>
+              <input type="search" id="as-exp-search" placeholder="ドライバー名 / TransportID / エリア名" class="text-sm border rounded px-3 py-1.5 w-64 max-w-full">
+            </div>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -1378,8 +1390,10 @@
 
         <div id="billing-actions" class="hidden mb-4 space-y-3">
           <div class="flex gap-2 flex-wrap">
-            <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE一斉送信</button>
+            <button onclick="sendBillingLineTest()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-bold hover:bg-blue-700 cursor-pointer">🧪 自分にテスト送信</button>
+            <button onclick="sendAllBillingLine()" class="bg-green-500 text-white px-4 py-2 rounded text-sm font-bold hover:bg-green-600 cursor-pointer">📩 LINE本送信</button>
             <button onclick="previewBillingMessage()" class="btn-secondary text-xs px-3 py-1.5 rounded cursor-pointer">👁 メッセージプレビュー</button>
+            <p class="w-full text-xs text-ink-lighter">テスト送信は管理者のLINEだけに届きます。ドライバー本人には送信されません。</p>
           </div>
 
           <!-- PDF一括アップロード -->
@@ -1394,8 +1408,8 @@
               ondragleave="this.classList.remove('border-blue-400','bg-blue-50')"
               ondrop="event.preventDefault(); this.classList.remove('border-blue-400','bg-blue-50'); handlePdfUpload(event.dataTransfer.files)">
               <p class="text-sm text-ink-lighter">請求書PDFをまとめてドラッグ＆ドロップ</p>
-              <p class="text-xs text-ink-lighter mt-1">ファイル名の【】内でドライバーを自動照合</p>
-              <input type="file" accept=".pdf" multiple onchange="handlePdfUpload(this.files)" class="hidden" id="pdf-files-input">
+              <p class="text-xs text-ink-lighter mt-1">PDF本文の氏名で対象者へ自動振り分け（ファイル名の【】も照合）</p>
+              <input type="file" accept="application/pdf,.pdf" multiple onchange="handlePdfUpload(this)" class="hidden" id="pdf-files-input">
             </div>
             <div id="pdf-match-list" class="mt-3 space-y-1 max-h-48 overflow-y-auto"></div>
           </div>
@@ -1446,9 +1460,11 @@
               <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white" id="btn-view-cc" onclick="setFtdsCcActiveView('cc')">CC表示</button>
             </div>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled>CC エクスポート</button>
+            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）の5シートExcel">📊 CC Ver.1 Excel出力</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled title="従来指標（べき架電／実架電）のExcel。CC Logic Ver.1 の数値ではありません">📞 従来架電実績 Excel出力</button>
           </div>
         </div>
+        <p class="text-xs text-ink-lighter -mt-2 mb-3 text-right" id="cc-v1-export-status">CC Ver.1 Excel：Amazon raw data 未読込（CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください）</p>
 
         <!-- Drop zones -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
@@ -1546,9 +1562,125 @@
         <!-- ===== Contact Compliance Section ===== -->
         <hr class="my-6 border-border">
 
-        <!-- CC Summary -->
+        <!-- CC Logic Ver.1 取込エラー（必須列不足など） -->
+        <div id="cc-v1-error" class="hidden mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700"></div>
+
+        <!-- CC Logic Ver.1（Amazon生データから算出: 4理由 × Call or Text） -->
+        <div id="cc-v1" class="hidden mb-6">
+          <div class="flex items-baseline justify-between flex-wrap gap-2 mb-2">
+            <h3 class="text-sm font-medium">📞 Contact Compliance</h3>
+            <span class="text-xs text-ink-lighter" id="cc-v1-logic-note"></span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">CC率</div>
+              <div class="text-2xl font-bold" id="cc-v1-rate">-</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">対象</div>
+              <div class="text-lg font-bold" id="cc-v1-total">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">適合</div>
+              <div class="text-lg font-bold text-emerald-600" id="cc-v1-compliant">0</div>
+            </div>
+            <div class="card p-3 text-center">
+              <div class="text-xs text-ink-lighter">非適合</div>
+              <div class="text-lg font-bold text-red-600" id="cc-v1-noncompliant">0</div>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">持ち戻り理由別</h4>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">理由</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-reason-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+            <h4 class="text-xs font-medium text-ink-lighter">DA別</h4>
+            <label class="text-xs text-ink-lighter">並び順
+              <select id="cc-v1-driver-sort" class="ml-1 text-xs border border-border rounded px-1 py-0.5" onchange="renderCcV1DriverTable()">
+                <option value="nonCompliantDesc">非適合件数が多い順</option>
+                <option value="rateAsc">CC率が低い順</option>
+                <option value="totalDesc">対象件数が多い順</option>
+              </select>
+            </label>
+          </div>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">DA名</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Transporter ID</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-driver-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">日別</h4>
+          <div class="card overflow-hidden mb-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Event Date</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-date-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <h4 class="text-xs font-medium text-ink-lighter mb-1">非適合明細（Contactなしで持ち戻り）<span id="cc-v1-nc-count"></span></h4>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto" style="max-height:480px; overflow-y:auto;">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-surface">
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Event Date</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DA名</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Transporter ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Scannable ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Destination Address ID</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Shipment Reason</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">理由</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Call Event</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Text Event</th>
+                    <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">判定</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-v1-nc-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- CC Summary（従来の架電実績指標: べき架電/実架電。協力会社ダッシュボード・累計取込と共通） -->
         <div id="cc-summary" class="hidden mb-4">
-          <h3 class="text-sm font-medium mb-2">📞 Contact Compliance サマリー</h3>
+          <h3 class="text-sm font-medium mb-2">📞 架電実績サマリー（従来指標：べき架電／実架電）</h3>
           <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div class="card p-3 text-center">
               <div class="text-xs text-ink-lighter">総レコード</div>
@@ -2701,7 +2833,7 @@
           <div id="map-loading" class="hidden mb-2 text-sm text-blue-600 font-medium">
             <span class="inline-flex items-center gap-2">
               <span class="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin inline-block"></span>
-              住所から座標を取得中... <span id="map-loading-count">0/0</span>
+              地点読込中 <span id="map-loading-count">0/0</span>
             </span>
           </div>
           <p id="map-cortex-note" class="hidden text-xs text-ink mb-2"></p>
@@ -7119,6 +7251,148 @@ var driverDB = {
       window.open(url, '_blank');
     }
 
+    function lineUnlinkedKnownMapping() {
+      var mapping = {};
+      Object.keys(lineMapping).forEach(function(name) {
+        var id = String(lineMapping[name] || '').trim();
+        if (id) mapping[id] = name;
+      });
+      return mapping;
+    }
+
+    function syncKnownLineIds() {
+      return fetch('/line-unlinked/known', {
+        method: 'POST',
+        headers: getProxyHeaders(),
+        body: JSON.stringify({ mapping: lineUnlinkedKnownMapping() })
+      }).then(function(r) {
+        if (!r.ok) return null;
+        return r.json();
+      }).catch(function() { return null; });
+    }
+
+    function refreshLineUnlinkedCount() {
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked', { headers: getProxyHeaders() }); })
+        .then(function(r) {
+          if (!r.ok) return null;
+          return r.json();
+        })
+        .then(function(data) {
+          if (!data || !data.users) return;
+          var el = document.getElementById('line-unlinked-count');
+          if (el) el.textContent = String(data.users.length);
+        }).catch(function() {});
+    }
+
+    function formatLineSeen(iso) {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso || '');
+      var p = function(n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function lineUnlinkedDriverOptions() {
+      var names = Object.keys(driverDB).concat(Object.keys(lineMapping));
+      var seen = {};
+      var list = [];
+      names.forEach(function(name) {
+        if (!name || seen[name] || (typeof isDriverDeleted === 'function' && isDriverDeleted(name))) return;
+        seen[name] = true;
+        list.push(name);
+      });
+      list.sort(function(a, b) { return a.localeCompare(b, 'ja'); });
+      return '<option value="">ドライバーを選択</option>' + list.map(function(name) {
+        return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
+      }).join('');
+    }
+
+    function openLineUnlinkedPanel() {
+      syncKnownLineIds().then(function() { return fetch('/line-unlinked', { headers: getProxyHeaders() }); })
+        .then(function(r) {
+          if (r.status === 403) {
+            alert('LINE未登録一覧を見るには、設定画面の Proxy Secret を入力してください。');
+            return null;
+          }
+          if (!r.ok) throw new Error('line-unlinked');
+          return r.json();
+        })
+        .then(function(data) {
+          if (!data) return;
+          renderLineUnlinkedPanel(data.users || []);
+        })
+        .catch(function() { alert('LINE未登録一覧を取得できませんでした'); });
+    }
+
+    function renderLineUnlinkedPanel(users) {
+      window.__lineUnlinkedUsers = users;
+      var existing = document.getElementById('line-unlinked-panel');
+      if (existing) existing.remove();
+      var root = document.createElement('div');
+      root.id = 'line-unlinked-panel';
+      root.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.4);display:flex;justify-content:center;align-items:flex-start;padding:16px;overflow:auto';
+      var rows = users.map(function(user, i) {
+        var hints = (typeof LineUnlinked !== 'undefined') ? LineUnlinked.suggestDriverCandidates(user.displayName, Object.keys(driverDB)) : [];
+        var picture = /^https:\/\//.test(String(user.pictureUrl || '')) ? '<img src="' + escapeHtml(user.pictureUrl) + '" alt="" style="width:40px;height:40px;border-radius:999px;vertical-align:middle;margin-right:8px">' : '';
+        return '<div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:8px">' +
+          picture +
+          '<div style="font-weight:bold">LINE表示名：' + escapeHtml(user.displayName || '（未取得）') + '</div>' +
+          '<div style="font-size:12px;color:#666">初回検知：' + escapeHtml(formatLineSeen(user.firstSeenAt)) + '</div>' +
+          '<div style="font-size:12px;word-break:break-all">LINE userId：' + escapeHtml(user.userId) + '</div>' +
+          (hints.length ? '<div style="font-size:12px;color:#047857">候補: ' + escapeHtml(hints.join('、')) + '</div>' : '') +
+          '<div style="margin-top:8px;font-size:12px">紐付け先</div>' +
+          '<select id="line-unlinked-driver-' + i + '" style="border:1px solid #ccc;border-radius:4px;padding:4px;width:100%">' + lineUnlinkedDriverOptions() + '</select>' +
+          '<button type="button" style="margin-top:8px;font-size:12px;padding:4px 12px;border-radius:4px;background:#059669;color:#fff;border:0" onclick="linkLineUnlinkedUser(' + i + ')">このドライバーに紐付け</button>' +
+        '</div>';
+      }).join('') || '<p style="font-size:14px">未登録のLINEユーザーはいません。</p>';
+      root.innerHTML = '<div style="background:#fff;border-radius:8px;max-width:32rem;width:100%;padding:16px;margin:32px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h2 style="font-weight:bold;margin:0">LINE未登録 ' + users.length + '名</h2>' +
+        '<button type="button" onclick="document.getElementById(\'line-unlinked-panel\').remove()">閉じる</button></div>' +
+        '<p style="font-size:12px;color:#666;margin-bottom:12px">表示名だけでは紐付けません。ドライバーを選んで確定してください。別のLINE IDが登録済みのドライバーには上書きしません。</p>' +
+        rows + '</div>';
+      document.body.appendChild(root);
+      var count = document.getElementById('line-unlinked-count');
+      if (count) count.textContent = String(users.length);
+    }
+
+    function linkLineUnlinkedUser(index) {
+      var user = (window.__lineUnlinkedUsers || [])[index];
+      var sel = document.getElementById('line-unlinked-driver-' + index);
+      var driverName = sel ? sel.value : '';
+      if (!user || !driverName) { alert('ドライバーを選択してください'); return; }
+      var userId = String(user.userId || '').trim();
+      var current = String(lineMapping[driverName] || '').trim();
+      var owner = '';
+      Object.keys(lineMapping).forEach(function(name) {
+        if (String(lineMapping[name] || '').trim() === userId) owner = name;
+      });
+      if (current && current !== userId) {
+        alert(driverName + ' には別のLINE IDが登録されています。上書きはしません。');
+        return;
+      }
+      if (owner && owner !== driverName) {
+        alert('このLINE IDは ' + owner + ' に登録済みです。');
+        return;
+      }
+      fetch('/line-unlinked/link', {
+        method: 'POST',
+        headers: getProxyHeaders(),
+        body: JSON.stringify({ userId: userId, driverName: driverName, currentLineId: current, lineIdOwner: owner, source: 'manual' })
+      }).then(function(r) {
+        return r.json().then(function(body) { return { ok: r.ok, body: body }; });
+      }).then(function(res) {
+        if (!res.ok) {
+          alert(res.body && res.body.error === 'overwrite_blocked' ? '別のLINE IDが登録済みのため上書きしません。' : '紐付けできませんでした。');
+          return;
+        }
+        lineMapping[driverName] = userId;
+        localStorage.setItem('lineMapping', JSON.stringify(lineMapping));
+        if (typeof syncMasterFieldToServer === 'function') syncMasterFieldToServer(driverName, 'lineId', userId);
+        renderMasterTable();
+        if (typeof renderLineMappings === 'function') renderLineMappings();
+        openLineUnlinkedPanel();
+      }).catch(function() { alert('紐付けできませんでした'); });
+    }
+
     function renderMasterTable() {
       const tbody = document.getElementById('master-table-body');
       const searchVal = (document.getElementById('master-search')?.value || '').toLowerCase();
@@ -7152,6 +7426,7 @@ var driverDB = {
       document.getElementById('master-total').textContent = '\u5408\u8A08: ' + (allDrivers.size - deletedCount) + '\u540D' + (deletedCount > 0 ? '\uFF08\u9000\u8077\u8005' + deletedCount + '\u540D\u975E\u8868\u793A\uFF09' : '');
       document.getElementById('master-linked').textContent = '\u7D10\u4ED8\u3051\u6E08\u307F: ' + linked + '\u540D';
       document.getElementById('master-unlinked').textContent = '\u672A\u7D10\u4ED8\u3051: ' + unlinked + '\u540D';
+      refreshLineUnlinkedCount();
       updateDeletedCountBadge();
 
       if (drivers.length === 0) {
@@ -7272,6 +7547,7 @@ var driverDB = {
 
       renderMasterTable();
       renderLineMappings();
+      syncKnownLineIds();
     }
 
     function updatePhone(name, value) {
@@ -7580,7 +7856,11 @@ var driverDB = {
         ...Object.keys(lineMapping),
         ...Object.keys(phoneMapping),
         ...Object.keys(transportIDs)
-      ])].sort((a, b) => a.localeCompare(b, 'ja'));
+      ])];
+      drivers = (typeof QrPrintOrder !== 'undefined' ? QrPrintOrder.sortDriversForBulkQr(drivers, function(name) {
+        var db = driverDB[name] || {};
+        return { createdAt: db.createdAt, driverId: db.driverId };
+      }) : drivers.slice().sort(function(a, b) { return a.localeCompare(b, 'ja'); }));
       if (drivers.length === 0) { alert('ドライバーが登録されていません'); return; }
 
       // 自己修復: 一括印刷対象全員のdriverId/TIDをタブレットへ再同期（未同期のまま印刷されるのを防止）
@@ -7593,7 +7873,7 @@ var driverDB = {
 
       var cards = [];
       var done = 0;
-      drivers.forEach(function(name) {
+      drivers.forEach(function(name, order) {
         var tid = transportIDs[name];
         // 異常データをスキップ
         if (tid && String(tid).length > 50) {
@@ -7620,7 +7900,7 @@ var driverDB = {
         setTimeout(function() {
           var c = qrDiv.querySelector('canvas');
           var imgSrc = c ? c.toDataURL('image/png') : '';
-          cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3' });
+          cards.push({ name: name, imgData: imgSrc, tid: tid || 'OFK3', order: order });
           done++;
           if (done === drivers.length) {
             finishPrintQR(cards, tempDiv);
@@ -7631,6 +7911,7 @@ var driverDB = {
 
     function finishPrintQR(cards, tempDiv) {
       document.body.removeChild(tempDiv);
+      cards.sort(function(a, b) { return a.order - b.order; });
       var win = window.open('', '_blank', 'width=800,height=600');
       var html = cards.map(function(r) {
         return '<div style="border:1px solid #ccc;border-radius:8px;padding:16px;text-align:center;break-inside:avoid;background:#fff">' +
@@ -7643,6 +7924,7 @@ var driverDB = {
         '<style>body{font-family:sans-serif;padding:20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}' +
         'h1{font-size:18px;margin-bottom:16px}@media print{.no-print{display:none}}</style></head>' +
         '<body><h1>OFK3 点呼認証QRコード一覧</h1>' +
+        '<p class="no-print" style="font-size:12px;color:#444">新しいドライバーは末尾です。印刷画面で最後のページだけを指定すると、そのページだけ印刷できます。</p>' +
         '<button class="no-print" onclick="window.print()" style="margin-bottom:16px;padding:8px 16px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">印刷</button>' +
         '<div class="grid">' + html + '</div></body></html>'
       );
@@ -8214,6 +8496,20 @@ var driverDB = {
       xhr.send(formData);
     }
 
+    function createNewDriverRecord() {
+      return {
+        driverId: getNextDriverId(),
+        packagesPerHour: null,
+        deliveryRate: null,
+        workDays: 0,
+        totalPackages: 0,
+        incidents: 0,
+        lastUpdated: getTodayJst(),
+        createdAt: Date.now(),
+        history: []
+      };
+    }
+
     function addNewDriver() {
       const name = prompt('ドライバー名を入力してください:');
       if (!name || !name.trim()) return;
@@ -8222,16 +8518,7 @@ var driverDB = {
         alert('このドライバーは既に登録されています');
         return;
       }
-      driverDB[trimmed] = {
-        driverId: getNextDriverId(),
-        packagesPerHour: null,
-        deliveryRate: null,
-        workDays: 0,
-        totalPackages: 0,
-        incidents: 0,
-        lastUpdated: getTodayJst(),
-        history: []
-      };
+      driverDB[trimmed] = createNewDriverRecord();
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
       if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(trimmed);
@@ -8248,16 +8535,7 @@ var driverDB = {
         el.focus();
         return;
       }
-      driverDB[name] = {
-        driverId: getNextDriverId(),
-        packagesPerHour: null,
-        deliveryRate: null,
-        workDays: 0,
-        totalPackages: 0,
-        incidents: 0,
-        lastUpdated: getTodayJst(),
-        history: []
-      };
+      driverDB[name] = createNewDriverRecord();
       // driverDBオーバーレイ保存
       saveDriverDBOverlay();
       if (typeof pushDriverDeltaToTablet === 'function') pushDriverDeltaToTablet(name);
@@ -11337,6 +11615,7 @@ var driverDB = {
     // ===== 請求照合機能 =====
     var billingData = [];
     var billingSent = {};
+    var billingSendError = {};
 
     function handleDropFile(event, type) {
       var file = event.dataTransfer.files[0];
@@ -11368,61 +11647,8 @@ var driverDB = {
     function parseBillingData(rows) {
       billingData = [];
       billingSent = {};
-      var startRow = 2;
-      for (var h = 0; h < Math.min(rows.length, 5); h++) {
-        if (rows[h] && rows[h].join && rows[h].join('').indexOf('宛名') >= 0) {
-          startRow = h + 1;
-          break;
-        }
-      }
-      for (var i = startRow; i < rows.length; i++) {
-        var row = rows[i];
-        if (!row || !row[0]) continue;
-
-        var driverKey = (row[0] || '').toString().trim();
-        var name = (row[2] || '').toString().trim();
-        if (!name) continue;
-
-        var workDays = 0;
-        for (var c = 3; c <= 10; c++) {
-          var v = parseInt(row[c]) || 0;
-          workDays += v;
-        }
-
-        var breakdown = [];
-        var labels = ['11B', '8B', 'B1', 'B2', 'biker', '嘉麻応援', 'C1', 'C3'];
-        for (var c2 = 3; c2 <= 10; c2++) {
-          var v2 = parseInt(row[c2]) || 0;
-          if (v2 > 0) breakdown.push(labels[c2 - 3] + ': ' + v2 + '日');
-        }
-
-        var sysUsageFlag = (row[11] || '').toString().trim();
-        var sundayBonus = (row[12] || '').toString().trim();
-        var charter = parseNum(row[13]);
-        var mileage = parseNum(row[14]);
-        var deduction = parseNum(row[15]);
-        var subtotal = parseNum(row[16]);
-        var sysUsageFee = parseNum(row[17]);
-        var tax = parseNum(row[18]);
-        var total = parseNum(row[19]);
-
-        billingData.push({
-          driverKey: driverKey,
-          name: name,
-          workDays: workDays,
-          breakdown: breakdown,
-          sysUsageFlag: sysUsageFlag,
-          sysUsageFee: sysUsageFee,
-          sundayBonus: sundayBonus,
-          charter: charter,
-          mileage: mileage,
-          deduction: deduction,
-          subtotal: subtotal,
-          tax: tax,
-          total: total,
-          selected: true
-        });
-      }
+      billingSendError = {};
+      if (window.BillingReconcile) billingData = BillingReconcile.parseBillingRows(rows);
 
       renderBillingTable();
       document.getElementById('billing-summary').classList.remove('hidden');
@@ -11455,23 +11681,25 @@ var driverDB = {
 
       tbody.innerHTML = billingData.map(function(d, i) {
         totalAmount += d.total;
-        var userId = findLineUserId(d.driverKey, d.name);
-        var hasLine = userId && userId.indexOf('U') === 0;
-        if (hasLine) lineCount++;
         if (d.selected) selectedCount++;
 
         var sent = billingSent[d.name];
+        var sendFail = billingSendError[d.name];
         var statusHtml = sent
-          ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">送信済</span>'
-          : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
+          ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">LINE送信成功</span>'
+          : sendFail
+            ? '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">LINE API送信失敗</span><div class="text-xs text-red-700">' + escapeHtmlBilling(sendFail) + '</div>'
+            : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">未送信</span>';
 
-        var lineHtml = hasLine
-          ? '<span class="text-xs text-green-600">✅ 登録済</span>'
-          : '<span class="text-xs text-gray-400">未登録</span>';
+        var preview = billingPersonListState(d);
+        if (preview.sendable) lineCount++;
+        var lineHtml = '<span class="billing-send-mark ' + (preview.sendable ? 'text-green-600' : 'text-red-600') + ' font-bold">' + preview.mark + '</span>';
 
+        var tidWarn = billingTidMismatchWarning(d);
         return '<tr class="border-b border-border hover:bg-surface/50 ' + (sent ? 'opacity-60' : '') + '">' +
           '<td class="px-3 py-2"><input type="checkbox" ' + (d.selected ? 'checked' : '') + ' onchange="toggleBillingSelect(' + i + ', this.checked)" class="cursor-pointer"></td>' +
-          '<td class="px-3 py-2 font-medium">' + d.name + '</td>' +
+          '<td class="px-3 py-2 font-medium">' + escapeHtmlBilling(String(d.name || '')) +
+            (tidWarn ? '<div class="text-xs text-amber-700">' + tidWarn + '</div>' : '') + '</td>' +
           '<td class="px-3 py-2 text-right">' + d.workDays + '日</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.charter) + '</td>' +
           '<td class="px-3 py-2 text-right">' + formatYen(d.mileage) + '</td>' +
@@ -11492,6 +11720,86 @@ var driverDB = {
 
     function toggleBillingSelect(index, checked) {
       billingData[index].selected = checked;
+    }
+
+    function billingMasterNamesForTid(tid) {
+      var names = [];
+      if (!tid || typeof transportIDs === 'undefined') return names;
+      for (var key in transportIDs) {
+        if (String(transportIDs[key] || '') !== String(tid)) continue;
+        names.push(key);
+        if (typeof driverJapaneseNames !== 'undefined' && driverJapaneseNames[key]) names.push(driverJapaneseNames[key]);
+      }
+      return names;
+    }
+
+    function billingMasterNames() {
+      var names = [];
+      if (typeof driverDB === 'undefined') return names;
+      for (var key in driverDB) names.push(key);
+      return names;
+    }
+
+    function billingLineKeys() {
+      var keys = [];
+      if (typeof lineMapping === 'undefined') return keys;
+      for (var key in lineMapping) {
+        if (lineMapping[key]) keys.push(key);
+      }
+      return keys;
+    }
+
+    function billingLineUserId(row) {
+      if (!row || !row.name || !window.BillingReconcile || typeof lineMapping === 'undefined') return '';
+      var key = BillingReconcile.resolveLineKey(row.name, billingMasterNames(), billingLineKeys());
+      if (!key) return '';
+      var id = lineMapping[key];
+      if (!id || String(id).indexOf('U') !== 0) return '';
+      return id;
+    }
+
+    function billingPersonListState(row) {
+      var lineLinked = !!billingLineUserId(row);
+      var related = null;
+      var results = billingPdfResults || [];
+      for (var i = 0; i < results.length; i++) {
+        var item = results[i];
+        if (!item || !item.targetName || !row || !row.name) continue;
+        var same = item.targetName === row.name;
+        if (!same && window.BillingReconcile && BillingReconcile.samePersonName) {
+          same = BillingReconcile.samePersonName(item.targetName, row.name);
+        }
+        if (!same) continue;
+        if (!related || item.duplicateTarget || item.sendable === false) related = item;
+      }
+      if (!window.BillingReconcile || !BillingReconcile.listSendState) {
+        return { mark: lineLinked ? '○' : '×', sendable: lineLinked, decision: lineLinked ? '送信可能' : 'LINE送信先未解決' };
+      }
+      return BillingReconcile.listSendState(billingPersonPreviewInput(row, lineLinked, related));
+    }
+
+    function billingPersonPreviewInput(row, lineLinked, related) {
+      if (!related) {
+        return { code: 'matched', lineLinked: lineLinked, sendable: true, duplicateTarget: false };
+      }
+      return {
+        code: related.code,
+        lineLinked: lineLinked,
+        sendable: related.sendable,
+        duplicateTarget: !!related.duplicateTarget
+      };
+    }
+
+    function billingAdminLineUserId() {
+      var raw = (lineSettings && lineSettings.adminLineId) ? String(lineSettings.adminLineId).split(',')[0].trim() : '';
+      if (raw.indexOf('U') === 0 && raw.length > 20) return raw;
+      return '';
+    }
+
+    function billingTidMismatchWarning(row) {
+      if (!row || !row.tid || !row.name || !window.BillingReconcile) return '';
+      if (!BillingReconcile.tidNameMismatch(row.name, billingMasterNamesForTid(row.tid))) return '';
+      return 'TIDとドライバーマスタの氏名が一致しません';
     }
 
     function findLineUserId(driverKey, name) {
@@ -11525,107 +11833,289 @@ var driverDB = {
 
     // PDF請求書マッチング
     var billingPdfMap = {}; // { driverName: { filename, base64, uploadedUrl } }
+    var billingPdfResults = [];
+    var billingPdfSeq = 0;
+    var billingPdfJsPromise = null;
 
-    function handlePdfUpload(files) {
-      if (!files || files.length === 0) return;
-      var processed = 0;
-      var matched = 0;
+    function ensureBillingPdfJs() {
+      if (billingPdfJsPromise) return billingPdfJsPromise;
+      billingPdfJsPromise = new Promise(function(resolve, reject) {
+        function ready(lib) {
+          lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          resolve(lib);
+        }
+        if (window.pdfjsLib) { ready(window.pdfjsLib); return; }
+        var s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        s.onload = function() {
+          if (!window.pdfjsLib) { reject(new Error('pdfjs missing')); return; }
+          ready(window.pdfjsLib);
+        };
+        s.onerror = function() { reject(new Error('pdfjs load failed')); };
+        document.head.appendChild(s);
+      });
+      return billingPdfJsPromise;
+    }
 
-      for (var i = 0; i < files.length; i++) {
-        (function(file) {
-          var reader = new FileReader();
-          reader.onload = function(e) {
-            processed++;
-            var base64 = e.target.result.split(',')[1]; // remove data:...;base64, prefix
-            var filename = file.name;
+    function billingPdfLinesFromContent(content) {
+      var lines = [];
+      var line = '';
+      var lastY = null;
+      var items = (content && content.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var y = item.transform ? item.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+          lines.push(line);
+          line = '';
+        }
+        line += item.str || '';
+        if (item.hasEOL) {
+          lines.push(line);
+          line = '';
+          lastY = null;
+        } else {
+          lastY = y;
+        }
+      }
+      if (line) lines.push(line);
+      return lines;
+    }
 
-            // ファイル名から名前を抽出: 【○○DA】 or 【○○】
-            var nameMatch = filename.match(/【(.+?)(?:DA|ＤＡ)?】/);
-            var extractedName = nameMatch ? nameMatch[1].replace(/[\s　]/g, '') : '';
+    function extractBillingPdfText(bytes) {
+      return ensureBillingPdfJs().then(function(pdfjsLib) {
+        var copy = new Uint8Array(bytes);
+        return pdfjsLib.getDocument({
+          data: copy,
+          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+          cMapPacked: true,
+          standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'
+        }).promise.then(function(pdf) {
+          var lines = [];
+          function readPage(n) {
+            if (n > pdf.numPages) return Promise.resolve(lines.join('\n'));
+            return pdf.getPage(n).then(function(page) {
+              return page.getTextContent().then(function(content) {
+                var pageLines = billingPdfLinesFromContent(content);
+                for (var i = 0; i < pageLines.length; i++) lines.push(pageLines[i]);
+                return readPage(n + 1);
+              });
+            });
+          }
+          return readPage(1);
+        });
+      }).then(function(text) {
+        return chooseBillingPdfText(text, bytes);
+      }).catch(function() {
+        try {
+          var fallback = BillingReconcile.extractPdfText(bytes);
+          if (fallback) return fallback;
+        } catch (e2) {}
+        return null;
+      });
+    }
 
-            if (extractedName) {
-              // billingDataから照合
-              var matchedDriver = findBillingDriverByName(extractedName);
-              if (matchedDriver) {
-                billingPdfMap[matchedDriver.name] = {
-                  filename: filename,
-                  base64: base64,
-                  uploadedUrl: null
-                };
-                matched++;
+    function billingPdfTextMentionsTarget(text) {
+      if (!text || !window.BillingReconcile || !billingData) return false;
+      var readings = BillingReconcile.collectNameReadings(billingData, {
+        driverJapaneseNames: typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : {},
+        driverNameAliases: typeof driverNameAliases !== 'undefined' ? driverNameAliases : {}
+      });
+      for (var i = 0; i < billingData.length; i++) {
+        if (BillingReconcile.textHasPersonName(text, billingData[i].name)) return true;
+        var extra = readings[billingData[i].name] || [];
+        for (var j = 0; j < extra.length; j++) {
+          if (BillingReconcile.textHasPersonName(text, extra[j])) return true;
+        }
+      }
+      return false;
+    }
+
+    function chooseBillingPdfText(primary, bytes) {
+      var fallback = '';
+      try { fallback = BillingReconcile.extractPdfText(bytes); } catch (e) { fallback = ''; }
+      if (billingPdfTextMentionsTarget(primary)) return primary;
+      if (billingPdfTextMentionsTarget(fallback)) return fallback;
+      if (primary && String(primary).replace(/\s/g, '')) return primary;
+      return fallback || primary || '';
+    }
+
+    function uint8ToBase64(bytes) {
+      var bin = '';
+      for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+
+    function billingTakeFiles(inputOrList) {
+      var list = inputOrList;
+      var inputEl = null;
+      if (inputOrList && inputOrList.tagName === 'INPUT') {
+        inputEl = inputOrList;
+        list = inputOrList.files;
+      }
+      var arr = [];
+      if (list && list.length) {
+        for (var i = 0; i < list.length; i++) arr.push(list[i]);
+      }
+      if (inputEl) inputEl.value = '';
+      return arr;
+    }
+
+    function handlePdfUpload(inputOrList) {
+      var files = billingTakeFiles(inputOrList);
+      if (!files.length) return;
+      if (!window.BillingReconcile) {
+        billingPdfResults = [{ filename: files[0].name || '', code: 'read_error', label: 'PDF読込失敗', targetName: '', sendable: false, base64: '', lineLinked: false }];
+        renderPdfMatchList();
+        return;
+      }
+      var seq = ++billingPdfSeq;
+      Promise.all(files.map(function(file) { return prepareBillingPdfFile(file); })).then(function(prepared) {
+        if (seq !== billingPdfSeq) return;
+        var readings = BillingReconcile.collectNameReadings(billingData, {
+          driverJapaneseNames: typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : {},
+          driverNameAliases: typeof driverNameAliases !== 'undefined' ? driverNameAliases : {}
+        });
+        var assigned = BillingReconcile.assignBillingPdfs(prepared, billingData, {
+          readings: readings,
+          masterNames: billingMasterNames()
+        });
+        billingPdfResults = assigned.map(function(a, idx) {
+          var row = {
+            filename: a.filename,
+            code: a.code,
+            label: a.label,
+            targetName: a.targetName,
+            sendable: a.sendable,
+            duplicateTarget: !!a.duplicateTarget,
+            duplicateWarning: a.duplicateWarning || '',
+            base64: prepared[idx].base64 || '',
+            lineLinked: false
+          };
+          if (a.targetName) {
+            for (var t = 0; t < billingData.length; t++) {
+              if (billingData[t].name === a.targetName) {
+                var uid = billingLineUserId(billingData[t]);
+                row.lineLinked = !!(uid && String(uid).indexOf('U') === 0);
+                break;
               }
             }
+          }
+          return row;
+        });
+        syncBillingPdfMapFromResults();
+        renderPdfMatchList();
+      }).catch(function() {
+        if (seq !== billingPdfSeq) return;
+        billingPdfResults = files.map(function(file) {
+          return { filename: file.name || '', code: 'read_error', label: 'PDF読込失敗', targetName: '', sendable: false, base64: '', lineLinked: false };
+        });
+        syncBillingPdfMapFromResults();
+        renderPdfMatchList();
+      });
+    }
 
-            if (processed === files.length) {
-              renderPdfMatchList();
-            }
-          };
-          reader.readAsDataURL(file);
-        })(files[i]);
+    function prepareBillingPdfFile(file) {
+      var filename = (file && file.name) || '';
+      return file.arrayBuffer().then(function(buf) {
+        var bytes = new Uint8Array(buf);
+        var kind = BillingReconcile.classifyPdfUpload({ name: filename, type: file.type || '' }, bytes);
+        if (!kind.ok) return { filename: filename, text: '', base64: '', error: kind.reason };
+        return extractBillingPdfText(bytes).then(function(text) {
+          if (text === null) return { filename: filename, text: '', base64: '', error: 'read_error' };
+          var b64 = '';
+          try { b64 = uint8ToBase64(bytes); } catch (e) {
+            return { filename: filename, text: '', base64: '', error: 'read_error' };
+          }
+          return { filename: filename, text: text || '', base64: b64, error: '' };
+        });
+      }).catch(function() {
+        return { filename: filename, text: '', base64: '', error: 'read_error' };
+      });
+    }
+
+    function syncBillingPdfMapFromResults() {
+      var prev = billingPdfMap;
+      var next = {};
+      for (var i = 0; i < billingPdfResults.length; i++) {
+        var r = billingPdfResults[i];
+        if (!r.sendable || !r.targetName || !r.base64) continue;
+        next[r.targetName] = {
+          filename: r.filename,
+          base64: r.base64,
+          uploadedUrl: (prev[r.targetName] && prev[r.targetName].uploadedUrl) || null
+        };
       }
+      billingPdfMap = next;
+    }
+
+    function billingPdfDecision(r) {
+      if (!window.BillingReconcile || !BillingReconcile.listSendState) return 'LINE送信禁止';
+      return BillingReconcile.listSendState(r).decision;
+    }
+
+    function removeBillingPdfResult(index) {
+      billingPdfResults.splice(index, 1);
+      if (window.BillingReconcile) BillingReconcile.applyDuplicatePdfBlock(billingPdfResults);
+      syncBillingPdfMapFromResults();
+      renderPdfMatchList();
     }
 
     function findBillingDriverByName(name) {
-      if (!billingData) return null;
-      var clean = name.replace(/[\s　]/g, '');
+      if (!billingData || !name) return null;
+      if (window.BillingReconcile) return BillingReconcile.matchUniqueTarget(billingData, name);
+      var clean = String(name).replace(/[\s　]/g, '');
+      var found = null;
       for (var i = 0; i < billingData.length; i++) {
-        var d = billingData[i];
-        var dClean = d.name.replace(/[\s　]/g, '');
-        if (dClean === clean) return d;
-        if (clean.length >= 2 && (dClean.indexOf(clean) >= 0 || clean.indexOf(dClean) >= 0)) return d;
-      }
-      // driverJapaneseNamesからも探す
-      for (var key in driverJapaneseNames) {
-        var jpClean = (driverJapaneseNames[key] || '').replace(/[\s　]/g, '');
-        if (jpClean === clean) {
-          // このkeyに対応するbillingDataを探す
-          for (var j = 0; j < billingData.length; j++) {
-            if (billingData[j].name.replace(/[\s　]/g, '') === key.replace(/[\s　]/g, '')) return billingData[j];
-            if (billingData[j].driverKey === key) return billingData[j];
-          }
+        if (String(billingData[i].name || '').replace(/[\s　]/g, '') === clean) {
+          if (found) return null;
+          found = billingData[i];
         }
       }
-      return null;
+      return found;
     }
 
     function renderPdfMatchList() {
       var listEl = document.getElementById('pdf-match-list');
       var countEl = document.getElementById('pdf-match-count');
       if (!listEl) return;
-
-      var keys = Object.keys(billingPdfMap);
-      if (keys.length === 0) {
+      if (!billingPdfResults.length) {
         listEl.innerHTML = '';
         if (countEl) countEl.textContent = '';
         return;
       }
-
+      var ready = 0;
       var html = '';
-      keys.forEach(function(name) {
-        var pdf = billingPdfMap[name];
-        var hasLine = false;
-        for (var i = 0; i < billingData.length; i++) {
-          if (billingData[i].name === name) {
-            var uid = findLineUserId(billingData[i].driverKey, name);
-            hasLine = uid && uid.indexOf('U') === 0;
-            break;
+      for (var i = 0; i < billingPdfResults.length; i++) {
+        var r = billingPdfResults[i];
+        var state = (window.BillingReconcile && BillingReconcile.listSendState)
+          ? BillingReconcile.listSendState(r)
+          : { mark: '×', sendable: false, decision: billingPdfDecision(r) };
+        var decision = state.decision;
+        if (state.sendable) ready++;
+        html += '<div class="text-xs py-2 border-b border-border flex items-start justify-between gap-3">';
+        html += '<div class="min-w-0">';
+        html += '<div class="font-medium">' + escapeHtmlBilling(String(r.filename || '(無題)')) + '</div>';
+        html += '<div>→ ' + escapeHtmlBilling(String(r.label || '')) + '</div>';
+        if (r.code === 'matched') html += '<div>→ ' + (r.lineLinked ? 'LINE紐付け済み' : 'LINE送信先未解決') + '</div>';
+        if (r.duplicateWarning) html += '<div class="text-amber-700">→ ' + escapeHtmlBilling(r.duplicateWarning) + '</div>';
+        if (r.code === 'matched' && r.targetName) {
+          for (var t = 0; t < billingData.length; t++) {
+            if (billingData[t].name === r.targetName) {
+              var tidWarn = billingTidMismatchWarning(billingData[t]);
+              if (tidWarn) html += '<div class="text-amber-700">→ ' + tidWarn + '</div>';
+              break;
+            }
           }
         }
-        var lineIcon = hasLine
-          ? '<span class="text-green-600 text-xs">✅</span>'
-          : '<span class="text-red-500 text-xs">⚠ LINE未登録</span>';
-        var uploadIcon = pdf.uploadedUrl
-          ? '<span class="text-green-600 text-xs">📤済</span>'
-          : '<span class="text-gray-400 text-xs">未送信</span>';
-        html += '<div class="flex items-center gap-2 text-xs py-1 border-b border-border">'
-          + '<span class="font-medium">' + name + '</span>'
-          + '<span class="text-ink-lighter truncate flex-1" title="' + pdf.filename + '">' + pdf.filename + '</span>'
-          + lineIcon + ' ' + uploadIcon
-          + '<button onclick="delete billingPdfMap[\'' + name.replace(/'/g, "\\'") + '\']; renderPdfMatchList();" class="text-red-400 hover:text-red-600 cursor-pointer">✕</button>'
-          + '</div>';
-      });
+        html += '<div>→ ' + decision + '</div>';
+        html += '<button type="button" onclick="removeBillingPdfResult(' + i + ')" class="text-ink-lighter hover:text-red-600 cursor-pointer">削除</button>';
+        html += '</div>';
+        html += '<div class="billing-send-mark shrink-0 text-base font-bold ' + (state.sendable ? 'text-green-600' : 'text-red-600') + '">' + state.mark + '</div>';
+        html += '</div>';
+      }
       listEl.innerHTML = html;
-      if (countEl) countEl.textContent = keys.length + '件マッチ';
+      if (countEl) countEl.textContent = '送信可能 ' + ready + ' / ' + billingPdfResults.length + '件';
     }
 
     async function uploadPdfToServer(name) {
@@ -11769,6 +12259,109 @@ var driverDB = {
       window.open(url, '_blank');
     }
 
+    async function billingUploadPdfForTest(pdf) {
+      if (!pdf || !pdf.base64) return '';
+      if (pdf.uploadedUrl) return pdf.uploadedUrl;
+      try {
+        var resp = await fetch('/pdf-upload', {
+          method: 'POST',
+          headers: getProxyHeaders(),
+          body: JSON.stringify({ filename: pdf.filename, data: pdf.base64 })
+        });
+        var result = await resp.json();
+        if (result && result.status === 'ok' && result.url) return result.url;
+      } catch (e) {}
+      return '';
+    }
+
+    async function sendBillingLineTest() {
+      var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
+      if (!proxyUrl) { alert('LINE設定でProxy URLを設定してください'); return; }
+      var adminId = billingAdminLineUserId();
+      if (!adminId) {
+        alert('管理者LINE IDが設定されていません。\n設定画面で管理者LINE IDを入力してください。\n\nテスト送信です。ドライバー本人には送信されません。');
+        return;
+      }
+      if (!window.BillingReconcile || !BillingReconcile.testSendAllowed) {
+        alert('テスト送信の判定を読み込めませんでした。');
+        return;
+      }
+
+      var targets = [];
+      var blocked = [];
+      (billingData || []).forEach(function(d) {
+        if (!d.selected) return;
+        var related = null;
+        var results = billingPdfResults || [];
+        for (var i = 0; i < results.length; i++) {
+          var item = results[i];
+          if (!item || !item.targetName) continue;
+          var same = item.targetName === d.name || (BillingReconcile.samePersonName && BillingReconcile.samePersonName(item.targetName, d.name));
+          if (!same) continue;
+          if (!related || item.duplicateTarget || item.sendable === false) related = item;
+        }
+        var gate = BillingReconcile.testSendAllowed(billingPersonPreviewInput(d, !!billingLineUserId(d), related));
+        if (gate.ok) targets.push(d);
+        else blocked.push((d.name || '') + '（' + (gate.reason || '送信不可') + '）');
+      });
+
+      if (!targets.length) {
+        alert('テスト送信できる請求がありません。\nテスト送信です。ドライバー本人には送信されません。' + (blocked.length ? '\n\n不可:\n' + blocked.join('\n') : ''));
+        return;
+      }
+      if (!confirm('テスト送信です。ドライバー本人には送信されません。\n\n管理者のLINEへ ' + targets.length + '件送ります。\n\n' + targets.map(function(d) { return '・' + d.name + '（' + formatYen(d.total) + '）'; }).join('\n') + (blocked.length ? '\n\n送らない:\n' + blocked.join('\n') : ''))) return;
+
+      document.getElementById('billing-send-log').classList.remove('hidden');
+      var logEl = document.getElementById('billing-log-entries');
+      var successCount = 0;
+      for (var t = 0; t < targets.length; t++) {
+        var d = targets[t];
+        var msg = '【テスト送信】\n' + buildBillingMessage(d);
+        var pdf = billingPdfMap[d.name];
+        if (pdf && pdf.base64) {
+          var pdfUrl = await billingUploadPdfForTest(pdf);
+          if (!pdfUrl) {
+            var pdfFail = document.createElement('div');
+            pdfFail.className = 'text-xs py-1 text-red-600';
+            pdfFail.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' PDF取得失敗';
+            logEl.insertBefore(pdfFail, logEl.firstChild);
+            continue;
+          }
+          msg += '\n\n📎 請求書PDF:\n' + pdfUrl;
+        }
+        try {
+          var res = await fetch(proxyUrl, {
+            method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
+            headers: getProxyHeaders(),
+            body: JSON.stringify({ to: adminId, messages: [{ type: 'text', text: msg }] })
+          });
+          var raw = '';
+          try { raw = await res.text(); } catch (readErr) { raw = ''; }
+          if (!res.ok || BillingReconcile.interpretLineHttpStatus(res.status) !== 'ok') {
+            var failEntry = document.createElement('div');
+            failEntry.className = 'text-xs py-1 text-red-600';
+            failEntry.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' ' + BillingReconcile.publicLineError(res.status, raw);
+            logEl.insertBefore(failEntry, logEl.firstChild);
+            continue;
+          }
+          successCount++;
+          var entry = document.createElement('div');
+          entry.className = 'text-xs py-1 text-blue-700';
+          entry.textContent = new Date().toLocaleTimeString() + ' 🧪 テスト送信成功 ' + d.name + ' → 管理者LINE（本人には未送信）';
+          logEl.insertBefore(entry, logEl.firstChild);
+        } catch (e) {
+          var entry2 = document.createElement('div');
+          entry2.className = 'text-xs py-1 text-red-600';
+          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ テスト送信失敗 ' + d.name + ' LINE API送信失敗';
+          logEl.insertBefore(entry2, logEl.firstChild);
+        }
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+      alert('テスト送信完了: ' + successCount + '/' + targets.length + '件\nドライバー本人には送信していません。');
+    }
+
     async function sendAllBillingLine() {
       var proxyUrl = (lineSettings.gasProxyUrl || '').trim();
       if (!proxyUrl) { alert('LINE設定でProxy URLを設定してください'); return; }
@@ -11776,7 +12369,7 @@ var driverDB = {
       var targets = billingData.filter(function(d) {
         if (!d.selected) return false;
         if (billingSent[d.name]) return false;
-        var userId = findLineUserId(d.driverKey, d.name);
+        var userId = billingLineUserId(d);
         return userId && userId.indexOf('U') === 0;
       });
 
@@ -11793,7 +12386,7 @@ var driverDB = {
       var successCount = 0;
       for (var i = 0; i < targets.length; i++) {
         var d = targets[i];
-        var userId = findLineUserId(d.driverKey, d.name);
+        var userId = billingLineUserId(d);
         var msg = buildBillingMessage(d);
 
         // PDF添付がある場合はアップロードしてURLを追加
@@ -11808,24 +12401,38 @@ var driverDB = {
         var lineMessages = [{ type: 'text', text: msg }];
 
         try {
-          await fetch(proxyUrl, {
+          var res = await fetch(proxyUrl, {
             method: 'POST',
             mode: 'cors',
             credentials: 'omit',
             headers: getProxyHeaders(),
             body: JSON.stringify({ to: userId, messages: lineMessages })
           });
+          var raw = '';
+          try { raw = await res.text(); } catch (readErr) { raw = ''; }
+          if (!res.ok || !window.BillingReconcile || BillingReconcile.interpretLineHttpStatus(res.status) !== 'ok') {
+            billingSendError[d.name] = window.BillingReconcile
+              ? BillingReconcile.publicLineError(res.status, raw)
+              : 'LINE API送信失敗';
+            var failEntry = document.createElement('div');
+            failEntry.className = 'text-xs py-1 text-red-600';
+            failEntry.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' ' + billingSendError[d.name];
+            logEl.insertBefore(failEntry, logEl.firstChild);
+            continue;
+          }
+          delete billingSendError[d.name];
           billingSent[d.name] = true;
           successCount++;
           var pdfNote = pdfUrl ? ' +PDF' : '';
           var entry = document.createElement('div');
           entry.className = 'text-xs py-1 text-green-600';
-          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + pdfNote + ' 送信完了';
+          entry.textContent = new Date().toLocaleTimeString() + ' ✅ ' + d.name + ' → ' + formatYen(d.total) + pdfNote + ' LINE送信成功';
           logEl.insertBefore(entry, logEl.firstChild);
         } catch(e) {
+          billingSendError[d.name] = 'LINE API送信失敗';
           var entry2 = document.createElement('div');
           entry2.className = 'text-xs py-1 text-red-600';
-          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' 送信失敗: ' + e.message;
+          entry2.textContent = new Date().toLocaleTimeString() + ' ❌ ' + d.name + ' LINE API送信失敗';
           logEl.insertBefore(entry2, logEl.firstChild);
         }
 
@@ -11905,9 +12512,25 @@ var driverDB = {
     // エリアカラーパレット
     var mapAreaColors = ['#ef4444','#f59e0b','#3b82f6','#8b5cf6','#06b6d4','#10b981','#ec4899','#6366f1','#14b8a6','#f97316'];
 
+    function dashboardMapCortexContext(routeCode) {
+      var Overlay = window.OFK3MapCortexOverlay;
+      if (!Overlay) return { state: 'none', route: null, index: null };
+      var index = null;
+      try { index = Overlay.getMapCortexIndex(window.OFK3Cortex13); } catch (e) { index = null; }
+      var st = Overlay.routeCortexState(index, routeCode, getTodayJst());
+      return { state: st.state, route: st.route, index: index };
+    }
+
     function openDeliveryMap(routeCode) {
+      var mapPerf = window.OFK3MapCortexOverlay ? OFK3MapCortexOverlay.createMapPerf(routeCode) : null;
+      if (mapPerf) mapPerf.mark('mapClickAt');
       var addresses = cycleData[routeCode];
       if (!addresses || addresses.length === 0) {
+        var cortexOnly = dashboardMapCortexContext(routeCode);
+        if (cortexOnly.state === 'ok' && typeof openCortexRouteDeliveryMap === 'function') {
+          openCortexRouteDeliveryMap(routeCode);
+          return;
+        }
         alert('このルートの住所データがありません。\n先に住所データ（コース詳細）をアップロードしてください。');
         return;
       }
@@ -11931,13 +12554,23 @@ var driverDB = {
       document.getElementById('map-modal-title').textContent = driverName + ' - 配送MAP';
       var subtitle = routeCode;
       if (routeInfo) subtitle += ' | ' + routeInfo.totalDeliveries + '件 | 出発 ' + routeInfo.departure;
+      var cortexCtx = dashboardMapCortexContext(routeCode);
+      if (cortexCtx.route) {
+        subtitle += ' | 13:00対象 ' + cortexCtx.route.priorityStopCount + ' Stops / ' + cortexCtx.route.priorityPackageCount + ' Packages';
+      }
       document.getElementById('map-modal-subtitle').textContent = subtitle;
+      if (noteCycle && cortexCtx.state !== 'ok' && window.OFK3MapCortexOverlay) {
+        noteCycle.textContent = OFK3MapCortexOverlay.cortexStateNote(cortexCtx.state);
+        noteCycle.classList.remove('hidden');
+      }
 
       // モーダル表示
       document.getElementById('map-modal').classList.remove('hidden');
+      if (mapPerf) mapPerf.mark('modalCreatedAt');
 
-      // 少し遅らせてマップ初期化（DOM描画待ち）
-      setTimeout(function() { initDeliveryMap(routeCode, addresses, routeInfo); }, 100);
+      var startInit = function() { initDeliveryMap(routeCode, addresses, routeInfo, mapPerf, cortexCtx); };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(startInit);
+      else setTimeout(startInit, 0);
     }
 
     // ===== Googleスプレッドシート住所キャッシュ（GAS連携） =====
@@ -12217,20 +12850,27 @@ var driverDB = {
       return totalCount;
     }
 
-    async function loadAddrMasterFromSheet() {
-      var gasUrl = getAddrMasterGasUrl();
-      if (!gasUrl) return {};
-      try {
-        var res = await fetch(gasUrl + '?action=list', { redirect: 'follow' });
-        var data = await res.json();
-        if (data && data.status === 'ok' && data.data) {
-          inMemoryAddrMaster = data.data;
-          return inMemoryAddrMaster;
+    var addrMasterLoadInFlight = null;
+
+    function loadAddrMasterFromSheet() {
+      if (addrMasterLoadInFlight) return addrMasterLoadInFlight;
+      addrMasterLoadInFlight = (async function() {
+        var gasUrl = getAddrMasterGasUrl();
+        if (!gasUrl) return {};
+        try {
+          var res = await fetch(gasUrl + '?action=list', { redirect: 'follow' });
+          var data = await res.json();
+          if (data && data.status === 'ok' && data.data) {
+            inMemoryAddrMaster = data.data;
+            return inMemoryAddrMaster;
+          }
+        } catch (e) {
+          console.error('loadAddrMasterFromSheet error:', e);
         }
-      } catch (e) {
-        console.error('loadAddrMasterFromSheet error:', e);
-      }
-      return {};
+        return {};
+      })();
+      addrMasterLoadInFlight.then(function() { addrMasterLoadInFlight = null; }, function() { addrMasterLoadInFlight = null; });
+      return addrMasterLoadInFlight;
     }
 
     async function loadPendingAddrFromSheet() {
@@ -12694,7 +13334,165 @@ var driverDB = {
       };
     })();
 
-    async function initDeliveryMap(routeCode, addresses, routeInfo) {
+    var dashboardMapCoordCache = null;
+    var dashboardMapGeocodeQueue = null;
+
+    function dashboardMapCoordStore() {
+      if (!dashboardMapCoordCache && window.OFK3MapCortexOverlay) {
+        var storage = null;
+        try { storage = window.localStorage; } catch (e) { storage = null; }
+        dashboardMapCoordCache = OFK3MapCortexOverlay.createCoordCache(storage);
+      }
+      return dashboardMapCoordCache;
+    }
+
+    function dashboardMapQueue() {
+      if (!dashboardMapGeocodeQueue && window.OFK3MapCortexOverlay) {
+        dashboardMapGeocodeQueue = OFK3MapCortexOverlay.createGeocodeQueue(async function(addr) {
+          var norm = normalizeAddress(addr);
+          var coord = null;
+          if (Object.keys(inMemoryAddrMaster).length > 0) {
+            var gc = await geocodeWithProxy(addr);
+            if (gc && !gc.failed) {
+              coord = { lat: gc.lat, lng: gc.lng };
+              inMemoryAddrMaster[norm] = coord;
+              inMemoryAddrMaster[addr] = coord;
+              saveAddrToSheet(addr, coord.lat, coord.lng);
+            }
+          } else {
+            coord = await getLatLng(addr);
+          }
+          if (coord && dashboardMapCoordStore()) dashboardMapCoordStore().set(norm, coord.lat, coord.lng);
+          return coord;
+        }, { concurrency: 3 });
+      }
+      return dashboardMapGeocodeQueue;
+    }
+
+    function dashboardMapRows(routeCode, addresses) {
+      var details = cycleDetailData[routeCode];
+      var rows = [];
+      if (Array.isArray(details) && details.length) {
+        for (var i = 0; i < details.length; i++) {
+          var d = details[i];
+          if (!d || !d.address || d.address.indexOf('OFK') >= 0) continue;
+          rows.push({ trackingId: d.trackingId || '', address: d.address });
+        }
+      }
+      if (!rows.length) {
+        for (var j = 0; j < addresses.length; j++) rows.push({ trackingId: '', address: String(addresses[j]).trim() });
+      }
+      return rows;
+    }
+
+    async function initDeliveryMap(routeCode, addresses, routeInfo, mapPerf, cortexCtx) {
+      var Overlay = window.OFK3MapCortexOverlay;
+      if (!Overlay || typeof L === 'undefined' || !L.map) {
+        return initDeliveryMapLegacy(routeCode, addresses, routeInfo);
+      }
+      var myToken = ++mapRenderToken;
+      var perf = mapPerf || Overlay.createMapPerf(routeCode);
+      if (deliveryMapInstance) {
+        deliveryMapInstance.remove();
+        deliveryMapInstance = null;
+      }
+      deliveryMapMarkers = [];
+      if (!document.getElementById('delivery-map')) { console.warn('delivery-map要素が見つかりません'); return; }
+
+      var ctx = cortexCtx || dashboardMapCortexContext(routeCode);
+      var areas = Overlay.computeAreaGroups(addresses, extractAreaName, mapAreaColors);
+      var tagsHtml = '';
+      for (var ti = 0; ti < areas.areaList.length; ti++) {
+        var tagArea = areas.areaList[ti];
+        var tagColor = areas.areaColorMap[tagArea];
+        tagsHtml += '<span style="background:' + tagColor + '20;color:' + tagColor + ';border:1px solid ' + tagColor + '40;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">' + tagArea + ' ' + areas.areaGroups[tagArea].count + '件</span>';
+      }
+      document.getElementById('map-area-tags').innerHTML = tagsHtml;
+
+      var rows = dashboardMapRows(routeCode, addresses);
+      var modelKey = [routeCode, getTodayJst(), ctx.index ? ctx.index.version : 0, ctx.state, Overlay.rowsSignature(rows)].join('|');
+      var routeModel = Overlay.getRouteModel(modelKey, function() {
+        return Overlay.joinRouteRows(routeCode, rows, ctx.route, normalizeAddress);
+      });
+      perf.mark('routeDataReadyAt');
+
+      var areaLabels = [];
+      for (var li = 0; li < areas.areaList.length; li++) {
+        var labelArea = areas.areaList[li];
+        var labelCoord = getAreaCenter(labelArea);
+        if (!labelCoord) continue;
+        areaLabels.push({
+          lat: labelCoord.lat,
+          lng: labelCoord.lng,
+          html: '<div style="background:' + areas.areaColorMap[labelArea] + ';color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.3);">' + labelArea + ' ' + areas.areaGroups[labelArea].count + '件</div>'
+        });
+      }
+
+      var store = dashboardMapCoordStore();
+      var loadingEl = document.getElementById('map-loading');
+      var countEl = document.getElementById('map-loading-count');
+      var rendered = Overlay.renderRouteMap({
+        L: L,
+        container: 'delivery-map',
+        model: routeModel.model,
+        areaOf: extractAreaName,
+        areaColorMap: areas.areaColorMap,
+        areaLabels: areaLabels,
+        normalize: normalizeAddress,
+        lookupCoord: function(addr) {
+          var master = cachedOrFallbackCoord(addr);
+          if (master) {
+            if (store) store.set(normalizeAddress(addr), master.lat, master.lng);
+            return master;
+          }
+          return store ? store.get(normalizeAddress(addr)) : null;
+        },
+        lookupMaster: function(addr) {
+          var master = cachedOrFallbackCoord(addr);
+          if (master && store) store.set(normalizeAddress(addr), master.lat, master.lng);
+          return master;
+        },
+        ensureMaster: function() {
+          if (Object.keys(inMemoryAddrMaster).length > 0) return null;
+          return loadAddrMasterFromSheet();
+        },
+        queue: dashboardMapQueue(),
+        isCurrent: function() { return myToken === mapRenderToken; },
+        perf: perf,
+        onMarker: function(m) { deliveryMapMarkers.push(m); },
+        onProgress: function(done, total) {
+          if (myToken !== mapRenderToken || !loadingEl || !countEl) return;
+          if (done >= total) { loadingEl.classList.add('hidden'); return; }
+          countEl.textContent = done + ' / ' + total;
+          loadingEl.classList.remove('hidden');
+        }
+      });
+      deliveryMapInstance = rendered.map;
+      setTimeout(function() {
+        try { if (myToken === mapRenderToken && deliveryMapInstance) deliveryMapInstance.invalidateSize(); } catch (e) {}
+      }, 200);
+
+      await rendered.done;
+      if (loadingEl && myToken === mapRenderToken) loadingEl.classList.add('hidden');
+      var summary = Overlay.recordPerf(perf, {
+        cortexState: ctx.state,
+        routeModelCached: routeModel.cached,
+        indexBuilds: Overlay.indexBuildCount(),
+        stopMatchedRows: routeModel.model.matchedRowCount,
+        stopUnmatchedRows: routeModel.model.unmatchedRowCount
+      });
+      window.OFK3MapDiagnostics = {
+        routeCode: routeCode,
+        cortexState: ctx.state,
+        diagnostics: rendered.diagnostics,
+        perf: summary
+      };
+      if (rendered.diagnostics.length) {
+        console.info('[OFK3 MAP] Stop番号未照合/警告 ' + rendered.diagnostics.length + '件', rendered.diagnostics);
+      }
+    }
+
+    async function initDeliveryMapLegacy(routeCode, addresses, routeInfo) {
       // デバッグ：渡ってきた住所データを確認
       console.log('initDeliveryMap addresses:', addresses);
       var myToken = ++mapRenderToken;
@@ -12847,6 +13645,9 @@ var driverDB = {
 
     function closeMapModal() {
       mapRenderToken++;
+      if (dashboardMapGeocodeQueue) dashboardMapGeocodeQueue.cancelPending();
+      var loadingClose = document.getElementById('map-loading');
+      if (loadingClose) loadingClose.classList.add('hidden');
       currentMapSource = 'cycle';
       cortexRouteView = null;
       var modal = document.getElementById('map-modal');
@@ -17039,6 +17840,9 @@ var driverDB = {
         el = document.getElementById(ccIds[fi]);
         if (el) el.classList.toggle('hidden', view !== 'cc');
       }
+      // CC Ver.1 はAmazon生データ取込時のみ結果がある（累計・分析CSV取込時は非表示のまま）
+      el = document.getElementById('cc-v1');
+      if (el) el.classList.toggle('hidden', view !== 'cc' || !ccV1Result);
       var btnF = document.getElementById('btn-view-ftds');
       var btnC = document.getElementById('btn-view-cc');
       if (btnF) {
@@ -17492,10 +18296,17 @@ var driverDB = {
         if (fnameLower.endsWith('.csv')) {
           var text = new TextDecoder('utf-8').decode(new Uint8Array(e.target.result));
           if (importCcExportCsv(text)) {
+            clearCcV1();
             var ccDrivers = ccResultData.length > 0
               ? Object.keys(groupCcDriverStats(ccResultData)).length
               : Object.keys(exportedQualityCounts || {}).length;
             showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: ccDrivers });
+            return;
+          }
+          // Amazon Contact Compliance 生データのCSV（ヘッダーに Transporter ID を含む）
+          var rawCsvRows = csvTextToRows(text);
+          if (isCcAmazonRawRows(rawCsvRows)) {
+            showCcRawImportResult(processCcData(rawCsvRows), fname);
             return;
           }
           alert('Contact Compliance CSV形式を認識できませんでした。\nContactCompliance分析_*.csv を確認してください');
@@ -17508,6 +18319,7 @@ var driverDB = {
           var cumRows = getSheetRows(wb, cumSheet);
           var cumInfo = importCcCumulativeRows(cumRows, { sheetName: cumSheet, fileName: fname });
           if (cumInfo) {
+            clearCcV1();
             showCcImportMessage(cumInfo);
             return;
           }
@@ -17517,8 +18329,7 @@ var driverDB = {
           alert('Contact Compliance形式のシートが見つかりません。\n・Amazon生データ\n・ContactCompliance分析_*.csv\n・ContactCompliance_累計*.xlsx\nを確認してください');
           return;
         }
-        processCcData(sheetData);
-        showCcImportMessage({ kind: 'normal', period: extractReportPeriodLabel('', fname), drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
+        showCcRawImportResult(processCcData(sheetData), fname);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -17533,15 +18344,228 @@ var driverDB = {
       return stats;
     }
 
+    // ===== CC Logic Ver.1（判定・集計は contact-compliance-core.js。ここは取込とDOM描画のみ） =====
+    var ccV1Result = null;
+
+    function isCcAmazonRawRows(rows) {
+      if (!rows || rows.length < 2 || typeof ContactComplianceCore === 'undefined') return false;
+      var hdr = ContactComplianceCore.ccFindHeaderRow(rows);
+      return hdr >= 0 && mapAnalysisHeaderColumns(rows[hdr]).tid !== undefined;
+    }
+
+    // CC Ver.1 を算出できなかったときの不足列（null = 未読込 / 算出済み）
+    var ccV1MissingColumns = null;
+
+    // CC Ver.1 Excel ボタンは ccV1Result（Amazon raw data から算出）があるときだけ押せる。
+    // 従来指標（ccResultData / exportedQualityCounts）からは CC Ver.1 Excel を作らない。
+    function updateCcExportUi() {
+      var btn = document.getElementById('cc-v1-export-btn');
+      if (btn) btn.disabled = !ccV1Result;
+      var st = document.getElementById('cc-v1-export-status');
+      if (!st) return;
+      if (ccV1Result) {
+        st.textContent = 'CC Ver.1 Excel：出力可能（' + ContactComplianceCore.CC_LOGIC_LABEL + '・対象 ' + ccV1Result.summary.total + '件）';
+      } else if (ccV1MissingColumns) {
+        st.textContent = 'CC Ver.1：必須列不足のため算出不可（不足列: ' + ccV1MissingColumns.join(', ') + '）／従来架電実績は利用可能な場合あり（CC Ver.1 の数値ではありません）';
+      } else {
+        st.textContent = 'CC Ver.1 Excel：Amazon raw data 未読込（CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください）';
+      }
+    }
+
+    function clearCcV1() {
+      ccV1Result = null;
+      ccV1MissingColumns = null;
+      var box = document.getElementById('cc-v1');
+      if (box) box.classList.add('hidden');
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
+      updateCcExportUi();
+    }
+
+    function showCcV1Error(html, missing) {
+      ccV1Result = null;
+      ccV1MissingColumns = (missing && missing.length) ? missing : null;
+      var box = document.getElementById('cc-v1');
+      if (box) box.classList.add('hidden');
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.innerHTML = html; err.classList.remove('hidden'); }
+      updateCcExportUi();
+    }
+
+    // CC率の評価色。Amazon正式基準が未確認のため ContactComplianceCore.CC_RATE_LEVEL_THRESHOLDS は null で、
+    // getCcRateLevel は常に null（数値のみ表示・色分けなし）。正式基準の設定後にここの色が使われる。
+    var CC_V1_RATE_LEVEL_COLORS = { good: '#16a34a', warn: '#d97706', bad: '#dc2626' };
+
+    function ccV1RateHtml(rate) {
+      var text = escapeHtml(ContactComplianceCore.formatCcRate(rate));
+      var color = CC_V1_RATE_LEVEL_COLORS[ContactComplianceCore.getCcRateLevel(rate)];
+      return color ? '<span style="color:' + color + ';">' + text + '</span>' : text;
+    }
+
+    // Amazon生データ（2次元配列）から CC Ver.1 を算出して描画する。DA名は既存マスタ照合（buildTidToNameLookup）を再利用。
+    // 戻り値: { ok: true } / { ok: false, missing: [不足列], reason }（通知は呼び出し側でまとめて出す）
+    function renderCcV1FromRows(rows) {
+      if (typeof ContactComplianceCore === 'undefined') {
+        showCcV1Error('Contact Compliance 判定モジュール（contact-compliance-core.js）を読み込めませんでした。ページを再読み込みしてください。');
+        return { ok: false, missing: [], reason: 'module' };
+      }
+      var tidToName = buildTidToNameLookup();
+      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; });
+      if (result.error) {
+        var missing = result.missing || [];
+        var msg = '<b>Contact Compliance を算出できません：必須列が不足しています。</b>';
+        if (missing.length) {
+          msg += '<br>不足列：';
+          for (var mi = 0; mi < missing.length; mi++) msg += (mi ? '、' : '') + '<code>' + escapeHtml(missing[mi]) + '</code>';
+        }
+        msg += '<br><span class="text-xs">必須列：';
+        for (var ci = 0; ci < ContactComplianceCore.CC_REQUIRED_COLUMNS.length; ci++) {
+          msg += (ci ? ' / ' : '') + escapeHtml(ContactComplianceCore.CC_REQUIRED_COLUMNS[ci].header);
+        }
+        msg += '</span>';
+        showCcV1Error(msg, missing);
+        return { ok: false, missing: missing, reason: 'missing_columns' };
+      }
+      ccV1Result = result;
+      ccV1MissingColumns = null;
+      updateCcExportUi();
+      var err = document.getElementById('cc-v1-error');
+      if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
+      renderCcV1();
+      return { ok: true, missing: [] };
+    }
+
+    // Amazon生データ取込の結果通知。従来指標（べき架電／実架電）と CC Ver.1 の成否を分けて表示し、
+    // 失敗した処理を成功のように見せない。両方成功時は従来どおり showCcImportMessage を使う。
+    function showCcRawImportResult(status, fname) {
+      var period = extractReportPeriodLabel('', fname);
+      if (status.legacyOk && status.v1.ok) {
+        showCcImportMessage({ kind: 'normal', period: period, drivers: Object.keys(groupCcDriverStats(ccResultData)).length });
+        return;
+      }
+      var v1Line = status.v1.ok
+        ? '\u30fbCC Logic Ver.1\uff1a\u7b97\u51fa\u5b8c\u4e86'
+        : ('\u30fbCC Logic Ver.1\uff1a\u5fc5\u9808\u5217\u4e0d\u8db3\u306e\u305f\u3081\u7b97\u51fa\u4e0d\u53ef'
+          + (status.v1.missing && status.v1.missing.length ? ('\n\u3000\u4e0d\u8db3\u5217: ' + status.v1.missing.join(', ')) : ''));
+      if (status.legacyOk) {
+        alert('\u26a0\ufe0f Contact Compliance \u4e00\u90e8\u306e\u307f\u8aad\u307f\u8fbc\u307f\uff1a' + period + '\n'
+          + '\u30fb\u5f93\u6765\u6307\u6a19\uff08\u3079\u304d\u67b6\u96fb\uff0f\u5b9f\u67b6\u96fb\uff09\uff1a\u8aad\u307f\u8fbc\u307f\u6210\u529f / '
+          + Object.keys(groupCcDriverStats(ccResultData)).length + '\u540d\n' + v1Line);
+      } else {
+        alert('\u274c Contact Compliance \u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\uff1a' + period + '\n'
+          + '\u30fb\u5f93\u6765\u6307\u6a19\uff08\u3079\u304d\u67b6\u96fb\uff0f\u5b9f\u67b6\u96fb\uff09\uff1aTransportID\u5217\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\n' + v1Line);
+      }
+    }
+
+    function renderCcV1() {
+      var res = ccV1Result;
+      if (!res) return;
+      var s = res.summary;
+      document.getElementById('cc-v1-rate').innerHTML = ccV1RateHtml(s.rate);
+      document.getElementById('cc-v1-total').textContent = s.total;
+      document.getElementById('cc-v1-compliant').textContent = s.compliant;
+      document.getElementById('cc-v1-noncompliant').textContent = s.nonCompliant;
+      document.getElementById('cc-v1-logic-note').textContent =
+        'CC Logic Ver.' + res.logicVersion + '（対象: 不在・配達先アクセス不可・住所不明・安全な置き場所なし ／ Call または Text あり＝適合）'
+        + ' 取込 ' + res.records.length + '行・対象外 ' + s.notEligible + '行';
+
+      var reasonHtml = '';
+      for (var i = 0; i < res.byReason.length; i++) {
+        var r = res.byReason[i];
+        reasonHtml += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2">' + escapeHtml(r.reasonLabel) + ' <span class="text-xs text-ink-lighter font-mono">' + escapeHtml(r.reason) + '</span></td>' +
+          '<td class="px-3 py-2 text-center">' + r.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + r.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (r.nonCompliant ? ' text-red-600' : '') + '">' + r.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(r.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-reason-tbody').innerHTML = reasonHtml;
+
+      renderCcV1DriverTable();
+
+      var dateHtml = '';
+      for (var d = 0; d < res.byDate.length; d++) {
+        var dr = res.byDate[d];
+        dateHtml += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2">' + escapeHtml(latFormatDate(dr.eventDate) || dr.eventDate) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + dr.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + dr.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (dr.nonCompliant ? ' text-red-600' : '') + '">' + dr.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(dr.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-date-tbody').innerHTML = dateHtml;
+
+      var ncHtml = '';
+      for (var n = 0; n < res.nonCompliant.length; n++) {
+        var nc = res.nonCompliant[n];
+        var unk = nc.driverName === ContactComplianceCore.CC_UNKNOWN_DA_LABEL;
+        ncHtml += '<tr class="border-b border-border">' +
+          '<td class="px-2 py-1.5 text-xs whitespace-nowrap">' + escapeHtml(latFormatDate(nc.eventDate) || nc.eventDate) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs' + (unk ? ' text-red-600' : '') + '">' + escapeHtml(nc.driverName) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.transporterId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.scannableId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.destinationAddressId) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(nc.shipmentReason) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + escapeHtml(nc.shipmentReasonLabel) + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + (escapeHtml(nc.callEvent) || '-') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs">' + (escapeHtml(nc.textEvent) || '-') + '</td>' +
+          '<td class="px-2 py-1.5 text-xs font-bold text-red-600">' + escapeHtml(nc.statusLabel) + '</td>' +
+          '</tr>';
+      }
+      if (!ncHtml) ncHtml = '<tr><td colspan="10" class="text-center py-4 text-ink-lighter text-xs">非適合はありません</td></tr>';
+      document.getElementById('cc-v1-nc-tbody').innerHTML = ncHtml;
+      document.getElementById('cc-v1-nc-count').textContent = '：' + res.nonCompliant.length + '件';
+
+      document.getElementById('cc-v1').classList.remove('hidden');
+    }
+
+    // CC Ver.1 Excel出力（5シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
+    // 画面と同じ ccV1Result から作る（Excel側で判定・集計をやり直さない）。DA別は画面の並び順に合わせる。
+    function exportCcV1Result() {
+      if (!ccV1Result) {
+        alert('CC Ver.1 Excel を出力できません。\n'
+          + (ccV1MissingColumns
+            ? ('CC Ver.1 は必須列不足のため算出不可です（不足列: ' + ccV1MissingColumns.join(', ') + '）。\n')
+            : 'CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください。\n')
+          + '※「従来架電実績 Excel出力」は従来指標（べき架電／実架電）で、CC Ver.1 の代わりにはなりません。');
+        return;
+      }
+      var sel = document.getElementById('cc-v1-driver-sort');
+      var wb = ContactComplianceCore.buildCcExportWorkbook(XLSX, ccV1Result, sel ? sel.value : 'nonCompliantDesc');
+      XLSX.writeFile(wb, 'CC_Ver1分析_' + getTodayJst() + '.xlsx');
+    }
+
+    function renderCcV1DriverTable() {
+      if (!ccV1Result) return;
+      var sel = document.getElementById('cc-v1-driver-sort');
+      var list = ContactComplianceCore.sortCcDriverStats(ccV1Result.byDriver, sel ? sel.value : 'nonCompliantDesc');
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var ds = list[i];
+        html += '<tr class="border-b border-border' + (ds.identified ? '' : ' bg-red-50') + '">' +
+          '<td class="px-3 py-2' + (ds.identified ? '' : ' text-red-600 font-medium') + '">' + escapeHtml(ds.driverName) + '</td>' +
+          '<td class="px-3 py-2 text-xs font-mono">' + escapeHtml(ds.transporterId || '-') + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ds.total + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ds.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold' + (ds.nonCompliant ? ' text-red-600' : '') + '">' + ds.nonCompliant + '</td>' +
+          '<td class="px-3 py-2 text-center font-bold">' + ccV1RateHtml(ds.rate) + '</td>' +
+          '</tr>';
+      }
+      document.getElementById('cc-v1-driver-tbody').innerHTML = html;
+    }
+
+    // 戻り値: { legacyOk: 従来指標の取込成否, v1: renderCcV1FromRows の結果 }。通知は showCcRawImportResult。
     function processCcData(rows) {
+      var v1Status = renderCcV1FromRows(rows);
       var headerIdx = findAnalysisHeaderRow(rows, 'cc');
       if (headerIdx < 0) headerIdx = 0;
       var header = rows[headerIdx];
       var colMap = mapAnalysisHeaderColumns(header);
       if (colMap.tid === undefined) {
         console.error('[CC] TransportID column not found. Detected headers:', header);
-        alert('TransportID列が見つかりません');
-        return;
+        return { legacyOk: false, v1: v1Status };
       }
       var tidToName = buildTidToNameLookup();
       var results = [];
@@ -17603,6 +18627,7 @@ var driverDB = {
 
       ccResultData = results;
       renderCcResultsUI();
+      return { legacyOk: true, v1: v1Status };
     }
 
     function renderCcResultsUI() {
@@ -17815,7 +18840,8 @@ var driverDB = {
       var wb = buildQualityAffiliationWorkbook(ccResultData, buildCcAoa, function(rec) {
         return resolveQualityAffiliationByKeys(rec.driverName, rec.transporterId);
       }, styleCcSheet);
-      XLSX.writeFile(wb, 'ContactCompliance分析_' + getTodayJst() + '.xlsx');
+      // 従来指標（べき架電／実架電）。CC Logic Ver.1 と誤認しないファイル名にする
+      XLSX.writeFile(wb, '\u5f93\u6765\u67b6\u96fb\u5b9f\u7e3e\u5206\u6790_' + getTodayJst() + '.xlsx');
     }
 
     // ===== LAT分析 =====
@@ -20834,7 +21860,7 @@ var driverDB = {
               asyncFallback = true;
               if (fname.indexOf('dnr') >= 0) handleDnrFile(file);
               else if (fname.indexOf('ftds') >= 0) handleFtdsFile(file);
-              else if (fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0) handleCcFile(file);
+              else if (fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0 || fname.indexOf('\u5f93\u6765\u67b6\u96fb\u5b9f\u7e3e') >= 0) handleCcFile(file);
               else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) handleFtdsFile(file);
             } else {
               loaded++;
@@ -21525,17 +22551,18 @@ var driverDB = {
     loadMasterFromServer();
 
   </script>
-  <script src="/assign-support-core.js?v=20260826-5"></script>
-  <script src="/assign-support.js?v=20260826-5"></script>
+  <script src="/assign-support-core.js?v=20261001-exp1b"></script>
+  <script src="/area-experience-core.js?v=20261001-exp1b"></script>
+  <script src="/assign-support.js?v=20261001-exp1b"></script>
   <script src="/manual-assign-board-core.js?v=20260903-2"></script>
   <script src="/manual-assign-board.js?v=20260903-2"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
-  <script src="/rolling60h-ui.js?v=20260904-1"></script>
+  <script src="/rolling60h-ui.js?v=20261007-1"></script>
   <script src="/cortex-13-priority-core.js?v=20260921-3"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
-  <script src="/ofk3-cortex-priority-ui.js?v=20260921-3"></script>
+  <script src="/ofk3-cortex-priority-ui.js?v=20260927-1"></script>
   <div id="ofk3-delivery-map-overlay" style="display:none;position:fixed;right:14px;bottom:14px;z-index:99998;width:min(920px,calc(100vw - 20px));max-height:80vh;overflow:auto;background:#fff;color:#111;border:1px solid #d1d5db;border-radius:12px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.22);">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
       <b>配送MAP</b>
@@ -21551,5 +22578,6 @@ var driverDB = {
   </div>
   <script src="/cortex-route-sequence.js?v=20260921-7"></script>
   <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
+  <script src="/ofk3-map-cortex-overlay.js?v=20260927-1"></script>
 </body>
 </html>

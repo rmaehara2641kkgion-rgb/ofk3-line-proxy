@@ -1,0 +1,535 @@
+/**
+ * 請求照合の対象者取込と PDF 自動振り分け。
+ * DOM・LINE送信APIには依存しない。
+ *
+ * 有効行は氏名（C列）または TID（B列）で判定する。
+ * A列が空でも行全体は捨てない。TIDは driverKey にコピーしない
+ * （別ドライバーの TransportID へ送信先を付け替えないため）。
+ *
+ * PDFの自動送信は、空白差を除いた氏名の一意一致だけ。
+ * 2要素の氏名は「姓 名」と「名 姓」を同一人物候補にする。
+ * スペース無しは、2要素のフルネームの「姓+名」または「名+姓」と一意のときだけ同一。
+ * 姓だけ・名だけ・部分一致・複数候補・読込失敗は sendable=false。
+ * 同一対象者へ2件以上割り当てた場合も sendable=false。先着も後着も採用しない。
+ */
+(function (global) {
+  'use strict';
+
+  var DAY_LABELS = ['11B', '8B', 'B1', 'B2', 'biker', '嘉麻応援', 'C1', 'C3'];
+  var NAME_CHAR = /[\u4E00-\u9FFF\u3040-\u30FF]/;
+  var KANA_ONLY = /^[\u30A0-\u30FF\u30FC\u3040-\u309F]+$/;
+
+  function cellText(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/\u00A0/g, ' ').trim();
+  }
+
+  function parseNum(val) {
+    if (!val) return 0;
+    var s = val.toString().replace(/[¥,\s]/g, '');
+    return parseInt(s, 10) || 0;
+  }
+
+  function looksLikeTransportId(s) {
+    return /^[A-Za-z][A-Za-z0-9]{8,}$/.test(s);
+  }
+
+  function normalizePersonName(s) {
+    return String(s == null ? '' : s).replace(/[\s\u3000\u00A0\r\n\f\v]+/g, '');
+  }
+
+  function nameTokens(s) {
+    return String(s == null ? '' : s).trim().split(/[\s\u3000\u00A0\r\n]+/).filter(function (part) {
+      return part.length > 0;
+    });
+  }
+
+  function fullNameKeys(name) {
+    var tokens = nameTokens(name);
+    if (tokens.length === 2) return [tokens[0] + tokens[1], tokens[1] + tokens[0]];
+    var compact = normalizePersonName(name);
+    return compact ? [compact] : [];
+  }
+
+  // 2要素の反転、またはスペース無しが相手の姓名連結と完全一致するときだけ同一。
+  // 文字の並べ替えはしない。姓だけ・名だけは一致しない。
+  function samePersonName(a, b) {
+    var ka = fullNameKeys(a);
+    var kb = fullNameKeys(b);
+    if (!ka.length || !kb.length) return false;
+    for (var i = 0; i < ka.length; i++) {
+      for (var j = 0; j < kb.length; j++) {
+        if (ka[i] === kb[j]) return true;
+      }
+    }
+    return false;
+  }
+
+  function matchUniquePerson(query, candidates) {
+    candidates = candidates || [];
+    var hits = [];
+    for (var i = 0; i < candidates.length; i++) {
+      var name = typeof candidates[i] === 'string' ? candidates[i] : (candidates[i] && candidates[i].name);
+      if (!name || !samePersonName(query, name)) continue;
+      hits.push(name);
+    }
+    return hits.length === 1 ? hits[0] : '';
+  }
+
+  // マスタで一意に人物が決まってから、その人物の登録キーを返す。
+  // マスタに無いときは、空白差を除いた完全一致の登録キーが1件のときだけ。
+  // User ID の部分一致や、他人キーへの fallback はしない。
+  function resolveLineKey(queryName, masterNames, lineKeys) {
+    masterNames = masterNames || [];
+    lineKeys = lineKeys || [];
+    if (!queryName) return '';
+    var person = matchUniquePerson(queryName, masterNames);
+    if (person) {
+      var keys = [];
+      for (var i = 0; i < lineKeys.length; i++) {
+        if (samePersonName(lineKeys[i], person)) keys.push(lineKeys[i]);
+      }
+      return keys.length === 1 ? keys[0] : '';
+    }
+    var exact = [];
+    var compact = normalizePersonName(queryName);
+    for (var j = 0; j < lineKeys.length; j++) {
+      if (normalizePersonName(lineKeys[j]) === compact) exact.push(lineKeys[j]);
+    }
+    return exact.length === 1 ? exact[0] : '';
+  }
+
+  function interpretLineHttpStatus(status) {
+    var n = Number(status);
+    return n >= 200 && n < 300 ? 'ok' : 'fail';
+  }
+
+  function publicLineError(status, body) {
+    var n = Number(status);
+    var reason = 'LINE API送信失敗';
+    if (n) reason += ' (' + n + ')';
+    var msg = '';
+    try {
+      var json = JSON.parse(String(body || ''));
+      if (json && typeof json.message === 'string') msg = json.message;
+      else if (json && typeof json.error === 'string') msg = json.error;
+    } catch (e) {
+      msg = '';
+    }
+    msg = String(msg || '');
+    if (/bearer|token|secret|authorization|proxy/i.test(msg)) msg = '';
+    msg = msg.replace(/U[0-9a-fA-F]{16,}/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (msg) reason += ': ' + msg;
+    return reason;
+  }
+
+  function isKanaReading(s) {
+    var n = normalizePersonName(s);
+    return n.length >= 2 && KANA_ONLY.test(n);
+  }
+
+  function parseBillingRows(rows) {
+    var out = [];
+    if (!rows || !rows.length) return out;
+    var startRow = 2;
+    var scan = Math.min(rows.length, 5);
+    for (var h = 0; h < scan; h++) {
+      var headerRow = rows[h];
+      if (headerRow && headerRow.join && String(headerRow.join('')).indexOf('宛名') >= 0) {
+        startRow = h + 1;
+        break;
+      }
+    }
+    for (var i = startRow; i < rows.length; i++) {
+      var row = rows[i];
+      if (!row) continue;
+      var colA = cellText(row[0]);
+      var colB = cellText(row[1]);
+      var name = cellText(row[2]);
+      var tid = '';
+      if (looksLikeTransportId(colB)) tid = colB;
+      else if (looksLikeTransportId(colA)) tid = colA;
+      if (!name && !tid) continue;
+
+      var driverKey = colA;
+      var workDays = 0;
+      var breakdown = [];
+      for (var c = 3; c <= 10; c++) {
+        var v = parseInt(row[c], 10) || 0;
+        workDays += v;
+        if (v > 0) breakdown.push(DAY_LABELS[c - 3] + ': ' + v + '日');
+      }
+      out.push({
+        driverKey: driverKey,
+        tid: tid,
+        name: name,
+        workDays: workDays,
+        breakdown: breakdown,
+        sysUsageFlag: cellText(row[11]),
+        sysUsageFee: parseNum(row[17]),
+        sundayBonus: cellText(row[12]),
+        charter: parseNum(row[13]),
+        mileage: parseNum(row[14]),
+        deduction: parseNum(row[15]),
+        subtotal: parseNum(row[16]),
+        tax: parseNum(row[18]),
+        total: parseNum(row[19]),
+        selected: true
+      });
+    }
+    return out;
+  }
+
+  function hasPdfMagic(bytes) {
+    if (!bytes || bytes.length < 5) return false;
+    return bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2D;
+  }
+
+  function classifyPdfUpload(meta, bytes) {
+    meta = meta || {};
+    var name = String(meta.name || '');
+    var type = String(meta.type || '').toLowerCase();
+    var ext = /\.pdf$/i.test(name);
+    var mime = type === 'application/pdf' || type === 'application/x-pdf';
+    var magic = hasPdfMagic(bytes);
+    if (!ext && !mime && !magic) return { ok: false, reason: 'not_pdf' };
+    if (!magic) return { ok: false, reason: 'bad_magic' };
+    return { ok: true, reason: '' };
+  }
+
+  function latin1FromBytes(bytes) {
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(bytes)) {
+      return bytes.toString('latin1');
+    }
+    var s = '';
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  }
+
+  function decodePdfHex(hex) {
+    if (!hex || hex.length < 4 || hex.length % 2) return '';
+    var bytes = [];
+    for (var i = 0; i < hex.length; i += 2) {
+      var n = parseInt(hex.substr(i, 2), 16);
+      if (isNaN(n)) return '';
+      bytes.push(n);
+    }
+    if (!(bytes[0] === 0xFE && bytes[1] === 0xFF)) return '';
+    var out = '';
+    for (var j = 2; j + 1 < bytes.length; j += 2) {
+      out += String.fromCharCode((bytes[j] << 8) | bytes[j + 1]);
+    }
+    return out;
+  }
+
+  function decodePdfLiteral(body) {
+    var out = '';
+    for (var i = 0; i < body.length; i++) {
+      var ch = body.charAt(i);
+      if (ch !== '\\') {
+        out += ch;
+        continue;
+      }
+      var n = body.charAt(++i);
+      if (n === 'n') out += '\n';
+      else if (n === 'r') out += '\r';
+      else if (n === 't') out += '\t';
+      else if (n === '(' || n === ')' || n === '\\') out += n;
+      else out += n;
+    }
+    return out;
+  }
+
+  function extractPdfText(bytes) {
+    if (!bytes) return '';
+    var src = latin1FromBytes(bytes);
+    if (src.indexOf('%PDF-') < 0) return '';
+    var parts = [];
+    var hexRe = /<([0-9A-Fa-f\s]+)>\s*Tj/g;
+    var m;
+    while ((m = hexRe.exec(src))) {
+      var text = decodePdfHex(m[1].replace(/\s+/g, ''));
+      if (text) parts.push(text);
+    }
+    var litRe = /\(((?:\\.|[^\\)])*)\)\s*Tj/g;
+    while ((m = litRe.exec(src))) {
+      var lit = decodePdfLiteral(m[1]);
+      if (lit) parts.push(lit);
+    }
+    return parts.join('\n');
+  }
+
+  function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function textHasPersonName(text, displayName) {
+    var raw = String(text || '');
+    var tokens = nameTokens(displayName);
+    if (!tokens.length) return false;
+    if (tokens.length === 1 && normalizePersonName(tokens[0]).length < 2) return false;
+    var between = '[\\s\\u3000\\u00A0\\r\\n]*';
+    var body = tokens.map(escapeRegExp).join(between);
+    var honor = '(?:[\\s\\u3000\\u00A0\\r\\n]*(?:様|殿|氏|君|さん|御中))?';
+    var re = new RegExp('(?:^|[^\\u4E00-\\u9FFF\\u3040-\\u30FF])' + body + honor + '(?![\\u4E00-\\u9FFF\\u3040-\\u30FF])');
+    return re.test(raw);
+  }
+
+  function extractBracketName(filename) {
+    var m = String(filename || '').match(/【(.+?)(?:DA|ＤＡ)?】/);
+    return m ? String(m[1]).trim() : '';
+  }
+
+  function targetsNamed(targets, rawName) {
+    var hits = [];
+    if (!normalizePersonName(rawName)) return hits;
+    for (var i = 0; i < targets.length; i++) {
+      if (samePersonName(targets[i].name, rawName)) hits.push(targets[i]);
+    }
+    return hits;
+  }
+
+  function personSurfaceNames(displayName, catalog) {
+    var tokens = nameTokens(displayName);
+    var surfaces = [];
+    if (tokens.length === 2) {
+      surfaces.push(tokens[0] + ' ' + tokens[1]);
+      surfaces.push(tokens[1] + ' ' + tokens[0]);
+      return surfaces;
+    }
+    var compact = normalizePersonName(displayName);
+    if (compact.length >= 2) surfaces.push(compact);
+    var expanded = matchUniquePerson(displayName, catalog || []);
+    var expandedTokens = nameTokens(expanded);
+    if (expandedTokens.length === 2) {
+      surfaces.push(expandedTokens[0] + ' ' + expandedTokens[1]);
+      surfaces.push(expandedTokens[1] + ' ' + expandedTokens[0]);
+    }
+    return surfaces;
+  }
+
+  function textMatchesPerson(text, displayName, catalog) {
+    var surfaces = personSurfaceNames(displayName, catalog);
+    for (var i = 0; i < surfaces.length; i++) {
+      if (textHasPersonName(text, surfaces[i])) return true;
+    }
+    return false;
+  }
+
+  function kanjiHits(text, targets, catalog) {
+    var hits = [];
+    for (var i = 0; i < targets.length; i++) {
+      if (!targets[i].name || isKanaReading(targets[i].name)) continue;
+      if (textMatchesPerson(text, targets[i].name, catalog)) hits.push(targets[i]);
+    }
+    return hits;
+  }
+
+  function readingsForTarget(readings, target) {
+    var out = [];
+    var keys = Object.keys(readings || {});
+    for (var i = 0; i < keys.length; i++) {
+      if (!samePersonName(keys[i], target.name)) continue;
+      var list = readings[keys[i]] || [];
+      for (var j = 0; j < list.length; j++) out.push(list[j]);
+    }
+    return out;
+  }
+
+  function kanaHits(text, targets, readings) {
+    var hits = [];
+    for (var i = 0; i < targets.length; i++) {
+      var list = readingsForTarget(readings, targets[i]);
+      for (var j = 0; j < list.length; j++) {
+        if (textHasPersonName(text, list[j])) {
+          hits.push(targets[i]);
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+
+  function resultOf(file, code, target) {
+    var labels = {
+      matched: target ? target.name : '',
+      unmatched: '対象者を特定できません',
+      ambiguous: '候補者が複数存在',
+      read_error: 'PDF読込失敗',
+      extract_failed: '氏名抽出失敗',
+      not_pdf: 'PDFとして認識されません'
+    };
+    return {
+      filename: (file && file.filename) || '',
+      code: code,
+      label: labels[code] || '',
+      targetName: target ? target.name : '',
+      target: target || null,
+      sendable: code === 'matched'
+    };
+  }
+
+  function assignOne(file, targets, readings, catalog) {
+    file = file || {};
+    if (file.error === 'not_pdf') return resultOf(file, 'not_pdf', null);
+    if (file.error === 'read_error' || file.error === 'bad_magic') return resultOf(file, 'read_error', null);
+
+    var text = String(file.text || '');
+    var kanji = kanjiHits(text, targets, catalog);
+    if (kanji.length > 1) return resultOf(file, 'ambiguous', null);
+    var textTarget = kanji.length === 1 ? kanji[0] : null;
+    if (!textTarget) {
+      var kana = kanaHits(text, targets, readings);
+      if (kana.length > 1) return resultOf(file, 'ambiguous', null);
+      if (kana.length === 1) textTarget = kana[0];
+    }
+
+    var bracket = extractBracketName(file.filename);
+    var fileHits = bracket ? targetsNamed(targets, bracket) : [];
+    var fileTarget = fileHits.length === 1 ? fileHits[0] : null;
+    if (fileHits.length > 1) return resultOf(file, 'ambiguous', null);
+    if (textTarget && fileTarget && !samePersonName(textTarget.name, fileTarget.name)) {
+      return resultOf(file, 'ambiguous', null);
+    }
+    if (textTarget) return resultOf(file, 'matched', textTarget);
+    if (fileTarget) return resultOf(file, 'matched', fileTarget);
+    if (!text.replace(/\s/g, '') && !bracket) return resultOf(file, 'extract_failed', null);
+    return resultOf(file, 'unmatched', null);
+  }
+
+  var DUPLICATE_PDF_WARNING = '同一対象者に複数PDFがあります';
+
+  // 同一対象者に2件以上の一意一致があるとき、その対象者のPDFはすべて送信不可。
+  // 1件に戻したあと再度呼ぶと、残った一致は送信可に戻る。PDFの中身は結合しない。
+  function applyDuplicatePdfBlock(results) {
+    results = results || [];
+    var reps = [];
+    function repOf(name) {
+      for (var r = 0; r < reps.length; r++) {
+        if (samePersonName(name, reps[r])) return reps[r];
+      }
+      reps.push(name);
+      return name;
+    }
+    var counts = {};
+    for (var i = 0; i < results.length; i++) {
+      var row = results[i];
+      if (!row || row.code !== 'matched' || !row.targetName) continue;
+      var key = repOf(row.targetName);
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    for (var j = 0; j < results.length; j++) {
+      var item = results[j];
+      if (!item || item.code !== 'matched' || !item.targetName) continue;
+      var dup = counts[repOf(item.targetName)] >= 2;
+      item.sendable = !dup;
+      item.duplicateTarget = dup;
+      item.duplicateWarning = dup ? DUPLICATE_PDF_WARNING : '';
+    }
+    return results;
+  }
+
+  function assignBillingPdfs(files, targets, options) {
+    var readings = (options && options.readings) || {};
+    var catalog = (options && options.masterNames) || [];
+    var list = files || [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) out.push(assignOne(list[i], targets || [], readings, catalog));
+    return applyDuplicatePdfBlock(out);
+  }
+
+  function collectNameReadings(targets, master) {
+    targets = targets || [];
+    master = master || {};
+    var pairs = [];
+    var jp = master.driverJapaneseNames || {};
+    var aliases = master.driverNameAliases || {};
+    Object.keys(jp).forEach(function (k) { pairs.push([k, jp[k]]); });
+    Object.keys(aliases).forEach(function (k) { pairs.push([k, aliases[k]]); });
+    var readings = {};
+    function add(target, reading) {
+      if (!isKanaReading(reading)) return;
+      var key = target.name;
+      if (!readings[key]) readings[key] = [];
+      var n = normalizePersonName(reading);
+      for (var i = 0; i < readings[key].length; i++) {
+        if (normalizePersonName(readings[key][i]) === n) return;
+      }
+      readings[key].push(reading);
+    }
+    pairs.forEach(function (pair) {
+      [[pair[0], pair[1]], [pair[1], pair[0]]].forEach(function (side) {
+        if (!isKanaReading(side[1])) return;
+        var hits = [];
+        for (var i = 0; i < targets.length; i++) {
+          if (samePersonName(targets[i].name, side[0])) hits.push(targets[i]);
+        }
+        if (hits.length === 1) add(hits[0], side[1]);
+      });
+    });
+    return readings;
+  }
+
+  function matchUniqueTarget(targets, rawName) {
+    var hits = targetsNamed(targets || [], rawName);
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  // 表示専用。マスタも送信先も書き換えない。
+  // masterNames が空なら不一致とは扱わない。1件でも同一人物なら警告しない。
+  function tidNameMismatch(billingName, masterNames) {
+    masterNames = masterNames || [];
+    if (!billingName || !masterNames.length) return false;
+    for (var i = 0; i < masterNames.length; i++) {
+      if (samePersonName(billingName, masterNames[i])) return false;
+    }
+    return true;
+  }
+
+  // 送信前一覧の文言と ○/× は同じ結果を返す。送信処理自体は変えない。
+  function listSendState(row) {
+    row = row || {};
+    if (row.duplicateTarget) return { mark: '×', sendable: false, decision: 'LINE送信禁止' };
+    if (row.code === 'ambiguous') return { mark: '×', sendable: false, decision: '候補者複数' };
+    if (row.code === 'unmatched' || row.code === 'extract_failed') return { mark: '×', sendable: false, decision: 'PDF対象者特定失敗' };
+    if (row.code === 'matched' && row.lineLinked && row.sendable) return { mark: '○', sendable: true, decision: '送信可能' };
+    if (row.code === 'matched' && !row.lineLinked) return { mark: '×', sendable: false, decision: 'LINE送信先未解決' };
+    return { mark: '×', sendable: false, decision: 'LINE送信禁止' };
+  }
+
+  // 管理者宛て確認用。本送信の ○/× は変えない。
+  // 請求内容が一致しているときは、ドライバー本人のLINE未解決だけでは止めない。
+  function testSendAllowed(row) {
+    row = row || {};
+    if (row.duplicateTarget || row.code === 'ambiguous' || row.code === 'unmatched' || row.code === 'extract_failed' || row.code === 'read_error' || row.code === 'not_pdf') {
+      return { ok: false, reason: listSendState(row).decision };
+    }
+    if (row.code === 'matched' && row.sendable) return { ok: true, reason: '' };
+    return { ok: false, reason: listSendState(row).decision };
+  }
+
+  var api = {
+    parseBillingRows: parseBillingRows,
+    normalizePersonName: normalizePersonName,
+    samePersonName: samePersonName,
+    matchUniquePerson: matchUniquePerson,
+    resolveLineKey: resolveLineKey,
+    interpretLineHttpStatus: interpretLineHttpStatus,
+    publicLineError: publicLineError,
+    textHasPersonName: textHasPersonName,
+    classifyPdfUpload: classifyPdfUpload,
+    extractPdfText: extractPdfText,
+    extractBracketName: extractBracketName,
+    assignBillingPdfs: assignBillingPdfs,
+    applyDuplicatePdfBlock: applyDuplicatePdfBlock,
+    collectNameReadings: collectNameReadings,
+    matchUniqueTarget: matchUniqueTarget,
+    tidNameMismatch: tidNameMismatch,
+    hasPdfMagic: hasPdfMagic,
+    listSendState: listSendState,
+    testSendAllowed: testSendAllowed
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  if (typeof global !== 'undefined') global.BillingReconcile = api;
+})(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));

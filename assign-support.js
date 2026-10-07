@@ -10,6 +10,13 @@
     experienceUpdatedAt: '',
     experienceLoadError: '',
     experienceSaving: false,
+    experienceSnapshot: null,
+    experienceMode: '',
+    inactiveSnapshotThroughDate: '',
+    experienceEvents: { routeCaptures: {}, items: {} },
+    experienceUpdatedAtRaw: '',
+    experienceLastAggregatedDate: '',
+    experienceLastAggregatedAt: '',
     pendingUpload: null,
     selectedTransportId: '',
     manifestRoutes: [],
@@ -260,6 +267,60 @@
     state.experienceUpdatedAt = updatedAt || (db && db.stats && db.stats.lastDate) || '';
   }
 
+  // ===== エリア経験DB（Snapshot Layer + Experience Event Layer） =====
+
+  var RESOLUTION_REASON_LABELS = {
+    not_in_master: 'マスタに該当氏名なし',
+    multiple_candidates: '複数候補（同姓同名等）',
+    master_has_no_transport_id: 'マスタにTransportID未登録',
+    tid_already_in_snapshot: '解決先TIDが既にTransportID付き行を持つ',
+    tid_shared_by_multiple_names: '複数の氏名が同一TIDに一致',
+    empty_name: '氏名空欄',
+  };
+  var RESOLUTION_METHOD_LABELS = {
+    exact_name: '氏名一致',
+    master_japanese_name: 'マスタ日本語名一致',
+    alias: '別名(alias)',
+  };
+
+  function getAreaExperienceCore() {
+    return typeof AreaExperienceCore !== 'undefined' ? AreaExperienceCore : null;
+  }
+
+  function getDriverJapaneseNamesMap() {
+    return typeof driverJapaneseNames !== 'undefined' ? driverJapaneseNames : readJsonFromLocalStorage('driverJapaneseNames');
+  }
+
+  function getDriverNameAliasesMap() {
+    return typeof driverNameAliases !== 'undefined' ? driverNameAliases : readJsonFromLocalStorage('driverNameAliases');
+  }
+
+  function getDriverNameByTid() {
+    var map = getTransportIDsMap();
+    var out = {};
+    Object.keys(map).forEach(function (name) {
+      var tid = String(map[name] || '').trim();
+      if (tid && !out[tid]) out[tid] = name;
+    });
+    return out;
+  }
+
+  function todayJstString() {
+    return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+  }
+
+  /** 保存済み snapshot + events から最新の経験DBを作り state.experience へ入れる */
+  function rebuildExperienceFromLayers() {
+    var AEC = getAreaExperienceCore();
+    if (!AEC || !state.experienceSnapshot) return;
+    var events = AEC.collectExperienceEvents(state.experienceEvents);
+    var merged = AEC.mergeSnapshotAndEvents(state.experienceSnapshot, events, {
+      knownTransportIds: getKnownTransportIds(),
+      driverNameByTid: getDriverNameByTid(),
+    });
+    applyExperienceDb(merged, state.experienceUpdatedAtRaw);
+  }
+
   function loadExperienceFromServer(cb) {
     state.experienceLoadError = '';
     fetch('/area-experience-master?action=get')
@@ -267,12 +328,32 @@
         return res.json();
       })
       .then(function (data) {
-        if (data.status === 'ok' && data.data && data.data.records && data.data.records.length) {
-          var rebuilt = AssignSupportCore.buildExperienceDbFromRecords(data.data.records, {
+        var AEC = getAreaExperienceCore();
+        var d = data && data.data;
+        var mode = d ? d.mode || (d.snapshot ? 'snapshot' : 'legacy_records') : '';
+        state.experienceMode = mode;
+        state.inactiveSnapshotThroughDate = '';
+        if (data.status === 'ok' && d && d.snapshot && mode === 'snapshot' && AEC) {
+          var restored = AEC.restoreSnapshotLayer(d.snapshot);
+          if (restored.ok) {
+            state.experienceSnapshot = restored;
+            state.experienceEvents = d.events || { routeCaptures: {}, items: {} };
+            state.experienceUpdatedAtRaw = d.updatedAt || '';
+            state.experienceLastAggregatedDate = d.lastAggregatedDate || '';
+            state.experienceLastAggregatedAt = d.lastAggregatedAt || '';
+            rebuildExperienceFromLayers();
+          } else {
+            state.experienceLoadError = '保存済みスナップショットの復元に失敗: ' + (restored.errors || []).join(' / ');
+          }
+        } else if (data.status === 'ok' && d && d.records && d.records.length) {
+          // 旧形式 / Legacy records モード: records のみ（Events とは結合しない）
+          if (d.snapshot && d.snapshot.snapshotThroughDate) state.inactiveSnapshotThroughDate = d.snapshot.snapshotThroughDate;
+          var rebuilt = AssignSupportCore.buildExperienceDbFromRecords(d.records, {
             knownTransportIds: getKnownTransportIds(),
           });
           if (rebuilt.ok) {
-            applyExperienceDb(rebuilt, data.data.updatedAt || '');
+            state.experienceSnapshot = null;
+            applyExperienceDb(rebuilt, d.updatedAt || '');
           }
         } else if (data.status === 'error' && data.message && data.message.indexOf('not configured') >= 0) {
           state.experienceLoadError = 'GAS未設定（メモリのみ・セッション中のみ利用可）';
@@ -287,8 +368,27 @@
       });
   }
 
-  function saveExperienceToServer(experienceDb, cb) {
-    var payload = AssignSupportCore.serializeExperienceForSave(experienceDb);
+  /** GAS が新action（saveSnapshot等）に対応しているか確認（旧GASへ新UIが送って unknown action になるのを防ぐ） */
+  function checkGasCapabilities(requiredAction, cb) {
+    fetch('/area-experience-master?action=capabilities')
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (data && data.status === 'ok' && Array.isArray(data.actions) && data.actions.indexOf(requiredAction) >= 0) {
+          cb(null, data);
+          return;
+        }
+        cb(new Error('GASが新形式（' + requiredAction + '）に未対応です。GASを更新・再デプロイしてから登録してください'));
+      })
+      .catch(function (e) {
+        cb(new Error('GAS疎通確認に失敗しました: ' + (e.message || e)));
+      });
+  }
+
+  /** Legacy records として保存（snapshotThroughDate なし・Events と結合しない） */
+  function saveLegacyRecordsToServer(db, cb) {
+    var payload = AssignSupportCore.serializeExperienceForSave(db);
     if (!payload) {
       if (cb) cb(new Error('保存データがありません'));
       return;
@@ -306,10 +406,48 @@
       .then(function (data) {
         state.experienceSaving = false;
         if (data.status === 'ok') {
-          applyExperienceDb(experienceDb, data.updatedAt || payload.updatedAt);
           state.pendingUpload = null;
           toggleUploadSection(false);
-          if (cb) cb(null);
+          if (cb) cb(null, data);
+          return;
+        }
+        if (cb) cb(new Error(data.message || '保存に失敗しました'));
+      })
+      .catch(function (e) {
+        state.experienceSaving = false;
+        if (cb) cb(e);
+      });
+  }
+
+  function saveSnapshotToServer(snapshot, cb) {
+    var AEC = getAreaExperienceCore();
+    var payload = AEC
+      ? AEC.buildSnapshotSavePayload(snapshot, {
+          knownTransportIds: getKnownTransportIds(),
+          updatedAt: todayJstString(),
+          registeredAt: new Date().toISOString(),
+        })
+      : null;
+    if (!payload) {
+      if (cb) cb(new Error('保存データがありません'));
+      return;
+    }
+    state.experienceSaving = true;
+    renderExperienceDashboard();
+    fetch('/area-experience-master?action=saveSnapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        state.experienceSaving = false;
+        if (data.status === 'ok') {
+          state.pendingUpload = null;
+          toggleUploadSection(false);
+          if (cb) cb(null, data);
           return;
         }
         if (cb) cb(new Error(data.message || '保存に失敗しました'));
@@ -327,6 +465,30 @@
     else section.classList.add('hidden');
   }
 
+  function getExperienceDriverList() {
+    var AEC = getAreaExperienceCore();
+    if (!AEC) return [];
+    return AEC.buildExperienceDriverList(state.experience, getTransportIDsMap());
+  }
+
+  function statTile(label, value, tone) {
+    var cls =
+      tone === 'good'
+        ? 'bg-emerald-50 border-emerald-200'
+        : tone === 'warn'
+          ? 'bg-amber-50 border-amber-200'
+          : 'bg-white border-border';
+    return (
+      '<div class="p-3 rounded-lg border ' +
+      cls +
+      '"><p class="text-xs text-ink-lighter">' +
+      escapeHtml(label) +
+      '</p><p class="font-bold">' +
+      escapeHtml(value) +
+      '</p></div>'
+    );
+  }
+
   function renderExperienceDashboard() {
     var box = el('as-exp-dashboard-status');
     var btn = el('as-exp-update-btn');
@@ -340,14 +502,25 @@
       uploadTitle.textContent = state.experience ? 'エリア経験データを更新' : 'エリア経験データを登録';
     }
 
+    var AEC = getAreaExperienceCore();
+    var list = getExperienceDriverList();
+    var overview = AEC
+      ? AEC.buildExperienceOverviewStats(list, state.experienceSnapshot, state.experience)
+      : null;
+
     if (!state.experience) {
       var emptyMsg =
         '<div class="p-4 rounded-lg bg-slate-50 border border-slate-200">' +
         '<p class="text-sm text-ink-lighter">エリア経験マスタ未登録</p>' +
-        '<p class="text-xs text-ink-lighter mt-1">CSV / XLSX を登録すると、常設ダッシュボードとして保持されます（GAS保存）</p>';
-      if (state.experienceLoadError) {
+        '<p class="text-xs text-ink-lighter mt-1">累積XLSX（areaExperience + importHistory）を登録すると、常設ダッシュボードとして保持されます（GAS保存）</p>';
+      if (overview) {
         emptyMsg +=
-          '<p class="text-xs text-amber-700 mt-2">⚠ ' + escapeHtml(state.experienceLoadError) + '</p>';
+          '<p class="text-xs text-ink-lighter mt-1">ドライバーマスタ ' +
+          overview.masterDriverCount +
+          '名（全員「経験データなし」）</p>';
+      }
+      if (state.experienceLoadError) {
+        emptyMsg += '<p class="text-xs text-amber-700 mt-2">⚠ ' + escapeHtml(state.experienceLoadError) + '</p>';
       }
       emptyMsg += '</div>';
       box.innerHTML = emptyMsg;
@@ -357,97 +530,252 @@
 
     var s = state.experience.stats;
     var updatedLabel = state.experienceUpdatedAt || s.lastDate || '-';
-    box.innerHTML =
-      '<div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">' +
-      '<div class="p-3 rounded-lg bg-emerald-50 border border-emerald-200"><p class="text-xs text-emerald-700">最終更新</p><p class="font-bold text-emerald-900">' +
-      escapeHtml(updatedLabel) +
-      '</p></div>' +
-      '<div class="p-3 rounded-lg bg-white border border-border"><p class="text-xs text-ink-lighter">登録ドライバー</p><p class="font-bold">' +
-      s.drivers +
-      '名</p></div>' +
-      '<div class="p-3 rounded-lg bg-white border border-border"><p class="text-xs text-ink-lighter">登録エリア</p><p class="font-bold">' +
-      s.areas +
-      'エリア</p></div>' +
-      '<div class="p-3 rounded-lg bg-white border border-border"><p class="text-xs text-ink-lighter">経験レコード</p><p class="font-bold">' +
-      s.records.toLocaleString() +
-      '件</p></div>' +
-      '<div class="p-3 rounded-lg bg-white border border-border"><p class="text-xs text-ink-lighter">TransportID未紐付け</p><p class="font-bold text-amber-700">' +
-      (s.unknownTidCount != null ? s.unknownTidCount : s.unknownTids.length) +
-      '件</p></div>' +
+    var o = overview || {};
+    var html =
+      (state.experienceSnapshot
+        ? '<p class="text-xs mb-2"><span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">自動更新モード（Snapshot + Events）</span></p>'
+        : '<div class="text-xs mb-2 p-2 rounded bg-slate-100 border border-slate-300 text-slate-700"><span class="font-medium">Legacy records モード（自動更新なし）</span>' +
+          ' — 自動集計イベントは経験日数に反映されていません' +
+          (state.inactiveSnapshotThroughDate
+            ? '。保存済みスナップショット（〜' + escapeHtml(state.inactiveSnapshotThroughDate) + '）は保持中で、新方式XLSXの再登録で自動更新モードに戻ります'
+            : '') +
+          '</div>') +
+      '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">' +
+      statTile('最終更新', updatedLabel, 'good') +
+      statTile('ドライバーマスタ', (o.masterDriverCount != null ? o.masterDriverCount : '-') + '名') +
+      statTile('経験あり', (o.withExperienceCount != null ? o.withExperienceCount : s.drivers) + '名') +
+      statTile('経験データなし', (o.withoutExperienceCount != null ? o.withoutExperienceCount : '-') + '名', o.withoutExperienceCount ? 'warn' : '') +
+      statTile('未解決ドライバー', (o.unresolvedDriverCount || 0) + '名', o.unresolvedDriverCount ? 'warn' : '') +
+      statTile('snapshotThroughDate', o.snapshotThroughDate || '-（旧形式）') +
+      statTile('イベント最終日', o.eventLastDate || '-') +
+      statTile('自動集計の最終処理日', state.experienceLastAggregatedDate || '-') +
       '</div>' +
-      (state.experienceSaving
-        ? '<p class="text-xs text-blue-600 mt-2">☁ GASへ保存中…</p>'
+      '<p class="text-xs text-ink-lighter mt-2">登録エリア ' +
+      s.areas +
+      ' / 経験レコード ' +
+      s.records.toLocaleString() +
+      '件 / TransportID未紐付け ' +
+      (s.unknownTidCount != null ? s.unknownTidCount : s.unknownTids.length) +
+      '件' +
+      (state.experienceSnapshot && state.experienceSnapshot.sourceFile
+        ? ' / 元ファイル ' + escapeHtml(state.experienceSnapshot.sourceFile)
         : '') +
-      (state.experienceLoadError
-        ? '<p class="text-xs text-amber-700 mt-2">⚠ ' + escapeHtml(state.experienceLoadError) + '</p>'
-        : '');
+      '</p>';
+    if (o.missingPeriods && o.missingPeriods.length) {
+      html +=
+        '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-xs text-amber-800">⚠ 経験データ欠損期間: ' +
+        o.missingPeriods
+          .map(function (p) {
+            return escapeHtml(p.from + '〜' + p.to);
+          })
+          .join(', ') +
+        '（importHistory上の未取込期間。0日として補完していません）</div>';
+    }
+    if (state.experience.meta && state.experience.meta.unresolvedAreas && state.experience.meta.unresolvedAreas.length) {
+      html +=
+        '<p class="text-xs text-amber-700 mt-1">⚠ スナップショットに無いエリア名（イベント側・未統合）: ' +
+        state.experience.meta.unresolvedAreas
+          .slice(0, 10)
+          .map(function (u) {
+            return escapeHtml(u.area);
+          })
+          .join('、') +
+        (state.experience.meta.unresolvedAreas.length > 10 ? ' …' : '') +
+        '</p>';
+    }
+    if (state.experienceSaving) html += '<p class="text-xs text-blue-600 mt-2">☁ GASへ保存中…</p>';
+    if (state.experienceLoadError) {
+      html += '<p class="text-xs text-amber-700 mt-2">⚠ ' + escapeHtml(state.experienceLoadError) + '</p>';
+    }
+    box.innerHTML = html;
 
     renderExperienceWarnings();
+  }
+
+  function renderUnresolvedDriversTable(unresolved, title) {
+    if (!unresolved || !unresolved.length) return '';
+    var h =
+      '<div class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-sm">' +
+      '<p class="font-bold text-amber-800">' +
+      escapeHtml(title) +
+      '（' +
+      unresolved.length +
+      '名）</p>' +
+      '<div class="mt-2 max-h-64 overflow-y-auto"><table class="w-full text-xs"><thead><tr>' +
+      '<th class="text-left p-1">XLSX上の氏名</th><th class="text-right p-1">行数</th><th class="text-right p-1">エリア数</th>' +
+      '<th class="text-left p-1">最新lastVisitDate</th><th class="text-left p-1">未解決理由</th><th class="text-left p-1">候補</th></tr></thead><tbody>';
+    for (var i = 0; i < unresolved.length; i++) {
+      var u = unresolved[i];
+      var cands = (u.candidates || [])
+        .map(function (c) {
+          return (c.transportId || '(TIDなし)') + (c.masterNames && c.masterNames.length ? ' ' + c.masterNames.join('/') : '');
+        })
+        .join('、');
+      h +=
+        '<tr class="border-t"><td class="p-1">' +
+        escapeHtml(u.driverName || '(氏名空欄)') +
+        '</td><td class="p-1 text-right">' +
+        u.rowCount +
+        '</td><td class="p-1 text-right">' +
+        u.areaCount +
+        '</td><td class="p-1">' +
+        escapeHtml(u.latestLastVisitDate || '-') +
+        '</td><td class="p-1">' +
+        escapeHtml(RESOLUTION_REASON_LABELS[u.reason] || u.reason) +
+        '</td><td class="p-1 font-mono">' +
+        escapeHtml(cands || '-') +
+        '</td></tr>';
+    }
+    h += '</tbody></table></div><p class="text-xs text-amber-700 mt-1">未解決行は削除せず rawRows として保存されます（経験計算・一覧には未反映）。</p></div>';
+    return h;
   }
 
   function renderExperienceWarnings() {
     var warnBox = el('as-exp-warnings');
     if (!warnBox) return;
-    if (!state.experience || !state.experience.stats.unknownTids.length) {
-      warnBox.innerHTML = '';
-      return;
+    var html = '';
+    if (state.experienceSnapshot && state.experienceSnapshot.unresolvedDrivers.length) {
+      html += renderUnresolvedDriversTable(state.experienceSnapshot.unresolvedDrivers, '⚠ TransportID未解決ドライバー');
     }
-    var s = state.experience.stats;
-    var wh =
-      '<div class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-sm">' +
-      '<p class="font-bold text-amber-800">⚠ TransportIDがOFK3マスタに存在しません</p>' +
-      '<div class="mt-2 max-h-32 overflow-y-auto"><table class="w-full text-xs"><thead><tr>' +
-      '<th class="text-left p-1">TransportID</th><th class="text-left p-1">氏名</th><th class="text-left p-1">エリア</th></tr></thead><tbody>';
-    for (var i = 0; i < Math.min(s.unknownTids.length, 30); i++) {
-      var u = s.unknownTids[i];
-      wh +=
-        '<tr class="border-t"><td class="p-1 font-mono">' +
-        escapeHtml(u.transportId) +
-        '</td><td class="p-1">' +
-        escapeHtml(u.driverName) +
-        '</td><td class="p-1">' +
-        escapeHtml(u.area) +
-        '</td></tr>';
+    if (state.experience && state.experience.stats.unknownTids.length) {
+      var s = state.experience.stats;
+      html +=
+        '<div class="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-sm">' +
+        '<p class="font-bold text-amber-800">⚠ TransportIDがOFK3マスタに存在しません</p>' +
+        '<div class="mt-2 max-h-32 overflow-y-auto"><table class="w-full text-xs"><thead><tr>' +
+        '<th class="text-left p-1">TransportID</th><th class="text-left p-1">氏名</th><th class="text-left p-1">エリア</th></tr></thead><tbody>';
+      for (var i = 0; i < Math.min(s.unknownTids.length, 30); i++) {
+        var u = s.unknownTids[i];
+        html +=
+          '<tr class="border-t"><td class="p-1 font-mono">' +
+          escapeHtml(u.transportId) +
+          '</td><td class="p-1">' +
+          escapeHtml(u.driverName) +
+          '</td><td class="p-1">' +
+          escapeHtml(u.area) +
+          '</td></tr>';
+      }
+      if (s.unknownTids.length > 30) html += '<tr><td colspan="3" class="p-1 text-amber-700">…他 ' + (s.unknownTids.length - 30) + '件</td></tr>';
+      html += '</tbody></table></div></div>';
     }
-    if (s.unknownTids.length > 30) wh += '<tr><td colspan="3" class="p-1 text-amber-700">…他 ' + (s.unknownTids.length - 30) + '件</td></tr>';
-    wh += '</tbody></table></div></div>';
-    warnBox.innerHTML = wh;
+    warnBox.innerHTML = html;
   }
 
   function renderUploadPreview() {
     var box = el('as-exp-preview');
     if (!box) return;
-    if (!state.pendingUpload) {
+    var snap = state.pendingUpload;
+    if (!snap) {
       box.innerHTML = '';
       return;
     }
-    var s = state.pendingUpload.stats;
-    box.innerHTML =
+    if (snap.legacy) {
+      renderLegacyUploadPreview(box, snap);
+      return;
+    }
+    var v = snap.validation || {};
+    var rs = snap.resolutionSummary || {};
+    var li = function (label, value) {
+      return '<li>' + escapeHtml(label) + '：<strong>' + escapeHtml(value) + '</strong></li>';
+    };
+    var registeredDrivers = rs.fileTransportIdDriverCount != null ? rs.fileTransportIdDriverCount + (rs.resolvedCount || 0) : '-';
+    var html =
       '<div class="mt-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">' +
-      '<p class="font-bold text-blue-800">登録前プレビュー（既存マスタは置き換え）</p>' +
-      '<ul class="mt-2 space-y-0.5">' +
-      '<li>登録ドライバー：<strong>' +
-      s.drivers +
-      '</strong>名</li>' +
-      '<li>エリア数：<strong>' +
-      s.areas +
-      '</strong></li>' +
-      '<li>レコード数：<strong>' +
-      s.records.toLocaleString() +
-      '</strong>件</li>' +
-      '<li>最終データ日：<strong>' +
-      escapeHtml(s.lastDate || '-') +
-      '</strong></li>' +
-      '</ul>' +
-      '<button type="button" id="as-exp-confirm-btn" class="mt-3 btn-primary text-xs px-4 py-2 rounded">' +
-      (state.experience ? '更新を確定してGAS保存' : '登録を確定してGAS保存') +
+      '<p class="font-bold text-blue-800">登録前プレビュー（まだGASへ保存していません）</p>' +
+      '<p class="text-xs text-blue-700 mt-1">' +
+      escapeHtml(snap.sourceFile || '') +
+      ' — スナップショットは置き換え、自動集計イベントは削除しません</p>';
+    if (snap.header) {
+      html +=
+        '<ul class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-6 space-y-0.5">' +
+        li('rawRows', (v.rawRowCount || 0).toLocaleString() + '行') +
+        li('TransportIDあり行', ((v.rawRowCount || 0) - (v.blankTidRowCount || 0)).toLocaleString() + '行') +
+        li('TransportID空欄行', (v.blankTidRowCount || 0).toLocaleString() + '行') +
+        li('元のTransportIDあり人数', (rs.fileTransportIdDriverCount || 0) + '名') +
+        li('TransportID空欄人数', (rs.blankTidDriverCount || 0) + '名') +
+        li('自動解決人数', (rs.resolvedCount || 0) + '名') +
+        li('未解決人数', (rs.unresolvedCount || 0) + '名') +
+        li('登録ドライバー数（TID確定）', registeredDrivers + '名') +
+        li('snapshotThroughDate', snap.snapshotThroughDate || '（未確定）') +
+        li('max(lastVisitDate)', v.maxLastVisitDate || '-') +
+        li('importHistory件数', (snap.importHistory || []).length + '件') +
+        li(
+          'missing periods',
+          (v.missingPeriods || []).length
+            ? v.missingPeriods
+                .map(function (p) {
+                  return p.from + '〜' + p.to;
+                })
+                .join(', ')
+            : 'なし'
+        ) +
+        li('TransportID + area 重複', (v.duplicates || []).length + '件') +
+        '</ul>';
+    }
+    if (snap.errors && snap.errors.length) {
+      html +=
+        '<div class="mt-2 p-2 rounded bg-red-50 border border-red-300 text-xs text-red-800"><p class="font-bold">validation error（登録できません）</p><ul class="list-disc ml-4">' +
+        snap.errors
+          .map(function (e) {
+            return '<li>' + escapeHtml(e) + '</li>';
+          })
+          .join('') +
+        '</ul></div>';
+    }
+    if (snap.warnings && snap.warnings.length) {
+      html +=
+        '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-xs text-amber-800"><p class="font-bold">warning（確認のうえ登録可能）</p><ul class="list-disc ml-4">' +
+        snap.warnings
+          .map(function (w) {
+            return '<li>' + escapeHtml(w) + '</li>';
+          })
+          .join('') +
+        '</ul></div>';
+    }
+    if (snap.resolvedDrivers && snap.resolvedDrivers.length) {
+      html +=
+        '<div class="mt-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200"><p class="font-bold text-emerald-800 text-sm">自動解決（' +
+        snap.resolvedDrivers.length +
+        '名）</p><div class="mt-2 max-h-48 overflow-y-auto"><table class="w-full text-xs"><thead><tr>' +
+        '<th class="text-left p-1">XLSX上の氏名</th><th class="text-left p-1">→ TransportID</th><th class="text-left p-1">マスタ名</th><th class="text-left p-1">方法</th><th class="text-right p-1">行数</th></tr></thead><tbody>' +
+        snap.resolvedDrivers
+          .map(function (d) {
+            return (
+              '<tr class="border-t"><td class="p-1">' +
+              escapeHtml(d.driverName) +
+              '</td><td class="p-1 font-mono">' +
+              escapeHtml(d.resolvedTransportId) +
+              '</td><td class="p-1">' +
+              escapeHtml((d.masterNames || []).join(' / ')) +
+              '</td><td class="p-1">' +
+              escapeHtml(RESOLUTION_METHOD_LABELS[d.resolutionMethod] || d.resolutionMethod) +
+              '</td><td class="p-1 text-right">' +
+              d.rowCount +
+              '</td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table></div></div>';
+    }
+    html += renderUnresolvedDriversTable(snap.unresolvedDrivers, '未解決（登録しても経験DBには入りません）');
+    var canRegister = !!snap.ok;
+    html +=
+      '<button type="button" id="as-exp-confirm-btn" class="mt-3 btn-primary text-xs px-4 py-2 rounded' +
+      (canRegister ? '' : ' opacity-50 cursor-not-allowed') +
+      '"' +
+      (canRegister ? '' : ' disabled') +
+      '>' +
+      (canRegister
+        ? (snap.warnings && snap.warnings.length ? '警告を確認のうえ登録してGAS保存' : '登録してGAS保存')
+        : '登録不可（validation error）') +
       '</button>' +
       '<button type="button" id="as-exp-cancel-btn" class="mt-3 ml-2 btn-secondary text-xs px-4 py-2 rounded">キャンセル</button>' +
       '</div>';
+    box.innerHTML = html;
 
     var confirmBtn = el('as-exp-confirm-btn');
     var cancelBtn = el('as-exp-cancel-btn');
-    if (confirmBtn) {
+    if (confirmBtn && canRegister) {
       confirmBtn.addEventListener('click', confirmPendingUpload);
     }
     if (cancelBtn) {
@@ -458,51 +786,133 @@
     }
   }
 
+  function renderLegacyUploadPreview(box, p) {
+    var st = p.result.stats;
+    box.innerHTML =
+      '<div class="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-300 text-sm">' +
+      '<p class="font-bold text-slate-800">Legacy records 取込プレビュー（まだGASへ保存していません）</p>' +
+      '<div class="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-xs text-amber-900">' +
+      '<p class="font-bold">⚠ 自動更新対応スナップショットではありません</p>' +
+      '<ul class="list-disc ml-4 mt-1">' +
+      '<li>importHistory が無いため snapshotThroughDate を決定できません（日付境界は推測しません）</li>' +
+      '<li>従来どおり records としてのみ取り込みます。自動集計イベントとは結合せず、自動更新モードにもなりません</li>' +
+      '<li>登録すると「Legacy records モード」になります。保存済みのスナップショット・イベントは削除されず、新方式XLSXを再登録すると自動更新モードに戻ります</li>' +
+      '<li>TransportID空欄の行は従来どおり取り込まれません（' + p.blankTidRowCount + '行）</li>' +
+      '</ul></div>' +
+      '<ul class="mt-2 space-y-0.5">' +
+      '<li>ファイル：<strong>' + escapeHtml(p.sourceFile) + '</strong></li>' +
+      '<li>行数：<strong>' + p.rawRowCount.toLocaleString() + '</strong>行（取込 ' + st.records.toLocaleString() + '件）</li>' +
+      '<li>登録ドライバー：<strong>' + st.drivers + '</strong>名 / エリア数：<strong>' + st.areas + '</strong></li>' +
+      '<li>最終データ日：<strong>' + escapeHtml(st.lastDate || '-') + '</strong></li>' +
+      '</ul>' +
+      '<button type="button" id="as-exp-confirm-btn" class="mt-3 btn-secondary text-xs px-4 py-2 rounded">Legacy records として登録（自動更新なし）</button>' +
+      '<button type="button" id="as-exp-cancel-btn" class="mt-3 ml-2 btn-secondary text-xs px-4 py-2 rounded">キャンセル</button>' +
+      '</div>';
+    el('as-exp-confirm-btn').addEventListener('click', confirmPendingUpload);
+    el('as-exp-cancel-btn').addEventListener('click', function () {
+      state.pendingUpload = null;
+      renderUploadPreview();
+    });
+  }
+
   function confirmPendingUpload() {
-    if (!state.pendingUpload) return;
-    var db = state.pendingUpload;
-    saveExperienceToServer(db, function (err) {
+    var snap = state.pendingUpload;
+    if (!snap || !snap.ok) return;
+    if (snap.legacy) {
+      var okLegacy = window.confirm(
+        'このファイルは自動更新対応スナップショットではありません。\n' +
+          'Legacy records として登録し、自動集計イベントとは結合しない「Legacy records モード」に切り替えます。\n' +
+          '（保存済みのスナップショット・イベントは削除されません）\n\n登録しますか？'
+      );
+      if (!okLegacy) return;
+      saveLegacyRecordsToServer(snap.result, function (errL) {
+        if (errL) {
+          alert('GAS保存エラー: ' + errL.message);
+          renderExperienceDashboard();
+          return;
+        }
+        loadExperienceFromServer(function () {
+          markSuggestionsStale();
+          renderAll();
+          alert('Legacy records として登録しました（自動更新なし）');
+        });
+      });
+      return;
+    }
+    if (snap.warnings && snap.warnings.length) {
+      var ok = window.confirm(
+        '以下の警告があります。内容を確認のうえ登録しますか？\n\n' + snap.warnings.map(function (w) { return '・' + w; }).join('\n')
+      );
+      if (!ok) return;
+    }
+    checkGasCapabilities('saveSnapshot', function (capErr) {
+      if (capErr) {
+        alert(capErr.message);
+        return;
+      }
+      doSaveSnapshot(snap);
+    });
+  }
+
+  function doSaveSnapshot(snap) {
+    saveSnapshotToServer(snap, function (err, res) {
       if (err) {
         alert('GAS保存エラー: ' + err.message + '\n\nRenderの AREA_EXPERIENCE_MASTER_GAS_URL を確認してください');
         renderExperienceDashboard();
         return;
       }
-      markSuggestionsStale();
-      renderAll();
-      alert(state.experience ? 'エリア経験マスタを更新しました' : 'エリア経験マスタを登録しました');
+      loadExperienceFromServer(function () {
+        markSuggestionsStale();
+        renderAll();
+        alert(
+          'エリア経験スナップショットを登録しました（snapshotThroughDate ' +
+            (res && res.snapshotThroughDate) +
+            '）\n保持された自動集計: Route取得 ' +
+            ((res && res.preservedRouteCaptures) || 0) +
+            '件 / イベント ' +
+            ((res && res.preservedEventItems) || 0) +
+            '件'
+        );
+      });
     });
   }
 
   function renderExperienceTable() {
     var tbody = el('as-exp-table-body');
     var searchEl = el('as-exp-search');
+    var filterEl = el('as-exp-filter');
     if (!tbody) return;
-
-    if (!state.experience) {
-      tbody.innerHTML =
-        '<tr><td colspan="5" class="px-4 py-8 text-center text-sm text-ink-lighter">エリア経験マスタ未登録</td></tr>';
-      renderDriverDetail();
-      return;
-    }
+    var AEC = getAreaExperienceCore();
 
     var query = searchEl ? searchEl.value : '';
-    var drivers = AssignSupportCore.filterExperienceDrivers(state.experience, query);
+    var filter = filterEl ? filterEl.value : 'all';
+    var list = AEC ? getExperienceDriverList() : [];
+    if (AEC) {
+      list = AEC.filterExperienceDriverList(list, query, { onlyWithoutExperience: filter === 'without' });
+      if (filter === 'with') {
+        list = list.filter(function (it) {
+          return it.hasExperience;
+        });
+      }
+    }
 
-    if (!drivers.length) {
+    if (!list.length) {
       tbody.innerHTML =
-        '<tr><td colspan="5" class="px-4 py-8 text-center text-sm text-ink-lighter">該当ドライバーなし</td></tr>';
+        '<tr><td colspan="5" class="px-4 py-8 text-center text-sm text-ink-lighter">' +
+        (state.experience || Object.keys(getTransportIDsMap()).length ? '該当ドライバーなし' : 'エリア経験マスタ未登録') +
+        '</td></tr>';
       renderDriverDetail();
       return;
     }
 
     var html = '';
-    for (var i = 0; i < drivers.length; i++) {
-      var d = drivers[i];
-      var tid = d.transportId;
-      var name = d.driverName || '(名前なし)';
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      var tid = it.transportId;
+      var name = it.driverName || '(名前なし)';
       var cap = getCapability(name, tid);
-      var latest = AssignSupportCore.getDriverLatestVisit(d);
-      var areaSummary = AssignSupportCore.formatAreaSummary(d, 3);
+      var latest = it.entry ? AssignSupportCore.getDriverLatestVisit(it.entry) : '';
+      var areaSummary = it.hasExperience ? AssignSupportCore.formatAreaSummary(it.entry, 3) : '経験データなし';
       var selectedClass = state.selectedTransportId === tid ? ' bg-amber-50' : '';
 
       html +=
@@ -520,7 +930,9 @@
         '<td class="px-3 py-2.5 text-sm text-right font-mono">' +
         escapeHtml(formatCapability(cap)) +
         '</td>' +
-        '<td class="px-3 py-2.5 text-xs">' +
+        '<td class="px-3 py-2.5 text-xs' +
+        (it.hasExperience ? '' : ' text-ink-lighter') +
+        '">' +
         escapeHtml(areaSummary) +
         '</td>' +
         '<td class="px-3 py-2.5 text-xs text-right">' +
@@ -542,18 +954,26 @@
   function renderDriverDetail() {
     var box = el('as-exp-detail');
     if (!box) return;
-    if (!state.experience || !state.selectedTransportId) {
+    if (!state.selectedTransportId) {
       box.classList.add('hidden');
       box.innerHTML = '';
       return;
     }
-    var entry = state.experience.byTransportId[state.selectedTransportId];
+    var entry = state.experience && state.experience.byTransportId[state.selectedTransportId];
+    var listItem = null;
     if (!entry) {
-      box.classList.add('hidden');
-      return;
+      var all = getExperienceDriverList();
+      for (var li = 0; li < all.length; li++) {
+        if (all[li].transportId === state.selectedTransportId) listItem = all[li];
+      }
+      if (!listItem) {
+        box.classList.add('hidden');
+        return;
+      }
+      entry = { transportId: listItem.transportId, driverName: listItem.driverName, areas: {}, areaCount: 0 };
     }
 
-    var name = entry.driverName || '(名前なし)';
+    var name = entry.driverName || (listItem && listItem.driverName) || '(名前なし)';
     var cap = getCapability(name, entry.transportId);
     var areaKeys = Object.keys(entry.areas).sort(function (a, b) {
       return (entry.areas[b].experienceDays || 0) - (entry.areas[a].experienceDays || 0);
@@ -578,29 +998,32 @@
       entry.areaCount +
       '</span></div>' +
       '</div>' +
-      '<h5 class="text-sm font-bold mt-4 mb-2">エリア経験</h5>' +
-      '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">';
+      '<h5 class="text-sm font-bold mt-4 mb-2">エリア経験</h5>';
 
-    for (var i = 0; i < areaKeys.length; i++) {
-      var ar = entry.areas[areaKeys[i]];
-      var statusLabel = AssignSupportCore.getExperienceStatusLabel(ar.experienceDays);
-      html +=
-        '<div class="p-2 rounded border border-white bg-white text-xs">' +
-        '<div class="font-medium">' +
-        escapeHtml(ar.area) +
-        '</div>' +
-        '<div class="mt-1"><span class="font-bold">' +
-        escapeHtml(AssignSupportCore.formatExperienceDaysDisplay(ar.experienceDays)) +
-        '</span>' +
-        ' <span class="text-ink-lighter">(' +
-        escapeHtml(statusLabel) +
-        ')</span></div>' +
-        '<div class="text-ink-lighter mt-0.5">最終 ' +
-        escapeHtml(ar.lastVisitDate || '-') +
-        '</div></div>';
+    if (!areaKeys.length) {
+      html += '<p class="text-xs text-ink-lighter">経験データなし（スナップショット・自動集計イベントともに未登場）</p></div>';
+    } else {
+      html += '<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">';
+      for (var i = 0; i < areaKeys.length; i++) {
+        var ar = entry.areas[areaKeys[i]];
+        var statusLabel = AssignSupportCore.getExperienceStatusLabel(ar.experienceDays);
+        html +=
+          '<div class="p-2 rounded border border-white bg-white text-xs">' +
+          '<div class="font-medium">' +
+          escapeHtml(ar.area) +
+          '</div>' +
+          '<div class="mt-1"><span class="font-bold">' +
+          escapeHtml(AssignSupportCore.formatExperienceDaysDisplay(ar.experienceDays)) +
+          '</span>' +
+          ' <span class="text-ink-lighter">(' +
+          escapeHtml(statusLabel) +
+          ')</span></div>' +
+          '<div class="text-ink-lighter mt-0.5">最終 ' +
+          escapeHtml(ar.lastVisitDate || '-') +
+          '</div></div>';
+      }
+      html += '</div></div>';
     }
-
-    html += '</div></div>';
     box.innerHTML = html;
     box.classList.remove('hidden');
 
@@ -1453,21 +1876,80 @@
     }
   }
 
+  /**
+   * 経験ファイル選択 → プレビューのみ（GASへは保存しない）。
+   * XLSX は areaExperience + importHistory を読み、ブラウザで使用中のドライバーマスタ
+   * （transportIDs / driverJapaneseNames / driverNameAliases）で TransportID空欄行の氏名を照合する。
+   */
   function loadExperienceFile(file) {
-    readFileAsRows(file, function (err, rows) {
-      if (err) {
-        alert(err.message);
+    var AEC = getAreaExperienceCore();
+    if (!AEC) {
+      alert('area-experience-core.js が読み込まれていません');
+      return;
+    }
+    var masterOptions = {
+      transportIDs: getTransportIDsMap(),
+      driverJapaneseNames: getDriverJapaneseNamesMap(),
+      driverNameAliases: getDriverNameAliasesMap(),
+      sourceFile: file.name || '',
+    };
+    var finish = function (parsed) {
+      if (!parsed.hasImportHistory) {
+        // Legacy（CSV / importHistory の無いXLSX）: 従来の records としてのみ取込。日付境界は推測しない
+        var legacy = AssignSupportCore.parseExperienceRows(parsed.areaRows, { knownTransportIds: getKnownTransportIds() });
+        if (!legacy.ok) {
+          alert(legacy.error);
+          return;
+        }
+        var tidCol = AssignSupportCore.mapExperienceColumns(
+          (parsed.areaRows[0] || []).map(function (h) {
+            return String(h == null ? '' : h).trim();
+          })
+        ).transportId;
+        var blank = 0;
+        for (var r = 1; r < parsed.areaRows.length; r++) {
+          var row = parsed.areaRows[r];
+          if (row && row.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }) && !String(row[tidCol] || '').trim()) blank++;
+        }
+        state.pendingUpload = { legacy: true, ok: true, sourceFile: file.name || '', result: legacy, blankTidRowCount: blank, rawRowCount: parsed.areaRows.length - 1 };
+        toggleUploadSection(true);
+        renderUploadPreview();
         return;
       }
-      var result = AssignSupportCore.parseExperienceRows(rows, { knownTransportIds: getKnownTransportIds() });
-      if (!result.ok) {
-        alert(result.error);
-        return;
-      }
-      state.pendingUpload = result;
+      state.pendingUpload = AEC.buildSnapshotLayer(parsed, masterOptions);
+      if (!state.pendingUpload.header) state.pendingUpload.sourceFile = file.name || '';
       toggleUploadSection(true);
       renderUploadPreview();
-    });
+    };
+    var lower = (file.name || '').toLowerCase();
+    if (lower.endsWith('.csv')) {
+      readFileAsRows(file, function (err, rows) {
+        if (err) {
+          alert(err.message);
+          return;
+        }
+        finish({ ok: true, sourceFile: file.name || '', areaRows: rows, importHistory: [], hasImportHistory: false });
+      });
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      try {
+        var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        var parsed = AEC.parseExperienceWorkbook(wb, XLSX, { fileName: file.name || '' });
+        if (!parsed.ok) {
+          alert(parsed.error);
+          return;
+        }
+        finish(parsed);
+      } catch (err2) {
+        alert('ファイル読込に失敗しました: ' + err2.message);
+      }
+    };
+    reader.onerror = function () {
+      alert('ファイル読込に失敗しました');
+    };
+    reader.readAsArrayBuffer(file);
   }
 
   function loadManifestFiles(fileList) {
@@ -1667,6 +2149,8 @@
 
     var search = el('as-exp-search');
     if (search) search.addEventListener('input', renderExperienceTable);
+    var expFilter = el('as-exp-filter');
+    if (expFilter) expFilter.addEventListener('change', renderExperienceTable);
 
     var rescue = el('as-rescue-count');
     if (rescue) {

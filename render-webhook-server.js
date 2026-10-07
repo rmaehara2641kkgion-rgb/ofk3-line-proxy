@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/dnr-export用。index.htmlからは未参照）
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
+const LineUnlinked = require('./line-unlinked-core.js');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -137,6 +138,74 @@ function persistTenkoSyncStoreToDisk() {
   }
 }
 
+// LINE未紐付け候補。点呼同期と同じ一時ディスク（再デプロイで消えるベストエフォート）。
+// チャネルトークンはこのストアにもレスポンスにも入れない。
+var lineUnlinkedStore = LineUnlinked.createStore();
+var LINE_UNLINKED_STORE_PATH = path.join(os.tmpdir(), 'line-unlinked-users.json');
+(function loadLineUnlinkedStore() {
+  try {
+    if (fs.existsSync(LINE_UNLINKED_STORE_PATH)) {
+      var loaded = JSON.parse(fs.readFileSync(LINE_UNLINKED_STORE_PATH, 'utf8'));
+      if (loaded && typeof loaded === 'object') {
+        lineUnlinkedStore.users = loaded.users || {};
+        lineUnlinkedStore.knownLineIds = loaded.knownLineIds || {};
+      }
+    }
+  } catch (e) {
+    console.warn('line-unlinked: restore failed (ignoring):', e.message);
+  }
+})();
+function persistLineUnlinkedStore() {
+  try {
+    fs.writeFileSync(LINE_UNLINKED_STORE_PATH, JSON.stringify(lineUnlinkedStore), 'utf8');
+  } catch (e) {
+    console.warn('line-unlinked: disk write failed (ignoring):', e.message);
+  }
+}
+async function fetchLineProfile(userId) {
+  if (!CHANNEL_ACCESS_TOKEN) return null;
+  try {
+    var response = await axios.get(
+      'https://api.line.me/v2/bot/profile/' + encodeURIComponent(userId),
+      { headers: { Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN }, timeout: 4000 }
+    );
+    return {
+      displayName: response.data && response.data.displayName || '',
+      pictureUrl: response.data && response.data.pictureUrl || ''
+    };
+  } catch (e) {
+    log('LINE profile fetch failed:', e.message);
+    return null;
+  }
+}
+async function captureUnlinkedLineUser(userId) {
+  var id = String(userId || '').trim();
+  if (!id) return;
+  if (lineUnlinkedStore.knownLineIds[id]) return;
+  var existing = lineUnlinkedStore.users[id];
+  if (existing && existing.status === 'linked') return;
+  var profile = await fetchLineProfile(id);
+  LineUnlinked.captureLineUser(lineUnlinkedStore, {
+    userId: id,
+    now: new Date().toISOString(),
+    profile: profile || {}
+  });
+  persistLineUnlinkedStore();
+}
+function rememberKnownLineIdsFromDrivers(drivers) {
+  if (!Array.isArray(drivers)) return;
+  var mapping = {};
+  for (var i = 0; i < drivers.length; i++) {
+    var row = drivers[i] || {};
+    var lineId = String(row.lineId || '').trim();
+    if (!lineId) continue;
+    mapping[lineId] = row.englishName || row.name || '';
+  }
+  if (!Object.keys(mapping).length) return;
+  LineUnlinked.mergeKnownLineIds(lineUnlinkedStore, mapping);
+  persistLineUnlinkedStore();
+}
+
 // 静的ファイル配信。index.htmlだけはCortex 13:00 UIタグをレスポンス時に注入する。
 // Renderが inject-tenko-audit.js を経由せず render-webhook-server.js を直接起動しても有効。
 app.get(['/', '/index.html'], function(req, res, next) {
@@ -215,11 +284,15 @@ console.log('LINE_NOTIFICATIONS_ENABLED (Render env, マスターキルスイッ
 var LINE_APP_SWITCH_STORE_PATH = path.join(os.tmpdir(), 'line-app-switch-store.json');
 // 既定値は enabled:false（＝状態不明時は送信禁止のフェイルセーフ）。
 // 保存済みファイルが正しく読めた場合のみ、その内容（enabled:trueも含む）を採用する。
-var lineAppSwitchState = { enabled: false, updatedAt: null, updatedBy: null };
+// Render の一時ディスクは再デプロイで消えるため、状態ファイルが無い場合は
+// 永続設定である LINE_NOTIFICATIONS_ENABLED を初期値として採用する。
+// これにより通常の再起動/再デプロイだけで LINE が意図せず停止し続けるのを防ぐ。
+// 緊急停止を永続させる場合は Render 側の LINE_NOTIFICATIONS_ENABLED=false を使用する。
+var lineAppSwitchState = { enabled: LINE_NOTIFICATIONS_ENABLED, updatedAt: null, updatedBy: 'render-env-default' };
 (function loadLineAppSwitchState() {
   try {
     if (!fs.existsSync(LINE_APP_SWITCH_STORE_PATH)) {
-      console.log('LINE app switch (非常停止): 状態ファイルなし → フェイルセーフでenabled=false');
+      console.log('LINE app switch (非常停止): 状態ファイルなし → Renderマスター設定を初期値として採用 enabled=' + lineAppSwitchState.enabled);
       return;
     }
     var loaded = JSON.parse(fs.readFileSync(LINE_APP_SWITCH_STORE_PATH, 'utf8'));
@@ -328,6 +401,7 @@ app.post('/webhook', async (req, res) => {
 
       if (event.source && event.source.userId) {
         log('=== USER ID FOUND:', event.source.userId, '===');
+        await captureUnlinkedLineUser(event.source.userId);
 
         if (event.type === 'follow' && CHANNEL_ACCESS_TOKEN) {
           await sendWelcomeMessage(event.source.userId);
@@ -381,6 +455,46 @@ app.get('/proxy', async (req, res) => {
       message: err.response && err.response.data ? err.response.data : err.message
     });
   }
+});
+
+function lineUnlinkedForbidden(req, res) {
+  if (LineUnlinked.proxySecretAllows(PROXY_SECRET, req.headers['x-proxy-secret'])) return false;
+  res.status(403).json({ status: 'error', message: 'Forbidden' });
+  return true;
+}
+
+app.get('/line-unlinked', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
+  res.json({ status: 'ok', users: LineUnlinked.listPending(lineUnlinkedStore) });
+});
+
+app.post('/line-unlinked/known', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
+  var mapping = req.body && req.body.mapping;
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+    return res.status(400).json({ status: 'error', message: 'mapping required' });
+  }
+  LineUnlinked.replaceKnownLineIds(lineUnlinkedStore, mapping);
+  persistLineUnlinkedStore();
+  res.json({ status: 'ok', pending: LineUnlinked.listPending(lineUnlinkedStore).length });
+});
+
+app.post('/line-unlinked/link', function(req, res) {
+  if (lineUnlinkedForbidden(req, res)) return;
+  var body = req.body || {};
+  var result = LineUnlinked.linkPendingUser(lineUnlinkedStore, {
+    userId: body.userId,
+    driverName: body.driverName,
+    currentLineId: body.currentLineId || '',
+    lineIdOwner: body.lineIdOwner || '',
+    source: body.source || 'manual',
+    now: new Date().toISOString()
+  });
+  if (!result.ok) {
+    return res.status(409).json({ status: 'error', error: result.error });
+  }
+  persistLineUnlinkedStore();
+  res.json({ status: 'ok', user: result.user });
 });
 
 // Cortex 13:00優先データ受信（拡張 → OFK3本体）
@@ -1306,7 +1420,15 @@ app.post('/area-experience-master', async (req, res) => {
     }
     var action = req.query.action || 'save';
     var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=' + encodeURIComponent(action);
-    console.log('area-experience-master POST:', url, 'records:', req.body && req.body.records ? req.body.records.length : 0);
+    // 個人データ（氏名・TransportID・rawRows）はログに出さず、集計値のみ出力する
+    var snapLog = req.body && req.body.snapshot ? req.body.snapshot : null;
+    var summaryLog = snapLog && snapLog.resolutionSummary ? snapLog.resolutionSummary : {};
+    console.log('area-experience-master POST:', 'action=' + action,
+      'records:', req.body && req.body.records ? req.body.records.length : 0,
+      snapLog ? 'rawRows: ' + (Array.isArray(snapLog.rawRows) ? snapLog.rawRows.length : 0) +
+        ' resolved: ' + (summaryLog.resolvedCount || 0) +
+        ' unresolved: ' + (summaryLog.unresolvedCount || 0) +
+        ' snapshotThroughDate: ' + (snapLog.snapshotThroughDate || '') : '');
     var response = await axios.post(url, req.body, {
       headers: { 'Content-Type': 'application/json' },
       maxRedirects: 5,
@@ -1316,6 +1438,51 @@ app.post('/area-experience-master', async (req, res) => {
     res.status(response.status).json(response.data);
   } catch (e) {
     console.error('area-experience-master POST error:', e.message);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// エリア経験イベント追記（Route取得 / 経験イベント → 正規化 → GAS appendEvents）
+// エリア抽出は assign-support-core.js の extractAreaLabelsFromAddresses のみ（area-experience-core.js 経由）。
+// 冪等性は GAS 側のキー（serviceDate|routeCode / TransportID|normalizedArea|serviceDate）で担保する。
+var AreaExperienceCore = require('./area-experience-core.js');
+app.post('/area-experience-events', async (req, res) => {
+  try {
+    if (!AREA_EXPERIENCE_MASTER_GAS_URL) {
+      return res.status(500).json({ status: 'error', message: 'AREA_EXPERIENCE_MASTER_GAS_URL not configured' });
+    }
+    var body = req.body || {};
+    var rawCaptures = Array.isArray(body.routeCaptures) ? body.routeCaptures : [];
+    var rawEvents = Array.isArray(body.events) ? body.events : [];
+    var captures = [];
+    var events = [];
+    var invalid = [];
+    rawCaptures.forEach(function (c) {
+      var n = AreaExperienceCore.normalizeRouteCapture(c);
+      if (n.ok) captures.push(n.capture);
+      else invalid.push({ type: 'routeCapture', routeCode: c && c.routeCode, serviceDate: c && c.serviceDate, reason: n.reason });
+    });
+    rawEvents.forEach(function (ev) {
+      var n = AreaExperienceCore.normalizeExperienceEventItem(ev);
+      if (n.ok) events.push(n.event);
+      else invalid.push({ type: 'event', reason: n.reason });
+    });
+    if (!captures.length && !events.length) {
+      return res.status(400).json({ status: 'error', message: 'no valid routeCaptures/events', invalid: invalid });
+    }
+    var url = AREA_EXPERIENCE_MASTER_GAS_URL + '?action=appendEvents';
+    console.log('area-experience-events POST: captures', captures.length, 'events', events.length, 'invalid', invalid.length);
+    var response = await axios.post(url, { routeCaptures: captures, events: events }, {
+      headers: { 'Content-Type': 'application/json' },
+      maxRedirects: 5,
+      timeout: 120000,
+      validateStatus: function() { return true; }
+    });
+    var data = response.data && typeof response.data === 'object' ? response.data : { status: 'error', message: 'GAS returned non-JSON' };
+    data.invalidBeforeGas = invalid;
+    res.status(response.status).json(data);
+  } catch (e) {
+    console.error('area-experience-events POST error:', e.message);
     res.status(500).json({ status: 'error', message: e.message });
   }
 });
@@ -1358,6 +1525,10 @@ app.post('/tenko-master', async (req, res) => {
       } catch (backupErr) {
         log('Master backup error: ' + backupErr.message);
       }
+    }
+    if (req.body && req.body.action === 'saveMaster') {
+      var masterRows = Array.isArray(req.body.drivers) ? req.body.drivers : (Array.isArray(req.body.data) ? req.body.data : null);
+      rememberKnownLineIdsFromDrivers(masterRows);
     }
 
     var url = TENKO_MASTER_GAS_URL;
