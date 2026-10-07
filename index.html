@@ -1460,9 +1460,11 @@
               <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white" id="btn-view-cc" onclick="setFtdsCcActiveView('cc')">CC表示</button>
             </div>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
-            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled>CC エクスポート</button>
+            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）の5シートExcel">📊 CC Ver.1 Excel出力</button>
+            <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled title="従来指標（べき架電／実架電）のExcel。CC Logic Ver.1 の数値ではありません">📞 従来架電実績 Excel出力</button>
           </div>
         </div>
+        <p class="text-xs text-ink-lighter -mt-2 mb-3 text-right" id="cc-v1-export-status">CC Ver.1 Excel：Amazon raw data 未読込（CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください）</p>
 
         <!-- Drop zones -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
@@ -1568,7 +1570,6 @@
           <div class="flex items-baseline justify-between flex-wrap gap-2 mb-2">
             <h3 class="text-sm font-medium">📞 Contact Compliance</h3>
             <span class="text-xs text-ink-lighter" id="cc-v1-logic-note"></span>
-            <button type="button" class="btn-secondary text-xs px-3 py-1.5 rounded" id="cc-v1-export-btn" onclick="exportCcV1Result()">CC Ver.1 Excel出力</button>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
             <div class="card p-3 text-center">
@@ -18352,20 +18353,43 @@ var driverDB = {
       return hdr >= 0 && mapAnalysisHeaderColumns(rows[hdr]).tid !== undefined;
     }
 
+    // CC Ver.1 を算出できなかったときの不足列（null = 未読込 / 算出済み）
+    var ccV1MissingColumns = null;
+
+    // CC Ver.1 Excel ボタンは ccV1Result（Amazon raw data から算出）があるときだけ押せる。
+    // 従来指標（ccResultData / exportedQualityCounts）からは CC Ver.1 Excel を作らない。
+    function updateCcExportUi() {
+      var btn = document.getElementById('cc-v1-export-btn');
+      if (btn) btn.disabled = !ccV1Result;
+      var st = document.getElementById('cc-v1-export-status');
+      if (!st) return;
+      if (ccV1Result) {
+        st.textContent = 'CC Ver.1 Excel：出力可能（' + ContactComplianceCore.CC_LOGIC_LABEL + '・対象 ' + ccV1Result.summary.total + '件）';
+      } else if (ccV1MissingColumns) {
+        st.textContent = 'CC Ver.1：必須列不足のため算出不可（不足列: ' + ccV1MissingColumns.join(', ') + '）／従来架電実績は利用可能な場合あり（CC Ver.1 の数値ではありません）';
+      } else {
+        st.textContent = 'CC Ver.1 Excel：Amazon raw data 未読込（CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください）';
+      }
+    }
+
     function clearCcV1() {
       ccV1Result = null;
+      ccV1MissingColumns = null;
       var box = document.getElementById('cc-v1');
       if (box) box.classList.add('hidden');
       var err = document.getElementById('cc-v1-error');
       if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
+      updateCcExportUi();
     }
 
-    function showCcV1Error(html) {
+    function showCcV1Error(html, missing) {
       ccV1Result = null;
+      ccV1MissingColumns = (missing && missing.length) ? missing : null;
       var box = document.getElementById('cc-v1');
       if (box) box.classList.add('hidden');
       var err = document.getElementById('cc-v1-error');
       if (err) { err.innerHTML = html; err.classList.remove('hidden'); }
+      updateCcExportUi();
     }
 
     // CC率の評価色。Amazon正式基準が未確認のため ContactComplianceCore.CC_RATE_LEVEL_THRESHOLDS は null で、
@@ -18399,10 +18423,12 @@ var driverDB = {
           msg += (ci ? ' / ' : '') + escapeHtml(ContactComplianceCore.CC_REQUIRED_COLUMNS[ci].header);
         }
         msg += '</span>';
-        showCcV1Error(msg);
+        showCcV1Error(msg, missing);
         return { ok: false, missing: missing, reason: 'missing_columns' };
       }
       ccV1Result = result;
+      ccV1MissingColumns = null;
+      updateCcExportUi();
       var err = document.getElementById('cc-v1-error');
       if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
       renderCcV1();
@@ -18498,10 +18524,17 @@ var driverDB = {
     // CC Ver.1 Excel出力（5シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
     // 画面と同じ ccV1Result から作る（Excel側で判定・集計をやり直さない）。DA別は画面の並び順に合わせる。
     function exportCcV1Result() {
-      if (!ccV1Result) return;
+      if (!ccV1Result) {
+        alert('CC Ver.1 Excel を出力できません。\n'
+          + (ccV1MissingColumns
+            ? ('CC Ver.1 は必須列不足のため算出不可です（不足列: ' + ccV1MissingColumns.join(', ') + '）。\n')
+            : 'CC Ver.1を出力するにはAmazon Contact Compliance raw dataを読み込んでください。\n')
+          + '※「従来架電実績 Excel出力」は従来指標（べき架電／実架電）で、CC Ver.1 の代わりにはなりません。');
+        return;
+      }
       var sel = document.getElementById('cc-v1-driver-sort');
       var wb = ContactComplianceCore.buildCcExportWorkbook(XLSX, ccV1Result, sel ? sel.value : 'nonCompliantDesc');
-      XLSX.writeFile(wb, 'ContactCompliance_Ver1_' + getTodayJst() + '.xlsx');
+      XLSX.writeFile(wb, 'CC_Ver1分析_' + getTodayJst() + '.xlsx');
     }
 
     function renderCcV1DriverTable() {
@@ -18807,7 +18840,8 @@ var driverDB = {
       var wb = buildQualityAffiliationWorkbook(ccResultData, buildCcAoa, function(rec) {
         return resolveQualityAffiliationByKeys(rec.driverName, rec.transporterId);
       }, styleCcSheet);
-      XLSX.writeFile(wb, 'ContactCompliance分析_' + getTodayJst() + '.xlsx');
+      // 従来指標（べき架電／実架電）。CC Logic Ver.1 と誤認しないファイル名にする
+      XLSX.writeFile(wb, '\u5f93\u6765\u67b6\u96fb\u5b9f\u7e3e\u5206\u6790_' + getTodayJst() + '.xlsx');
     }
 
     // ===== LAT分析 =====
@@ -21826,7 +21860,7 @@ var driverDB = {
               asyncFallback = true;
               if (fname.indexOf('dnr') >= 0) handleDnrFile(file);
               else if (fname.indexOf('ftds') >= 0) handleFtdsFile(file);
-              else if (fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0) handleCcFile(file);
+              else if (fname.indexOf('contact') >= 0 || fname.indexOf('cc') >= 0 || fname.indexOf('\u5f93\u6765\u67b6\u96fb\u5b9f\u7e3e') >= 0) handleCcFile(file);
               else if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) handleFtdsFile(file);
             } else {
               loaded++;
