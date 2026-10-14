@@ -1,0 +1,617 @@
+(function (root, factory) {
+  'use strict';
+  var api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  if (typeof window !== 'undefined') window.InoichiDashboard = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  var DASHBOARD_SCHEMA_VERSION = '0.1';
+
+  function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+  function isStr(v) { return typeof v === 'string'; }
+  function isNum(v) { return typeof v === 'number' && !isNaN(v); }
+  function isArr(v) { return Array.isArray(v); }
+
+  function escapeHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  function nowIso() { return new Date().toISOString(); }
+
+  function formatNumber(n, fallback) {
+    if (isNum(n)) return String(n);
+    return arguments.length > 1 ? fallback : '—';
+  }
+
+  function formatDateTime(dt) {
+    if (!dt) return '不明';
+    try {
+      var d = new Date(dt);
+      if (isNaN(d.getTime())) return '不明';
+      return d.toLocaleString('ja-JP');
+    } catch (e) { return '不明'; }
+  }
+
+  function buildAlertKey(ruleId, localDate, hours) {
+    return [String(ruleId || ''), String(localDate || ''), String(hours === undefined || hours === null ? '' : hours)].join('|');
+  }
+
+  function findAlertRecord(store, ruleId, localDate, hours) {
+    if (!isObj(store) || !isObj(store.alerts)) return null;
+    var key = buildAlertKey(ruleId, localDate, hours);
+    return store.alerts[key] || null;
+  }
+
+  function countBy(arr, keyFn) {
+    var out = {};
+    if (!isArr(arr)) return out;
+    for (var i = 0; i < arr.length; i++) {
+      var k = keyFn(arr[i]);
+      if (k === null || k === undefined) continue;
+      out[k] = (out[k] || 0) + 1;
+    }
+    return out;
+  }
+
+  function buildSeverityCounts(records) {
+    var counts = { critical: 0, warning: 0, info: 0 };
+    for (var i = 0; i < records.length; i++) {
+      var sev = records[i].severity;
+      if (counts.hasOwnProperty(sev)) counts[sev] += 1;
+    }
+    return counts;
+  }
+
+  function buildSummary(store, canonicalInputs, opts) {
+    opts = opts || {};
+    var records = (isObj(store) && isObj(store.alerts)) ? [] : [];
+    if (isObj(store) && isObj(store.alerts)) {
+      var keys = Object.keys(store.alerts);
+      for (var i = 0; i < keys.length; i++) records.push(store.alerts[keys[i]]);
+    }
+
+    var statusCounts = countBy(records, function (r) { return r.status; });
+    var missingActualCount = 0;
+    var unevaluatedCount = 0;
+    if (isArr(canonicalInputs)) {
+      for (var j = 0; j < canonicalInputs.length; j++) {
+        var inp = canonicalInputs[j];
+        if (!isObj(inp)) continue;
+        if (inp.actual === undefined || inp.actual === null) {
+          missingActualCount += 1;
+          unevaluatedCount += 1;
+        }
+      }
+    }
+
+    return {
+      totalAlerts: records.length,
+      openCount: statusCounts.OPEN || 0,
+      ongoingCount: statusCounts.ONGOING || 0,
+      reopenedCount: statusCounts.REOPENED || 0,
+      resolvedCount: statusCounts.RESOLVED || 0,
+      severityCounts: buildSeverityCounts(records),
+      unevaluatedCount: unevaluatedCount,
+      missingActualCount: missingActualCount
+    };
+  }
+
+  function buildRiskRows(canonicalInputs, store, opts) {
+    opts = opts || {};
+    var ruleId = opts.ruleId || 'fleet-capacity-shortage-v1';
+    var rows = [];
+    if (!isArr(canonicalInputs)) return rows;
+
+    for (var i = 0; i < canonicalInputs.length; i++) {
+      var inp = canonicalInputs[i];
+      if (!isObj(inp)) continue;
+      var actualMissing = inp.actual === undefined || inp.actual === null;
+      var actualNum = actualMissing ? null : inp.actual;
+      var shortage = (isNum(inp.expected) && isNum(actualNum)) ? inp.expected - actualNum : null;
+      var record = findAlertRecord(store, ruleId, inp.localDate, inp.hours);
+
+      var status;
+      var severity;
+      var lastDetectedAt;
+      var alertKey;
+      if (record) {
+        status = record.status;
+        severity = record.severity || 'info';
+        lastDetectedAt = record.lastDetectedAt;
+        alertKey = record.alertKey;
+      } else if (actualMissing) {
+        status = '未取得';
+        severity = 'none';
+        lastDetectedAt = null;
+        alertKey = buildAlertKey(ruleId, inp.localDate, inp.hours);
+      } else {
+        status = '正常';
+        severity = 'none';
+        lastDetectedAt = null;
+        alertKey = buildAlertKey(ruleId, inp.localDate, inp.hours);
+      }
+
+      rows.push({
+        localDate: inp.localDate,
+        block: inp.block,
+        hours: inp.hours,
+        expected: inp.expected,
+        actual: actualNum,
+        actualMissing: actualMissing,
+        shortage: shortage,
+        severity: severity,
+        status: status,
+        lastDetectedAt: lastDetectedAt,
+        alertKey: alertKey,
+        inputIndex: i
+      });
+    }
+
+    rows.sort(function (a, b) {
+      var d = String(a.localDate).localeCompare(String(b.localDate));
+      if (d !== 0) return d;
+      if (a.hours !== b.hours) return b.hours - a.hours;
+      return String(a.block).localeCompare(String(b.block));
+    });
+    return rows;
+  }
+
+  function buildAlertHistory(store) {
+    if (!isObj(store) || !isObj(store.alerts)) return [];
+    var keys = Object.keys(store.alerts);
+    var out = [];
+    for (var i = 0; i < keys.length; i++) out.push(store.alerts[keys[i]]);
+    out.sort(function (a, b) {
+      return String(a.firstDetectedAt || '').localeCompare(String(b.firstDetectedAt || ''));
+    });
+    return out;
+  }
+
+  function getFleetAdapter() {
+    if (typeof window !== 'undefined' && window.InoichiFleetAdapter) return window.InoichiFleetAdapter;
+    try { var req = require; return req('./inoichi-fleet-adapter.js'); } catch (e) {}
+    return null;
+  }
+
+  function buildDiagnostics(canonicalInputs, fleetResult, store, opts) {
+    opts = opts || {};
+    var fleetDiagnostics = (fleetResult && isObj(fleetResult.diagnostics)) ? fleetResult.diagnostics : {};
+    var inputCount = isArr(canonicalInputs) ? canonicalInputs.length : 0;
+    var missingActualCount = isArr(fleetDiagnostics.missingActuals) ? fleetDiagnostics.missingActuals.length : 0;
+
+    var invalidCanonicalCount = 0;
+    var Fleet = getFleetAdapter();
+    if (Fleet && isArr(canonicalInputs)) {
+      for (var i = 0; i < canonicalInputs.length; i++) {
+        if (!Fleet.validateFleetCanonicalInput(canonicalInputs[i]).ok) invalidCanonicalCount++;
+      }
+    }
+    var invalidCount = fleetDiagnostics.skippedCount || (isArr(fleetDiagnostics.invalidEntries) ? fleetDiagnostics.invalidEntries.length : 0);
+    if (invalidCanonicalCount > 0) invalidCount = invalidCanonicalCount;
+    var validCount = inputCount - invalidCanonicalCount;
+
+    var persistenceErrors = false;
+    if (isObj(store) && isObj(store.diagnostics) && isArr(store.diagnostics.persistenceErrors)) {
+      persistenceErrors = store.diagnostics.persistenceErrors.length > 0;
+    }
+
+    var lastEvaluatedAt = null;
+    if (isObj(store) && store._updatedAt) lastEvaluatedAt = store._updatedAt;
+    else if (opts && opts.detectedAt) lastEvaluatedAt = opts.detectedAt;
+
+    return {
+      inputCount: inputCount,
+      validCount: validCount,
+      invalidCount: invalidCount,
+      missingActualCount: missingActualCount,
+      lastEvaluatedAt: lastEvaluatedAt,
+      persistenceErrors: persistenceErrors,
+      dataSource: opts.dataSource || 'unknown'
+    };
+  }
+
+  function buildDashboardState(opts) {
+    opts = opts || {};
+    var canonicalInputs = isArr(opts.canonicalInputs) ? opts.canonicalInputs : [];
+    var fleetResult = opts.fleetResult || null;
+    var store = opts.store || null;
+    var notificationDryRun = opts.notificationDryRun || { dryRun: true, candidates: [], previews: [], summary: { total: 0, eligible: 0, suppressed: 0, byReason: {} } };
+
+    var summary = buildSummary(store, canonicalInputs, opts);
+    var riskRows = buildRiskRows(canonicalInputs, store, opts);
+    var alertHistory = buildAlertHistory(store);
+    var diagnostics = buildDiagnostics(canonicalInputs, fleetResult, store, opts);
+
+    return {
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      meta: {
+        title: 'INO-1 Prototype 1 — 調査用Dashboard',
+        banner: opts.sampleMode ? 'Prototype 1 / サンプルデータ / 本番未接続 / 実通知なし' : '本番未接続 / 実通知なし',
+        dryRunBanner: 'Dry-run専用・実通知なし',
+        generatedAt: opts.now || nowIso(),
+        sampleMode: opts.sampleMode === true,
+        dataSource: diagnostics.dataSource
+      },
+      summary: summary,
+      riskRows: riskRows,
+      alertHistory: alertHistory,
+      dryRun: notificationDryRun,
+      diagnostics: diagnostics
+    };
+  }
+
+  function severityClass(severity) {
+    if (severity === 'critical') return 'ino-severity-critical';
+    if (severity === 'warning') return 'ino-severity-warning';
+    if (severity === 'info') return 'ino-severity-info';
+    return 'ino-severity-none';
+  }
+
+  function statusClass(status) {
+    if (status === 'OPEN') return 'ino-status-open';
+    if (status === 'ONGOING') return 'ino-status-ongoing';
+    if (status === 'REOPENED') return 'ino-status-reopened';
+    if (status === 'RESOLVED') return 'ino-status-resolved';
+    if (status === '未取得') return 'ino-status-missing';
+    return 'ino-status-normal';
+  }
+
+  function card(title, body, opts) {
+    opts = opts || {};
+    var cls = 'ino-card' + (opts.full ? ' ino-card-full' : '');
+    return '<section class="' + cls + '"><h2 class="ino-card-title">' + escapeHtml(title) + '</h2><div class="ino-card-body">' + body + '</div></section>';
+  }
+
+  function renderSummary(summary) {
+    var h = '<div class="ino-summary-grid">';
+    h += '<div class="ino-stat"><div class="ino-stat-value">' + escapeHtml(summary.totalAlerts) + '</div><div class="ino-stat-label">アラート総数</div></div>';
+    h += '<div class="ino-stat ino-stat-open"><div class="ino-stat-value">' + escapeHtml(summary.openCount) + '</div><div class="ino-stat-label">OPEN</div></div>';
+    h += '<div class="ino-stat ino-stat-ongoing"><div class="ino-stat-value">' + escapeHtml(summary.ongoingCount) + '</div><div class="ino-stat-label">ONGOING</div></div>';
+    h += '<div class="ino-stat ino-stat-reopened"><div class="ino-stat-value">' + escapeHtml(summary.reopenedCount) + '</div><div class="ino-stat-label">REOPENED</div></div>';
+    h += '<div class="ino-stat ino-stat-resolved"><div class="ino-stat-value">' + escapeHtml(summary.resolvedCount) + '</div><div class="ino-stat-label">RESOLVED</div></div>';
+    h += '</div>';
+    h += '<div class="ino-severity-bar">';
+    h += '<span class="ino-sev ino-severity-critical">critical ' + escapeHtml(summary.severityCounts.critical) + '</span>';
+    h += '<span class="ino-sev ino-severity-warning">warning ' + escapeHtml(summary.severityCounts.warning) + '</span>';
+    h += '<span class="ino-sev ino-severity-info">info ' + escapeHtml(summary.severityCounts.info) + '</span>';
+    h += '</div>';
+    h += '<div class="ino-metric-row">';
+    h += '<span class="ino-metric">データ不足・未評価: <b>' + escapeHtml(summary.unevaluatedCount) + '</b></span>';
+    h += '<span class="ino-metric">actual未取得: <b>' + escapeHtml(summary.missingActualCount) + '</b></span>';
+    h += '</div>';
+    return h;
+  }
+
+  function renderRiskRows(rows) {
+    if (!rows.length) return '<p class="ino-empty">該当する入力がありません。</p>';
+    var h = '<div class="ino-table-wrap"><table class="ino-table">';
+    h += '<thead><tr>';
+    h += '<th>対象日</th><th>ブロック</th><th>時間</th><th>必要台数</th><th>計画台数</th><th>不足台数</th><th>severity</th><th>状態</th><th>最終検知時刻</th>';
+    h += '</tr></thead><tbody>';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += '<tr>';
+      h += '<td>' + escapeHtml(r.localDate) + '</td>';
+      h += '<td>' + escapeHtml(r.block) + '</td>';
+      h += '<td>' + escapeHtml(formatNumber(r.hours)) + 'h</td>';
+      h += '<td>' + escapeHtml(formatNumber(r.expected)) + '</td>';
+      h += '<td>' + (r.actualMissing ? '<span class="ino-missing">未取得</span>' : escapeHtml(formatNumber(r.actual))) + '</td>';
+      h += '<td>' + (r.shortage === null ? '—' : escapeHtml(formatNumber(r.shortage))) + '</td>';
+      h += '<td><span class="ino-pill ' + severityClass(r.severity) + '">' + escapeHtml(r.severity || 'none') + '</span></td>';
+      h += '<td><span class="ino-pill ' + statusClass(r.status) + '">' + escapeHtml(r.status) + '</span></td>';
+      h += '<td>' + escapeHtml(formatDateTime(r.lastDetectedAt)) + '</td>';
+      h += '</tr>';
+    }
+    h += '</tbody></table></div>';
+    return h;
+  }
+
+  function renderHistory(records) {
+    if (!records.length) return '<p class="ino-empty">アラート履歴はありません。</p>';
+    var h = '<div class="ino-history-list">';
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      h += '<div class="ino-history-item">';
+      h += '<div class="ino-history-header">';
+      h += '<code class="ino-key">' + escapeHtml(r.alertKey) + '</code>';
+      h += '<span class="ino-pill ' + statusClass(r.status) + '">' + escapeHtml(r.status) + '</span>';
+      h += '<span class="ino-pill ' + severityClass(r.severity) + '">' + escapeHtml(r.severity) + '</span>';
+      if (r.acknowledgedAt) h += '<span class="ino-pill ino-status-ack">acknowledged</span>';
+      h += '</div>';
+      h += '<div class="ino-history-meta">';
+      h += '初回: ' + escapeHtml(formatDateTime(r.firstDetectedAt));
+      h += ' / 最終: ' + escapeHtml(formatDateTime(r.lastDetectedAt));
+      h += ' / 検知回数: ' + escapeHtml(r.occurrenceCount);
+      h += '</div>';
+      if (isArr(r.transitionHistory) && r.transitionHistory.length) {
+        h += '<ul class="ino-transition-list">';
+        for (var j = 0; j < r.transitionHistory.length; j++) {
+          var t = r.transitionHistory[j];
+          h += '<li>';
+          h += escapeHtml(t.from || '(なし)') + ' → ' + escapeHtml(t.to);
+          h += ' <span class="ino-transition-at">' + escapeHtml(formatDateTime(t.at)) + '</span>';
+          h += ' <span class="ino-transition-reason">' + escapeHtml(t.reason) + '</span>';
+          h += '</li>';
+        }
+        h += '</ul>';
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  function renderDryRun(dryRun) {
+    var summary = isObj(dryRun.summary) ? dryRun.summary : {};
+    var h = '<div class="ino-dryrun-banner">' + escapeHtml('Dry-run専用・実通知なし') + '</div>';
+    h += '<div class="ino-metric-row">';
+    h += '<span class="ino-metric">候補数: <b>' + escapeHtml(summary.total || 0) + '</b></span>';
+    h += '<span class="ino-metric">eligible: <b>' + escapeHtml(summary.eligible || 0) + '</b></span>';
+    h += '<span class="ino-metric">suppressed: <b>' + escapeHtml(summary.suppressed || 0) + '</b></span>';
+    h += '</div>';
+    if (isObj(summary.byReason)) {
+      var reasons = Object.keys(summary.byReason);
+      if (reasons.length) {
+        h += '<div class="ino-suppression-reasons">抑止理由: ';
+        for (var i = 0; i < reasons.length; i++) {
+          var k = reasons[i];
+          h += '<span class="ino-reason-chip">' + escapeHtml(k) + ' ' + escapeHtml(summary.byReason[k]) + '</span>';
+        }
+        h += '</div>';
+      }
+    }
+    if (isArr(dryRun.candidates) && dryRun.candidates.length) {
+      h += '<div class="ino-candidate-list">';
+      for (var j = 0; j < dryRun.candidates.length; j++) {
+        var c = dryRun.candidates[j];
+        h += '<div class="ino-candidate">';
+        h += '<div class="ino-candidate-title">' + escapeHtml(c.title) + ' <span class="ino-pill ' + (c.eligibility === 'eligible' ? 'ino-status-normal' : 'ino-status-ongoing') + '">' + escapeHtml(c.eligibility) + '</span></div>';
+        h += '<div class="ino-candidate-message">' + escapeHtml(c.message) + '</div>';
+        h += '<div class="ino-candidate-meta">';
+        h += 'alertKey: ' + escapeHtml(c.alertKey) + ' / ';
+        h += 'status: ' + escapeHtml(c.alertStatus) + ' / ';
+        h += 'dedup: ' + escapeHtml(c.deduplicationKey);
+        if (c.suppressionReason) h += ' <span class="ino-reason-chip">' + escapeHtml(c.suppressionReason) + '</span>';
+        h += '</div>';
+        if (isArr(dryRun.previews) && dryRun.previews[j]) {
+          h += '<pre class="ino-preview">' + escapeHtml(dryRun.previews[j]) + '</pre>';
+        }
+        h += '</div>';
+      }
+      h += '</div>';
+    } else {
+      h += '<p class="ino-empty">通知候補はありません。</p>';
+    }
+    return h;
+  }
+
+  function renderDiagnostics(d) {
+    var h = '<div class="ino-diagnostics-grid">';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">入力件数</span><span class="ino-diag-value">' + escapeHtml(d.inputCount) + '</span></div>';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">正常なCanonical Input</span><span class="ino-diag-value">' + escapeHtml(d.validCount) + '</span></div>';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">不正データ</span><span class="ino-diag-value">' + escapeHtml(d.invalidCount) + '</span></div>';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">actual未取得</span><span class="ino-diag-value">' + escapeHtml(d.missingActualCount) + '</span></div>';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">最終評価日時</span><span class="ino-diag-value">' + escapeHtml(formatDateTime(d.lastEvaluatedAt)) + '</span></div>';
+    h += '<div class="ino-diag-item"><span class="ino-diag-label">永続化エラー</span><span class="ino-diag-value">' + (d.persistenceErrors ? 'あり' : 'なし') + '</span></div>';
+    h += '<div class="ino-diag-item ino-diag-wide"><span class="ino-diag-label">データ取得元</span><span class="ino-diag-value">' + escapeHtml(d.dataSource) + '</span></div>';
+    h += '</div>';
+    return h;
+  }
+
+  function renderDashboard(element, state) {
+    if (!element) return;
+    var meta = state.meta || {};
+    var h = '';
+    h += '<header class="ino-header">';
+    h += '<div class="ino-header-title">' + escapeHtml(meta.title) + '</div>';
+    h += '<div class="ino-header-subtitle">' + escapeHtml(meta.banner) + '</div>';
+    h += '<div class="ino-header-meta">生成時刻: ' + escapeHtml(formatDateTime(meta.generatedAt)) + ' / データ取得元: ' + escapeHtml(meta.dataSource) + '</div>';
+    h += '</header>';
+    h += '<main class="ino-main">';
+    h += card('A. サマリー', renderSummary(state.summary));
+    h += card('B. 欠車リスク一覧', renderRiskRows(state.riskRows), { full: true });
+    h += card('C. アラート履歴', renderHistory(state.alertHistory), { full: true });
+    h += card('D. 通知Dry-run', renderDryRun(state.dryRun), { full: true });
+    h += card('E. 診断情報', renderDiagnostics(state.diagnostics));
+    h += '</main>';
+    h += '<footer class="ino-footer">INO-1 Prototype 1 Dashboard — read-only / dry-run only</footer>';
+    element.innerHTML = h;
+  }
+
+  function ingestSequence(store, alertsByKey, now, ruleId) {
+    ruleId = ruleId || 'fleet-capacity-shortage-v1';
+    var Alerts = (typeof window !== 'undefined' && window.InoichiAlertStore) ? window.InoichiAlertStore : null;
+    if (!Alerts) {
+      try { var req = require; Alerts = req('./inoichi-alert-store.js'); } catch (e) {}
+    }
+    if (!Alerts) throw new Error('InoichiAlertStore not available for sample data');
+
+    var newAlerts = [];
+    var keys = Object.keys(alertsByKey);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var ev = alertsByKey[k];
+      if (!ev) continue;
+      newAlerts.push({
+        alertId: 'sample-' + k + '-' + now,
+        ruleId: ruleId,
+        category: 'fleet-capacity',
+        sourceDataType: 'fleet-capacity-canonical',
+        localDate: ev.localDate,
+        severity: ev.severity,
+        detectedAt: now,
+        evidence: ev
+      });
+    }
+    Alerts.ingest(store, { alerts: newAlerts }, { now: now });
+  }
+
+  function generateSampleStore(opts) {
+    opts = opts || {};
+    var Alerts = (typeof window !== 'undefined' && window.InoichiAlertStore) ? window.InoichiAlertStore : null;
+    if (!Alerts) {
+      try { var req = require; Alerts = req('./inoichi-alert-store.js'); } catch (e) {}
+    }
+    if (!Alerts) throw new Error('InoichiAlertStore not available');
+
+    var store = Alerts.createStore();
+    var ruleId = opts.ruleId || 'fleet-capacity-shortage-v1';
+
+    // 1. OPEN alert for 2026-10-07 8h
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|8': {
+        localDate: '2026-10-07', block: '8B', hours: 8, expected: 12, actual: 10, shortage: 2,
+        severity: 'warning'
+      }
+    }, '2026-10-07T08:00:00.000Z', ruleId);
+
+    // 2. ONGOING alert for 2026-10-07 6.5h
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|6.5': {
+        localDate: '2026-10-07', block: '6B30S', hours: 6.5, expected: 16, actual: 14, shortage: 2,
+        severity: 'warning'
+      }
+    }, '2026-10-07T08:00:00.000Z', ruleId);
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|6.5': {
+        localDate: '2026-10-07', block: '6B30S', hours: 6.5, expected: 16, actual: 13, shortage: 3,
+        severity: 'critical'
+      }
+    }, '2026-10-07T09:00:00.000Z', ruleId);
+
+    // 3. REOPENED alert for 2026-10-07 4.5h
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|4.5': {
+        localDate: '2026-10-07', block: '4B30S', hours: 4.5, expected: 16, actual: 15, shortage: 1,
+        severity: 'warning'
+      }
+    }, '2026-10-07T08:00:00.000Z', ruleId);
+    var key45 = Alerts.buildAlertKey(ruleId, '2026-10-07', 4.5);
+    Alerts.ingest(store, { alerts: [] }, { evaluatedKeys: [key45], now: '2026-10-07T10:00:00.000Z' });
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|4.5': {
+        localDate: '2026-10-07', block: '4B30S', hours: 4.5, expected: 16, actual: 14, shortage: 2,
+        severity: 'warning'
+      }
+    }, '2026-10-07T11:00:00.000Z', ruleId);
+
+    // 4. RESOLVED alert for 2026-10-07 3h
+    ingestSequence(store, {
+      'fleet-capacity-shortage-v1|2026-10-07|3': {
+        localDate: '2026-10-07', block: '3B', hours: 3, expected: 4, actual: 3, shortage: 1,
+        severity: 'info'
+      }
+    }, '2026-10-07T08:00:00.000Z', ruleId);
+    var key3 = Alerts.buildAlertKey(ruleId, '2026-10-07', 3);
+    Alerts.ingest(store, { alerts: [] }, { evaluatedKeys: [key3], now: '2026-10-07T10:00:00.000Z' });
+
+    // 5. actual未取得 and 8. アラート0件 entries are in canonicalInputs only, not alerts.
+    // 6. invalid inputs handled by fleet diagnostics.
+    // 7. notification dry-run suppression handled by using sample rule.
+
+    return store;
+  }
+
+  function generateSampleInputs(opts) {
+    opts = opts || {};
+    var Adapter = (typeof window !== 'undefined' && window.InoichiFleetAdapter) ? window.InoichiFleetAdapter : null;
+    if (!Adapter) {
+      try { var req = require; Adapter = req('./inoichi-fleet-adapter.js'); } catch (e) {}
+    }
+    if (!Adapter) throw new Error('InoichiFleetAdapter not available');
+
+    var master = [
+      { block: '8B', hours: 8, count: 12 },
+      { block: '6B30S', hours: 6.5, count: 16 },
+      { block: '4B30S', hours: 4.5, count: 16 },
+      { block: '3B', hours: 3, count: 4 },
+      { block: '2B', hours: 2, count: 8 },
+      { block: '', hours: 1, count: NaN }
+    ];
+    var dateMap = {
+      '2026-10-07': { 8: 10, 6.5: 13, 4.5: 14, 3: 4, 2: undefined }
+    };
+    return Adapter.buildFleetCanonicalInputs(master, dateMap, { now: '2026-10-07' });
+  }
+
+  function initDashboard(opts) {
+    opts = opts || {};
+    var container = opts.container || document.getElementById('inoichi-dashboard');
+    if (!container) return;
+    var Fleet = (typeof window !== 'undefined' && window.InoichiFleetAdapter) ? window.InoichiFleetAdapter : null;
+    var Core = (typeof window !== 'undefined' && window.InoichiDetectionCore) ? window.InoichiDetectionCore : null;
+    var Rules = (typeof window !== 'undefined' && window.InoichiDetectionRules) ? window.InoichiDetectionRules : null;
+    var Alerts = (typeof window !== 'undefined' && window.InoichiAlertStore) ? window.InoichiAlertStore : null;
+    var Notification = (typeof window !== 'undefined' && window.InoichiNotificationAdapter) ? window.InoichiNotificationAdapter : null;
+
+    var fleetResult;
+    var store;
+    if (opts.sampleMode !== false) {
+      fleetResult = generateSampleInputs();
+      store = generateSampleStore();
+    } else {
+      fleetResult = opts.fleetResult || { inputs: [], diagnostics: {} };
+      store = opts.store || Alerts.createStore();
+    }
+
+    var canonicalInputs = isArr(fleetResult.inputs) ? fleetResult.inputs : [];
+
+    var detectionOutputs = [];
+    if (Core && Rules && canonicalInputs.length) {
+      var rule = Rules.getSampleFleetCapacityRule();
+      rule.enabled = true;
+      for (var i = 0; i < canonicalInputs.length; i++) {
+        var det = Core.detect(canonicalInputs[i], [rule], { now: opts.now });
+        detectionOutputs.push(det);
+      }
+    }
+
+    var dryRun = { dryRun: true, candidates: [], previews: [], summary: { total: 0, eligible: 0, suppressed: 0, byReason: {} } };
+    if (Notification) {
+      var alerts = [];
+      if (isObj(store) && isObj(store.alerts)) {
+        var keys = Object.keys(store.alerts);
+        for (var j = 0; j < keys.length; j++) alerts.push(store.alerts[keys[j]]);
+      }
+      dryRun = Notification.createNotificationDryRun(alerts, {
+        dryRun: true,
+        destinations: [{ type: 'line-group', id: 'dashboard-dry-run' }],
+        isSampleRule: true
+      });
+    }
+
+    var state = buildDashboardState({
+      canonicalInputs: canonicalInputs,
+      fleetResult: fleetResult,
+      store: store,
+      notificationDryRun: dryRun,
+      sampleMode: opts.sampleMode !== false,
+      dataSource: opts.dataSource || 'サンプルデータ（本番未接続）',
+      now: opts.now,
+      ruleId: opts.ruleId
+    });
+
+    renderDashboard(container, state);
+    return state;
+  }
+
+  return {
+    DASHBOARD_SCHEMA_VERSION: DASHBOARD_SCHEMA_VERSION,
+    escapeHtml: escapeHtml,
+    formatNumber: formatNumber,
+    formatDateTime: formatDateTime,
+    buildAlertKey: buildAlertKey,
+    buildSummary: buildSummary,
+    buildRiskRows: buildRiskRows,
+    buildAlertHistory: buildAlertHistory,
+    buildDiagnostics: buildDiagnostics,
+    buildDashboardState: buildDashboardState,
+    renderDashboard: renderDashboard,
+    generateSampleStore: generateSampleStore,
+    generateSampleInputs: generateSampleInputs,
+    initDashboard: initDashboard
+  };
+});
