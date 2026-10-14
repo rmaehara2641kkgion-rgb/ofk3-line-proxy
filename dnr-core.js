@@ -100,12 +100,32 @@
     return en;
   }
 
-  // 新規（既存translateReasonとは別物）: dictに完全一致する値だけを翻訳する。
+  // 詳細分類（sub_bucket）のうち日本語表示を追加した3種類。元データの英語表記は保持し、表示・出力時のみ変換する。
+  // 照合キーは「小文字化・アンダースコア/空白（全角含む）の連続を半角スペース1つに統一」した形。
+  // 元データは 'No Item_front door' / 'No Item_mail slot' / 'No item_Others'（大文字小文字・区切りが不揃い）で、
+  // 既存の整形後表記（'No Item front door' 等）や全大文字でも同じ値として扱う。この3種類以外は一切変換しない。
+  var DNR_DETAIL_REASON_JA = {
+    'no item front door': '玄関前に荷物なし',
+    'no item mail slot': '郵便受けに荷物なし',
+    'no item others': 'その他の場所に荷物なし'
+  };
+
+  function dnrDetailReasonKey(v) {
+    return String(v === null || v === undefined ? '' : v).trim().toLowerCase().replace(/[_\s]+/g, ' ');
+  }
+
+  // 3種類に該当すれば日本語、該当しなければ入力をそのまま返す（他の理由は変更しない）。
+  function dnrFormatDetailReason(v) {
+    var key = dnrDetailReasonKey(v);
+    return Object.prototype.hasOwnProperty.call(DNR_DETAIL_REASON_JA, key) ? DNR_DETAIL_REASON_JA[key] : v;
+  }
+
+  // 新規（既存translateReasonとは別物）: dictに完全一致する値だけを翻訳する（上記3種類の詳細分類のみ追加で表記揺れ対応）。
   // 一致しない場合は原文をそのまま返す（英字除去等のフォールバック変換はしない）。
   function dnrTranslateReason(reason, dict) {
     if (!reason) return '';
     if (dict && Object.prototype.hasOwnProperty.call(dict, reason)) return dict[reason];
-    return reason;
+    return dnrFormatDetailReason(reason);
   }
 
   // index.html: handleDnrFile内の1行分の抽出処理（18516-18535）を移植（ドライバー照合部分を除く。
@@ -133,6 +153,85 @@
       out.push(dnrExtractRow(row, colMap));
     }
     return out;
+  }
+
+  // ---- 日時の表示変換（表示層・出力層のみ。取込済みの元の値 rec.delivery_date_jst は変更しない） ----
+  //
+  // Amazon DNRファイルの delivery_date_jst / reporting_date は「YYYY-MM-DD 00:00:00」形式の日付のみの値で、
+  // 時刻情報を持たない（00:00:00 は時刻ではなく日付のみを表すプレースホルダー）。したがって
+  //   - 時刻部分が 00:00:00 以外 → 時刻あり: 「YYYY/MM/DD HH」（JST）
+  //   - 日付のみ / 00:00:00     → 「YYYY/MM/DD 時刻不明」（00:00 を発生時刻として表示しない）
+  //   - 解釈できない値           → 原文のまま（情報を落とさない）
+  // 注意: 配達日(delivery_date_jst)は配達日であり DNR発生日時ではない。両者を混同しないため、この関数は
+  // 配達日列の表記だけを整える（列名・値の意味は変えない）。
+
+  function dnrPad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  var DNR_JST_OFFSET_MIN = 9 * 60;
+
+  // Excel シリアル値 → { y, mo, d, h, mi, s }（シリアルは日付のセル値そのもの＝JSTの壁時計。タイムゾーン変換なし）
+  function dnrSerialToParts(v) {
+    if (typeof v !== 'number' || !isFinite(v) || v < 20000 || v > 80000) return null;
+    var whole = Math.floor(v);
+    var secs = Math.round((v - whole) * 86400);
+    if (secs >= 86400) { whole += 1; secs -= 86400; }
+    var dt = new Date(Math.round((whole - 25569) * 86400000));
+    return { y: dt.getUTCFullYear(), mo: dt.getUTCMonth() + 1, d: dt.getUTCDate(),
+      h: Math.floor(secs / 3600), mi: Math.floor((secs % 3600) / 60), s: secs % 60 };
+  }
+
+  // 値 → { y, mo, d, h, mi, s, hasTime } | null。
+  // 文字列: 「YYYY-MM-DD[ T]HH[:mm[:ss]][.fff][Z|±hh[:mm]]」「YYYY/MM/DD HH」等。
+  //   タイムゾーン指定（Z / ±hh:mm）がある場合だけ JST（+09:00）へ換算する。指定が無い値は JST とみなす
+  //   （delivery_date_jst はすでにJST）。「時刻不明」など時刻として読めない後続文字列は日付のみ扱い。
+  function dnrParseDateTime(v) {
+    if (v === null || v === undefined || v === '') return null;
+    var parts = null;
+    if (Object.prototype.toString.call(v) === '[object Date]') {
+      if (isNaN(v.getTime())) return null;
+      // Date オブジェクトは絶対時刻として扱い JST に換算する
+      var j = new Date(v.getTime() + DNR_JST_OFFSET_MIN * 60000);
+      parts = { y: j.getUTCFullYear(), mo: j.getUTCMonth() + 1, d: j.getUTCDate(), h: j.getUTCHours(), mi: j.getUTCMinutes(), s: j.getUTCSeconds() };
+    } else if (typeof v === 'number') {
+      parts = dnrSerialToParts(v);
+    } else {
+      var str = String(v).replace(/ /g, ' ').trim();
+      var m = str.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ T]+(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?)?/i);
+      if (!m) return null;
+      parts = { y: +m[1], mo: +m[2], d: +m[3], h: m[4] !== undefined ? +m[4] : 0, mi: m[5] !== undefined ? +m[5] : 0, s: m[6] !== undefined ? +m[6] : 0 };
+      if (m[7]) {
+        var off = 0;
+        if (m[7].toUpperCase() !== 'Z') {
+          var sign = m[7].charAt(0) === '-' ? -1 : 1;
+          var digits = m[7].slice(1).replace(':', '');
+          off = sign * (parseInt(digits.slice(0, 2), 10) * 60 + (digits.length > 2 ? parseInt(digits.slice(2, 4), 10) : 0));
+        }
+        var base = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi, parts.s) - off * 60000 + DNR_JST_OFFSET_MIN * 60000;
+        var jd = new Date(base);
+        parts = { y: jd.getUTCFullYear(), mo: jd.getUTCMonth() + 1, d: jd.getUTCDate(), h: jd.getUTCHours(), mi: jd.getUTCMinutes(), s: jd.getUTCSeconds() };
+      }
+    }
+    if (!parts) return null;
+    parts.hasTime = !(parts.h === 0 && parts.mi === 0 && parts.s === 0);
+    return parts;
+  }
+
+  var DNR_TIME_UNKNOWN_LABEL = '時刻不明';
+
+  // 表示用の文字列。空値は ''、解釈できない値は原文（trim）のまま。
+  function dnrFormatOccurrence(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var p = dnrParseDateTime(v);
+    if (!p) return String(v).trim();
+    var date = p.y + '/' + dnrPad2(p.mo) + '/' + dnrPad2(p.d);
+    return date + ' ' + (p.hasTime ? dnrPad2(p.h) : DNR_TIME_UNKNOWN_LABEL);
+  }
+
+  // Excel の日時セル（数値）→ 取込用の文字列「YYYY-MM-DD HH:MM:SS」。時刻の欠落を防ぐための取込補助。
+  function dnrSerialToDateTimeString(v) {
+    var p = dnrSerialToParts(v);
+    if (!p) return null;
+    return p.y + '-' + dnrPad2(p.mo) + '-' + dnrPad2(p.d) + ' ' + dnrPad2(p.h) + ':' + dnrPad2(p.mi) + ':' + dnrPad2(p.s);
   }
 
   // index.html: exportDnrResult のCSV行列生成部分（18881-18897）を移植。
@@ -171,6 +270,9 @@
         if (col === 'sub_bucket') {
           val = dnrNormalizeSubBucketDisplay(val);
         }
+        if (col === 'delivery_date_jst') {
+          val = dnrFormatOccurrence(val);
+        }
         row.push(val);
       }
       rows.push(row);
@@ -187,11 +289,17 @@
     dnrMapHeaderColumns: dnrMapHeaderColumns,
     dnrDetectSignal: dnrDetectSignal,
     dnrResolveDriverDisplayName: dnrResolveDriverDisplayName,
+    DNR_DETAIL_REASON_JA: DNR_DETAIL_REASON_JA,
+    dnrFormatDetailReason: dnrFormatDetailReason,
     dnrTranslateReason: dnrTranslateReason,
     dnrNormalizeSubBucketDisplay: dnrNormalizeSubBucketDisplay,
     dnrExtractRow: dnrExtractRow,
     dnrExtractRows: dnrExtractRows,
-    dnrBuildExportRows: dnrBuildExportRows
+    dnrBuildExportRows: dnrBuildExportRows,
+    DNR_TIME_UNKNOWN_LABEL: DNR_TIME_UNKNOWN_LABEL,
+    dnrParseDateTime: dnrParseDateTime,
+    dnrFormatOccurrence: dnrFormatOccurrence,
+    dnrSerialToDateTimeString: dnrSerialToDateTimeString
   };
 
   if (typeof module !== 'undefined' && module.exports) {
