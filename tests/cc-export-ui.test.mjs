@@ -52,7 +52,8 @@ const FUNCTIONS = [
   'normalizeReportHeader', 'isTransporterHeader', 'mapAnalysisHeaderColumns', 'findAnalysisHeaderRow',
   'buildTidToNameLookup', 'updateCcExportUi', 'clearCcV1', 'showCcV1Error', 'ccV1RateHtml',
   'renderCcV1FromRows', 'renderCcV1', 'renderCcV1DriverTable', 'ccV1RateBarHtml', 'ccV1NcBarHtml', 'ccV1ReasonTableHtml',
-  'ccV1StatTableHtml', 'normalizeIdToken', 'normalizeCcTid', 'ccV1MasterSignature', 'buildCcMasterLookup',
+  'ccV1StatTableHtml', 'ccMasterSyncLabel', 'renderMasterSyncWarning', 'finishMasterSync', 'syncMasterBeforeAnalysis',
+  'ccMasterAffiliationFor', 'handleCcFile', 'handleFtdsFile', 'normalizeIdToken', 'normalizeCcTid', 'ccV1MasterSignature', 'buildCcMasterLookup',
   'summarizeCcAffiliationStatus', 'refreshCcV1Affiliation', 'ccV1SelectAff', 'ccV1SelectDa', 'ccV1NavTo', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
   'translateReason', 'isCcCallRequired', 'isCcCallMade', 'calcCcCallRate', 'buildCcAoa',
   'styleQualityExportSheet', 'styleCcSheet', 'buildQualityAffiliationWorkbook',
@@ -107,6 +108,12 @@ function buildSandbox(master) {
     resolveQualityAffiliationByKeys: function () { return ''; }, // 従来指標Excel側（CC Ver.1 の所属判定では使わない）
     resolveDriverKey: function (n) { return n; },
     ccV1SourceRows: null,
+    ccMasterSync: { state: 'none', at: 0, reason: '' },
+    ccMasterSyncWaiters: null,
+    CC_MASTER_SYNC_TIMEOUT_MS: 400,
+    setTimeout: setTimeout,
+    handleCcFileImpl: function (f) { sandbox.__impl = (sandbox.__impl || []).concat(['cc:' + f + ':' + sandbox.ccMasterSync.state]); },
+    handleFtdsFileImpl: function (f) { sandbox.__impl = (sandbox.__impl || []).concat(['ftds:' + f + ':' + sandbox.ccMasterSync.state]); },
     ccV1MasterSig: '',
     ccV1AffStats: null,
     renderCcResultsUI: function () { sandbox.__legacyRendered = true; } // 従来指標の描画（DOM）だけ省略
@@ -364,9 +371,110 @@ function testMasterNotModified() {
     'CCの所属判定はマスタを読むだけ（書き込み・削除・保存をしない）');
 }
 
-var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown, testMasterLookup, testMasterNotModified];
+// ---- Transporter ID 重複登録: 同一所属は正常 / 異なる所属は「所属競合」（自動振り分けしない） ----
+function testDuplicateIdConflict() {
+  var rows = [['Event Date', 'Scannable ID', 'Destination Address ID', 'Transporter ID', 'Shipment Reason', 'Call Event', 'Text Event']];
+  function add(tid, call) { rows.push(['2026-10-04', 'S' + rows.length, 'D' + rows.length, tid, 'CUSTOMER_UNAVAILABLE', call ? 'Calls to Customer' : '', '']); }
+  add('SAME1', true); add('SAME1', false);            // 同一ID・同一所属(2登録)
+  add('BLANK1', false);                                // 同一ID・片方は所属空
+  add('CONF1', false); add('CONF1', false); add('CONF1', true); // 同一ID・異なる所属
+  add('SOLO1', true);
+  var master = { '甲': 'SAME1', '甲別表記': ' same1 ', '乙': 'BLANK1', '乙別表記': 'BLANK1', '丙': 'CONF1', '丙別表記': 'conf1', '丁': 'SOLO1' };
+  var depts = { '甲': 'JHS', '甲別表記': 'JHS', '乙': 'AE物流', '乙別表記': '', '丙': 'JHS', '丙別表記': 'AE物流', '丁': 'JHS' };
+  var t = buildSandbox(master);
+  t.sandbox.driverDepartments = depts;
+  assert(t.sandbox.renderCcV1FromRows(rows).ok, '算出成功');
+  var r = t.sandbox.ccV1Result;
+  var grp = function (n) { return r.byAffiliation.filter(function (a) { return a.affiliation === n; })[0]; };
+  var tids = function (a) { return a.drivers.map(function (d) { return d.transporterId; }).sort().join(); };
+  assert(tids(grp('JHS')) === 'SAME1,SOLO1', '同一ID・同一所属は正常にJHS: ' + tids(grp('JHS')));
+  assert(tids(grp('AE物流')) === 'BLANK1', '片方が所属空でも競合にしない（所属ありの登録を採用）');
+  var c = grp('所属競合');
+  assert(c && c.conflict && tids(c) === 'CONF1' && c.total === 3 && c.nonCompliant === 2, '異なる所属は「所属競合」へ（JHS/AE物流のどちらにも入れない）');
+  assert(c.drivers[0].affiliationCandidates.join() === 'AE物流,JHS', '候補所属を保持: ' + c.drivers[0].affiliationCandidates);
+  assert(grp('JHS').drivers.every(function (d) { return d.transporterId !== 'CONF1'; }) && grp('AE物流').drivers.every(function (d) { return d.transporterId !== 'CONF1'; }), '競合IDは特定所属に自動振り分けしない');
+  var st = t.sandbox.ccV1AffStats;
+  assert(st.conflict === 1 && st.ok === 3 && st.noDept === 0 && st.duplicateSame === 2 && st.duplicateConflict === 1, '内訳: ' + JSON.stringify(st));
+  assert(r.summary.total === 7 && r.summary.compliant === 3 && r.summary.nonCompliant === 4, 'CC件数は競合に影響されない');
+  assert(r.aggregationCheck.ok, '競合ありでも集計整合');
+  // 競合の有無でCC計算が変わらない: マスタ無しで解析した結果と summary/byReason/byDriver が一致
+  var base = Cc2().analyzeCcRows(rows, null);
+  assert(JSON.stringify(base.summary) === JSON.stringify(r.summary) && JSON.stringify(base.byReason) === JSON.stringify(r.byReason), 'CC率・理由別はマスタに依存しない');
+  // 画面
+  t.sandbox.renderCcV1Affiliation();
+  var body = t.elements['cc-v1-aff-body'].innerHTML;
+  assert(body.indexOf('所属競合') >= 0 && body.indexOf('bg-amber-50') >= 0, '画面に所属競合を強調表示');
+  assert(t.elements['cc-v1-aff-check'].innerHTML.indexOf('所属競合 1名') >= 0, '内訳に所属競合');
+  // Excel
+  var wb = roundTrip(t.sandbox.ContactComplianceCore.buildCcExportWorkbook(XLSX, r));
+  var aoa = function (n) { return XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: true }); };
+  var sum = {}; aoa('CCサマリー').forEach(function (x) { sum[x[0]] = x[1]; });
+  assert(sum['所属競合DA数'] === 1 && sum['CC対象件数'] === 7 && sum['CC率'] === 42.86, 'サマリーに競合DA数・CC率維持: ' + JSON.stringify(sum));
+  assert(aoa('所属別サマリー').some(function (x) { return x[0] === '所属競合' && x[2] === 3; }), '所属別サマリーに所属競合行');
+  var da = aoa('所属別DA分析').filter(function (x) { return x[0] === '所属競合'; });
+  assert(da.length === 1 && da[0][12] === 'AE物流 / JHS', '所属別DA分析に候補所属: ' + JSON.stringify(da));
+  assert(aoa('Non-Compliant明細').filter(function (x) { return x[10] === '所属競合'; }).length === 2, '明細の所属列にも所属競合');
+}
+
+function Cc2() { return require('../contact-compliance-core.js'); }
+
+// ---- 分析開始時のマスタ同期（既存 loadMasterFromServer を利用。失敗は警告・古いマスタを最新扱いしない・CC結果は不変） ----
+async function testMasterSyncOnAnalysisStart() {
+  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  var master = { '甲': 'T1' };
+  // 成功: 完了後に取込が始まり、状態は fresh・警告なし
+  var ok = buildSandbox(master);
+  ok.sandbox.driverDepartments = { '甲': 'JHS' };
+  var calls = 0;
+  ok.sandbox.loadMasterFromServer = function () {
+    calls++;
+    setTimeout(function () { ok.sandbox.driverDepartments['甲'] = 'AGENTLINE'; ok.sandbox.window.__ofk3MasterLoadStatus = { completedAt: Date.now(), driverCount: 3, updated: true }; }, 120);
+  };
+  ok.sandbox.handleCcFile('a.xlsx');
+  assert(!ok.sandbox.__impl, '同期完了前は取込を始めない');
+  await wait(450);
+  assert(calls === 1 && ok.sandbox.__impl && ok.sandbox.__impl[0] === 'cc:a.xlsx:fresh', '同期完了後に取込開始(fresh): ' + JSON.stringify(ok.sandbox.__impl));
+  assert(ok.elements['master-sync-warning'].classList.contains('hidden'), '成功時は警告なし');
+  assert(/最新/.test(ok.sandbox.ccMasterSyncLabel()), '最新ラベル');
+
+  // 失敗: 応答なし → タイムアウトで stale。警告表示・取込は続行・古いマスタを最新と表示しない
+  var ng = buildSandbox(master);
+  ng.sandbox.driverDepartments = { '甲': 'JHS' };
+  ng.sandbox.loadMasterFromServer = function () { /* オフライン: 何も起きない */ };
+  ng.sandbox.window.__ofk3MasterLoadStatus = { completedAt: Date.now() - 100000, driverCount: 9 }; // 過去の成功記録
+  ng.sandbox.handleFtdsFile('b.csv');
+  await wait(800);
+  assert(ng.sandbox.__impl && ng.sandbox.__impl[0] === 'ftds:b.csv:stale', '失敗でも取込は続行(stale): ' + JSON.stringify(ng.sandbox.__impl));
+  var warn = ng.elements['master-sync-warning'];
+  assert(!warn.classList.contains('hidden') && /最新のドライバーマスタを取得できませんでした/.test(warn.innerHTML) && /CC率などの計算結果には影響しません/.test(warn.innerHTML), '同期失敗の警告を表示');
+  assert(ng.sandbox.window.__ofk3MasterLoadStatus.driverCount === 9, '過去の成功記録を最新として扱わず、かつ壊さない');
+  assert(/未同期/.test(ng.sandbox.ccMasterSyncLabel()) && !/^最新/.test(ng.sandbox.ccMasterSyncLabel()), '古いローカルマスタを「最新」と表示しない');
+
+  // 同期有無でCC計算結果は変わらない（所属の振り分けのみ変わり得る）。Excelに同期状態を残す。
+  var rows = wk40Rows();
+  var a = buildSandbox({ 'DA0': rows[1][5] }); a.sandbox.driverDepartments = { 'DA0': 'JHS' };
+  var b = buildSandbox({ 'DA0': rows[1][5] }); b.sandbox.driverDepartments = { 'DA0': 'AE物流' };
+  a.sandbox.ccMasterSync = { state: 'fresh', at: Date.now(), reason: '' };
+  b.sandbox.ccMasterSync = { state: 'stale', at: Date.now(), reason: 'x' };
+  a.sandbox.renderCcV1FromRows(wk40Rows()); b.sandbox.renderCcV1FromRows(wk40Rows());
+  var ra = a.sandbox.ccV1Result, rb = b.sandbox.ccV1Result;
+  assert(JSON.stringify(ra.summary) === JSON.stringify(rb.summary) && JSON.stringify(ra.byReason) === JSON.stringify(rb.byReason) &&
+    JSON.stringify(ra.byDate) === JSON.stringify(rb.byDate) && ra.summary.total === 575 && ra.summary.nonCompliant === 122, '同期状態・マスタ内容でCC計算結果は不変(575/453/122)');
+  var cell = function (t2) {
+    var w = roundTrip(t2.sandbox.ContactComplianceCore.buildCcExportWorkbook(XLSX, t2.sandbox.ccV1Result));
+    var v = {}; XLSX.utils.sheet_to_json(w.Sheets['CCサマリー'], { header: 1, defval: '' }).forEach(function (x) { v[x[0]] = x[1]; }); return v['マスタ同期状態'];
+  };
+  assert(/^最新/.test(cell(a)) && /^未同期/.test(cell(b)), 'Excelのサマリーにマスタ同期状態: ' + cell(a) + ' / ' + cell(b));
+
+  // 実装の静的確認: 既存の保存・マージには触れない
+  var fn = ['syncMasterBeforeAnalysis', 'finishMasterSync', 'renderMasterSyncWarning'].map(function (n) { return extractFunction(html, n); }).join('\n');
+  assert(fn.indexOf('localStorage') < 0 && !/(transportIDs|driverDepartments|driverDB|lineMapping)\s*(\[[^\]]*\])?\s*=[^=]/.test(fn), '同期処理はマスタを書き換えない（既存の loadMasterFromServer に任せる）');
+  assert(fn.indexOf('loadMasterFromServer()') >= 0, '既存の同期機構 loadMasterFromServer を呼ぶ');
+}
+
+var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown, testMasterLookup, testMasterNotModified, testDuplicateIdConflict, testMasterSyncOnAnalysisStart];
 for (var i = 0; i < tests.length; i++) {
-  tests[i]();
+  await tests[i]();
   console.log('PASS ' + tests[i].name);
 }
 console.log('cc-export-ui tests passed (' + tests.length + ')');

@@ -154,7 +154,7 @@ function testExcel(r) {
   for (let i = 1; i < body.length; i++) assert(body[i - 1][4] >= body[i][4], '所属別サマリーはNC降順');
 
   const d = aoa('所属別DA分析');
-  assert(d[0].join() === '所属,DA名,Transporter ID,配送理由,Shipment Reason（原文コード）,対象件数,Compliant,Non-Compliant,CC率,DA合計 対象件数,DA合計 Non-Compliant,DA合計 CC率', '所属別DA分析見出し');
+  assert(d[0].join() === '所属,DA名,Transporter ID,配送理由,Shipment Reason（原文コード）,対象件数,Compliant,Non-Compliant,CC率,DA合計 対象件数,DA合計 Non-Compliant,DA合計 CC率,所属候補（競合時）', '所属別DA分析見出し');
   const dBody = d.slice(1);
   assert(sum(dBody.map(x => ({ v: x[5] })), 'v') === 678 && sum(dBody.map(x => ({ v: x[7] })), 'v') === 172, '所属別DA分析の合計=全体');
   assert(dBody.every(x => REASONS.indexOf(x[4]) >= 0 && x[3] === Cc.getCcReasonLabel(x[4])), '配送理由は日本語＋原文コード別列');

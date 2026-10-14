@@ -56,6 +56,9 @@
   // 所属がドライバーマスタと照合できなかったDAの集計先（除外せず1グループとして集計する）
   var CC_UNKNOWN_AFFILIATION_LABEL = '所属未判定';
 
+  // 同じTransporter IDがマスタ上で異なる所属に登録されている場合の集計先。特定の所属へは自動で振り分けない。
+  var CC_CONFLICT_AFFILIATION_LABEL = '所属競合';
+
   // 表示専用の理由ラベル（CC対象理由ではない。判定・対象理由リストには一切使わない）。
   // FTDS の「Not Attempt」は元コードを保持したまま表示層・出力層でのみ「配達未試行」に変換する。
   var CC_DISPLAY_ONLY_REASON_LABELS_JA = {
@@ -348,9 +351,20 @@
 
   // ---- 所属別集計（表示用の追加集計。CC判定・既存の集計結果には影響しない） ----
 
+  // resolveAffiliation(tid) の戻り値は所属名（文字列）か、競合を表す { conflict: true, candidates: [所属名...] }。
+  // 戻り値: { name: 集計先の所属名, conflict: boolean, candidates: [所属名] }
+  function resolveCcAffiliationInfo(tid, resolveAffiliation) {
+    var v = (tid && typeof resolveAffiliation === 'function') ? resolveAffiliation(tid) : '';
+    if (v && typeof v === 'object') {
+      if (v.conflict) return { name: CC_CONFLICT_AFFILIATION_LABEL, conflict: true, candidates: (v.candidates || []).slice() };
+      v = v.name;
+    }
+    var a = cellText(v);
+    return { name: a || CC_UNKNOWN_AFFILIATION_LABEL, conflict: false, candidates: [] };
+  }
+
   function resolveCcAffiliation(tid, resolveAffiliation) {
-    var a = (tid && typeof resolveAffiliation === 'function') ? cellText(resolveAffiliation(tid)) : '';
-    return a || CC_UNKNOWN_AFFILIATION_LABEL;
+    return resolveCcAffiliationInfo(tid, resolveAffiliation).name;
   }
 
   // CC_ELIGIBLE_REASONS の順に0件の理由も含めたカウンター配列
@@ -402,12 +416,14 @@
       var status = getCcStatus(row);
       if (status === CC_STATUS.NOT_ELIGIBLE) continue;
       var tid = cellText(row.transporterId);
-      var affName = resolveCcAffiliation(tid, resolveAffiliation);
+      var affInfo = resolveCcAffiliationInfo(tid, resolveAffiliation);
+      var affName = affInfo.name;
       var aff = byAff[affName];
       if (!aff) {
         aff = newCounter();
         aff.affiliation = affName;
-        aff.identified = affName !== CC_UNKNOWN_AFFILIATION_LABEL;
+        aff.identified = affName !== CC_UNKNOWN_AFFILIATION_LABEL && affName !== CC_CONFLICT_AFFILIATION_LABEL;
+        aff.conflict = affName === CC_CONFLICT_AFFILIATION_LABEL;
         aff.byReason = newReasonCounters();
         aff._drivers = {};
         aff.drivers = [];
@@ -421,6 +437,7 @@
         da.driverName = resolveCcDriverName(tid, resolveName);
         da.identified = da.driverName !== CC_UNKNOWN_DA_LABEL;
         da.affiliation = affName;
+        da.affiliationCandidates = affInfo.candidates;
         da.byReason = newReasonCounters();
         aff._drivers[tid] = da;
         aff.drivers.push(da);
@@ -587,6 +604,12 @@
       var v = roundCcRate(rate);
       return v === null ? '-' : v;
     }
+    function conflictDaCount(res) {
+      var n = 0;
+      var list = res.byAffiliation || [];
+      for (var i = 0; i < list.length; i++) if (list[i].conflict) n += list[i].drivers.length;
+      return n;
+    }
     var reasonCodes = CC_ELIGIBLE_REASONS.slice();
     var reasonDesc = [];
     for (var rc = 0; rc < reasonCodes.length; rc++) reasonDesc.push(getCcReasonLabel(reasonCodes[rc]) + '(' + reasonCodes[rc] + ')');
@@ -604,7 +627,9 @@
       ['判定条件', 'Call Event または Text Event が存在 = Compliant（両方あっても1件）'],
       ['集計単位', 'Amazonファイルの対象行1行 = 1件（dedupeなし）'],
       ['所属判定', 'Transporter ID × ドライバーマスタ照合（不明は「' + CC_UNKNOWN_AFFILIATION_LABEL + '」として集計）'],
-      ['所属数', (result.byAffiliation || []).length]
+      ['所属数', (result.byAffiliation || []).length],
+      ['所属競合DA数', conflictDaCount(result)],
+      ['マスタ同期状態', result.masterSync && result.masterSync.label ? result.masterSync.label : '未確認']
     ];
 
     var reasonRows = [['配送理由', 'Shipment Reason', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
@@ -638,7 +663,7 @@
 
     // 所属 → DA → 配送理由 の縦持ち。対象件数のある理由のみ出力（合計は全体集計と一致する）。
     var affDaRows = [['所属', 'DA名', 'Transporter ID', '配送理由', 'Shipment Reason（原文コード）',
-      '対象件数', 'Compliant', 'Non-Compliant', 'CC率', 'DA合計 対象件数', 'DA合計 Non-Compliant', 'DA合計 CC率']];
+      '対象件数', 'Compliant', 'Non-Compliant', 'CC率', 'DA合計 対象件数', 'DA合計 Non-Compliant', 'DA合計 CC率', '所属候補（競合時）']];
     for (var ai = 0; ai < affs.length; ai++) {
       var das = sortCcDriverStats(affs[ai].drivers, mode);
       for (var di = 0; di < das.length; di++) {
@@ -647,7 +672,8 @@
           var rr = da.byReason[ri];
           if (!rr.total) continue;
           affDaRows.push([affs[ai].affiliation, da.driverName, da.transporterId, rr.reasonLabel, rr.reason,
-            rr.total, rr.compliant, rr.nonCompliant, rateCell(rr.rate), da.total, da.nonCompliant, rateCell(da.rate)]);
+            rr.total, rr.compliant, rr.nonCompliant, rateCell(rr.rate), da.total, da.nonCompliant, rateCell(da.rate),
+            (da.affiliationCandidates || []).join(' / ')]);
         }
       }
     }
@@ -663,7 +689,7 @@
     return [
       { name: 'CCサマリー', rows: summaryRows, rateCells: [[2, 1]], widths: [20, 60] },
       { name: '所属別サマリー', rows: affRows, rateColumn: 5, widths: [22, 8, 10, 12, 14, 10] },
-      { name: '所属別DA分析', rows: affDaRows, rateColumns: [8, 11], widths: [20, 22, 18, 20, 32, 10, 12, 14, 10, 14, 18, 14] },
+      { name: '所属別DA分析', rows: affDaRows, rateColumns: [8, 11], widths: [20, 22, 18, 20, 32, 10, 12, 14, 10, 14, 18, 14, 24] },
       { name: '理由別', rows: reasonRows, rateColumn: 5, widths: [20, 34, 10, 12, 14, 10] },
       { name: 'DA別', rows: driverRows, rateColumn: 5, widths: [22, 18, 10, 12, 14, 10] },
       { name: '日別', rows: dateRows, rateColumn: 4, widths: [14, 10, 12, 14, 10] },
@@ -706,6 +732,7 @@
     CC_STATUS_LABELS_JA: CC_STATUS_LABELS_JA,
     CC_UNKNOWN_DA_LABEL: CC_UNKNOWN_DA_LABEL,
     CC_UNKNOWN_AFFILIATION_LABEL: CC_UNKNOWN_AFFILIATION_LABEL,
+    CC_CONFLICT_AFFILIATION_LABEL: CC_CONFLICT_AFFILIATION_LABEL,
     CC_DISPLAY_ONLY_REASON_LABELS_JA: CC_DISPLAY_ONLY_REASON_LABELS_JA,
     CC_LOGIC_LABEL: CC_LOGIC_LABEL,
     CC_RATE_LEVEL_THRESHOLDS: CC_RATE_LEVEL_THRESHOLDS,
@@ -731,6 +758,7 @@
     groupCcByDriver: groupCcByDriver,
     sortCcDriverStats: sortCcDriverStats,
     resolveCcAffiliation: resolveCcAffiliation,
+    resolveCcAffiliationInfo: resolveCcAffiliationInfo,
     groupCcByAffiliation: groupCcByAffiliation,
     sortCcAffiliationStats: sortCcAffiliationStats,
     verifyCcAggregation: verifyCcAggregation,

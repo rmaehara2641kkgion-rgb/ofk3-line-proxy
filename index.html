@@ -1562,6 +1562,9 @@
         <!-- ===== Contact Compliance Section ===== -->
         <hr class="my-6 border-border">
 
+        <!-- マスタ同期失敗の警告（CC/FTDS分析開始時の最新マスタ取得に失敗したとき） -->
+        <div id="master-sync-warning" class="hidden mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800"></div>
+
         <!-- CC Logic Ver.1 取込エラー（必須列不足など） -->
         <div id="cc-v1-error" class="hidden mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700"></div>
 
@@ -17889,7 +17892,13 @@ var driverDB = {
       if (files.length > 0) handleFtdsFile(files[0]);
     }
 
+    // 分析開始時に最新マスタへ同期してから取込む（同期失敗でも取込は続行し、警告を表示）
     function handleFtdsFile(file) {
+      if (!file) return;
+      syncMasterBeforeAnalysis(function() { handleFtdsFileImpl(file); });
+    }
+
+    function handleFtdsFileImpl(file) {
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
@@ -18308,6 +18317,11 @@ var driverDB = {
 
     function handleCcFile(file) {
       if (!file) return;
+      syncMasterBeforeAnalysis(function() { handleCcFileImpl(file); });
+    }
+
+    function handleCcFileImpl(file) {
+      if (!file) return;
       var reader = new FileReader();
       reader.onload = function(e) {
         var fname = file.name || '';
@@ -18438,8 +18452,7 @@ var driverDB = {
         var m = master.byTid[normalizeCcTid(tid)];
         return m ? m.name : '';
       }, function(tid) {
-        var m = master.byTid[normalizeCcTid(tid)];
-        return m ? m.dept : '';
+        return ccMasterAffiliationFor(master, tid);
       });
       if (result.error) {
         var missing = result.missing || [];
@@ -18456,6 +18469,7 @@ var driverDB = {
         showCcV1Error(msg, missing);
         return { ok: false, missing: missing, reason: 'missing_columns' };
       }
+      result.masterSync = { state: ccMasterSync.state, label: ccMasterSyncLabel() };
       ccV1Result = result;
       ccV1MissingColumns = null;
       ccV1AffStats = summarizeCcAffiliationStatus(result, master);
@@ -18553,6 +18567,73 @@ var driverDB = {
       document.getElementById('cc-v1').classList.remove('hidden');
     }
 
+    // ===== CC/FTDS 分析開始時のマスタ同期（既存の loadMasterFromServer を呼ぶだけ。保存・マージ処理は変更しない） =====
+    // loadMasterFromServer は完了通知を持たないため、成功時にだけ更新される window.__ofk3MasterLoadStatus を目印に完了を待つ。
+    // 失敗（オフライン・HTTPエラー・解析エラー）やタイムアウト時は state='stale' とし、警告を表示する。
+    // ローカルのマスタは使い続けるが、「最新」とは扱わない（画面・Excelに同期状態を表示）。
+    var CC_MASTER_SYNC_TIMEOUT_MS = 6000;
+    var ccMasterSync = { state: 'none', at: 0, reason: '' };   // none=未同期 / fresh=最新 / stale=同期できず
+    var ccMasterSyncWaiters = null;
+
+    function ccMasterSyncLabel() {
+      if (ccMasterSync.state === 'fresh') return '最新（サーバー同期済み ' + new Date(ccMasterSync.at).toLocaleString('ja-JP') + '）';
+      if (ccMasterSync.state === 'stale') return '未同期（サーバーから最新を取得できず、ローカル保存のマスタを使用）';
+      return '未確認（この分析ではサーバー同期していません）';
+    }
+
+    function renderMasterSyncWarning() {
+      var el = document.getElementById('master-sync-warning');
+      if (!el) return;
+      if (ccMasterSync.state === 'stale') {
+        el.innerHTML = '⚠ 最新のドライバーマスタを取得できませんでした（' + escapeHtml(ccMasterSync.reason || '同期失敗') +
+          '）。ローカルに保存されたマスタで所属・DA名を判定しているため、最新の内容と異なる可能性があります。CC率などの計算結果には影響しません。';
+        el.classList.remove('hidden');
+      } else {
+        el.innerHTML = '';
+        el.classList.add('hidden');
+      }
+    }
+
+    function finishMasterSync(state, reason) {
+      ccMasterSync = { state: state, at: Date.now(), reason: reason || '' };
+      renderMasterSyncWarning();
+      var waiters = ccMasterSyncWaiters || [];
+      ccMasterSyncWaiters = null;
+      for (var i = 0; i < waiters.length; i++) {
+        try { waiters[i](ccMasterSync); } catch (e) { console.error('[master sync] callback error', e); }
+      }
+    }
+
+    // done(syncInfo) は成功・失敗・タイムアウトのいずれでも必ず1回呼ばれる（分析は止めない）。
+    function syncMasterBeforeAnalysis(done) {
+      if (ccMasterSyncWaiters) { ccMasterSyncWaiters.push(done); return; }   // 同期中なら相乗り
+      ccMasterSyncWaiters = [done];
+      if (typeof loadMasterFromServer !== 'function') { finishMasterSync('stale', '同期機能が見つかりません'); return; }
+      var startedAt = Date.now();
+      var prevStatus = window.__ofk3MasterLoadStatus;
+      try { window.__ofk3MasterLoadStatus = undefined; } catch (e) { /* 読み取り専用なら従来値のまま待つ */ }
+      try { loadMasterFromServer(); } catch (e) {
+        window.__ofk3MasterLoadStatus = prevStatus;
+        finishMasterSync('stale', '同期の開始に失敗: ' + (e && e.message ? e.message : e));
+        return;
+      }
+      var poll = function() {
+        var st = window.__ofk3MasterLoadStatus;
+        if (st && st.completedAt >= startedAt) {
+          if (st.driverCount > 0) finishMasterSync('fresh', '');
+          else finishMasterSync('stale', 'サーバーのマスタが空、または応答が不正です');
+          return;
+        }
+        if (Date.now() - startedAt >= CC_MASTER_SYNC_TIMEOUT_MS) {
+          if (!window.__ofk3MasterLoadStatus) window.__ofk3MasterLoadStatus = prevStatus;
+          finishMasterSync('stale', 'サーバーから応答がありません（オフライン/エラー/タイムアウト）');
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      setTimeout(poll, 100);
+    }
+
     // ===== CC 所属判定: ドライバーマスタ参照（アプリ本体の transportIDs / driverDepartments を都度参照） =====
     var ccV1SourceRows = null;
     var ccV1MasterSig = '';
@@ -18576,35 +18657,59 @@ var driverDB = {
       return keys.length + ':' + dk.length + ':' + h;
     }
 
-    // 正規化 Transporter ID → { name, dept, status }。status: 'ok'（所属あり）| 'noDept'（マスタ登録済・所属未設定）
-    // 同じIDが複数の氏名に登録されている場合は、所属が設定されている登録を優先する。
+    // 正規化 Transporter ID → { name, dept, status, candidates }。
+    //   status: 'ok'（所属あり）| 'noDept'（マスタ登録済・所属未設定）| 'conflict'（同一IDが異なる所属に登録）
+    // 同一ID・同一所属の重複登録は正常扱い。異なる所属に登録されている場合は特定の所属へ振り分けず conflict とする。
+    // 同一IDのうち所属が空の登録は、所属が設定された登録がある場合は無視する（競合ではない）。
     function buildCcMasterLookup() {
-      var byTid = {};
-      var duplicates = 0;
+      var groups = {};
       var keys = Object.keys(transportIDs);
       for (var k = 0; k < keys.length; k++) {
         var tid = normalizeCcTid(transportIDs[keys[k]]);
         if (!tid) continue;
         var dept = String(driverDepartments[resolveDriverKey(keys[k])] || driverDepartments[keys[k]] || '').trim();
-        var entry = { name: keys[k], dept: dept, status: dept ? 'ok' : 'noDept' };
-        if (byTid[tid]) {
-          duplicates++;
-          if (byTid[tid].dept || !dept) continue;
-        }
-        byTid[tid] = entry;
+        if (!groups[tid]) groups[tid] = { name: keys[k], depts: [], count: 0 };
+        groups[tid].count++;
+        if (dept && groups[tid].depts.indexOf(dept) < 0) groups[tid].depts.push(dept);
       }
-      return { byTid: byTid, duplicates: duplicates };
+      var byTid = {};
+      var duplicateSame = 0;
+      var duplicateConflict = 0;
+      var gk = Object.keys(groups);
+      for (var g = 0; g < gk.length; g++) {
+        var grp = groups[gk[g]];
+        var entry;
+        if (grp.depts.length > 1) {
+          grp.depts.sort();
+          entry = { name: grp.name, dept: '', status: 'conflict', candidates: grp.depts.slice() };
+          duplicateConflict++;
+        } else {
+          entry = { name: grp.name, dept: grp.depts[0] || '', status: grp.depts.length ? 'ok' : 'noDept', candidates: [] };
+          if (grp.count > 1) duplicateSame++;
+        }
+        byTid[gk[g]] = entry;
+      }
+      return { byTid: byTid, duplicates: duplicateSame + duplicateConflict, duplicateSame: duplicateSame, duplicateConflict: duplicateConflict };
     }
 
-    // DA単位の所属判定内訳: 所属あり / マスタ登録済だが所属未設定 / マスタ未登録
+    // 所属競合は { conflict, candidates } を返す（core が「所属競合」に集計。自動振り分けはしない）
+    function ccMasterAffiliationFor(master, tid) {
+      var m = master.byTid[normalizeCcTid(tid)];
+      if (!m) return '';
+      if (m.status === 'conflict') return { conflict: true, candidates: m.candidates };
+      return m.dept;
+    }
+
+    // DA単位の所属判定内訳: 所属あり / マスタ登録済だが所属未設定 / 所属競合 / マスタ未登録
     function summarizeCcAffiliationStatus(result, master) {
-      var st = { ok: 0, noDept: 0, notInMaster: 0, duplicates: master.duplicates };
+      var st = { ok: 0, noDept: 0, conflict: 0, notInMaster: 0, duplicates: master.duplicates, duplicateSame: master.duplicateSame, duplicateConflict: master.duplicateConflict };
       for (var a = 0; a < result.byAffiliation.length; a++) {
         var ds = result.byAffiliation[a].drivers;
         for (var d = 0; d < ds.length; d++) {
           var m = master.byTid[normalizeCcTid(ds[d].transporterId)];
           if (!m) st.notInMaster++;
           else if (m.status === 'ok') st.ok++;
+          else if (m.status === 'conflict') st.conflict++;
           else st.noDept++;
         }
       }
@@ -18679,9 +18784,11 @@ var driverDB = {
       for (var i = 0; i < items.length; i++) {
         var it = items[i];
         var name = showId ? it.driverName : it.affiliation;
-        var warn = !it.identified;
-        html += '<tr class="border-b border-border cursor-pointer hover:bg-surface' + (warn ? ' bg-red-50' : '') + '" onclick="' + clickFn + '(' + i + ')">' +
-          '<td class="px-3 py-2' + (warn ? ' text-red-600 font-medium' : ' font-medium') + '">' + escapeHtml(name) + ' <span class="text-xs text-ink-lighter">›</span></td>' +
+        var conflict = !!it.conflict || (showId && it.affiliation === ContactComplianceCore.CC_CONFLICT_AFFILIATION_LABEL);
+        var warn = !it.identified && !conflict;
+        var cand = (showId && conflict && it.affiliationCandidates && it.affiliationCandidates.length) ? '<div class="text-xs text-amber-700">候補: ' + escapeHtml(it.affiliationCandidates.join(' / ')) + '（マスタ要確認）</div>' : '';
+        html += '<tr class="border-b border-border cursor-pointer hover:bg-surface' + (conflict ? ' bg-amber-50' : (warn ? ' bg-red-50' : '')) + '" onclick="' + clickFn + '(' + i + ')">' +
+          '<td class="px-3 py-2' + (conflict ? ' text-amber-700 font-medium' : (warn ? ' text-red-600 font-medium' : ' font-medium')) + '">' + escapeHtml(name) + ' <span class="text-xs text-ink-lighter">›</span>' + cand + '</td>' +
           (showId ? '<td class="px-3 py-2 text-xs font-mono">' + escapeHtml(it.transporterId || '-') + '</td>' : '<td class="px-3 py-2 text-center">' + it.driverCount + '</td>') +
           '<td class="px-3 py-2 text-center">' + it.total + '</td><td class="px-3 py-2 text-center">' + it.compliant + '</td>' +
           '<td class="px-3 py-2 text-center">' + ccV1NcBarHtml(it.nonCompliant, max) + '</td>' +
@@ -18741,7 +18848,9 @@ var driverDB = {
       var statTxt = '';
       if (ccV1AffStats) {
         statTxt = ' <span class="text-ink-lighter ml-2">所属判定（DA単位）：マスタ照合 ' + ccV1AffStats.ok + '名 / マスタ登録済・所属未設定 ' + ccV1AffStats.noDept +
-          '名 / マスタ未登録 ' + ccV1AffStats.notInMaster + '名' + (ccV1AffStats.duplicates ? ' / ID重複登録 ' + ccV1AffStats.duplicates + '件' : '') + '</span>' +
+          '名 / <span class="' + (ccV1AffStats.conflict ? 'text-amber-700 font-bold' : '') + '">所属競合 ' + ccV1AffStats.conflict + '名</span> / マスタ未登録 ' + ccV1AffStats.notInMaster + '名' +
+          (ccV1AffStats.duplicates ? ' / ID重複登録 ' + ccV1AffStats.duplicates + '件（同一所属 ' + ccV1AffStats.duplicateSame + '・競合 ' + ccV1AffStats.duplicateConflict + '）' : '') + '</span>' +
+          '<div class="mt-1 ' + (ccMasterSync.state === 'fresh' ? 'text-emerald-700' : 'text-amber-700') + '">マスタ同期：' + escapeHtml(ccMasterSyncLabel()) + '</div>' +
           ' <a href="javascript:void(0)" class="text-emerald-700 underline ml-2" onclick="refreshCcV1Affiliation()">所属を再判定</a>';
       }
       if (chk) chk.innerHTML = (chkRes && chkRes.ok
