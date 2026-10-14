@@ -573,6 +573,8 @@
             <div class="px-4 py-3 border-b border-border flex items-center justify-between">
               <h2 class="text-sm font-medium">ルート別配送予測</h2>
               <div class="flex items-center gap-2">
+                <button type="button" id="ofk3-bag-dashboard-import" class="btn-secondary text-xs px-3 py-1 rounded">BAGファイルを読み込む</button>
+                <span id="ofk3-bag-dash-status" class="text-xs text-ink-lighter">BAGファイル未読込</span>
                 <button class="btn-secondary text-xs px-3 py-1 rounded" onclick="openPrintPreview()">
                   <span class="inline-flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
@@ -3968,6 +3970,13 @@ var driverDB = {
       return 'ok';
     }
 
+    function ofk3BagAttr(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;');
+    }
+
     function renderDashboard() {
       document.getElementById('dashboard-content').classList.remove('hidden');
       var heroEl = document.getElementById('dashboard-hero');
@@ -4022,6 +4031,7 @@ var driverDB = {
           </td>
           <td class="px-4 py-2.5 text-center">
             <button onclick="openDeliveryMap('${route.routeCode}')" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors" title="配送MAP">🗺</button>
+            ${route.driverName ? `<button type="button" data-ofk3-bag-driver="${ofk3BagAttr(route.driverName)}" class="text-xs px-2 py-1 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors" title="荷物詳細">荷物</button>` : ''}
           </td>
         </tr>`;
       }).join('');
@@ -21841,5 +21851,6 @@ var driverDB = {
   </div>
   <script src="/cortex-route-sequence.js?v=20260921-7"></script>
   <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
+  <script src="/ofk3-bag-sheet.js?v=20261014-bag2"></script>
 </body>
 </html>

@@ -225,6 +225,11 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (twBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, twBodyPos) + '  <script src="' + twBoardScriptSrc + '"></script>\n' + html.slice(twBodyPos);
     }
+    if (html.indexOf('/ofk3-bag-sheet.js') < 0) {
+      var bagBodyPos = html.lastIndexOf('</body>');
+      if (bagBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, bagBodyPos) + '  <script src="/ofk3-bag-sheet.js?v=20261014-bag2"></script>\n' + html.slice(bagBodyPos);
+    }
     if (html.indexOf('/gds-fleet-audit-core.js') < 0) {
       var gdsCoreBodyPos = html.lastIndexOf('</body>');
       if (gdsCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));

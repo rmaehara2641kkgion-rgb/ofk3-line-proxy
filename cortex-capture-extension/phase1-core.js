@@ -18,6 +18,13 @@
   var CUTOFF_M = 0;
   var CUTOFF_S = 0;
   var ELEVEN_HOUR = 11;
+  var CYCLE_PREFIX_MAP = { DCX: 'C1', DMX: 'C2', DSX: 'C3' };
+
+  function cycleOfRouteCode(routeCode) {
+    var m = String(routeCode || '').toUpperCase().match(/^([A-Z]+)/);
+    if (!m) return '';
+    return CYCLE_PREFIX_MAP[m[1]] || '';
+  }
 
   var ERROR = {
     SCHEMA: 'API_SCHEMA_CHANGED',
@@ -226,6 +233,47 @@
       };
     }
     return { ok: true, routes: routes, skipped: skipped, warnings: warnings };
+  }
+
+  // Cycle 2/3 routes by prefix (DMX/DSX). Does not use the 11:00 departure filter.
+  function selectRoutesByCycle(summariesPayload, cycles) {
+    var wanted = {};
+    (cycles || ['C2', 'C3']).forEach(function (c) { wanted[String(c)] = true; });
+    if (!summariesPayload || !Array.isArray(summariesPayload.rmsRouteSummaries)) {
+      return {
+        ok: false,
+        error: ERROR.SCHEMA,
+        message: 'route-summaries に rmsRouteSummaries がありません',
+        routes: [],
+        skipped: []
+      };
+    }
+    var routes = [];
+    var skipped = [];
+    summariesPayload.rmsRouteSummaries.forEach(function (row) {
+      if (!row || !row.routeId) {
+        skipped.push({ reason: ERROR.SCHEMA, routeCode: row && row.routeCode });
+        return;
+      }
+      var cycle = cycleOfRouteCode(row.routeCode);
+      var depMs = epochToMs(row.plannedDepartureTime);
+      var item = {
+        routeId: row.routeId,
+        routeCode: row.routeCode,
+        cycle: cycle,
+        plannedDepartureTime: depMs,
+        plannedDepartureClock: depMs == null ? '' : formatTokyoClock(depMs),
+        serviceTypeName: row.serviceTypeName || ''
+      };
+      if (wanted[cycle]) routes.push(item);
+      else skipped.push({
+        reason: 'NOT_TARGET_CYCLE',
+        routeId: row.routeId,
+        routeCode: row.routeCode,
+        cycle: cycle
+      });
+    });
+    return { ok: true, routes: routes, skipped: skipped };
   }
 
   function extractFromRouteDetails(details, options) {
@@ -1026,6 +1074,140 @@
     });
     out.targets.sort(compareBagTargets);
     return out;
+  }
+
+  // All DROP_OFF packages on the given routes. Not the 13:00 priority filter.
+  function selectCycleBagTargets(detailsList, trDetailsByTrId) {
+    var out = {
+      targets: [],
+      packageCount: 0,
+      skipped: { alreadyCaptured: 0, missingScannableId: 0, missingReferenceId: 0, duplicateReferenceId: 0 }
+    };
+    var seen = {};
+    (detailsList || []).forEach(function (details) {
+      var rd = details && details.rmsRouteDetails;
+      if (!rd || !Array.isArray(rd.stops)) return;
+      var cycle = cycleOfRouteCode(rd.routeCode);
+      if (cycle !== 'C2' && cycle !== 'C3') return;
+      rd.stops.forEach(function (stop) {
+        if (!stop || !Array.isArray(stop.tasks)) return;
+        stop.tasks.forEach(function (task) {
+          if (!task || task.taskType !== 'DROP_OFF') return;
+          out.packageCount += 1;
+          var referenceId = String(task.referenceId || '').trim();
+          var map = task.domainMap || {};
+          var scannableId = String(map.scannableId || '').trim();
+          if (!referenceId) { out.skipped.missingReferenceId += 1; return; }
+          if (hasTrDetails(trDetailsByTrId, referenceId)) { out.skipped.alreadyCaptured += 1; return; }
+          if (!scannableId) { out.skipped.missingScannableId += 1; return; }
+          if (seen[referenceId]) { out.skipped.duplicateReferenceId += 1; return; }
+          seen[referenceId] = true;
+          var stopStatus = stop.status == null ? null : String(stop.status);
+          out.targets.push({
+            routeId: String(rd.routeId || ''),
+            routeCode: String(rd.routeCode || ''),
+            cycle: cycle,
+            stop: stop.sequenceNumber,
+            stopStatus: stopStatus,
+            stopPriority: stopStatusPriority(stopStatus),
+            scannableId: scannableId,
+            referenceId: referenceId
+          });
+        });
+      });
+    });
+    out.targets.sort(compareBagTargets);
+    return out;
+  }
+
+  function cycleBagPackageFromAssist(routeCode, row, stopStatus) {
+    var status = stopStatus == null ? '' : String(stopStatus);
+    return {
+      routeCode: routeCode,
+      trackingId: String((row && row.trackingId) || ''),
+      referenceId: row && row.referenceId ? row.referenceId : null,
+      bagName: row && row.bagName ? row.bagName : null,
+      bagNumber: row && row.bagNumber ? row.bagNumber : null,
+      bagColor: row && row.bagColor ? row.bagColor : null,
+      bagColorCode: row && row.bagColorCode ? row.bagColorCode : null,
+      bagDisplay: row && row.bagDisplay ? row.bagDisplay : null,
+      bagStatus: (row && row.bagStatus) || 'not_attempted',
+      bagSource: (row && row.bagSource) || null,
+      stopStatus: status || null,
+      stopComplete: isCompleteStopStatus(status),
+      looseConfirmed: false,
+      packageBlockRead: false
+    };
+  }
+
+  // Independent of cortexPriorityStore. Cycle 1 routes are omitted.
+  // captured_null does not set looseConfirmed.
+  function buildCycleBagSnapshot(opts) {
+    opts = opts || {};
+    var localDate = String(opts.localDate || '');
+    var byCode = {};
+    (opts.routes || []).forEach(function (r) {
+      if (!r || !r.routeCode) return;
+      var cycle = r.cycle || cycleOfRouteCode(r.routeCode);
+      if (cycle !== 'C2' && cycle !== 'C3') return;
+      byCode[String(r.routeCode)] = {
+        routeCode: String(r.routeCode),
+        cycle: cycle,
+        fetched: false,
+        packages: []
+      };
+    });
+    (opts.detailsList || []).forEach(function (details) {
+      var rd = details && details.rmsRouteDetails;
+      if (!rd) return;
+      var routeCode = String(rd.routeCode || '');
+      var cycle = cycleOfRouteCode(routeCode);
+      if (cycle !== 'C2' && cycle !== 'C3') return;
+      if (!byCode[routeCode]) {
+        byCode[routeCode] = { routeCode: routeCode, cycle: cycle, fetched: false, packages: [] };
+      }
+      var stopByRef = {};
+      (rd.stops || []).forEach(function (stop) {
+        if (!stop || !Array.isArray(stop.tasks)) return;
+        stop.tasks.forEach(function (task) {
+          if (!task || !task.referenceId) return;
+          stopByRef[String(task.referenceId)] = stop.status == null ? '' : String(stop.status);
+        });
+      });
+      var assist = extractPackageAssistIndex(
+        details,
+        opts.trDetailsByTrId || {},
+        opts.bagStatusByReferenceId || null,
+        opts.bagDomByReferenceId || null
+      );
+      byCode[routeCode].fetched = true;
+      byCode[routeCode].packages = (assist.index || []).map(function (row) {
+        return cycleBagPackageFromAssist(routeCode, row, stopByRef[String((row && row.referenceId) || '')] || '');
+      });
+    });
+    var routes = Object.keys(byCode).map(function (k) { return byCode[k]; });
+    routes.sort(function (a, b) {
+      return String(a.routeCode).localeCompare(String(b.routeCode), 'en', { numeric: true });
+    });
+    return { kind: 'ofk3-cycle-bag', version: 1, localDate: localDate, routes: routes };
+  }
+
+  function mergeCycleBagDocuments(bucket, doc) {
+    var next = { byDate: {} };
+    var src = bucket && bucket.byDate && typeof bucket.byDate === 'object' ? bucket.byDate : {};
+    Object.keys(src).forEach(function (date) {
+      next.byDate[date] = { routes: Object.assign({}, (src[date] && src[date].routes) || {}) };
+    });
+    if (!doc || doc.kind !== 'ofk3-cycle-bag') return next;
+    var date = String(doc.localDate || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return next;
+    if (!next.byDate[date]) next.byDate[date] = { routes: {} };
+    (doc.routes || []).forEach(function (r) {
+      if (!r || !r.routeCode) return;
+      if (r.cycle !== 'C2' && r.cycle !== 'C3') return;
+      next.byDate[date].routes[String(r.routeCode)] = r;
+    });
+    return next;
   }
 
   function groupBagTargetsByRoute(targets) {
@@ -3391,6 +3573,11 @@
     pickRouteClickCandidate: pickRouteClickCandidate,
     resolveClickableAncestor: resolveClickableAncestor,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
+    cycleOfRouteCode: cycleOfRouteCode,
+    selectRoutesByCycle: selectRoutesByCycle,
+    selectCycleBagTargets: selectCycleBagTargets,
+    buildCycleBagSnapshot: buildCycleBagSnapshot,
+    mergeCycleBagDocuments: mergeCycleBagDocuments,
     resolveStopAddress: resolveStopAddress,
     extractFromRouteDetails: extractFromRouteDetails,
     extractRouteSequence: extractRouteSequence,
