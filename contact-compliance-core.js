@@ -53,6 +53,18 @@
 
   var CC_UNKNOWN_DA_LABEL = '未特定';
 
+  // 所属がドライバーマスタと照合できなかったDAの集計先（除外せず1グループとして集計する）
+  var CC_UNKNOWN_AFFILIATION_LABEL = '所属未判定';
+
+  // 同じTransporter IDがマスタ上で異なる所属に登録されている場合の集計先。特定の所属へは自動で振り分けない。
+  var CC_CONFLICT_AFFILIATION_LABEL = '所属競合';
+
+  // 表示専用の理由ラベル（CC対象理由ではない。判定・対象理由リストには一切使わない）。
+  // FTDS の「Not Attempt」は元コードを保持したまま表示層・出力層でのみ「配達未試行」に変換する。
+  var CC_DISPLAY_ONLY_REASON_LABELS_JA = {
+    NOT_ATTEMPT: '配達未試行'
+  };
+
   var CC_LOGIC_LABEL = 'CC Logic Ver.' + CC_LOGIC_VERSION;
 
   // CC率の評価色分け閾値。Amazon正式基準が未確認のため現時点は null（色分けしない）。
@@ -225,9 +237,15 @@
     return parseFloat(rate.toFixed(2));
   }
 
+  // 'Not Attempt' / 'NOT_ATTEMPT' / 'not-attempt' を同一視するための表示用キー
+  function normalizeReasonKey(code) {
+    return cellText(code).toUpperCase().replace(/[\s\-]+/g, '_');
+  }
+
   function getCcReasonLabel(reason) {
     var code = cellText(reason);
-    return CC_REASON_LABELS_JA[code] || code;
+    if (CC_REASON_LABELS_JA[code]) return CC_REASON_LABELS_JA[code];
+    return CC_DISPLAY_ONLY_REASON_LABELS_JA[normalizeReasonKey(code)] || code;
   }
 
   function newCounter() {
@@ -331,6 +349,182 @@
     return copy;
   }
 
+  // ---- 所属別集計（表示用の追加集計。CC判定・既存の集計結果には影響しない） ----
+
+  // resolveAffiliation(tid) の戻り値は所属名（文字列）か、競合を表す { conflict: true, candidates: [所属名...] }。
+  // 戻り値: { name: 集計先の所属名, conflict: boolean, candidates: [所属名] }
+  function resolveCcAffiliationInfo(tid, resolveAffiliation) {
+    var v = (tid && typeof resolveAffiliation === 'function') ? resolveAffiliation(tid) : '';
+    if (v && typeof v === 'object') {
+      if (v.conflict) return { name: CC_CONFLICT_AFFILIATION_LABEL, conflict: true, candidates: (v.candidates || []).slice() };
+      v = v.name;
+    }
+    var a = cellText(v);
+    return { name: a || CC_UNKNOWN_AFFILIATION_LABEL, conflict: false, candidates: [] };
+  }
+
+  function resolveCcAffiliation(tid, resolveAffiliation) {
+    return resolveCcAffiliationInfo(tid, resolveAffiliation).name;
+  }
+
+  // CC_ELIGIBLE_REASONS の順に0件の理由も含めたカウンター配列
+  function newReasonCounters() {
+    var out = [];
+    for (var r = 0; r < CC_ELIGIBLE_REASONS.length; r++) {
+      var c = newCounter();
+      c.reason = CC_ELIGIBLE_REASONS[r];
+      c.reasonLabel = getCcReasonLabel(c.reason);
+      out.push(c);
+    }
+    return out;
+  }
+
+  function addToReasonCounters(counters, reason, status) {
+    var idx = CC_ELIGIBLE_REASONS.indexOf(cellText(reason));
+    if (idx >= 0) addToCounter(counters[idx], status);
+  }
+
+  // mode: 'nonCompliantDesc' | 'rateAsc' | 'totalDesc'。tieKey は同順位の名前順に使うキー。
+  function sortCcStats(list, mode, tieKey) {
+    var copy = (list || []).slice();
+    copy.sort(function (a, b) {
+      var d;
+      if (mode === 'rateAsc') {
+        d = compareRateAsc(a, b) || (b.nonCompliant - a.nonCompliant);
+      } else if (mode === 'totalDesc') {
+        d = (b.total - a.total) || (b.nonCompliant - a.nonCompliant);
+      } else {
+        d = (b.nonCompliant - a.nonCompliant) || compareRateAsc(a, b);
+      }
+      return d || (a[tieKey] < b[tieKey] ? -1 : (a[tieKey] > b[tieKey] ? 1 : 0));
+    });
+    return copy;
+  }
+
+  function sortCcAffiliationStats(list, mode) {
+    return sortCcStats(list, mode, 'affiliation');
+  }
+
+  // 所属 → DA → 理由 の3階層。所属は resolveAffiliation(tid) で判定し、不明は「所属未判定」に集計する（除外しない）。
+  // 既定の並び = Non-Compliant 降順 → CC率昇順（所属・DAとも）。
+  function groupCcByAffiliation(rows, resolveName, resolveAffiliation) {
+    var byAff = {};
+    var out = [];
+    var list = rows || [];
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      var status = getCcStatus(row);
+      if (status === CC_STATUS.NOT_ELIGIBLE) continue;
+      var tid = cellText(row.transporterId);
+      var affInfo = resolveCcAffiliationInfo(tid, resolveAffiliation);
+      var affName = affInfo.name;
+      var aff = byAff[affName];
+      if (!aff) {
+        aff = newCounter();
+        aff.affiliation = affName;
+        aff.identified = affName !== CC_UNKNOWN_AFFILIATION_LABEL && affName !== CC_CONFLICT_AFFILIATION_LABEL;
+        aff.conflict = affName === CC_CONFLICT_AFFILIATION_LABEL;
+        aff.byReason = newReasonCounters();
+        aff._drivers = {};
+        aff.drivers = [];
+        byAff[affName] = aff;
+        out.push(aff);
+      }
+      var da = aff._drivers[tid];
+      if (!da) {
+        da = newCounter();
+        da.transporterId = tid;
+        da.driverName = resolveCcDriverName(tid, resolveName);
+        da.identified = da.driverName !== CC_UNKNOWN_DA_LABEL;
+        da.affiliation = affName;
+        da.affiliationCandidates = affInfo.candidates;
+        da.byReason = newReasonCounters();
+        aff._drivers[tid] = da;
+        aff.drivers.push(da);
+      }
+      addToCounter(aff, status);
+      addToReasonCounters(aff.byReason, row.shipmentReason, status);
+      addToCounter(da, status);
+      addToReasonCounters(da.byReason, row.shipmentReason, status);
+    }
+    for (var a = 0; a < out.length; a++) {
+      var g = out[a];
+      delete g._drivers;
+      finishCounter(g);
+      for (var r = 0; r < g.byReason.length; r++) finishCounter(g.byReason[r]);
+      for (var d = 0; d < g.drivers.length; d++) {
+        finishCounter(g.drivers[d]);
+        for (var dr = 0; dr < g.drivers[d].byReason.length; dr++) finishCounter(g.drivers[d].byReason[dr]);
+      }
+      g.driverCount = g.drivers.length;
+      g.drivers = sortCcDriverStats(g.drivers, 'nonCompliantDesc');
+    }
+    return sortCcAffiliationStats(out, 'nonCompliantDesc');
+  }
+
+  // 所属別・DA別・理由別の合計が全体集計（summary / byReason / byDriver）と一致するかを検証する。
+  // 戻り値: { ok: boolean, errors: [説明文字列] }
+  function verifyCcAggregation(result) {
+    var errors = [];
+    var s = result.summary;
+    var affs = result.byAffiliation || [];
+    function eq(label, actual, expected) {
+      if (actual !== expected) errors.push(label + ': ' + actual + ' != ' + expected);
+    }
+    var tot = { total: 0, compliant: 0, nonCompliant: 0 };
+    var reasonTot = result.byReason.map(function () { return { total: 0, compliant: 0, nonCompliant: 0 }; });
+    var driverMap = {};
+    for (var a = 0; a < affs.length; a++) {
+      var g = affs[a];
+      tot.total += g.total; tot.compliant += g.compliant; tot.nonCompliant += g.nonCompliant;
+      var dSum = { total: 0, compliant: 0, nonCompliant: 0 };
+      var dReason = g.byReason.map(function () { return { total: 0, compliant: 0, nonCompliant: 0 }; });
+      for (var r = 0; r < g.byReason.length; r++) {
+        reasonTot[r].total += g.byReason[r].total;
+        reasonTot[r].compliant += g.byReason[r].compliant;
+        reasonTot[r].nonCompliant += g.byReason[r].nonCompliant;
+      }
+      for (var d = 0; d < g.drivers.length; d++) {
+        var da = g.drivers[d];
+        dSum.total += da.total; dSum.compliant += da.compliant; dSum.nonCompliant += da.nonCompliant;
+        var daR = { total: 0, compliant: 0, nonCompliant: 0 };
+        for (var dr = 0; dr < da.byReason.length; dr++) {
+          daR.total += da.byReason[dr].total; daR.compliant += da.byReason[dr].compliant; daR.nonCompliant += da.byReason[dr].nonCompliant;
+          dReason[dr].total += da.byReason[dr].total;
+          dReason[dr].compliant += da.byReason[dr].compliant;
+          dReason[dr].nonCompliant += da.byReason[dr].nonCompliant;
+        }
+        eq('DA ' + da.transporterId + ' 理由合計(対象)', daR.total, da.total);
+        eq('DA ' + da.transporterId + ' 理由合計(NC)', daR.nonCompliant, da.nonCompliant);
+        driverMap[da.transporterId] = (driverMap[da.transporterId] || 0) + 1;
+        var base = result.byDriver.filter(function (x) { return x.transporterId === da.transporterId; })[0];
+        if (!base) errors.push('DA ' + da.transporterId + ' が DA別集計にない');
+        else {
+          eq('DA ' + da.transporterId + ' 対象', da.total, base.total);
+          eq('DA ' + da.transporterId + ' Compliant', da.compliant, base.compliant);
+          eq('DA ' + da.transporterId + ' NC', da.nonCompliant, base.nonCompliant);
+        }
+      }
+      eq('所属 ' + g.affiliation + ' DA合計(対象)', dSum.total, g.total);
+      eq('所属 ' + g.affiliation + ' DA合計(Compliant)', dSum.compliant, g.compliant);
+      eq('所属 ' + g.affiliation + ' DA合計(NC)', dSum.nonCompliant, g.nonCompliant);
+      for (var q = 0; q < dReason.length; q++) {
+        eq('所属 ' + g.affiliation + ' 理由' + g.byReason[q].reason + '(対象)', dReason[q].total, g.byReason[q].total);
+        eq('所属 ' + g.affiliation + ' 理由' + g.byReason[q].reason + '(NC)', dReason[q].nonCompliant, g.byReason[q].nonCompliant);
+      }
+    }
+    eq('所属合計 対象件数', tot.total, s.total);
+    eq('所属合計 Compliant', tot.compliant, s.compliant);
+    eq('所属合計 Non-Compliant', tot.nonCompliant, s.nonCompliant);
+    for (var k = 0; k < result.byReason.length; k++) {
+      eq('理由別 ' + result.byReason[k].reason + ' 所属合計(対象)', reasonTot[k].total, result.byReason[k].total);
+      eq('理由別 ' + result.byReason[k].reason + ' 所属合計(Compliant)', reasonTot[k].compliant, result.byReason[k].compliant);
+      eq('理由別 ' + result.byReason[k].reason + ' 所属合計(NC)', reasonTot[k].nonCompliant, result.byReason[k].nonCompliant);
+    }
+    eq('DA数', Object.keys(driverMap).length, result.byDriver.length);
+    return { ok: errors.length === 0, errors: errors };
+  }
+
   // Event Date 昇順
   function groupCcByDate(rows) {
     var byDate = {};
@@ -352,7 +546,7 @@
   }
 
   // Non-Compliant 行のみ（Event Date → DA名 → Scannable ID 順）
-  function listCcNonCompliant(rows, resolveName) {
+  function listCcNonCompliant(rows, resolveName, resolveAffiliation) {
     var out = [];
     var list = rows || [];
     for (var i = 0; i < list.length; i++) {
@@ -361,6 +555,7 @@
       out.push({
         eventDate: cellText(row.eventDate),
         driverName: resolveCcDriverName(cellText(row.transporterId), resolveName),
+        affiliation: resolveCcAffiliation(cellText(row.transporterId), resolveAffiliation),
         transporterId: cellText(row.transporterId),
         scannableId: cellText(row.scannableId),
         destinationAddressId: cellText(row.destinationAddressId),
@@ -381,22 +576,26 @@
   }
 
   // 取込〜全集計をまとめて行う（UI/サーバー共通の入口）
-  function analyzeCcRows(rows, resolveName) {
+  // resolveAffiliation(tid) は省略可（省略時は全DAが「所属未判定」）。CC判定・既存集計には影響しない。
+  function analyzeCcRows(rows, resolveName, resolveAffiliation) {
     var parsed = ccParseRows(rows);
     if (parsed.error) return parsed;
     var records = parsed.records;
-    return {
+    var result = {
       logicVersion: CC_LOGIC_VERSION,
       records: records,
       summary: calculateCcSummary(records),
       byReason: groupCcByReason(records),
       byDriver: groupCcByDriver(records, resolveName),
       byDate: groupCcByDate(records),
-      nonCompliant: listCcNonCompliant(records, resolveName)
+      nonCompliant: listCcNonCompliant(records, resolveName, resolveAffiliation),
+      byAffiliation: groupCcByAffiliation(records, resolveName, resolveAffiliation)
     };
+    result.aggregationCheck = verifyCcAggregation(result);
+    return result;
   }
 
-  // analyzeCcRows() の結果 → Excel 5シート分の行データ（配列の配列）。判定・集計は再実行しない。
+  // analyzeCcRows() の結果 → Excel 7シート分の行データ（配列の配列）。判定・集計は再実行しない。
   // CC率は roundCcRate の数値（buildCcExportWorkbook が表示形式 0.00"%" を付ける）。0件は '-'。
   // rateColumn / rateCells: CC率セルの位置（0始まり）。driverSort: DA別の並び（画面の選択と揃える）。
   function buildCcExportSheets(result, driverSort) {
@@ -404,6 +603,12 @@
     function rateCell(rate) {
       var v = roundCcRate(rate);
       return v === null ? '-' : v;
+    }
+    function conflictDaCount(res) {
+      var n = 0;
+      var list = res.byAffiliation || [];
+      for (var i = 0; i < list.length; i++) if (list[i].conflict) n += list[i].drivers.length;
+      return n;
     }
     var reasonCodes = CC_ELIGIBLE_REASONS.slice();
     var reasonDesc = [];
@@ -420,7 +625,11 @@
       ['対象外行数', s.notEligible],
       ['対象理由', reasonDesc.join(' / ')],
       ['判定条件', 'Call Event または Text Event が存在 = Compliant（両方あっても1件）'],
-      ['集計単位', 'Amazonファイルの対象行1行 = 1件（dedupeなし）']
+      ['集計単位', 'Amazonファイルの対象行1行 = 1件（dedupeなし）'],
+      ['所属判定', 'Transporter ID × ドライバーマスタ照合（不明は「' + CC_UNKNOWN_AFFILIATION_LABEL + '」として集計）'],
+      ['所属数', (result.byAffiliation || []).length],
+      ['所属競合DA数', conflictDaCount(result)],
+      ['マスタ同期状態', result.masterSync && result.masterSync.label ? result.masterSync.label : '未確認']
     ];
 
     var reasonRows = [['配送理由', 'Shipment Reason', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
@@ -442,20 +651,49 @@
       dateRows.push([dr.eventDate, dr.total, dr.compliant, dr.nonCompliant, rateCell(dr.rate)]);
     }
 
+    var mode = driverSort || 'nonCompliantDesc';
+    var affs = sortCcAffiliationStats(result.byAffiliation || [], mode);
+
+    var affRows = [['所属', 'DA数', '対象件数', 'Compliant', 'Non-Compliant', 'CC率']];
+    for (var a = 0; a < affs.length; a++) {
+      var g = affs[a];
+      affRows.push([g.affiliation, g.drivers.length, g.total, g.compliant, g.nonCompliant, rateCell(g.rate)]);
+    }
+    affRows.push(['合計', result.byDriver.length, s.total, s.compliant, s.nonCompliant, rateCell(s.rate)]);
+
+    // 所属 → DA → 配送理由 の縦持ち。対象件数のある理由のみ出力（合計は全体集計と一致する）。
+    var affDaRows = [['所属', 'DA名', 'Transporter ID', '配送理由', 'Shipment Reason（原文コード）',
+      '対象件数', 'Compliant', 'Non-Compliant', 'CC率', 'DA合計 対象件数', 'DA合計 Non-Compliant', 'DA合計 CC率', '所属候補（競合時）']];
+    for (var ai = 0; ai < affs.length; ai++) {
+      var das = sortCcDriverStats(affs[ai].drivers, mode);
+      for (var di = 0; di < das.length; di++) {
+        var da = das[di];
+        for (var ri = 0; ri < da.byReason.length; ri++) {
+          var rr = da.byReason[ri];
+          if (!rr.total) continue;
+          affDaRows.push([affs[ai].affiliation, da.driverName, da.transporterId, rr.reasonLabel, rr.reason,
+            rr.total, rr.compliant, rr.nonCompliant, rateCell(rr.rate), da.total, da.nonCompliant, rateCell(da.rate),
+            (da.affiliationCandidates || []).join(' / ')]);
+        }
+      }
+    }
+
     var ncRows = [['Event Date', 'DA名', 'Transporter ID', 'Scannable ID', 'Destination Address ID',
-      'Shipment Reason', '配送理由（日本語）', 'Call Event', 'Text Event', '判定']];
+      'Shipment Reason', '配送理由（日本語）', 'Call Event', 'Text Event', '判定', '所属']];
     for (var n = 0; n < result.nonCompliant.length; n++) {
       var nc = result.nonCompliant[n];
       ncRows.push([nc.eventDate, nc.driverName, nc.transporterId, nc.scannableId, nc.destinationAddressId,
-        nc.shipmentReason, nc.shipmentReasonLabel, nc.callEvent, nc.textEvent, 'Non-Compliant']);
+        nc.shipmentReason, nc.shipmentReasonLabel, nc.callEvent, nc.textEvent, 'Non-Compliant', nc.affiliation]);
     }
 
     return [
       { name: 'CCサマリー', rows: summaryRows, rateCells: [[2, 1]], widths: [20, 60] },
+      { name: '所属別サマリー', rows: affRows, rateColumn: 5, widths: [22, 8, 10, 12, 14, 10] },
+      { name: '所属別DA分析', rows: affDaRows, rateColumns: [8, 11], widths: [20, 22, 18, 20, 32, 10, 12, 14, 10, 14, 18, 14, 24] },
       { name: '理由別', rows: reasonRows, rateColumn: 5, widths: [20, 34, 10, 12, 14, 10] },
       { name: 'DA別', rows: driverRows, rateColumn: 5, widths: [22, 18, 10, 12, 14, 10] },
       { name: '日別', rows: dateRows, rateColumn: 4, widths: [14, 10, 12, 14, 10] },
-      { name: 'Non-Compliant明細', rows: ncRows, widths: [12, 22, 18, 16, 22, 32, 20, 18, 18, 14] }
+      { name: 'Non-Compliant明細', rows: ncRows, widths: [12, 22, 18, 16, 22, 32, 20, 18, 18, 14, 18] }
     ];
   }
 
@@ -469,8 +707,10 @@
       var sh = sheets[i];
       var ws = XLSX.utils.aoa_to_sheet(sh.rows);
       var cells = (sh.rateCells || []).slice();
-      if (sh.rateColumn !== undefined) {
-        for (var r = 1; r < sh.rows.length; r++) cells.push([r, sh.rateColumn]);
+      var rateCols = sh.rateColumns ? sh.rateColumns.slice() : [];
+      if (sh.rateColumn !== undefined) rateCols.push(sh.rateColumn);
+      for (var rc = 0; rc < rateCols.length; rc++) {
+        for (var r = 1; r < sh.rows.length; r++) cells.push([r, rateCols[rc]]);
       }
       for (var c = 0; c < cells.length; c++) {
         var cell = ws[XLSX.utils.encode_cell({ r: cells[c][0], c: cells[c][1] })];
@@ -491,6 +731,9 @@
     CC_STATUS: CC_STATUS,
     CC_STATUS_LABELS_JA: CC_STATUS_LABELS_JA,
     CC_UNKNOWN_DA_LABEL: CC_UNKNOWN_DA_LABEL,
+    CC_UNKNOWN_AFFILIATION_LABEL: CC_UNKNOWN_AFFILIATION_LABEL,
+    CC_CONFLICT_AFFILIATION_LABEL: CC_CONFLICT_AFFILIATION_LABEL,
+    CC_DISPLAY_ONLY_REASON_LABELS_JA: CC_DISPLAY_ONLY_REASON_LABELS_JA,
     CC_LOGIC_LABEL: CC_LOGIC_LABEL,
     CC_RATE_LEVEL_THRESHOLDS: CC_RATE_LEVEL_THRESHOLDS,
     CC_REQUIRED_COLUMNS: CC_REQUIRED_COLUMNS,
@@ -514,6 +757,11 @@
     resolveCcDriverName: resolveCcDriverName,
     groupCcByDriver: groupCcByDriver,
     sortCcDriverStats: sortCcDriverStats,
+    resolveCcAffiliation: resolveCcAffiliation,
+    resolveCcAffiliationInfo: resolveCcAffiliationInfo,
+    groupCcByAffiliation: groupCcByAffiliation,
+    sortCcAffiliationStats: sortCcAffiliationStats,
+    verifyCcAggregation: verifyCcAggregation,
     groupCcByDate: groupCcByDate,
     listCcNonCompliant: listCcNonCompliant,
     analyzeCcRows: analyzeCcRows
