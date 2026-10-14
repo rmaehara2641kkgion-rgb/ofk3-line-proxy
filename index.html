@@ -26,6 +26,7 @@
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script src="/billing-reconcile-core.js?v=20261007-3"></script>
   <script src="/contact-compliance-core.js?v=20261014-1"></script>
+  <script src="/dnr-core.js?v=20261014-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -20808,6 +20809,13 @@ var driverDB = {
     }
 
     // DNR保持列定義
+    // DNR日時の表示変換（表示・出力専用。rec.delivery_date_jst の元の値は変更しない）。
+    // 時刻あり→「YYYY/MM/DD HH」、日付のみ/00:00:00→「YYYY/MM/DD 時刻不明」。ロジックは dnr-core.js（DnrCore）。
+    function dnrDisplayDateTime(v) {
+      if (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatOccurrence) return DnrCore.dnrFormatOccurrence(v);
+      return v === null || v === undefined ? '' : String(v);
+    }
+
     var DNR_KEEP_COLS = ['delivery_date_jst', 'delivery_station_code', 'provider_company_name', 'transporter_id', 'tracking_id', 'shipment_reason', 'bucket', 'sub_bucket', 'state', 'postal_code', 'address', 'scan_gps_latitude', 'scan_gps_longitude', 'conceded_units', 'dnr_cost_jpy'];
     var DNR_COL_LABELS = {
       'delivery_date_jst': '配達日', 'delivery_station_code': 'DS', 'provider_company_name': 'DSP名',
@@ -20860,6 +20868,7 @@ var driverDB = {
         if (tidIdx < 0 && headers.length > 8) tidIdx = 8;
 
         var tids = JSON.parse(localStorage.getItem('transportIDs') || '{}');
+        var dnrRange = XLSX.utils.decode_range(ws['!ref'] || 'A1');
 
         dnrResultData = [];
         for (var i = 1; i < json.length; i++) {
@@ -20885,6 +20894,14 @@ var driverDB = {
             var col = DNR_KEEP_COLS[k];
             var idx = colIdx[col];
             rec[col] = (idx !== undefined && row[idx] !== undefined && row[idx] !== null) ? String(row[idx]).trim() : '';
+            // 日時の数値セル（Excelシリアル）は raw:false の整形で時刻が落ちることがあるため、セルの生の値から時刻付きで復元する
+            if (col === 'delivery_date_jst' && idx !== undefined && typeof DnrCore !== 'undefined') {
+              var dcell = ws[XLSX.utils.encode_cell({ r: dnrRange.s.r + i, c: dnrRange.s.c + idx })];
+              if (dcell && dcell.t === 'n') {
+                var dtext = DnrCore.dnrSerialToDateTimeString(dcell.v);
+                if (dtext) rec[col] = dtext;
+              }
+            }
           }
           // 金額を数値化
           rec._cost = parseFloat(rec.dnr_cost_jpy) || 0;
@@ -20980,7 +20997,7 @@ var driverDB = {
         var rowColor = r.driverName ? '' : 'bg-red-900 bg-opacity-10';
         tbody += '<tr class="border-b border-border ' + rowColor + '">';
         tbody += '<td class="px-2 py-1.5 text-xs font-medium ' + (r.driverName ? 'text-emerald-400' : 'text-red-400') + '">' + (r.driverName || '未特定') + '</td>';
-        tbody += '<td class="px-2 py-1.5 text-xs text-center">' + r.delivery_date_jst + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs text-center whitespace-nowrap">' + escapeHtml(dnrDisplayDateTime(r.delivery_date_jst)) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + r.delivery_station_code + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + r.provider_company_name + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs font-mono">' + r.tracking_id + '</td>';
@@ -21025,7 +21042,7 @@ var driverDB = {
       for (var i = 0; i < pins.length; i++) {
         var p = pins[i];
         var popupContent = '<b>' + (p.driverName || '未特定') + '</b><br>'
-          + p.delivery_date_jst + '<br>'
+          + dnrDisplayDateTime(p.delivery_date_jst) + '<br>'
           + '<b>理由:</b> ' + p.shipment_reason + '<br>'
           + '<b>住所:</b> ' + (p.address || '') + '<br>'
           + '<b>金額:</b> ¥' + p._cost.toLocaleString();
@@ -21120,7 +21137,7 @@ var driverDB = {
         attribution: '&copy; OpenStreetMap'
       }).addTo(dnrMap);
       var popupContent = '<b>' + (r.driverName || '未特定') + '</b><br>'
-        + r.delivery_date_jst + '<br>'
+        + dnrDisplayDateTime(r.delivery_date_jst) + '<br>'
         + '<b>理由:</b> ' + r.shipment_reason + '<br>'
         + '<b>住所:</b> ' + (r.address || '') + '<br>'
         + '<b>金額:</b> ¥' + r._cost.toLocaleString();
@@ -21161,7 +21178,7 @@ var driverDB = {
       }
 
       var msg = '🚫 DNR通知\n━━━━━━━━━━━━\n'
-        + '📅 配達日: ' + r.delivery_date_jst + '\n'
+        + '📅 配達日: ' + dnrDisplayDateTime(r.delivery_date_jst) + '\n'
         + '📦 TrackingID: ' + r.tracking_id + '\n'
         + '❓ 理由: ' + r.shipment_reason + '\n'
         + '📍 住所: ' + (r.address || r.state || '') + '\n'
@@ -21244,6 +21261,7 @@ var driverDB = {
         for (var k = 0; k < DNR_KEEP_COLS.length; k++) {
           var val = r[DNR_KEEP_COLS[k]] || '';
           if (DNR_KEEP_COLS[k] === 'shipment_reason' || DNR_KEEP_COLS[k] === 'sub_bucket' || DNR_KEEP_COLS[k] === 'bucket') val = translateReason(val);
+          if (DNR_KEEP_COLS[k] === 'delivery_date_jst') val = dnrDisplayDateTime(val);
           row.push(val);
         }
         aoa.push(row);
