@@ -261,6 +261,7 @@ assert(mentorSrc.indexOf('vrm-mentor.edriving.com') >= 0, 'host gate is explicit
 assert(mentorSrc.indexOf('top:12px;right:12px') >= 0, 'diagnostic panel is fixed at the top right');
 assert(mentorSrc.indexOf('left:12px;bottom:12px') < 0, 'diagnostic panel is not fixed at the bottom left');
 assert(mentorSrc.indexOf('最小化') >= 0 && mentorSrc.indexOf('ofk3-mentor-details') >= 0, 'diagnostic panel can collapse to the title');
+assert(mentorSrc.indexOf("if (title) title.style.display = 'none';") >= 0, 'the shell title stays hidden so Mentor稼働確認 is shown once');
 assert(mentorSrc.indexOf('shifts\\/devices') >= 0, 'devices path is explicitly excluded');
 
 const manifest = JSON.parse(readFileSync(join(repo, 'cortex-capture-extension', 'manifest.json'), 'utf8'));
@@ -347,6 +348,19 @@ assert(parsedOk.lastResponse.pathname.indexOf('SECRET-FLEET') < 0, 'last pathnam
 assert(parsedOk.lastResponse.pathname === '/reports/driver/shifts', 'last pathname is the shifts path');
 assert(parsedCopy.indexOf(secretName) < 0 && parsedCopy.indexOf(secretId) < 0 && parsedCopy.indexOf(secretStaff) < 0, 'parsed diagnostic hides driver values');
 assert(parsedCopy.indexOf('1791160800000') < 0, 'parsed diagnostic hides the timestamp');
+const secretQuery = 'https://vrm-mentor.edriving.com/reports/driver/shifts?localDate=2026-10-13&startTime=1&endTime=2&fpId=SECRET-FLEET';
+const keptUrl = MC.applyObservation(freshState(), 'shifts', {
+  pathname: '/reports/driver/shifts',
+  requestUrl: secretQuery,
+  method: 'GET',
+  transport: 'fetch',
+  status: 200,
+  clone: 'SUCCESS',
+  textStatus: 'SUCCESS',
+  text: secretBody
+});
+const keptCopy = JSON.stringify(MC.buildDiagnostic(keptUrl));
+assert(keptCopy.indexOf('SECRET-FLEET') < 0 && keptCopy.indexOf(secretQuery) < 0 && keptCopy.indexOf('localDate') < 0, 'the capture diagnostic does not keep the request url or query');
 
 const prefixed = MC.applyObservation(freshState(), 'shifts', {
   pathname: '/reports/driver/shifts',

@@ -7,6 +7,7 @@
 (function (global) {
   'use strict';
 
+  var lastMentorDigest = null;
   var IDENTIFIER_CANDIDATES = [
     'driverId',
     'driverID',
@@ -494,6 +495,41 @@
     return false;
   }
 
+  function publishMentorIdMessage(digest) {
+    try {
+      if (typeof global.postMessage !== 'function') return;
+      var target = '';
+      try { target = global.location && global.location.origin; } catch (e0) { target = ''; }
+      if (!target) return;
+      lastMentorDigest = digest;
+      global.postMessage({ source: 'OFK3_ID_DIAG', type: 'mentor-ids', digest: digest }, target);
+    } catch (e1) {}
+  }
+
+  function shiftsFailureIssue(last) {
+    if (!last || last.clone !== 'SUCCESS') return 'CLONE_FAILED';
+    if (last.text !== 'SUCCESS') return 'TEXT_FAILED';
+    if (last.jsonParse !== 'SUCCESS') return 'JSON_PARSE_FAILED';
+    if (!(last.status >= 200 && last.status < 300)) return 'HTTP';
+    return 'NO_DATA_ARRAY';
+  }
+
+  function publishMentorIdFailure(issue) {
+    publishMentorIdMessage({
+      ok: false,
+      issue: issue || 'FAILED',
+      capturedAt: new Date().toISOString()
+    });
+  }
+
+  function publishMentorIdDigest(body, capturedAt, requestUrl) {
+    try {
+      var Core = global.OFK3IdDiag;
+      if (!Core || typeof Core.mentorDigest !== 'function') return;
+      publishMentorIdMessage(Core.mentorDigest(body, capturedAt, requestUrl));
+    } catch (e1) {}
+  }
+
   function applyObservation(state, kind, obs) {
     obs = obs || {};
     var cloneOk = obs.clone === 'SUCCESS';
@@ -523,6 +559,7 @@
       signalAtReadFailure: textOk ? '' : safeSignalState(obs.signalAtReadFailure)
     };
     var accepted = !!(parsed && parsed.ok && status >= 200 && status < 300);
+    if (kind === 'shifts' && !accepted) publishMentorIdFailure(shiftsFailureIssue(last));
     if (kindCaptured(state, kind) && !accepted) return state;
     state.lastResponse = last;
     if (!cloneOk) {
@@ -584,6 +621,9 @@
       state.issue = '';
     }
     state.capturedAt = new Date().toISOString();
+    if (kind === 'shifts' && state.shiftsCaptured && accepted && parsed && parsed.body) {
+      publishMentorIdDigest(parsed.body, state.capturedAt, obs.requestUrl || '');
+    }
     return state;
   }
 
@@ -742,6 +782,7 @@
     }
     var facts = {
       pathname: pathnameOnly(info && info.url),
+      requestUrl: info && info.url,
       method: info && info.method,
       transport: 'fetch',
       status: res && Number(res.status) || 0,
@@ -806,6 +847,7 @@
   function observeXhr(kind, xhr) {
     var facts = {
       pathname: pathnameOnly(xhr && xhr.__ofk3MentorUrl),
+      requestUrl: xhr && xhr.__ofk3MentorUrl,
       method: xhr && xhr.__ofk3MentorMethod,
       transport: 'xhr',
       status: xhr ? Number(xhr.status) || 0 : 0,
@@ -956,9 +998,9 @@
     var details = host.shadowRoot.getElementById('ofk3-mentor-details');
     if (box) box.className = panelCollapsed ? 'box collapsed' : 'box';
     if (head) head.style.display = panelCollapsed ? 'block' : 'flex';
-    if (title) title.style.display = panelCollapsed ? 'none' : '';
+    if (title) title.style.display = 'none';
     if (details) details.style.display = panelCollapsed ? 'none' : 'block';
-    if (toggle) toggle.textContent = panelCollapsed ? 'MENTOR CAPTURE v0' : '最小化';
+    if (toggle) toggle.textContent = panelCollapsed ? 'Mentor稼働確認' : '最小化';
   }
 
   function line(parent, label, value) {
@@ -1113,6 +1155,19 @@
     else markSend(data.message || '送信できませんでした');
   });
 
+  global.addEventListener('message', function (ev) {
+    if (ev.source !== global) return;
+    var data = ev.data;
+    if (!data || data.source !== 'OFK3_ID_DIAG' || data.type !== 'please-resend-mentor') return;
+    if (!lastMentorDigest || typeof global.postMessage !== 'function') return;
+    var target = '';
+    try { target = global.location.origin; } catch (e) { target = ''; }
+    if (!target) return;
+    try {
+      global.postMessage({ source: 'OFK3_ID_DIAG', type: 'mentor-ids', digest: lastMentorDigest }, target);
+    } catch (e2) {}
+  });
+
   function ensurePanel() {
     if (!document.documentElement || document.getElementById(PANEL_ID)) return;
     var host = document.createElement('div');
@@ -1120,7 +1175,7 @@
     host.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483646;';
     var shadow = host.attachShadow({ mode: 'open' });
     var style = document.createElement('style');
-    style.textContent = '.box{width:420px;max-height:70vh;overflow:auto;background:#111;color:#fff;font:12px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} .box.collapsed{width:auto;max-height:none;padding:0;background:transparent;box-shadow:none;overflow:visible} .head{display:flex;align-items:center;justify-content:space-between;gap:8px} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .chip{margin:0;font-weight:700} .note{opacity:.8;min-height:1.2em}';
+    style.textContent = '.box{width:min(460px,calc(100vw - 24px));max-height:70vh;overflow:auto;overflow-x:hidden;background:#111;color:#fff;font:13px/1.45 sans-serif;padding:10px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)} .box.collapsed{width:auto;max-height:none;padding:0;background:transparent;box-shadow:none;overflow:visible} .head{display:flex;align-items:center;justify-content:space-between;gap:8px} button{margin:8px 8px 0 0;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer} .chip{margin:0;font-weight:700} .note{opacity:.8;min-height:1.2em}';
     var box = document.createElement('div');
     box.className = 'box collapsed';
     var head = document.createElement('div');
@@ -1129,13 +1184,13 @@
     head.style.display = 'block';
     var titleName = document.createElement('b');
     titleName.id = 'ofk3-mentor-title';
-    titleName.textContent = 'MENTOR CAPTURE v0';
+    titleName.textContent = 'Mentor稼働確認';
     titleName.style.display = 'none';
     var toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.id = 'ofk3-mentor-toggle';
     toggle.className = 'chip';
-    toggle.textContent = 'MENTOR CAPTURE v0';
+    toggle.textContent = 'Mentor稼働確認';
     toggle.addEventListener('click', function () {
       setPanelCollapsed(!panelCollapsed);
     });
@@ -1144,6 +1199,37 @@
     var details = document.createElement('div');
     details.id = 'ofk3-mentor-details';
     details.style.display = 'none';
+    var diag = document.createElement('div');
+    diag.id = 'ofk3-id-diag';
+    diag.style.marginBottom = '10px';
+    diag.style.paddingBottom = '8px';
+    diag.style.borderBottom = '1px solid rgba(255,255,255,.2)';
+    var diagTitle = document.createElement('b');
+    diagTitle.textContent = 'ID照合診断（調査用）';
+    var diagBody = document.createElement('pre');
+    diagBody.id = 'ofk3-id-diag-body';
+    diagBody.style.whiteSpace = 'pre-wrap';
+    diagBody.style.overflowWrap = 'anywhere';
+    diagBody.style.margin = '8px 0 0';
+    diagTitle.hidden = true;
+    diagBody.hidden = true;
+    try {
+      diagBody.textContent = (global.OFK3IdDiag && typeof global.OFK3IdDiag.panelLines === 'function')
+        ? global.OFK3IdDiag.panelLines(null).join('\n')
+        : 'ID照合診断（調査用）\n未取得';
+    } catch (eDiag) {
+      diagBody.textContent = 'ID照合診断（調査用）\n未取得';
+    }
+    diag.appendChild(diagTitle);
+    diag.appendChild(diagBody);
+    details.appendChild(diag);
+    var tech = document.createElement('div');
+    tech.id = 'ofk3-mentor-tech';
+    tech.hidden = true;
+    var techLabel = document.createElement('div');
+    techLabel.textContent = 'API取得ログ';
+    techLabel.style.fontWeight = '700';
+    techLabel.style.marginTop = '8px';
     var status = document.createElement('div');
     status.id = 'ofk3-mentor-status';
     status.textContent = 'WAITING';
@@ -1163,12 +1249,14 @@
     var sendNote = document.createElement('div');
     sendNote.id = 'ofk3-mentor-send-note';
     sendNote.className = 'note';
-    details.appendChild(status);
-    details.appendChild(body);
-    details.appendChild(button);
-    details.appendChild(copyNote);
-    details.appendChild(sendButton);
-    details.appendChild(sendNote);
+    tech.appendChild(techLabel);
+    tech.appendChild(status);
+    tech.appendChild(body);
+    tech.appendChild(button);
+    tech.appendChild(copyNote);
+    tech.appendChild(sendButton);
+    tech.appendChild(sendNote);
+    details.appendChild(tech);
     box.appendChild(head);
     box.appendChild(details);
     shadow.appendChild(style);
