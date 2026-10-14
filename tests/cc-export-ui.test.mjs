@@ -52,9 +52,9 @@ const FUNCTIONS = [
   'normalizeReportHeader', 'isTransporterHeader', 'mapAnalysisHeaderColumns', 'findAnalysisHeaderRow',
   'buildTidToNameLookup', 'updateCcExportUi', 'clearCcV1', 'showCcV1Error', 'ccV1RateHtml',
   'renderCcV1FromRows', 'renderCcV1', 'renderCcV1DriverTable', 'ccV1RateBarHtml', 'ccV1NcBarHtml', 'ccV1ReasonTableHtml',
-  'ccV1StatTableHtml', 'ccMasterSyncLabel', 'renderMasterSyncWarning', 'finishMasterSync', 'syncMasterBeforeAnalysis',
+  'ccV1RateCellHtml', 'ccV1TabClass', 'ccMasterSyncLabel', 'renderMasterSyncWarning', 'finishMasterSync', 'syncMasterBeforeAnalysis',
   'ccMasterAffiliationFor', 'handleCcFile', 'handleFtdsFile', 'normalizeIdToken', 'normalizeCcTid', 'ccV1MasterSignature', 'buildCcMasterLookup',
-  'summarizeCcAffiliationStatus', 'refreshCcV1Affiliation', 'ccV1SelectAff', 'ccV1SelectDa', 'ccV1NavTo', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
+  'summarizeCcAffiliationStatus', 'refreshCcV1Affiliation', 'ccV1SelectTab', 'ccV1SelectDa', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
   'translateReason', 'isCcCallRequired', 'isCcCallMade', 'calcCcCallRate', 'buildCcAoa',
   'styleQualityExportSheet', 'styleCcSheet', 'buildQualityAffiliationWorkbook',
   'groupQualityRecordsByAffiliation', 'toSafeExcelSheetName', 'exportCcResult'
@@ -98,8 +98,9 @@ function buildSandbox(master) {
     exportedQualityCounts: {},
     ccV1Result: null,
     ccV1MissingColumns: null,
-    ccV1Nav: { aff: null, tid: null },
-    ccV1AffView: [],
+    ccV1Tab: '__all__',
+    ccV1TabList: [],
+    ccV1DaSel: null,
     ccV1DaView: [],
     getTodayJst: function () { return '2026-10-07'; },
     escapeHtml: function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
@@ -260,8 +261,8 @@ function testBulkImportRoutesLegacyName() {
   assert(!test('ftds分析_2026-10-07.xlsx'), 'FTDS は対象外');
 }
 
-// ---- 所属別ドリルダウン（全体 → 所属 → DA → 理由 → 詳細）と Excel の一致 ----
-function testAffiliationDrilldown() {
+// ---- 所属別タブ（W36方式）: 全体｜所属…｜所属競合｜所属未判定 ----
+function testAffiliationTabs() {
   var rows = wk40Rows();
   var tids = Array.from(new Set(rows.slice(1).map(function (r) { return r[5]; }))).filter(Boolean);
   var master = {}; var depts = {};
@@ -274,34 +275,64 @@ function testAffiliationDrilldown() {
   var res = t.sandbox.renderCcV1FromRows(wk40Rows());
   assert(res.ok, '算出成功');
   var r = t.sandbox.ccV1Result;
-  assert(r.summary.total === 575 && r.summary.compliant === 453 && r.summary.nonCompliant === 122, 'Wk40の全体値は所属追加後も不変');
+  assert(r.summary.total === 575 && r.summary.compliant === 453 && r.summary.nonCompliant === 122, 'Wk40の全体値は不変');
+  var tabsHtml = function () { return t.elements['cc-v1-aff-tabs'].innerHTML; };
   var body = function () { return t.elements['cc-v1-aff-body'].innerHTML; };
-  assert(/JHS/.test(body()) && /AE物流/.test(body()) && /所属未判定/.test(body()), 'ルート: 所属一覧に所属未判定を含む');
-  assert(/一致/.test(t.elements['cc-v1-aff-check'].innerHTML), '整合性表示');
-  assert(/<b>全体<\/b>/.test(t.elements['cc-v1-aff-crumb'].innerHTML), 'パンくず: 全体');
+  var tabLabels = t.sandbox.ccV1TabList.map(function (x) { return x.label; });
+  assert(tabLabels.join() === '全体,JHS,AE物流,所属未判定', 'タブはマスタの所属から動的生成（マスタ順→所属未判定）: ' + tabLabels);
+  assert(t.sandbox.ccV1Tab === '__all__' && /全体/.test(tabsHtml()), '最初は全体タブ');
 
-  t.sandbox.ccV1SelectAff(0);
-  var first = t.sandbox.ccV1AffView[0];
-  assert(first.nonCompliant === Math.max.apply(null, r.byAffiliation.map(function (a) { return a.nonCompliant; })), '先頭はNC最多の所属');
-  assert(body().indexOf(first.drivers[0].transporterId) >= 0 && /DA別/.test(body()) && /所属内の配送理由別/.test(body()), '所属選択でDA一覧と理由別');
-  assert(new RegExp('<b>' + first.affiliation + '</b>').test(t.elements['cc-v1-aff-crumb'].innerHTML), 'パンくず: 所属');
+  // 全体タブ: 全DAを最初から表示・所属列あり・10項目
+  var head = body().slice(0, body().indexOf('</thead>'));
+  ['DA名', 'Transporter ID', '所属', '対象', 'Compliant', 'Non-Compliant', 'CC率', '不在', '配達先アクセス不可', '住所不明', '安全な置き場所なし'].forEach(function (h) {
+    assert(head.indexOf('>' + h) >= 0, '全体タブの列: ' + h);
+  });
+  var allRows = (body().match(/onclick="ccV1SelectDa\(/g) || []).length;
+  assert(allRows === r.byDriver.length, '全体タブに全DA(' + r.byDriver.length + '名)を表示: ' + allRows);
+  assert(/（NC \d+）/.test(body()), '理由別にNC件数を併記');
+  assert(body().indexOf('所属未判定') >= 0, '全体タブの所属列に所属未判定');
 
+  // 各所属タブ: そのDA全員・所属列なし・上部に所属合計
+  t.sandbox.ccV1SelectTab(1);
+  var tab = t.sandbox.ccV1TabList[1];
+  assert(tab.label === 'JHS' && t.sandbox.ccV1Tab === 'JHS', 'JHSタブ選択');
+  var g = r.byAffiliation.filter(function (a) { return a.affiliation === 'JHS'; })[0];
+  assert((body().match(/onclick="ccV1SelectDa\(/g) || []).length === g.drivers.length, '所属に該当するDA全員を最初から表示');
+  var head2 = body().slice(0, body().indexOf('</thead>'));
+  assert(head2.indexOf('>所属<') < 0, '所属タブには所属列なし');
+  assert(body().indexOf('JHS CC率') >= 0, 'タブ上部に所属合計(CC率)');
+  var top = body().slice(0, body().indexOf('<table'));
+  [g.total, g.compliant, g.nonCompliant].forEach(function (n) { assert(top.indexOf('>' + n + '<') >= 0, 'タブ上部に所属合計 ' + n); });
+  assert(top.indexOf(t.sandbox.ContactComplianceCore.formatCcRate(g.rate)) >= 0, 'タブ上部のCC率');
+  // 合計行(理由別含む)
+  var totalRow = body().slice(body().lastIndexOf('<tr class="bg-surface font-bold">'));
+  assert(totalRow.indexOf('>' + g.total + '<') >= 0 && totalRow.indexOf('>' + g.nonCompliant + '<') >= 0, '合計行は所属合計と一致');
+
+  // 所属未判定タブ
+  var ui = t.sandbox.ccV1TabList.map(function (x) { return x.label; }).indexOf('所属未判定');
+  t.sandbox.ccV1SelectTab(ui);
+  assert(t.sandbox.ccV1TabList[ui].kind === 'unknown' && body().indexOf('ドライバーマスタに未登録') >= 0, '所属未判定タブ');
+  assert(/bg-red-600/.test(tabsHtml()), '所属未判定タブは強調色');
+
+  // DA詳細（階層クリックは詳細表示として残す）
+  t.sandbox.ccV1SelectTab(0);
   t.sandbox.ccV1SelectDa(0);
-  assert(/配送理由別/.test(body()) && /非適合明細/.test(body()), 'DA選択で理由別内訳と詳細');
-  assert(body().indexOf('不在') >= 0 || body().indexOf('配達先アクセス不可') >= 0, '理由は日本語表示');
+  var detail = t.elements['cc-v1-da-detail'].innerHTML;
   var da = t.sandbox.ccV1DaView[0];
-  assert(body().indexOf('非適合明細（' + da.nonCompliant + '件）') >= 0, 'DAの詳細件数=DA非適合件数');
-
-  t.sandbox.ccV1NavTo('aff');
-  assert(/DA別/.test(body()), '所属へ戻る');
-  t.sandbox.ccV1NavTo('root');
-  assert(/<b>全体<\/b>/.test(t.elements['cc-v1-aff-crumb'].innerHTML), '全体へ戻る');
+  assert(/の詳細/.test(detail) && detail.indexOf('非適合明細（' + da.nonCompliant + '件）') >= 0 && detail.indexOf('不在') >= 0, 'DA詳細: 理由別内訳と非適合明細');
+  t.sandbox.ccV1SelectDa(0);
+  assert(t.elements['cc-v1-da-detail'].innerHTML === '', '再クリックで詳細を閉じる');
 
   // 並び替え
   t.elements['cc-v1-aff-sort'].value = 'rateAsc';
   t.sandbox.renderCcV1Affiliation();
-  var v = t.sandbox.ccV1AffView;
+  var v = t.sandbox.ccV1DaView;
   for (var i = 1; i < v.length; i++) assert(v[i - 1].rate <= v[i].rate, 'CC率昇順');
+
+  // 選択中のタブがマスタ更新後の再判定で消えた場合は全体へ戻る
+  t.sandbox.ccV1Tab = '存在しない所属';
+  t.sandbox.renderCcV1Affiliation();
+  assert(t.sandbox.ccV1Tab === '__all__', '存在しないタブは全体へ');
 }
 
 // ---- マスタ参照: 同一データソース・表記ゆれ・マスタ更新後の再判定・所属未判定の条件 ----
@@ -403,7 +434,12 @@ function testDuplicateIdConflict() {
   // 画面
   t.sandbox.renderCcV1Affiliation();
   var body = t.elements['cc-v1-aff-body'].innerHTML;
-  assert(body.indexOf('所属競合') >= 0 && body.indexOf('bg-amber-50') >= 0, '画面に所属競合を強調表示');
+  assert(body.indexOf('所属競合') >= 0 && body.indexOf('bg-amber-50') >= 0, '全体タブに所属競合を強調表示');
+  var ci = t.sandbox.ccV1TabList.map(function (x) { return x.label; }).indexOf('所属競合');
+  assert(ci > 0 && t.sandbox.ccV1TabList[ci].kind === 'conflict' && /bg-amber/.test(t.elements['cc-v1-aff-tabs'].innerHTML) === false, '所属競合は独立タブ');
+  t.sandbox.ccV1SelectTab(ci);
+  assert(t.elements['cc-v1-aff-body'].innerHTML.indexOf('候補: AE物流 / JHS') >= 0, '所属競合タブに候補を併記');
+  assert(/bg-amber-600/.test(t.elements['cc-v1-aff-tabs'].innerHTML), '所属競合タブは選択時に琥珀色');
   assert(t.elements['cc-v1-aff-check'].innerHTML.indexOf('所属競合 1名') >= 0, '内訳に所属競合');
   // Excel
   var wb = roundTrip(t.sandbox.ContactComplianceCore.buildCcExportWorkbook(XLSX, r));
@@ -472,7 +508,7 @@ async function testMasterSyncOnAnalysisStart() {
   assert(fn.indexOf('loadMasterFromServer()') >= 0, '既存の同期機構 loadMasterFromServer を呼ぶ');
 }
 
-var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown, testMasterLookup, testMasterNotModified, testDuplicateIdConflict, testMasterSyncOnAnalysisStart];
+var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationTabs, testMasterLookup, testMasterNotModified, testDuplicateIdConflict, testMasterSyncOnAnalysisStart];
 for (var i = 0; i < tests.length; i++) {
   await tests[i]();
   console.log('PASS ' + tests[i].name);
