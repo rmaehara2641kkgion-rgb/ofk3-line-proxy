@@ -1460,7 +1460,7 @@
               <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white" id="btn-view-cc" onclick="setFtdsCcActiveView('cc')">CC表示</button>
             </div>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
-            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）の7シートExcel（所属別サマリー・所属別DA分析を含む）">📊 CC Ver.1 Excel出力</button>
+            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）のExcel（全体・所属別シート＋CCサマリー/所属別サマリー/所属別DA分析/理由別/DA別/日別/Non-Compliant明細）">📊 CC Ver.1 Excel出力</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled title="従来指標（べき架電／実架電）のExcel。CC Logic Ver.1 の数値ではありません">📞 従来架電実績 Excel出力</button>
           </div>
         </div>
@@ -18917,7 +18917,7 @@ var driverDB = {
       }
     }
 
-    // CC Ver.1 Excel出力（7シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
+    // CC Ver.1 Excel出力（所属別タブ相当シート＋7分析シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
     // 画面と同じ ccV1Result から作る（Excel側で判定・集計をやり直さない）。DA別は画面の並び順に合わせる。
     function exportCcV1Result() {
       if (!ccV1Result) {
@@ -18929,7 +18929,7 @@ var driverDB = {
         return;
       }
       var sel = document.getElementById('cc-v1-driver-sort');
-      var wb = ContactComplianceCore.buildCcExportWorkbook(XLSX, ccV1Result, sel ? sel.value : 'nonCompliantDesc');
+      var wb = ContactComplianceCore.buildCcExportWorkbook(XLSX, ccV1Result, sel ? sel.value : 'nonCompliantDesc', DEPARTMENTS);
       XLSX.writeFile(wb, 'CC_Ver1分析_' + getTodayJst() + '.xlsx');
     }
 

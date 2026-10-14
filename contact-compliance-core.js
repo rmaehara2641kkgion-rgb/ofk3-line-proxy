@@ -647,10 +647,92 @@
     return result;
   }
 
-  // analyzeCcRows() の結果 → Excel 7シート分の行データ（配列の配列）。判定・集計は再実行しない。
+  // ---- Excel 所属別シート（画面の所属別タブと同じ分類・集計: buildCcAffiliationTabs / buildCcTabRows を共用） ----
+
+  var CC_FIXED_SHEET_NAMES = ['CCサマリー', '所属別サマリー', '所属別DA分析', '理由別', 'DA別', '日別', 'Non-Compliant明細'];
+  var CC_ALL_SHEET_NAME = '全体';
+
+  // Excelシート名として安全な名前にする: \ / ? * [ ] : を _ に置換、前後の ' を除去、31文字以内、
+  // 大文字小文字を区別せず重複しない（重複時は _2, _3…）。used は小文字化したキーのマップ（呼び出し側が共有）。
+  function ccSafeSheetName(name, used) {
+    var s = cellText(name).replace(/[\\\/\?\*\[\]:]/g, '_').replace(/^'+|'+$/g, '').trim();
+    if (!s) s = 'Sheet';
+    if (s.length > 31) s = s.substring(0, 31);
+    var cand = s;
+    var n = 2;
+    while (used[cand.toLowerCase()] || cand.toLowerCase() === 'history') {
+      var suffix = '_' + n;
+      cand = s.substring(0, 31 - suffix.length) + suffix;
+      n++;
+    }
+    used[cand.toLowerCase()] = true;
+    return cand;
+  }
+
+  // 理由別セルは画面と同じ表記: 0件は '-'、それ以外は 「件数（NC n）」
+  function ccReasonCellText(c) {
+    return c.total ? (c.total + '（NC ' + c.nonCompliant + '）') : '-';
+  }
+
+  // 1タブ分のシート定義（画面のタブと同じ: 所属合計 → DA一覧 → 合計行）。全体タブのみ「所属」列を追加。
+  // 全体・所属競合には「所属候補（競合時）」列を付ける。rateRound は小数2桁の数値（セル書式は workbook 側）。
+  function buildCcTabSheet(result, tab, sortMode, sheetName) {
+    function rateCell(rate) {
+      var v = roundCcRate(rate);
+      return v === null ? '-' : v;
+    }
+    var isAll = tab.kind === 'all';
+    var withCand = isAll || tab.kind === 'conflict';
+    var rows = buildCcTabRows(result, tab.key, sortMode);
+    var out = [];
+    var rateCells = [];
+    out.push(['所属', tab.label]);
+    out.push(['DA数', '対象', 'Compliant', 'Non-Compliant', 'CC率']);
+    out.push([tab.driverCount, tab.total, tab.compliant, tab.nonCompliant, rateCell(tab.rate)]);
+    rateCells.push([2, 4]);
+    out.push([]);
+    var header = ['DA名', 'Transporter ID'];
+    if (isAll) header.push('所属');
+    header.push('対象件数', 'Compliant', 'Non-Compliant', 'CC率');
+    var rateCol = header.length - 1;
+    for (var q = 0; q < CC_ELIGIBLE_REASONS.length; q++) header.push(getCcReasonLabel(CC_ELIGIBLE_REASONS[q]));
+    if (withCand) header.push('所属候補（競合時）');
+    out.push(header);
+    var rt = [], rn = [];
+    for (var z = 0; z < CC_ELIGIBLE_REASONS.length; z++) { rt.push(0); rn.push(0); }
+    for (var i = 0; i < rows.length; i++) {
+      var d = rows[i];
+      var line = [d.driverName, d.transporterId];
+      if (isAll) line.push(d.affiliation);
+      line.push(d.total, d.compliant, d.nonCompliant, rateCell(d.rate));
+      rateCells.push([out.length, rateCol]);
+      for (var k = 0; k < d.byReason.length; k++) {
+        line.push(ccReasonCellText(d.byReason[k]));
+        rt[k] += d.byReason[k].total;
+        rn[k] += d.byReason[k].nonCompliant;
+      }
+      if (withCand) line.push((d.affiliationCandidates || []).join(' / '));
+      out.push(line);
+    }
+    var totalLine = ['合計', ''];
+    if (isAll) totalLine.push('');
+    totalLine.push(tab.total, tab.compliant, tab.nonCompliant, rateCell(tab.rate));
+    rateCells.push([out.length, rateCol]);
+    for (var m = 0; m < rt.length; m++) totalLine.push(rt[m] + '（NC ' + rn[m] + '）');
+    if (withCand) totalLine.push('');
+    out.push(totalLine);
+    var widths = [22, 18];
+    if (isAll) widths.push(16);
+    widths.push(10, 12, 14, 10, 14, 18, 12, 18);
+    if (withCand) widths.push(24);
+    return { name: sheetName, rows: out, rateCells: rateCells, widths: widths, kind: tab.kind, tabKey: tab.key };
+  }
+
+  // analyzeCcRows() の結果 → Excel 全シート分の行データ（所属別タブ相当シート＋7分析シート）（配列の配列）。判定・集計は再実行しない。
   // CC率は roundCcRate の数値（buildCcExportWorkbook が表示形式 0.00"%" を付ける）。0件は '-'。
   // rateColumn / rateCells: CC率セルの位置（0始まり）。driverSort: DA別の並び（画面の選択と揃える）。
-  function buildCcExportSheets(result, driverSort) {
+  // affiliationOrder: 所属シートの並び（マスタの所属順。アプリの DEPARTMENTS）。省略時は所属名順。
+  function buildCcExportSheets(result, driverSort, affiliationOrder) {
     var s = result.summary;
     function rateCell(rate) {
       var v = roundCcRate(rate);
@@ -738,7 +820,25 @@
         nc.shipmentReason, nc.shipmentReasonLabel, nc.callEvent, nc.textEvent, 'Non-Compliant', nc.affiliation]);
     }
 
-    return [
+    // 先頭: 全体 → マスタ所属順の各所属 → 所属競合 → 所属未判定（画面の所属別タブと同一。結果に存在する所属のみ）
+    var tabs = buildCcAffiliationTabs(result, affiliationOrder || []);
+    var usedNames = {};
+    for (var fx = 0; fx < CC_FIXED_SHEET_NAMES.length; fx++) usedNames[CC_FIXED_SHEET_NAMES[fx].toLowerCase()] = true;
+    usedNames[CC_ALL_SHEET_NAME.toLowerCase()] = true;
+    var tabSheets = [];
+    var renamed = [];
+    for (var tb = 0; tb < tabs.length; tb++) {
+      var sheetName;
+      if (tabs[tb].kind === 'all') sheetName = CC_ALL_SHEET_NAME;
+      else {
+        sheetName = ccSafeSheetName(tabs[tb].label, usedNames);
+        if (sheetName !== tabs[tb].label) renamed.push([tabs[tb].label, sheetName]);
+      }
+      tabSheets.push(buildCcTabSheet(result, tabs[tb], mode, sheetName));
+    }
+    for (var rn = 0; rn < renamed.length; rn++) summaryRows.push(['シート名変換', renamed[rn][0] + ' → ' + renamed[rn][1]]);
+
+    return tabSheets.concat([
       { name: 'CCサマリー', rows: summaryRows, rateCells: [[2, 1]], widths: [20, 60] },
       { name: '所属別サマリー', rows: affRows, rateColumn: 5, widths: [22, 8, 10, 12, 14, 10] },
       { name: '所属別DA分析', rows: affDaRows, rateColumns: [8, 11], widths: [20, 22, 18, 20, 32, 10, 12, 14, 10, 14, 18, 14, 24] },
@@ -746,15 +846,15 @@
       { name: 'DA別', rows: driverRows, rateColumn: 5, widths: [22, 18, 10, 12, 14, 10] },
       { name: '日別', rows: dateRows, rateColumn: 4, widths: [14, 10, 12, 14, 10] },
       { name: 'Non-Compliant明細', rows: ncRows, widths: [12, 22, 18, 16, 22, 32, 20, 18, 18, 14, 18] }
-    ];
+    ]);
   }
 
   var CC_RATE_NUMBER_FORMAT = '0.00"%"';
 
   // buildCcExportSheets → SheetJS ワークブック。XLSX はブラウザのグローバル / Node の require('xlsx') を渡す。
-  function buildCcExportWorkbook(XLSX, result, driverSort) {
+  function buildCcExportWorkbook(XLSX, result, driverSort, affiliationOrder) {
     var wb = XLSX.utils.book_new();
-    var sheets = buildCcExportSheets(result, driverSort);
+    var sheets = buildCcExportSheets(result, driverSort, affiliationOrder);
     for (var i = 0; i < sheets.length; i++) {
       var sh = sheets[i];
       var ws = XLSX.utils.aoa_to_sheet(sh.rows);
@@ -817,6 +917,9 @@
     CC_TAB_ALL_KEY: CC_TAB_ALL_KEY,
     buildCcAffiliationTabs: buildCcAffiliationTabs,
     buildCcTabRows: buildCcTabRows,
+    ccSafeSheetName: ccSafeSheetName,
+    buildCcTabSheet: buildCcTabSheet,
+    CC_FIXED_SHEET_NAMES: CC_FIXED_SHEET_NAMES,
     groupCcByDate: groupCcByDate,
     listCcNonCompliant: listCcNonCompliant,
     analyzeCcRows: analyzeCcRows

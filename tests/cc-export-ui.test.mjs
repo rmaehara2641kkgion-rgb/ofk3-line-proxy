@@ -194,7 +194,7 @@ function testWk40ScreenAndV1Excel() {
   var v1Name = t.writes[0].name;
   assert(v1Name === 'CC_Ver1分析_2026-10-07.xlsx', 'CC Ver.1 ファイル名: ' + v1Name);
   var wb = roundTrip(t.writes[0].wb);
-  assert(wb.SheetNames.join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'Test 2: 7シート ' + wb.SheetNames);
+  assert(wb.SheetNames.join() === '全体,所属未判定,CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'Test 2: 全体・所属別シート＋7分析シート ' + wb.SheetNames);
   var sum = summaryOf(wb);
   var excel = { rate: sum['CC率'].w, total: String(sum['CC対象件数'].v), compliant: String(sum['Compliant件数'].v), nonCompliant: String(sum['Non-Compliant件数'].v) };
   assert(JSON.stringify(excel) === JSON.stringify(screen), 'Test 1: 画面とExcelが一致 screen=' + JSON.stringify(screen) + ' excel=' + JSON.stringify(excel));
@@ -508,7 +508,48 @@ async function testMasterSyncOnAnalysisStart() {
   assert(fn.indexOf('loadMasterFromServer()') >= 0, '既存の同期機構 loadMasterFromServer を呼ぶ');
 }
 
-var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationTabs, testMasterLookup, testMasterNotModified, testDuplicateIdConflict, testMasterSyncOnAnalysisStart];
+// ---- 画面の所属別タブとExcelの所属別シートが一致（同じ分類・集計結果を使用）。実際の出力ボタン経路で検証 ----
+function testScreenTabsMatchExcel() {
+  var rows = wk40Rows();
+  var tids = Array.from(new Set(rows.slice(1).map(function (r) { return r[5]; }))).filter(Boolean);
+  var master = {}; var depts = {};
+  tids.forEach(function (tid, i) {
+    master['DA' + i] = tid;
+    if (i % 4 !== 0) depts['DA' + i] = ['GDSダイレクト', 'JHS', 'AE物流'][i % 3];
+  });
+  master['重複'] = tids[1]; depts['重複'] = 'OFK6'; // tids[1] は JHS... と OFK6 に二重登録 → 所属競合
+  var t = buildSandbox(master);
+  t.sandbox.driverDepartments = depts;
+  assert(t.sandbox.renderCcV1FromRows(wk40Rows()).ok, '算出成功');
+  t.sandbox.exportCcV1Result();
+  assert(t.writes.length === 1, '従来どおり1ファイル出力');
+  var wb = roundTrip(t.writes[0].wb);
+  var tabs = t.sandbox.ccV1TabList;
+  assert(tabs.length >= 4 && tabs.some(function (x) { return x.kind === 'conflict'; }) && tabs.some(function (x) { return x.kind === 'unknown'; }), '競合・未判定タブを含む: ' + tabs.map(function (x) { return x.label; }));
+  assert(wb.SheetNames.slice(0, tabs.length).join() === tabs.map(function (x) { return x.label; }).join(), '画面のタブ順 = Excelのシート順');
+  assert(wb.SheetNames.slice(tabs.length).join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', '続けて既存7分析シート');
+  var sel = t.elements['cc-v1-aff-sort'];
+  tabs.forEach(function (tab, i) {
+    t.sandbox.ccV1SelectTab(i);
+    var screenRows = t.sandbox.ccV1DaView;
+    var a = XLSX.utils.sheet_to_json(wb.Sheets[tab.label], { header: 1, defval: '', raw: true });
+    var body = a.slice(5, -1);
+    assert(body.length === screenRows.length, 'DA行数が画面と一致: ' + tab.label + ' ' + body.length + '/' + screenRows.length);
+    var o = tab.kind === 'all' ? 1 : 0;
+    screenRows.forEach(function (d, k) {
+      var x = body[k];
+      assert(x[0] === d.driverName && x[1] === d.transporterId && x[2 + o] === d.total && x[3 + o] === d.compliant && x[4 + o] === d.nonCompliant, '行内容が画面と一致: ' + tab.label + ' ' + d.transporterId);
+    });
+    assert(a[2][1] === tab.total && a[2][3] === tab.nonCompliant, 'タブ合計が画面と一致: ' + tab.label);
+  });
+  var all = tabs[0];
+  var sumOthers = tabs.slice(1).reduce(function (s, x) { return s + x.total; }, 0);
+  assert(all.total === 575 && sumOthers === 575, '全体575 = 所属別合計（競合・未判定含む）: ' + sumOthers);
+  var summary = XLSX.utils.sheet_to_json(wb.Sheets['CCサマリー'], { header: 1, defval: '' }).filter(function (x) { return x[0] === 'CC対象件数'; })[0];
+  assert(summary[1] === 575, '既存CCサマリーは従来どおり');
+}
+
+var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationTabs, testMasterLookup, testMasterNotModified, testDuplicateIdConflict, testMasterSyncOnAnalysisStart, testScreenTabsMatchExcel];
 for (var i = 0; i < tests.length; i++) {
   await tests[i]();
   console.log('PASS ' + tests[i].name);

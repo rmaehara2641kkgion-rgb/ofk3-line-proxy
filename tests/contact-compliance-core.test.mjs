@@ -231,7 +231,7 @@ function testExcelExportWk40() {
   var result = Cc.analyzeCcRows(loadWk40Rows(), function (tid) { return tid === 'A8JSA661WQ3ZH' ? 'テスト 太郎' : ''; });
   var buf = XLSX.write(Cc.buildCcExportWorkbook(XLSX, result, 'nonCompliantDesc'), { type: 'buffer', bookType: 'xlsx' });
   var wb = XLSX.read(buf, { type: 'buffer' });
-  assert(wb.SheetNames.join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート構成: ' + wb.SheetNames);
+  assert(wb.SheetNames.join() === '全体,所属未判定,CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート構成: ' + wb.SheetNames);
 
   var sum = {};
   sheetAoa(wb, 'CCサマリー').forEach(function (row, i) { sum[row[0]] = { v: row[1], i: i }; });
@@ -287,9 +287,11 @@ function testExcelExportZero() {
   var result = Cc.analyzeCcRows([['Event Date', 'Scannable ID', 'Destination Address ID', 'Transporter ID', 'Shipment Reason', 'Call Event', 'Text Event'],
     ['2026-09-27', 'S', 'D', 'T', 'DELIVERED_TO_FRONT_DOOR', CALL, '']]);
   var sheets = Cc.buildCcExportSheets(result);
-  assert(sheets[0].rows[2][1] === '-', '0件のCC率は "-"');
+  var summarySheet = sheets.filter(function (x) { return x.name === 'CCサマリー'; })[0];
+  assert(summarySheet.rows[2][1] === '-', '0件のCC率は "-"');
+  assert(sheets[0].name === '全体' && sheets[0].rows[2][4] === '-', '全体シートも0件のCC率は "-"');
   var wb = Cc.buildCcExportWorkbook(XLSX, result);
-  assert(wb.SheetNames.length === 7, '0件でも7シート');
+  assert(wb.SheetNames.length === 8, '0件でも全体シート＋7分析シート');
 }
 
 var tests = [testStatusJudgment, testZeroEligible, testUnknownDriver, testAggregations, testParseRows, testWk40Ofk3RealData,

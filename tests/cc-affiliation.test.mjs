@@ -142,8 +142,8 @@ function testNotAttempt() {
 }
 
 function testExcel(r) {
-  const wb = XLSX.read(XLSX.write(Cc.buildCcExportWorkbook(XLSX, r), { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' });
-  assert(wb.SheetNames.join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート順: ' + wb.SheetNames);
+  const wb = XLSX.read(XLSX.write(Cc.buildCcExportWorkbook(XLSX, r, 'nonCompliantDesc', ['GDSダイレクト', 'JHS', 'AE物流']), { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' });
+  assert(wb.SheetNames.join() === '全体,GDSダイレクト,JHS,AE物流,所属未判定,CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート順: ' + wb.SheetNames);
   const aoa = n => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: true });
   const a = aoa('所属別サマリー');
   assert(a[0].join() === '所属,DA数,対象件数,Compliant,Non-Compliant,CC率', '所属別サマリー見出し');
@@ -197,10 +197,121 @@ function testTabView(r) {
   assert(JSON.stringify(r.summary) === JSON.stringify(Cc.analyzeCcRows(w41LikeRows(), resolveName, resolveAff).summary), 'ビュー生成後もsummary不変');
 }
 
+// ---- Excel 所属別シート（画面の所属別タブと同一）: 並び・内容・合計一致・シート名安全化 ----
+function wk41LikeConflictResult() {
+  const rows = w41LikeRows();
+  // T08 を競合にして「所属競合」「所属未判定」の両方を作る
+  const aff = tid => (tid === 'T08' ? { conflict: true, candidates: ['AE物流', 'JHS'] } : (AFFS[tid] || ''));
+  return Cc.analyzeCcRows(rows, resolveName, aff);
+}
+
+function testAffiliationSheets() {
+  const r = wk41LikeConflictResult();
+  const order = ['GDSダイレクト', 'JHS', 'AE物流'];
+  const wb = XLSX.read(XLSX.write(Cc.buildCcExportWorkbook(XLSX, r, 'nonCompliantDesc', order), { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' });
+  const names = wb.SheetNames;
+  assert(names.join() === '全体,GDSダイレクト,JHS,AE物流,所属競合,所属未判定,CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート順: ' + names);
+  const tabs = Cc.buildCcAffiliationTabs(r, order);
+  assert(tabs.map(t => t.label).join() === names.slice(0, tabs.length).join(), '画面のタブ順とExcelのシート順が一致');
+  const aoa = n => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: true });
+  const REASON_JA = REASONS.map(c => Cc.getCcReasonLabel(c));
+  let allSum = null;
+  const sums = { total: 0, compliant: 0, nonCompliant: 0, das: 0 };
+  tabs.forEach(tab => {
+    const a = aoa(tab.label);
+    assert(a[0][0] === '所属' && a[0][1] === tab.label, '所属名: ' + tab.label);
+    assert(a[1].slice(0, 5).join() === 'DA数,対象,Compliant,Non-Compliant,CC率', '所属合計の見出し');
+    assert(a[2][0] === tab.driverCount && a[2][1] === tab.total && a[2][2] === tab.compliant && a[2][3] === tab.nonCompliant, '所属合計: ' + tab.label + JSON.stringify(a[2]));
+    const isAll = tab.kind === 'all';
+    const hd = a[4];
+    const expectHead = ['DA名', 'Transporter ID'].concat(isAll ? ['所属'] : [], ['対象件数', 'Compliant', 'Non-Compliant', 'CC率'], REASON_JA, (isAll || tab.kind === 'conflict') ? ['所属候補（競合時）'] : []);
+    assert(hd.join() === expectHead.join(), '列構成(' + tab.label + '): ' + hd);
+    const body = a.slice(5, -1), total = a[a.length - 1];
+    assert(total[0] === '合計', '末尾に合計行: ' + tab.label);
+    const o = isAll ? 1 : 0;
+    assert(body.length === tab.driverCount, 'DA行数=DA数: ' + tab.label);
+    const sumCol = c => body.reduce((s, x) => s + x[c], 0);
+    assert(sumCol(2 + o) === tab.total && sumCol(3 + o) === tab.compliant && sumCol(4 + o) === tab.nonCompliant, 'DA行の合計=所属合計: ' + tab.label);
+    assert(total[2 + o] === tab.total && total[3 + o] === tab.compliant && total[4 + o] === tab.nonCompliant, '合計行=所属合計: ' + tab.label);
+    // 理由別セル: 「件数（NC n）」。行合計=DA合計
+    body.forEach(x => {
+      let t = 0, n = 0;
+      for (let q = 0; q < 4; q++) {
+        const cell = x[6 + o + q];
+        const m = /^(\d+)（NC (\d+)）$/.exec(cell);
+        assert(cell === '-' || m, '理由別セル形式: ' + cell);
+        if (m) { t += +m[1]; n += +m[2]; }
+      }
+      assert(t === x[2 + o] && n === x[4 + o], 'DAの理由別合計=DA合計: ' + x[0]);
+    });
+    for (let q = 0; q < 4; q++) {
+      const re = /^(\d+)（NC (\d+)）$/;
+      const tt = total[6 + o + q];
+      assert(re.test(tt), '合計行の理由別形式');
+    }
+    if (tab.kind === 'conflict') {
+      assert(body.length > 0 && body.every(x => x[x.length - 1] === 'AE物流 / JHS'), '所属競合シートは候補所属を併記');
+    }
+    if (isAll) {
+      allSum = { total: total[2 + o], compliant: total[3 + o], nonCompliant: total[4 + o], das: body.length };
+      assert(body.every(x => x[2] && x[2] !== ''), '全体シートは所属列あり');
+      assert(body.some(x => x[2] === '所属競合' && x[x.length - 1] === 'AE物流 / JHS'), '全体シートでも競合DAに候補併記');
+    } else {
+      sums.total += total[2]; sums.compliant += total[3]; sums.nonCompliant += total[4]; sums.das += body.length;
+    }
+  });
+  assert(allSum.total === 678 && allSum.compliant === 506 && allSum.nonCompliant === 172, '全体シート=678/506/172');
+  assert(sums.total === allSum.total && sums.compliant === allSum.compliant && sums.nonCompliant === allSum.nonCompliant && sums.das === allSum.das, '全体と所属別（競合・未判定含む）の合計が一致');
+  // CC率の表示形式
+  assert(/^\d+\.\d\d%$/.test(wb.Sheets['全体'][XLSX.utils.encode_cell({ r: 2, c: 4 })].w), '所属合計のCC率書式');
+  // 既存の分析シートは削除されていない
+  ['CCサマリー', '所属別サマリー', '所属別DA分析', '理由別', 'DA別', '日別', 'Non-Compliant明細'].forEach(n => assert(names.indexOf(n) >= 0, '既存シート維持: ' + n));
+  assert(aoa('Non-Compliant明細').length === 173 && aoa('DA別').length - 1 === r.byDriver.length, '既存シートの内容は従来どおり');
+  // 並び替えが画面の選択に追従
+  const wb2 = Cc.buildCcExportWorkbook(XLSX, r, 'rateAsc', order);
+  const all2 = XLSX.utils.sheet_to_json(wb2.Sheets['全体'], { header: 1, defval: '', raw: true }).slice(5, -1);
+  for (let i = 1; i < all2.length; i++) assert((typeof all2[i - 1][6] === 'number' ? all2[i - 1][6] : Infinity) <= (typeof all2[i][6] === 'number' ? all2[i][6] : Infinity), '全体シートはCC率昇順');
+}
+
+function testSheetNameSafety() {
+  const used = {};
+  assert(Cc.ccSafeSheetName('A/B\\C?D*E[F]G:H', {}) === 'A_B_C_D_E_F_G_H', '禁止文字を置換');
+  assert(Cc.ccSafeSheetName("'quoted'", {}) === 'quoted', '前後のアポストロフィ除去');
+  assert(Cc.ccSafeSheetName('', {}) === 'Sheet', '空名');
+  const long = 'あ'.repeat(40);
+  const a = Cc.ccSafeSheetName(long, used), b = Cc.ccSafeSheetName(long, used);
+  assert(a.length === 31 && b.length <= 31 && a !== b, '31文字超は切詰め、重複は連番: ' + a + ' / ' + b);
+  assert(Cc.ccSafeSheetName('ABC', used) !== Cc.ccSafeSheetName('abc', used), '大文字小文字違いも別名（Excelは区別しない）');
+  assert(Cc.ccSafeSheetName('History', {}) !== 'History', '予約名Historyを避ける');
+
+  // 所属名が固定シート名・全体と衝突/禁止文字/長すぎる場合でもブックが生成でき、全シート名が一意
+  const rows = [['Event Date', 'Scannable ID', 'Destination Address ID', 'Transporter ID', 'Shipment Reason', 'Call Event', 'Text Event']];
+  const depts = { A1: '理由別', A2: 'JHS/本部:第1', A3: 'JHS／本部：第1', A4: 'あ'.repeat(35) + 'X', A5: 'あ'.repeat(35) + 'Y', A6: 'jhs/本部:第1' };
+  Object.keys(depts).forEach((t, i) => { rows.push(['2026-10-04', 'S' + i, 'D' + i, t, 'CUSTOMER_UNAVAILABLE', i % 2 ? 'Calls to Customer' : '', '']); });
+  const r = Cc.analyzeCcRows(rows, null, t => depts[t] || '');
+  const wb = Cc.buildCcExportWorkbook(XLSX, r, 'nonCompliantDesc', []);
+  const names = wb.SheetNames;
+  assert(new Set(names.map(n => n.toLowerCase())).size === names.length, 'シート名が一意（大文字小文字無視）: ' + names);
+  assert(names.every(n => n.length <= 31 && !/[\\\/\?\*\[\]:]/.test(n)), 'シート名は31文字以内で禁止文字なし');
+  assert(names.filter(n => n === '理由別').length === 1 && names.indexOf('理由別_2') >= 0, '所属名が固定シート名と衝突しても固定シートは維持し所属側を連番に');
+  const tabs = Cc.buildCcAffiliationTabs(r, []);
+  assert(names.length === tabs.length + 7, 'タブ数＋7分析シート: ' + names.length);
+  // 切詰め・変換された所属の元の名前はシート内（所属行）とCCサマリーに残る
+  const sum = XLSX.utils.sheet_to_json(wb.Sheets['CCサマリー'], { header: 1, defval: '' });
+  assert(sum.some(x => x[0] === 'シート名変換' && /JHS\/本部:第1 → JHS_本部_第1/.test(x[1])), 'CCサマリーにシート名変換を記録');
+  const tabSheet = XLSX.utils.sheet_to_json(wb.Sheets[names[names.indexOf('理由別_2')]], { header: 1, defval: '' });
+  assert(tabSheet[0][1] === '理由別', 'シート内に元の所属名を保持');
+  // 合計一致
+  const tot = names.slice(1, tabs.length).reduce((s, n) => s + XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: true })[2][1], 0);
+  assert(tot === r.summary.total, '安全化後も所属シート合計=全体: ' + tot);
+}
+
 const r = testW41Regression(); console.log('PASS testW41Regression');
 testAffiliationAggregation(r); console.log('PASS testAffiliationAggregation');
 testWk40Unchanged(); console.log('PASS testWk40Unchanged');
 testNotAttempt(); console.log('PASS testNotAttempt');
 testExcel(r); console.log('PASS testExcel');
 testTabView(r); console.log('PASS testTabView');
-console.log('cc-affiliation tests passed (6)');
+testAffiliationSheets(); console.log('PASS testAffiliationSheets');
+testSheetNameSafety(); console.log('PASS testSheetNameSafety');
+console.log('cc-affiliation tests passed (8)');
