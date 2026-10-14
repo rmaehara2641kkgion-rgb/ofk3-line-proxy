@@ -29,6 +29,11 @@
   var localDate = '';
   var waitTimer = 0;
   var summariesWaitTimer = 0;
+  var cycleIsolate = false;
+  var cycleMainStore = null;
+  var cyclePlannedRoutes = [];
+  var cycleBagClicksStarted = false;
+  var lastCycleBagDocument = null;
 
   function tokyoDate() {
     return new Intl.DateTimeFormat('en-CA', {
@@ -340,6 +345,10 @@
   }
 
   async function sendPriorityToOfk3() {
+    if (cycleIsolate) {
+      alert('サイクル2・3の取得中は送信しません。');
+      return;
+    }
     var bundle = Core.buildCaptureBundle(store, { localDate: currentLocalDate() });
     var result = Core.ingestBundle(bundle);
     var packages = (result && result.packages) || [];
@@ -439,6 +448,7 @@
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
       row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('C2/C3 BAG取得', function () { startCycleBagCapture(); }));
       row.appendChild(mk('未完了Bagテスト', function () { startUnfinishedBagTest(); }));
       row.appendChild(mk('Bag診断保存', function () { saveBagDiagnostics(); }));
       row.appendChild(mk('停止', function () {
@@ -1140,6 +1150,7 @@
   }
 
   function start() {
+    if (cycleIsolate) return;
     show();
     lastAutoCollapsedKey = '';
     setPanelCollapsed(false);
@@ -3405,6 +3416,7 @@
     bagRun.stopRequested = true;
     if (bagRun.mode === 'unfinished_test') { finishUnfinishedTest('手動停止'); return; }
     finishBagPhase('手動停止');
+    if (cycleIsolate) finalizeCycleBagSave();
   }
 
   function routeFromHref(routes) {
@@ -3574,6 +3586,7 @@
   }
 
   function startBagPhase() {
+    if (cycleIsolate) return;
     show();
     setPanelCollapsed(false);
     if (bagActive()) return;
@@ -3640,6 +3653,199 @@
     });
   }
 
+  function downloadCycleBag(doc) {
+    try {
+      var blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'ofk3-cycle-bag_' + (doc && doc.localDate ? doc.localDate : currentLocalDate()) + '.json';
+      a.click();
+    } catch (e) {
+      alert('サイクル2・3のBAGファイルを保存できませんでした。');
+    }
+  }
+
+  function restoreCycleStore() {
+    if (cycleMainStore) store = cycleMainStore;
+    cycleMainStore = null;
+    cycleIsolate = false;
+    cycleBagClicksStarted = false;
+    cyclePlannedRoutes = [];
+    sessionBusy = false;
+    if (tour) {
+      tour.routes = [];
+      tour.status = 'idle';
+      tour.index = 0;
+      tour.currentRouteId = '';
+      tour.currentRouteCode = '';
+    }
+  }
+
+  function finalizeCycleBagSave() {
+    if (!cycleIsolate && !cycleMainStore) return;
+    var hold = store;
+    var planned = cyclePlannedRoutes.slice();
+    var doc = null;
+    try {
+      var detailsList = Object.keys((hold && hold.detailsByRouteId) || {}).map(function (id) {
+        return hold.detailsByRouteId[id];
+      });
+      doc = Core.buildCycleBagSnapshot({
+        localDate: currentLocalDate(),
+        routes: planned,
+        detailsList: detailsList,
+        trDetailsByTrId: (hold && hold.trDetailsByTrId) || {},
+        bagStatusByReferenceId: (hold && hold.bagStatusByReferenceId) || null,
+        bagDomByReferenceId: (hold && hold.bagDomByReferenceId) || null
+      });
+      lastCycleBagDocument = doc;
+      downloadCycleBag(doc);
+    } catch (e) {
+      alert('サイクル2・3のBAG保存に失敗しました。');
+    }
+    restoreCycleStore();
+    setBagStatus('サイクル2・3のBAGを保存しました。OFK3へは送信していません。');
+    paint();
+  }
+
+  function watchCycleTour() {
+    function tick() {
+      if (!cycleIsolate) return;
+      if (bagActive() || cycleBagClicksStarted) {
+        setTimeout(tick, 400);
+        return;
+      }
+      var status = tour && tour.status;
+      if (status !== 'done' && status !== 'stopped') {
+        setTimeout(tick, 400);
+        return;
+      }
+      if (status === 'stopped' || stopRequested) {
+        finalizeCycleBagSave();
+        return;
+      }
+      startCycleBagClicks();
+    }
+    setTimeout(tick, 400);
+  }
+
+  function ensureCycleRouteList(done) {
+    var backs = 0;
+    var lastHref = '';
+    function check() {
+      if (!cycleIsolate) return;
+      if (anyRouteCardShown()) { done(true); return; }
+      if (backs >= 4) { done(false); return; }
+      var href = hrefNow();
+      if (backs > 0 && href === lastHref) { done(false); return; }
+      lastHref = href;
+      backs += 1;
+      try {
+        if (!global.history) { done(false); return; }
+        global.history.back();
+      } catch (e) {
+        done(false);
+        return;
+      }
+      setTimeout(check, 800);
+    }
+    check();
+  }
+
+  function startCycleBagClicks() {
+    if (!cycleIsolate || cycleBagClicksStarted) return;
+    cycleBagClicksStarted = true;
+    ensureCycleRouteList(function (onList) {
+      if (!cycleIsolate) return;
+      var detailsList = Object.keys(store.detailsByRouteId || {}).map(function (id) {
+        return store.detailsByRouteId[id];
+      });
+      var selection = Core.selectCycleBagTargets(detailsList, store.trDetailsByTrId);
+      var routes = Core.groupBagTargetsByRoute(selection.targets);
+      if (!onList || !selection.targets.length) {
+        if (!onList) setBagStatus('Route一覧に戻れなかったため、BAGクリックは開始しませんでした。OFK3へは送信していません。');
+        finalizeCycleBagSave();
+        return;
+      }
+      bagSnapshot = Core.snapshotNormalCapture(store);
+      bagRun = Core.createBagRun(selection.targets);
+      bagRun.selection = selection;
+      bagRun.stopOpenedFor = {};
+      bagRun.preexisting = {};
+      var runId = bagRun.id;
+      var ctx = {
+        currentPage: false,
+        listHref: hrefNow(),
+        routeHref: hrefNow(),
+        baseDialogs: visibleDialogs()
+      };
+      setBagStatus('サイクル2・3のBAGを取得中。対象Route ' + routes.length + '。OFK3へは送信しません。');
+      bagEngine = Core.runBagEngine({
+        run: bagRun,
+        routes: routes,
+        getTrMap: function () { return store.trDetailsByTrId; },
+        driver: createBagDriver(ctx, runId),
+        routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+        routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
+        routeIdleMs: BAG_ROUTE_IDLE_MS,
+        routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS,
+        pageContext: bagPageContext,
+        log: bagLog,
+        onProgress: function (p) {
+          if (!bagIsCurrent(runId)) return;
+          setBagStatus(Core.formatBagProgress(p) + '\nサイクル2・3 / 送信なし');
+        },
+        done: function (aborted) {
+          if (bagRun && bagRun.id === runId) finishBagPhase(aborted);
+          finalizeCycleBagSave();
+        }
+      });
+    });
+  }
+
+  function startCycleBagCapture() {
+    show();
+    setPanelCollapsed(false);
+    if (cycleIsolate || sessionBusy || bagActive() || (pocRun && pocRun.active && !pocRun.ended)) {
+      alert('他の取得が終わるまで待ってください。');
+      return;
+    }
+    if (!store.summaries) {
+      alert('Route一覧を開いてから押してください。この操作はOFK3へ送信しません。');
+      return;
+    }
+    var selected = Core.selectRoutesByCycle(store.summaries, ['C2', 'C3']);
+    if (!selected.ok || !selected.routes.length) {
+      alert('DMX/DSXのRouteがありません。OFK3へは送信していません。');
+      return;
+    }
+    cycleMainStore = store;
+    store = Core.createCaptureStore();
+    store.summaries = cycleMainStore.summaries;
+    cyclePlannedRoutes = selected.routes.slice();
+    cycleBagClicksStarted = false;
+    cycleIsolate = true;
+    sessionBusy = true;
+    stopRequested = false;
+    tour.routes = cyclePlannedRoutes.slice();
+    tour.index = 0;
+    tour.status = 'running';
+    tour.visitedRouteIds = {};
+    tour.wheelAttempts = 0;
+    tour.wheelDirection = 'up';
+    tour.retryCounts = {};
+    wheelTrace = [];
+    pocRun = Core.createPocRun({});
+    setBagStatus('サイクル2・3のRouteを開いています。OFK3へは送信しません。');
+    try {
+      runNextRoute();
+    } catch (e) {
+      finalizeCycleBagSave();
+      return;
+    }
+    watchCycleTour();
+  }
+
   function onReady(fn) {
     if (document.body || document.documentElement) fn();
     else document.addEventListener('DOMContentLoaded', fn);
@@ -3657,6 +3863,8 @@
     stop: stopPoc,
     save: saveBundle,
     bag: startBagPhase,
+    cycleBag: startCycleBagCapture,
+    cycleBagDocument: function () { return lastCycleBagDocument; },
     bagDiagnostics: buildBagDiagnostics,
     unfinishedBagTest: startUnfinishedBagTest,
     _store: store

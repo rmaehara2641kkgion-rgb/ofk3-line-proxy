@@ -2394,7 +2394,7 @@ v311Suite('phase1-core');
     .forEach((k) => assert(drv.indexOf("note('" + k + "')") >= 0, 'v3.11: sub-step progress ' + k));
   assert((drv.match(/\}, note\);/g) || []).length === 2 && bag.indexOf("if (note) note('tr_details');") >= 0, 'v3.11: both trDetails waits report to their Route');
   assert(runner.indexOf('bagEngine.noteProgress(') < 0 && bag.indexOf('setInterval') < 0, 'v3.11: no global progress call, no heartbeat interval');
-  assert((bag.match(/pageContext: bagPageContext,/g) || []).length === 2 && bag.indexOf("visibilityState: document.visibilityState") >= 0, 'v3.11: page context wired');
+  assert((bag.match(/pageContext: bagPageContext,/g) || []).length === 3 && bag.indexOf("visibilityState: document.visibilityState") >= 0, 'v3.11: page context wired for unfinished test, 13:00 bag, and cycle 2/3');
   assert((bag.match(/if \(bagEngine && typeof bagEngine\.dispose === 'function'\) bagEngine\.dispose\(\);/g) || []).length === 2, 'v3.11: dispose at both phase ends');
   ['BAG_ROUTE_IDLE_MS = 90000', 'BAG_ROUTE_HARD_MAX_MS = 900000', 'BAG_ROUTE_BUDGET_MS = 120000', 'BAG_STOP_OPEN_TR_WAIT_MS = 3000',
     'BAG_STOP_OPEN_TR_EXTRA_MS = 3000', 'BAG_STOP_EXPAND_TIMEOUT_MS = 3000', 'BAG_STOP_CLOSE_TIMEOUT_MS = 5000', 'BAG_ROUTE_RETRY_WAIT_MS = 15000']
