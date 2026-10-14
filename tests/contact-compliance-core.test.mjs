@@ -226,12 +226,12 @@ function cellText(wb, name, r, c) {
   return cell ? (cell.w !== undefined ? cell.w : String(cell.v)) : '';
 }
 
-// ---- Excel出力（5シート）: 画面と同じ analyzeCcRows 結果から作り、書き出し→読み戻しで一致を確認 ----
+// ---- Excel出力（7シート）: 画面と同じ analyzeCcRows 結果から作り、書き出し→読み戻しで一致を確認 ----
 function testExcelExportWk40() {
   var result = Cc.analyzeCcRows(loadWk40Rows(), function (tid) { return tid === 'A8JSA661WQ3ZH' ? 'テスト 太郎' : ''; });
   var buf = XLSX.write(Cc.buildCcExportWorkbook(XLSX, result, 'nonCompliantDesc'), { type: 'buffer', bookType: 'xlsx' });
   var wb = XLSX.read(buf, { type: 'buffer' });
-  assert(wb.SheetNames.join() === 'CCサマリー,理由別,DA別,日別,Non-Compliant明細', 'シート構成: ' + wb.SheetNames);
+  assert(wb.SheetNames.join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'シート構成: ' + wb.SheetNames);
 
   var sum = {};
   sheetAoa(wb, 'CCサマリー').forEach(function (row, i) { sum[row[0]] = { v: row[1], i: i }; });
@@ -277,7 +277,7 @@ function testExcelExportWk40() {
   assert(cellText(wb, '日別', 1, 4) === '60.00%', '日別CC率表示');
 
   var nc = sheetAoa(wb, 'Non-Compliant明細');
-  assert(nc[0].join() === 'Event Date,DA名,Transporter ID,Scannable ID,Destination Address ID,Shipment Reason,配送理由（日本語）,Call Event,Text Event,判定', 'NC明細ヘッダー');
+  assert(nc[0].join() === 'Event Date,DA名,Transporter ID,Scannable ID,Destination Address ID,Shipment Reason,配送理由（日本語）,Call Event,Text Event,判定,所属', 'NC明細ヘッダー');
   assert(nc.length === 123, 'NC明細122件');
   assert(nc.slice(1).every(function (r) { return r[9] === 'Non-Compliant' && r[7] === '' && r[8] === ''; }), '判定=Non-Compliant、Call/Textなし');
   assert(nc.slice(1).every(function (r) { return Cc.CC_ELIGIBLE_REASONS.indexOf(r[5]) >= 0 && r[6] === Cc.getCcReasonLabel(r[5]); }), '理由コードと日本語');
@@ -289,7 +289,7 @@ function testExcelExportZero() {
   var sheets = Cc.buildCcExportSheets(result);
   assert(sheets[0].rows[2][1] === '-', '0件のCC率は "-"');
   var wb = Cc.buildCcExportWorkbook(XLSX, result);
-  assert(wb.SheetNames.length === 5, '0件でも5シート');
+  assert(wb.SheetNames.length === 7, '0件でも7シート');
 }
 
 var tests = [testStatusJudgment, testZeroEligible, testUnknownDriver, testAggregations, testParseRows, testWk40Ofk3RealData,

@@ -2056,6 +2056,8 @@ var FTDS_REASON_JA = {
 function ftdsTranslateReason(reason) {
   if (!reason) return '';
   if (FTDS_REASON_JA[reason]) return FTDS_REASON_JA[reason];
+  // 'Not Attempt' などの表記ゆれ（表示のみ変換。元コードは保持）
+  if (String(reason).trim().toUpperCase().replace(/[\s\-]+/g, '_') === 'NOT_ATTEMPT') return FTDS_REASON_JA.NOT_ATTEMPT;
   var ja = reason.replace(/\s*[A-Za-z].*$/, '').trim();
   if (ja && ja !== reason) return ja;
   return reason.replace(/_/g, ' ');

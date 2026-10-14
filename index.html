@@ -25,7 +25,7 @@
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script src="/billing-reconcile-core.js?v=20261007-3"></script>
-  <script src="/contact-compliance-core.js?v=20261007-2"></script>
+  <script src="/contact-compliance-core.js?v=20261014-1"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -1460,7 +1460,7 @@
               <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white" id="btn-view-cc" onclick="setFtdsCcActiveView('cc')">CC表示</button>
             </div>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportFtdsResult()" id="ftds-export-btn" disabled>FTDS エクスポート</button>
-            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）の5シートExcel">📊 CC Ver.1 Excel出力</button>
+            <button type="button" class="text-xs px-3 py-1.5 rounded font-bold bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed" onclick="exportCcV1Result()" id="cc-v1-export-btn" disabled title="CC Logic Ver.1（Amazon raw data から算出）の7シートExcel（所属別サマリー・所属別DA分析を含む）">📊 CC Ver.1 Excel出力</button>
             <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="exportCcResult()" id="cc-export-btn" disabled title="従来指標（べき架電／実架電）のExcel。CC Logic Ver.1 の数値ではありません">📞 従来架電実績 Excel出力</button>
           </div>
         </div>
@@ -1607,6 +1607,21 @@
               </table>
             </div>
           </div>
+
+          <!-- 所属別分析: 全体 → 所属 → DA → 理由 → 詳細（表示用の追加集計。CC判定・上記の全体集計は変更しない） -->
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
+            <h4 class="text-xs font-medium text-ink-lighter">所属別分析（全体 → 所属 → DA → 理由 → 詳細）</h4>
+            <label class="text-xs text-ink-lighter">並び順
+              <select id="cc-v1-aff-sort" class="ml-1 text-xs border border-border rounded px-1 py-0.5" onchange="renderCcV1Affiliation()">
+                <option value="nonCompliantDesc">非適合件数が多い順</option>
+                <option value="rateAsc">CC率が低い順</option>
+                <option value="totalDesc">対象件数が多い順</option>
+              </select>
+            </label>
+          </div>
+          <div id="cc-v1-aff-crumb" class="text-xs mb-1"></div>
+          <div id="cc-v1-aff-check" class="text-xs mb-2"></div>
+          <div id="cc-v1-aff-body" class="mb-4"></div>
 
           <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
             <h4 class="text-xs font-medium text-ink-lighter">DA別</h4>
@@ -18410,7 +18425,12 @@ var driverDB = {
         return { ok: false, missing: [], reason: 'module' };
       }
       var tidToName = buildTidToNameLookup();
-      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; });
+      // 所属は Transporter ID × ドライバーマスタで判定（不明は core 側で「所属未判定」に集計。除外しない）
+      var affCache = {};
+      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; }, function(tid) {
+        if (!Object.prototype.hasOwnProperty.call(affCache, tid)) affCache[tid] = resolveQualityAffiliationByKeys('', tid) || '';
+        return affCache[tid];
+      });
       if (result.error) {
         var missing = result.missing || [];
         var msg = '<b>Contact Compliance を算出できません：必須列が不足しています。</b>';
@@ -18482,6 +18502,7 @@ var driverDB = {
       }
       document.getElementById('cc-v1-reason-tbody').innerHTML = reasonHtml;
 
+      renderCcV1Affiliation();
       renderCcV1DriverTable();
 
       var dateHtml = '';
@@ -18521,7 +18542,161 @@ var driverDB = {
       document.getElementById('cc-v1').classList.remove('hidden');
     }
 
-    // CC Ver.1 Excel出力（5シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
+    // ===== 所属別分析ドリルダウン（全体 → 所属 → DA → 理由 → 詳細）。表示のみ。集計は ccV1Result.byAffiliation =====
+    var ccV1Nav = { aff: null, tid: null };
+    var ccV1AffView = [];
+    var ccV1DaView = [];
+
+    // CC率バー。Amazon正式基準が未確認のため絶対評価はせず、全体CC率を下回る所属/DAを赤で示す相対表示。
+    function ccV1RateBarHtml(rate, overall) {
+      if (rate === null || rate === undefined || !isFinite(rate)) return '-';
+      var below = overall !== null && overall !== undefined && rate < overall;
+      var color = below ? '#dc2626' : '#16a34a';
+      return '<div style="min-width:96px;"><div class="font-bold" style="color:' + color + ';">' + escapeHtml(ContactComplianceCore.formatCcRate(rate)) + '</div>' +
+        '<div style="height:4px;background:#e5e7eb;border-radius:2px;"><div style="height:4px;width:' + Math.max(0, Math.min(100, rate)).toFixed(1) +
+        '%;background:' + color + ';border-radius:2px;"></div></div></div>';
+    }
+
+    function ccV1NcBarHtml(n, max) {
+      var w = max > 0 ? Math.round(n / max * 100) : 0;
+      return '<div style="min-width:72px;"><div class="font-bold' + (n ? ' text-red-600' : '') + '">' + n + '</div>' +
+        (n ? '<div style="height:4px;background:#fee2e2;border-radius:2px;"><div style="height:4px;width:' + w + '%;background:#dc2626;border-radius:2px;"></div></div>' : '') + '</div>';
+    }
+
+    function ccV1ReasonTableHtml(byReason, overall) {
+      var tot = { total: 0, compliant: 0, nonCompliant: 0 };
+      var max = 0;
+      for (var m = 0; m < byReason.length; m++) max = Math.max(max, byReason[m].nonCompliant);
+      var html = '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+        '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">配送理由</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th></tr></thead><tbody>';
+      for (var i = 0; i < byReason.length; i++) {
+        var r = byReason[i];
+        tot.total += r.total; tot.compliant += r.compliant; tot.nonCompliant += r.nonCompliant;
+        html += '<tr class="border-b border-border">' +
+          '<td class="px-3 py-2">' + escapeHtml(r.reasonLabel) + ' <span class="text-xs text-ink-lighter font-mono">' + escapeHtml(r.reason) + '</span></td>' +
+          '<td class="px-3 py-2 text-center">' + r.total + '</td><td class="px-3 py-2 text-center">' + r.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ccV1NcBarHtml(r.nonCompliant, max) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ccV1RateBarHtml(r.rate, overall) + '</td></tr>';
+      }
+      var totRate = ContactComplianceCore.calcCcRate(tot.compliant, tot.total);
+      html += '<tr class="bg-surface font-bold"><td class="px-3 py-2">合計</td><td class="px-3 py-2 text-center">' + tot.total + '</td>' +
+        '<td class="px-3 py-2 text-center">' + tot.compliant + '</td><td class="px-3 py-2 text-center">' + tot.nonCompliant + '</td>' +
+        '<td class="px-3 py-2 text-center">' + escapeHtml(ContactComplianceCore.formatCcRate(totRate)) + '</td></tr></tbody></table></div></div>';
+      return html;
+    }
+
+    function ccV1StatTableHtml(firstHeader, items, overall, clickFn, showId) {
+      var max = 0;
+      for (var m = 0; m < items.length; m++) max = Math.max(max, items[m].nonCompliant);
+      var html = '<div class="card overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+        '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">' + firstHeader + '</th>' +
+        (showId ? '<th class="px-3 py-2 text-left text-xs font-medium text-ink-lighter">Transporter ID</th>' : '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">DA数</th>') +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">対象</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">適合</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">非適合</th>' +
+        '<th class="px-3 py-2 text-center text-xs font-medium text-ink-lighter">CC率</th></tr></thead><tbody>';
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var name = showId ? it.driverName : it.affiliation;
+        var warn = !it.identified;
+        html += '<tr class="border-b border-border cursor-pointer hover:bg-surface' + (warn ? ' bg-red-50' : '') + '" onclick="' + clickFn + '(' + i + ')">' +
+          '<td class="px-3 py-2' + (warn ? ' text-red-600 font-medium' : ' font-medium') + '">' + escapeHtml(name) + ' <span class="text-xs text-ink-lighter">›</span></td>' +
+          (showId ? '<td class="px-3 py-2 text-xs font-mono">' + escapeHtml(it.transporterId || '-') + '</td>' : '<td class="px-3 py-2 text-center">' + it.driverCount + '</td>') +
+          '<td class="px-3 py-2 text-center">' + it.total + '</td><td class="px-3 py-2 text-center">' + it.compliant + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ccV1NcBarHtml(it.nonCompliant, max) + '</td>' +
+          '<td class="px-3 py-2 text-center">' + ccV1RateBarHtml(it.rate, overall) + '</td></tr>';
+      }
+      if (!items.length) html += '<tr><td colspan="6" class="text-center py-4 text-ink-lighter text-xs">CC対象データがありません</td></tr>';
+      return html + '</tbody></table></div></div>';
+    }
+
+    function ccV1SelectAff(i) {
+      if (!ccV1AffView[i]) return;
+      ccV1Nav = { aff: ccV1AffView[i].affiliation, tid: null };
+      renderCcV1Affiliation();
+    }
+
+    function ccV1SelectDa(i) {
+      if (!ccV1DaView[i]) return;
+      ccV1Nav.tid = ccV1DaView[i].transporterId;
+      renderCcV1Affiliation();
+    }
+
+    function ccV1NavTo(level) {
+      if (level === 'root') ccV1Nav = { aff: null, tid: null };
+      else if (level === 'aff') ccV1Nav.tid = null;
+      renderCcV1Affiliation();
+    }
+
+    function renderCcV1Affiliation() {
+      var body = document.getElementById('cc-v1-aff-body');
+      var crumb = document.getElementById('cc-v1-aff-crumb');
+      var chk = document.getElementById('cc-v1-aff-check');
+      if (!ccV1Result || !ccV1Result.byAffiliation || !body) return;
+      var res = ccV1Result;
+      var core = ContactComplianceCore;
+      var sel = document.getElementById('cc-v1-aff-sort');
+      var mode = sel && sel.value ? sel.value : 'nonCompliantDesc';
+      var overall = res.summary.rate;
+      ccV1AffView = core.sortCcAffiliationStats(res.byAffiliation, mode);
+
+      var curAff = null, curDa = null;
+      for (var a = 0; a < ccV1AffView.length; a++) if (ccV1AffView[a].affiliation === ccV1Nav.aff) curAff = ccV1AffView[a];
+      if (!curAff) ccV1Nav = { aff: null, tid: null };
+      if (curAff) {
+        ccV1DaView = core.sortCcDriverStats(curAff.drivers, mode);
+        for (var d = 0; d < ccV1DaView.length; d++) if (ccV1DaView[d].transporterId === ccV1Nav.tid) curDa = ccV1DaView[d];
+        if (!curDa) ccV1Nav.tid = null;
+      }
+
+      var link = function(label, fn) { return '<a href="javascript:void(0)" class="text-emerald-700 underline" onclick="' + fn + '">' + label + '</a>'; };
+      var c = link('全体', "ccV1NavTo('root')");
+      if (curAff) c = curDa ? c + ' › ' + link(escapeHtml(curAff.affiliation), "ccV1NavTo('aff')") + ' › <b>' + escapeHtml(curDa.driverName) + '</b>'
+                            : c + ' › <b>' + escapeHtml(curAff.affiliation) + '</b>';
+      else c = '<b>全体</b>';
+      if (crumb) crumb.innerHTML = c + ' <span class="text-ink-lighter ml-2">赤＝全体CC率（' + escapeHtml(core.formatCcRate(overall)) + '）を下回る／行クリックで掘り下げ</span>';
+
+      var chkRes = res.aggregationCheck;
+      if (chk) chk.innerHTML = chkRes && chkRes.ok
+        ? '<span class="text-emerald-700">✔ 所属別・DA別・理由別の合計は全体集計と一致（対象 ' + res.summary.total + '件 / 非適合 ' + res.summary.nonCompliant + '件）</span>'
+        : '<span class="text-red-600">⚠ 集計不一致: ' + escapeHtml(((chkRes && chkRes.errors) || []).slice(0, 3).join(' / ')) + '</span>';
+
+      var html = '';
+      if (!curAff) {
+        html += ccV1StatTableHtml('所属', ccV1AffView, overall, 'ccV1SelectAff', false);
+        html += '<h5 class="text-xs font-medium text-ink-lighter mt-3 mb-1">全体の配送理由別（所属合計）</h5>' + ccV1ReasonTableHtml(res.byReason, overall);
+      } else if (!curDa) {
+        html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">' +
+          '<div class="card p-3 text-center"><div class="text-xs text-ink-lighter">CC率</div><div class="text-xl font-bold">' + ccV1RateBarHtml(curAff.rate, overall) + '</div></div>' +
+          '<div class="card p-3 text-center"><div class="text-xs text-ink-lighter">対象</div><div class="text-lg font-bold">' + curAff.total + '</div></div>' +
+          '<div class="card p-3 text-center"><div class="text-xs text-ink-lighter">適合</div><div class="text-lg font-bold text-emerald-600">' + curAff.compliant + '</div></div>' +
+          '<div class="card p-3 text-center"><div class="text-xs text-ink-lighter">非適合</div><div class="text-lg font-bold text-red-600">' + curAff.nonCompliant + '</div></div></div>';
+        html += '<h5 class="text-xs font-medium text-ink-lighter mb-1">DA別（' + ccV1DaView.length + '名）</h5>' + ccV1StatTableHtml('DA名', ccV1DaView, overall, 'ccV1SelectDa', true);
+        html += '<h5 class="text-xs font-medium text-ink-lighter mt-3 mb-1">所属内の配送理由別</h5>' + ccV1ReasonTableHtml(curAff.byReason, overall);
+      } else {
+        html += '<div class="text-xs text-ink-lighter mb-2">' + escapeHtml(curDa.driverName) + ' / <span class="font-mono">' + escapeHtml(curDa.transporterId || '-') + '</span> / ' + escapeHtml(curAff.affiliation) +
+          ' ／ 対象 ' + curDa.total + '・適合 ' + curDa.compliant + '・非適合 ' + curDa.nonCompliant + '・CC率 ' + escapeHtml(core.formatCcRate(curDa.rate)) + '</div>';
+        html += '<h5 class="text-xs font-medium text-ink-lighter mb-1">配送理由別</h5>' + ccV1ReasonTableHtml(curDa.byReason, overall);
+        var ncRows = res.nonCompliant.filter(function(nc) { return nc.transporterId === curDa.transporterId; });
+        html += '<h5 class="text-xs font-medium text-ink-lighter mt-3 mb-1">非適合明細（' + ncRows.length + '件）</h5><div class="card overflow-hidden"><div class="overflow-x-auto" style="max-height:320px; overflow-y:auto;"><table class="w-full text-sm"><thead><tr class="border-b border-border bg-surface">' +
+          '<th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Event Date</th><th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Scannable ID</th>' +
+          '<th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">Destination Address ID</th><th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">配送理由</th></tr></thead><tbody>';
+        for (var n = 0; n < ncRows.length; n++) {
+          html += '<tr class="border-b border-border"><td class="px-2 py-1.5 text-xs whitespace-nowrap">' + escapeHtml(latFormatDate(ncRows[n].eventDate) || ncRows[n].eventDate) + '</td>' +
+            '<td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(ncRows[n].scannableId) + '</td><td class="px-2 py-1.5 text-xs font-mono">' + escapeHtml(ncRows[n].destinationAddressId) + '</td>' +
+            '<td class="px-2 py-1.5 text-xs">' + escapeHtml(ncRows[n].shipmentReasonLabel) + ' <span class="font-mono text-ink-lighter">' + escapeHtml(ncRows[n].shipmentReason) + '</span></td></tr>';
+        }
+        if (!ncRows.length) html += '<tr><td colspan="4" class="text-center py-4 text-ink-lighter text-xs">非適合はありません</td></tr>';
+        html += '</tbody></table></div></div>';
+      }
+      body.innerHTML = html;
+    }
+
+    // CC Ver.1 Excel出力（7シート）。シート内容は ContactComplianceCore.buildCcExportWorkbook が
     // 画面と同じ ccV1Result から作る（Excel側で判定・集計をやり直さない）。DA別は画面の並び順に合わせる。
     function exportCcV1Result() {
       if (!ccV1Result) {
@@ -20401,6 +20576,9 @@ var driverDB = {
       if (!reason) return '';
       // 完全一致
       if (REASON_JA[reason]) return REASON_JA[reason];
+      // 'Not Attempt' / 'not attempt' などの表記ゆれ（元の理由コードは変更せず表示のみ変換）
+      var normalizedKey = String(reason).trim().toUpperCase().replace(/[\s\-]+/g, '_');
+      if (normalizedKey === 'NOT_ATTEMPT') return REASON_JA.NOT_ATTEMPT;
       // 部分一致（英語部分を除去して日本語部分だけ残す）
       var ja = reason.replace(/\s*[A-Za-z].*$/, '').trim();
       if (ja && ja !== reason) return ja;

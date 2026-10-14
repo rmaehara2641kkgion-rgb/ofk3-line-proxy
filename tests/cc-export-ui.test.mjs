@@ -51,7 +51,8 @@ function extractVarObject(src, name) {
 const FUNCTIONS = [
   'normalizeReportHeader', 'isTransporterHeader', 'mapAnalysisHeaderColumns', 'findAnalysisHeaderRow',
   'buildTidToNameLookup', 'updateCcExportUi', 'clearCcV1', 'showCcV1Error', 'ccV1RateHtml',
-  'renderCcV1FromRows', 'renderCcV1', 'renderCcV1DriverTable', 'exportCcV1Result', 'processCcData',
+  'renderCcV1FromRows', 'renderCcV1', 'renderCcV1DriverTable', 'ccV1RateBarHtml', 'ccV1NcBarHtml', 'ccV1ReasonTableHtml',
+  'ccV1StatTableHtml', 'ccV1SelectAff', 'ccV1SelectDa', 'ccV1NavTo', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
   'translateReason', 'isCcCallRequired', 'isCcCallMade', 'calcCcCallRate', 'buildCcAoa',
   'styleQualityExportSheet', 'styleCcSheet', 'buildQualityAffiliationWorkbook',
   'groupQualityRecordsByAffiliation', 'toSafeExcelSheetName', 'exportCcResult'
@@ -95,10 +96,13 @@ function buildSandbox(master) {
     exportedQualityCounts: {},
     ccV1Result: null,
     ccV1MissingColumns: null,
+    ccV1Nav: { aff: null, tid: null },
+    ccV1AffView: [],
+    ccV1DaView: [],
     getTodayJst: function () { return '2026-10-07'; },
     escapeHtml: function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
     latFormatDate: function (s) { return String(s || '').replace(/-/g, '/'); },
-    resolveQualityAffiliationByKeys: function () { return ''; },
+    resolveQualityAffiliationByKeys: function (name, tid) { return (sandbox.__affMaster || {})[tid] || ''; },
     renderCcResultsUI: function () { sandbox.__legacyRendered = true; } // 従来指標の描画（DOM）だけ省略
   };
   sandbox.window = sandbox;
@@ -176,7 +180,7 @@ function testWk40ScreenAndV1Excel() {
   var v1Name = t.writes[0].name;
   assert(v1Name === 'CC_Ver1分析_2026-10-07.xlsx', 'CC Ver.1 ファイル名: ' + v1Name);
   var wb = roundTrip(t.writes[0].wb);
-  assert(wb.SheetNames.join() === 'CCサマリー,理由別,DA別,日別,Non-Compliant明細', 'Test 2: 5シート ' + wb.SheetNames);
+  assert(wb.SheetNames.join() === 'CCサマリー,所属別サマリー,所属別DA分析,理由別,DA別,日別,Non-Compliant明細', 'Test 2: 7シート ' + wb.SheetNames);
   var sum = summaryOf(wb);
   var excel = { rate: sum['CC率'].w, total: String(sum['CC対象件数'].v), compliant: String(sum['Compliant件数'].v), nonCompliant: String(sum['Non-Compliant件数'].v) };
   assert(JSON.stringify(excel) === JSON.stringify(screen), 'Test 1: 画面とExcelが一致 screen=' + JSON.stringify(screen) + ' excel=' + JSON.stringify(excel));
@@ -243,7 +247,51 @@ function testBulkImportRoutesLegacyName() {
   assert(!test('ftds分析_2026-10-07.xlsx'), 'FTDS は対象外');
 }
 
-var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName];
+// ---- 所属別ドリルダウン（全体 → 所属 → DA → 理由 → 詳細）と Excel の一致 ----
+function testAffiliationDrilldown() {
+  var rows = wk40Rows();
+  var tids = Array.from(new Set(rows.slice(1).map(function (r) { return r[5]; }))).filter(Boolean);
+  var master = {}; var affMaster = {};
+  tids.forEach(function (tid, i) {
+    master['DA' + i] = tid;
+    if (i % 3 !== 0) affMaster[tid] = i % 3 === 1 ? 'JHS' : 'AE物流'; // 3人に1人は所属マスタ無し
+  });
+  var t = buildSandbox(master);
+  t.sandbox.__affMaster = affMaster;
+  var res = t.sandbox.renderCcV1FromRows(wk40Rows());
+  assert(res.ok, '算出成功');
+  var r = t.sandbox.ccV1Result;
+  assert(r.summary.total === 575 && r.summary.compliant === 453 && r.summary.nonCompliant === 122, 'Wk40の全体値は所属追加後も不変');
+  var body = function () { return t.elements['cc-v1-aff-body'].innerHTML; };
+  assert(/JHS/.test(body()) && /AE物流/.test(body()) && /所属未判定/.test(body()), 'ルート: 所属一覧に所属未判定を含む');
+  assert(/一致/.test(t.elements['cc-v1-aff-check'].innerHTML), '整合性表示');
+  assert(/<b>全体<\/b>/.test(t.elements['cc-v1-aff-crumb'].innerHTML), 'パンくず: 全体');
+
+  t.sandbox.ccV1SelectAff(0);
+  var first = t.sandbox.ccV1AffView[0];
+  assert(first.nonCompliant === Math.max.apply(null, r.byAffiliation.map(function (a) { return a.nonCompliant; })), '先頭はNC最多の所属');
+  assert(body().indexOf(first.drivers[0].transporterId) >= 0 && /DA別/.test(body()) && /所属内の配送理由別/.test(body()), '所属選択でDA一覧と理由別');
+  assert(new RegExp('<b>' + first.affiliation + '</b>').test(t.elements['cc-v1-aff-crumb'].innerHTML), 'パンくず: 所属');
+
+  t.sandbox.ccV1SelectDa(0);
+  assert(/配送理由別/.test(body()) && /非適合明細/.test(body()), 'DA選択で理由別内訳と詳細');
+  assert(body().indexOf('不在') >= 0 || body().indexOf('配達先アクセス不可') >= 0, '理由は日本語表示');
+  var da = t.sandbox.ccV1DaView[0];
+  assert(body().indexOf('非適合明細（' + da.nonCompliant + '件）') >= 0, 'DAの詳細件数=DA非適合件数');
+
+  t.sandbox.ccV1NavTo('aff');
+  assert(/DA別/.test(body()), '所属へ戻る');
+  t.sandbox.ccV1NavTo('root');
+  assert(/<b>全体<\/b>/.test(t.elements['cc-v1-aff-crumb'].innerHTML), '全体へ戻る');
+
+  // 並び替え
+  t.elements['cc-v1-aff-sort'].value = 'rateAsc';
+  t.sandbox.renderCcV1Affiliation();
+  var v = t.sandbox.ccV1AffView;
+  for (var i = 1; i < v.length; i++) assert(v[i - 1].rate <= v[i].rate, 'CC率昇順');
+}
+
+var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown];
 for (var i = 0; i < tests.length; i++) {
   tests[i]();
   console.log('PASS ' + tests[i].name);
