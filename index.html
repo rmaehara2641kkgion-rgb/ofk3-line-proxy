@@ -3861,6 +3861,10 @@ var driverDB = {
         var tabBtn = document.getElementById('tab-' + t);
         if (tabBtn) tabBtn.className = t === tab ? 'tab-active pb-3 text-sm whitespace-nowrap' : 'tab-inactive pb-3 text-sm whitespace-nowrap';
       }
+      if (tab === 'ftds' && ccV1Result && ccV1SourceRows && ccV1MasterSig !== ccV1MasterSignature()) {
+        // マスタ（Transporter ID・所属）が更新されていたら、CC分析の所属判定を最新のマスタで再実行
+        try { refreshCcV1Affiliation(); } catch (e) { console.error('[CC] 所属再判定に失敗', e); }
+      }
       if (tab === 'master') {
         // マスタタブを開くたびにサーバーから最新を取得（マージ）
         loadMasterFromServer();
@@ -18389,6 +18393,7 @@ var driverDB = {
 
     function clearCcV1() {
       ccV1Result = null;
+      ccV1SourceRows = null;
       ccV1MissingColumns = null;
       var box = document.getElementById('cc-v1');
       if (box) box.classList.add('hidden');
@@ -18424,12 +18429,17 @@ var driverDB = {
         showCcV1Error('Contact Compliance 判定モジュール（contact-compliance-core.js）を読み込めませんでした。ページを再読み込みしてください。');
         return { ok: false, missing: [], reason: 'module' };
       }
-      var tidToName = buildTidToNameLookup();
-      // 所属は Transporter ID × ドライバーマスタで判定（不明は core 側で「所属未判定」に集計。除外しない）
-      var affCache = {};
-      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) { return tidToName[tid] || ''; }, function(tid) {
-        if (!Object.prototype.hasOwnProperty.call(affCache, tid)) affCache[tid] = resolveQualityAffiliationByKeys('', tid) || '';
-        return affCache[tid];
+      // DA名・所属とも、アプリ本体と同じドライバーマスタ（transportIDs / driverDepartments）を実行時に参照する。
+      // Transporter ID は表記ゆれ（大小文字・全角・空白・ハイフン・数値型）を吸収して照合する。
+      var master = buildCcMasterLookup();
+      ccV1SourceRows = rows;
+      ccV1MasterSig = ccV1MasterSignature();
+      var result = ContactComplianceCore.analyzeCcRows(rows, function(tid) {
+        var m = master.byTid[normalizeCcTid(tid)];
+        return m ? m.name : '';
+      }, function(tid) {
+        var m = master.byTid[normalizeCcTid(tid)];
+        return m ? m.dept : '';
       });
       if (result.error) {
         var missing = result.missing || [];
@@ -18448,6 +18458,7 @@ var driverDB = {
       }
       ccV1Result = result;
       ccV1MissingColumns = null;
+      ccV1AffStats = summarizeCcAffiliationStatus(result, master);
       updateCcExportUi();
       var err = document.getElementById('cc-v1-error');
       if (err) { err.classList.add('hidden'); err.innerHTML = ''; }
@@ -18540,6 +18551,72 @@ var driverDB = {
       document.getElementById('cc-v1-nc-count').textContent = '：' + res.nonCompliant.length + '件';
 
       document.getElementById('cc-v1').classList.remove('hidden');
+    }
+
+    // ===== CC 所属判定: ドライバーマスタ参照（アプリ本体の transportIDs / driverDepartments を都度参照） =====
+    var ccV1SourceRows = null;
+    var ccV1MasterSig = '';
+    var ccV1AffStats = null;
+
+    // Transporter ID の照合キー。全角→半角・空白/ハイフン除去（normalizeIdToken）+ 大文字化 + 文字列化。
+    function normalizeCcTid(v) {
+      return normalizeIdToken(v).toUpperCase();
+    }
+
+    // マスタ更新の検知用。件数と内容を畳み込んだ軽量署名（localStorageに依存せず現在のメモリ上のマスタを見る）。
+    function ccV1MasterSignature() {
+      var parts = [];
+      var keys = Object.keys(transportIDs).sort();
+      for (var i = 0; i < keys.length; i++) parts.push(keys[i] + '=' + transportIDs[keys[i]] + '@' + (driverDepartments[keys[i]] || ''));
+      var dk = Object.keys(driverDepartments).sort();
+      for (var j = 0; j < dk.length; j++) parts.push('D:' + dk[j] + '=' + driverDepartments[dk[j]]);
+      var str = parts.join('|');
+      var h = 5381;
+      for (var c = 0; c < str.length; c++) h = ((h << 5) + h + str.charCodeAt(c)) | 0;
+      return keys.length + ':' + dk.length + ':' + h;
+    }
+
+    // 正規化 Transporter ID → { name, dept, status }。status: 'ok'（所属あり）| 'noDept'（マスタ登録済・所属未設定）
+    // 同じIDが複数の氏名に登録されている場合は、所属が設定されている登録を優先する。
+    function buildCcMasterLookup() {
+      var byTid = {};
+      var duplicates = 0;
+      var keys = Object.keys(transportIDs);
+      for (var k = 0; k < keys.length; k++) {
+        var tid = normalizeCcTid(transportIDs[keys[k]]);
+        if (!tid) continue;
+        var dept = String(driverDepartments[resolveDriverKey(keys[k])] || driverDepartments[keys[k]] || '').trim();
+        var entry = { name: keys[k], dept: dept, status: dept ? 'ok' : 'noDept' };
+        if (byTid[tid]) {
+          duplicates++;
+          if (byTid[tid].dept || !dept) continue;
+        }
+        byTid[tid] = entry;
+      }
+      return { byTid: byTid, duplicates: duplicates };
+    }
+
+    // DA単位の所属判定内訳: 所属あり / マスタ登録済だが所属未設定 / マスタ未登録
+    function summarizeCcAffiliationStatus(result, master) {
+      var st = { ok: 0, noDept: 0, notInMaster: 0, duplicates: master.duplicates };
+      for (var a = 0; a < result.byAffiliation.length; a++) {
+        var ds = result.byAffiliation[a].drivers;
+        for (var d = 0; d < ds.length; d++) {
+          var m = master.byTid[normalizeCcTid(ds[d].transporterId)];
+          if (!m) st.notInMaster++;
+          else if (m.status === 'ok') st.ok++;
+          else st.noDept++;
+        }
+      }
+      return st;
+    }
+
+    // マスタ更新後に、読込済みのAmazon生データから所属を再判定する（CC判定・件数は変わらない）。
+    function refreshCcV1Affiliation() {
+      if (!ccV1SourceRows) return false;
+      var rows = ccV1SourceRows;
+      renderCcV1FromRows(rows);
+      return true;
     }
 
     // ===== 所属別分析ドリルダウン（全体 → 所属 → DA → 理由 → 詳細）。表示のみ。集計は ccV1Result.byAffiliation =====
@@ -18661,9 +18738,15 @@ var driverDB = {
       if (crumb) crumb.innerHTML = c + ' <span class="text-ink-lighter ml-2">赤＝全体CC率（' + escapeHtml(core.formatCcRate(overall)) + '）を下回る／行クリックで掘り下げ</span>';
 
       var chkRes = res.aggregationCheck;
-      if (chk) chk.innerHTML = chkRes && chkRes.ok
+      var statTxt = '';
+      if (ccV1AffStats) {
+        statTxt = ' <span class="text-ink-lighter ml-2">所属判定（DA単位）：マスタ照合 ' + ccV1AffStats.ok + '名 / マスタ登録済・所属未設定 ' + ccV1AffStats.noDept +
+          '名 / マスタ未登録 ' + ccV1AffStats.notInMaster + '名' + (ccV1AffStats.duplicates ? ' / ID重複登録 ' + ccV1AffStats.duplicates + '件' : '') + '</span>' +
+          ' <a href="javascript:void(0)" class="text-emerald-700 underline ml-2" onclick="refreshCcV1Affiliation()">所属を再判定</a>';
+      }
+      if (chk) chk.innerHTML = (chkRes && chkRes.ok
         ? '<span class="text-emerald-700">✔ 所属別・DA別・理由別の合計は全体集計と一致（対象 ' + res.summary.total + '件 / 非適合 ' + res.summary.nonCompliant + '件）</span>'
-        : '<span class="text-red-600">⚠ 集計不一致: ' + escapeHtml(((chkRes && chkRes.errors) || []).slice(0, 3).join(' / ')) + '</span>';
+        : '<span class="text-red-600">⚠ 集計不一致: ' + escapeHtml(((chkRes && chkRes.errors) || []).slice(0, 3).join(' / ')) + '</span>') + statTxt;
 
       var html = '';
       if (!curAff) {

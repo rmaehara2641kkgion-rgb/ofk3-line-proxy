@@ -52,7 +52,8 @@ const FUNCTIONS = [
   'normalizeReportHeader', 'isTransporterHeader', 'mapAnalysisHeaderColumns', 'findAnalysisHeaderRow',
   'buildTidToNameLookup', 'updateCcExportUi', 'clearCcV1', 'showCcV1Error', 'ccV1RateHtml',
   'renderCcV1FromRows', 'renderCcV1', 'renderCcV1DriverTable', 'ccV1RateBarHtml', 'ccV1NcBarHtml', 'ccV1ReasonTableHtml',
-  'ccV1StatTableHtml', 'ccV1SelectAff', 'ccV1SelectDa', 'ccV1NavTo', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
+  'ccV1StatTableHtml', 'normalizeIdToken', 'normalizeCcTid', 'ccV1MasterSignature', 'buildCcMasterLookup',
+  'summarizeCcAffiliationStatus', 'refreshCcV1Affiliation', 'ccV1SelectAff', 'ccV1SelectDa', 'ccV1NavTo', 'renderCcV1Affiliation', 'exportCcV1Result', 'processCcData',
   'translateReason', 'isCcCallRequired', 'isCcCallMade', 'calcCcCallRate', 'buildCcAoa',
   'styleQualityExportSheet', 'styleCcSheet', 'buildQualityAffiliationWorkbook',
   'groupQualityRecordsByAffiliation', 'toSafeExcelSheetName', 'exportCcResult'
@@ -102,7 +103,12 @@ function buildSandbox(master) {
     getTodayJst: function () { return '2026-10-07'; },
     escapeHtml: function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
     latFormatDate: function (s) { return String(s || '').replace(/-/g, '/'); },
-    resolveQualityAffiliationByKeys: function (name, tid) { return (sandbox.__affMaster || {})[tid] || ''; },
+    driverDepartments: {},
+    resolveQualityAffiliationByKeys: function () { return ''; }, // 従来指標Excel側（CC Ver.1 の所属判定では使わない）
+    resolveDriverKey: function (n) { return n; },
+    ccV1SourceRows: null,
+    ccV1MasterSig: '',
+    ccV1AffStats: null,
     renderCcResultsUI: function () { sandbox.__legacyRendered = true; } // 従来指標の描画（DOM）だけ省略
   };
   sandbox.window = sandbox;
@@ -251,13 +257,13 @@ function testBulkImportRoutesLegacyName() {
 function testAffiliationDrilldown() {
   var rows = wk40Rows();
   var tids = Array.from(new Set(rows.slice(1).map(function (r) { return r[5]; }))).filter(Boolean);
-  var master = {}; var affMaster = {};
+  var master = {}; var depts = {};
   tids.forEach(function (tid, i) {
     master['DA' + i] = tid;
-    if (i % 3 !== 0) affMaster[tid] = i % 3 === 1 ? 'JHS' : 'AE物流'; // 3人に1人は所属マスタ無し
+    if (i % 3 !== 0) depts['DA' + i] = i % 3 === 1 ? 'JHS' : 'AE物流'; // 3人に1人は所属マスタ無し
   });
   var t = buildSandbox(master);
-  t.sandbox.__affMaster = affMaster;
+  t.sandbox.driverDepartments = depts;
   var res = t.sandbox.renderCcV1FromRows(wk40Rows());
   assert(res.ok, '算出成功');
   var r = t.sandbox.ccV1Result;
@@ -291,7 +297,74 @@ function testAffiliationDrilldown() {
   for (var i = 1; i < v.length; i++) assert(v[i - 1].rate <= v[i].rate, 'CC率昇順');
 }
 
-var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown];
+// ---- マスタ参照: 同一データソース・表記ゆれ・マスタ更新後の再判定・所属未判定の条件 ----
+function testMasterLookup() {
+  var rows = [['Event Date', 'Scannable ID', 'Destination Address ID', 'Transporter ID', 'Shipment Reason', 'Call Event', 'Text Event']];
+  function add(tid, reason, call) { rows.push(['2026-10-04', 'S' + rows.length, 'D' + rows.length, tid, reason, call ? 'Calls to Customer' : '', '']); }
+  var U = 'CUSTOMER_UNAVAILABLE';
+  add('A1B2C3', U, true); add('A1B2C3', U, false);          // 完全一致
+  add('  a1b2c3\u00a0', U, false);                           // 小文字・空白・NBSP → 同一DA(A1B2C3)に統合されない行は別TID扱いだが所属は同じ
+  add('Ａ２Ｂ３', U, false);                                   // 全角 → A2B3
+  add('A3-4 5', U, true);                                     // ハイフン・空白 → A345
+  add('A5NODEPT', U, false);                                  // マスタ登録済・所属未設定
+  add('A6GHOST', U, false);                                   // マスタ未登録
+  add('', U, false);                                          // ID空
+  // マスタ（実アプリと同じ: 氏名→TID / 氏名→所属）。TIDは型・表記がまちまち。
+  var master = { '甲': ' A1B2C3 ', '乙': 'a2b3', '丙': 'A345', '丁': 'A5NODEPT', '戊': 12345 };
+  var t = buildSandbox(master);
+  t.sandbox.driverDepartments = { '甲': 'JHS', '乙': 'AE物流', '丙': 'JHS', '戊': 'OFK6' };
+
+  var before = null;
+  var res = t.sandbox.renderCcV1FromRows(rows);
+  assert(res.ok, '算出成功');
+  var r = t.sandbox.ccV1Result;
+  var affOf = function (r2, tidNorm) {
+    var f = null;
+    r2.byAffiliation.forEach(function (a) { a.drivers.forEach(function (d) { if (t.sandbox.normalizeCcTid(d.transporterId) === t.sandbox.normalizeCcTid(tidNorm)) f = a.affiliation; }); });
+    return f;
+  };
+  assert(affOf(r, 'A1B2C3') === 'JHS', '小文字・前後空白・NBSP付きIDでも照合: ' + affOf(r, 'A1B2C3'));
+  assert(affOf(r, 'A2B3') === 'AE物流', '全角IDでも照合');
+  assert(affOf(r, 'A3-45') === 'JHS', 'ハイフン・空白入りでも照合');
+  assert(affOf(r, 'A5NODEPT') === '所属未判定' && affOf(r, 'A6GHOST') === '所属未判定', '所属未設定・未登録は所属未判定');
+  var unk = r.byAffiliation.filter(function (a) { return a.affiliation === '所属未判定'; })[0];
+  assert(unk.total === 3 && unk.drivers.length === 3, '所属未判定=所属未設定1+未登録1+ID空1 の3DA/3件: ' + unk.total);
+  // 名前もマスタから解決される（照合に成功したDAは「未特定」にならない）
+  var named = r.byDriver.filter(function (d) { return d.identified; }).length;
+  assert(named === 5, 'マスタ照合できたDA名が解決される: ' + named);
+  var st = t.sandbox.ccV1AffStats;
+  assert(st.ok === 4 && st.noDept === 1 && st.notInMaster === 2, '所属判定内訳: ' + JSON.stringify(st));
+  assert(r.summary.total === 8 && r.summary.compliant === 2 && r.summary.nonCompliant === 6, 'CC件数は照合結果に依存しない');
+
+  // マスタ更新 → 再判定で最新の所属が反映（CC件数・率は不変）
+  var sig1 = t.sandbox.ccV1MasterSig;
+  assert(sig1 === t.sandbox.ccV1MasterSignature(), '署名は未更新なら同じ');
+  t.sandbox.driverDepartments['丁'] = 'GDSパート';          // 所属を設定
+  t.sandbox.transportIDs['己'] = 'A6GHOST';                  // 未登録DAを新規登録
+  t.sandbox.driverDepartments['己'] = 'JHS';
+  t.sandbox.driverDepartments['甲'] = 'AGENTLINE';           // 所属変更
+  assert(sig1 !== t.sandbox.ccV1MasterSignature(), 'マスタ更新で署名が変わる');
+  var totalBefore = JSON.stringify(r.summary);
+  assert(t.sandbox.refreshCcV1Affiliation() === true, '再判定を実行');
+  var r2 = t.sandbox.ccV1Result;
+  assert(JSON.stringify(r2.summary) === totalBefore, '再判定でCC件数・CC率は不変');
+  assert(affOf(r2, 'A1B2C3') === 'AGENTLINE' && affOf(r2, 'A5NODEPT') === 'GDSパート' && affOf(r2, 'A6GHOST') === 'JHS', '更新後のマスタが反映');
+  var unk2 = r2.byAffiliation.filter(function (a) { return a.affiliation === '所属未判定'; })[0];
+  assert(unk2.total === 1 && unk2.drivers.length === 1, '残る所属未判定はID空のみ');
+  assert(t.sandbox.ccV1MasterSig === t.sandbox.ccV1MasterSignature(), '再判定後は署名が最新');
+  assert(r2.aggregationCheck.ok, '再判定後も集計整合');
+}
+
+// 画面タブ切替で、マスタ更新を検知して再判定される・マスタ管理機能に変更が無い
+function testMasterNotModified() {
+  var sw = extractFunction(html, 'switchTab');
+  assert(/ccV1MasterSig !== ccV1MasterSignature\(\)/.test(sw), 'FTDS/CCタブ表示時にマスタ更新を検知して再判定');
+  var helpers = ['normalizeCcTid', 'ccV1MasterSignature', 'buildCcMasterLookup', 'summarizeCcAffiliationStatus'].map(function (n) { return extractFunction(html, n); }).join('\n');
+  assert(!/(transportIDs|driverDepartments)\s*(\[[^\]]*\])?\s*=[^=]/.test(helpers) && helpers.indexOf('localStorage') < 0 && helpers.indexOf('delete ') < 0,
+    'CCの所属判定はマスタを読むだけ（書き込み・削除・保存をしない）');
+}
+
+var tests = [testButtonsAreSeparated, testWk40ScreenAndV1Excel, testV1ExportBlockedWithoutRawData, testNoFallbackWhenColumnsMissing, testBulkImportRoutesLegacyName, testAffiliationDrilldown, testMasterLookup, testMasterNotModified];
 for (var i = 0; i < tests.length; i++) {
   tests[i]();
   console.log('PASS ' + tests[i].name);
