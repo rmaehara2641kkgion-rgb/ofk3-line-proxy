@@ -100,12 +100,32 @@
     return en;
   }
 
-  // 新規（既存translateReasonとは別物）: dictに完全一致する値だけを翻訳する。
+  // 詳細分類（sub_bucket）のうち日本語表示を追加した3種類。元データの英語表記は保持し、表示・出力時のみ変換する。
+  // 照合キーは「小文字化・アンダースコア/空白（全角含む）の連続を半角スペース1つに統一」した形。
+  // 元データは 'No Item_front door' / 'No Item_mail slot' / 'No item_Others'（大文字小文字・区切りが不揃い）で、
+  // 既存の整形後表記（'No Item front door' 等）や全大文字でも同じ値として扱う。この3種類以外は一切変換しない。
+  var DNR_DETAIL_REASON_JA = {
+    'no item front door': '玄関前に荷物なし',
+    'no item mail slot': '郵便受けに荷物なし',
+    'no item others': 'その他の場所に荷物なし'
+  };
+
+  function dnrDetailReasonKey(v) {
+    return String(v === null || v === undefined ? '' : v).trim().toLowerCase().replace(/[_\s]+/g, ' ');
+  }
+
+  // 3種類に該当すれば日本語、該当しなければ入力をそのまま返す（他の理由は変更しない）。
+  function dnrFormatDetailReason(v) {
+    var key = dnrDetailReasonKey(v);
+    return Object.prototype.hasOwnProperty.call(DNR_DETAIL_REASON_JA, key) ? DNR_DETAIL_REASON_JA[key] : v;
+  }
+
+  // 新規（既存translateReasonとは別物）: dictに完全一致する値だけを翻訳する（上記3種類の詳細分類のみ追加で表記揺れ対応）。
   // 一致しない場合は原文をそのまま返す（英字除去等のフォールバック変換はしない）。
   function dnrTranslateReason(reason, dict) {
     if (!reason) return '';
     if (dict && Object.prototype.hasOwnProperty.call(dict, reason)) return dict[reason];
-    return reason;
+    return dnrFormatDetailReason(reason);
   }
 
   // index.html: handleDnrFile内の1行分の抽出処理（18516-18535）を移植（ドライバー照合部分を除く。
@@ -269,6 +289,8 @@
     dnrMapHeaderColumns: dnrMapHeaderColumns,
     dnrDetectSignal: dnrDetectSignal,
     dnrResolveDriverDisplayName: dnrResolveDriverDisplayName,
+    DNR_DETAIL_REASON_JA: DNR_DETAIL_REASON_JA,
+    dnrFormatDetailReason: dnrFormatDetailReason,
     dnrTranslateReason: dnrTranslateReason,
     dnrNormalizeSubBucketDisplay: dnrNormalizeSubBucketDisplay,
     dnrExtractRow: dnrExtractRow,

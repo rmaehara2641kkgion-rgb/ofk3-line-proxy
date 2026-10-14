@@ -20798,6 +20798,11 @@ var driverDB = {
       if (!reason) return '';
       // 完全一致
       if (REASON_JA[reason]) return REASON_JA[reason];
+      // 詳細分類3種（No Item front door / mail slot / Others）の日本語表示（大文字小文字・_/空白の表記揺れ対応。表示のみ）
+      if (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatDetailReason) {
+        var detailJa = DnrCore.dnrFormatDetailReason(reason);
+        if (detailJa !== reason) return detailJa;
+      }
       // 'Not Attempt' / 'not attempt' などの表記ゆれ（元の理由コードは変更せず表示のみ変換）
       var normalizedKey = String(reason).trim().toUpperCase().replace(/[\s\-]+/g, '_');
       if (normalizedKey === 'NOT_ATTEMPT') return REASON_JA.NOT_ATTEMPT;
@@ -20811,6 +20816,11 @@ var driverDB = {
     // DNR保持列定義
     // DNR日時の表示変換（表示・出力専用。rec.delivery_date_jst の元の値は変更しない）。
     // 時刻あり→「YYYY/MM/DD HH」、日付のみ/00:00:00→「YYYY/MM/DD 時刻不明」。ロジックは dnr-core.js（DnrCore）。
+    // 地図ポップアップ・LINE通知など元の値をそのまま表示している箇所用: 3種類の詳細分類だけ日本語にし、他は元の値のまま。
+    function dnrDisplayReasonText(v) {
+      return (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatDetailReason) ? DnrCore.dnrFormatDetailReason(v) : v;
+    }
+
     function dnrDisplayDateTime(v) {
       if (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatOccurrence) return DnrCore.dnrFormatOccurrence(v);
       return v === null || v === undefined ? '' : String(v);
@@ -21043,7 +21053,7 @@ var driverDB = {
         var p = pins[i];
         var popupContent = '<b>' + (p.driverName || '未特定') + '</b><br>'
           + dnrDisplayDateTime(p.delivery_date_jst) + '<br>'
-          + '<b>理由:</b> ' + p.shipment_reason + '<br>'
+          + '<b>理由:</b> ' + dnrDisplayReasonText(p.shipment_reason) + '<br>'
           + '<b>住所:</b> ' + (p.address || '') + '<br>'
           + '<b>金額:</b> ¥' + p._cost.toLocaleString();
         var marker = L.marker([p._lat, p._lng], {
@@ -21138,7 +21148,7 @@ var driverDB = {
       }).addTo(dnrMap);
       var popupContent = '<b>' + (r.driverName || '未特定') + '</b><br>'
         + dnrDisplayDateTime(r.delivery_date_jst) + '<br>'
-        + '<b>理由:</b> ' + r.shipment_reason + '<br>'
+        + '<b>理由:</b> ' + dnrDisplayReasonText(r.shipment_reason) + '<br>'
         + '<b>住所:</b> ' + (r.address || '') + '<br>'
         + '<b>金額:</b> ¥' + r._cost.toLocaleString();
       L.marker([r._lat, r._lng], {
@@ -21180,7 +21190,7 @@ var driverDB = {
       var msg = '🚫 DNR通知\n━━━━━━━━━━━━\n'
         + '📅 配達日: ' + dnrDisplayDateTime(r.delivery_date_jst) + '\n'
         + '📦 TrackingID: ' + r.tracking_id + '\n'
-        + '❓ 理由: ' + r.shipment_reason + '\n'
+        + '❓ 理由: ' + dnrDisplayReasonText(r.shipment_reason) + '\n'
         + '📍 住所: ' + (r.address || r.state || '') + '\n'
         + '💰 金額: ¥' + r._cost.toLocaleString() + '\n';
       if (r._lat && r._lng) {
