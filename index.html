@@ -2064,6 +2064,7 @@
                       <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DSP</th>
                       <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">TrackingID</th>
                       <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">DNR理由</th>
+                      <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">詳細分類</th>
                       <th class="px-2 py-2 text-left text-xs font-medium text-ink-lighter">住所</th>
                       <th class="px-2 py-2 text-center text-xs font-medium text-ink-lighter">個数</th>
                       <th class="px-2 py-2 text-right text-xs font-medium text-ink-lighter">金額</th>
@@ -20821,6 +20822,17 @@ var driverDB = {
       return (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatDetailReason) ? DnrCore.dnrFormatDetailReason(v) : v;
     }
 
+    // 明細一覧の「詳細分類」列の表示値（表示専用。rec.sub_bucket の元の値は変更しない）。
+    // 空 → '-'。英語の元データは translateReason（実装済みの日本語変換。3種の No Item も含む）、
+    // すでに日本語を含む値（再取込したExcel/CSV由来など）は translateReason の英字除去フォールバックで
+    // 欠けないようそのまま表示する。
+    function dnrDisplaySubBucket(v) {
+      var t = (v === null || v === undefined) ? '' : String(v).trim();
+      if (!t) return '-';
+      if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(t)) return t;
+      return translateReason(t) || '-';
+    }
+
     function dnrDisplayDateTime(v) {
       if (typeof DnrCore !== 'undefined' && DnrCore.dnrFormatOccurrence) return DnrCore.dnrFormatOccurrence(v);
       return v === null || v === undefined ? '' : String(v);
@@ -21012,6 +21024,7 @@ var driverDB = {
         tbody += '<td class="px-2 py-1.5 text-xs">' + r.provider_company_name + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs font-mono">' + r.tracking_id + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + translateReason(r.shipment_reason) + '</td>';
+        tbody += '<td class="px-2 py-1.5 text-xs">' + escapeHtml(dnrDisplaySubBucket(r.sub_bucket)) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs">' + (r.address || r.state) + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-center">' + (r._units || '') + '</td>';
         tbody += '<td class="px-2 py-1.5 text-xs text-right font-bold text-red-400">' + (r._cost ? '¥' + r._cost.toLocaleString() : '') + '</td>';

@@ -120,6 +120,60 @@ function testServer() {
   assert(dict.indexOf('No Item_front door') < 0 && dict.indexOf('No Item_mail slot') < 0, 'サーバー辞書には3種を追加していない（dnr-core側で処理）');
 }
 
-const tests = [testCore, testTranslateReason, testExport, testUi, testServer];
+// ---- 明細一覧の「詳細分類」列 ----
+function testDetailColumn() {
+  // 静的: ヘッダーは DNR理由 の次、住所の前。既存列は残る
+  const head = html.slice(html.indexOf('id="dnr-detail-section"'), html.indexOf('id="dnr-detail-tbody"'));
+  const labels = [...head.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
+  assert(labels.join() === 'ドライバー,配達日,DS,DSP,TrackingID,DNR理由,詳細分類,住所,個数,金額,操作', '明細の列構成: ' + labels);
+
+  const els = {};
+  const el = id => (els[id] = els[id] || { id, innerHTML: '', textContent: '', disabled: true, style: {}, classList: { add() {}, remove() {} } });
+  const sb = {
+    DnrCore: D, console, document: { getElementById: el },
+    escapeHtml: v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;'),
+    renderDnrMap() {}, driverMap: {}, dnrMap: null,
+    dnrResultData: []
+  };
+  vm.createContext(sb);
+  vm.runInContext([extractVar('REASON_JA'), extractFn('translateReason'), extractFn('dnrDisplayDateTime'), extractFn('dnrDisplayReasonText'),
+    extractFn('dnrDisplaySubBucket'), extractFn('renderDnrResults')].join('\n'), sb);
+  const mk = (sub, reason, tid, cost) => ({ driverName: tid, delivery_date_jst: '2026-10-04 00:00:00', delivery_station_code: 'OFK3', provider_company_name: 'GDS', tracking_id: 'DA' + tid,
+    shipment_reason: reason, sub_bucket: sub, address: '福岡', state: '福岡県', _units: 1, _cost: cost, _lat: 0, _lng: 0, transporter_id: tid });
+  const data = [
+    mk('No Item_front door', 'DELIVERED_TO_FRONT_DOOR', 'T1', 1000),
+    mk('No Item_mail slot', 'DELIVERED_TO_MAIL_SLOT', 'T2', 2000),
+    mk('No item_Others', 'DELIVERED_TO_HOUSEHOLD_MEMBER', 'T3', 3000),
+    mk('No Item_delivery box', 'DELIVERED_TO_DELIVERY_BOX', 'T4', 4000),
+    mk('Missing/Wrong Delivery Box Number or PIN code', 'DELIVERED_TO_DELIVERY_BOX', 'T5', 5000),
+    mk('', 'DELIVERED_TO_DELIVERY_BOX', 'T6', 6000),
+    mk(undefined, 'DELIVERED_TO_DELIVERY_BOX', 'T7', 7000),
+    mk('宅配BOXに荷物なし', 'DELIVERED_TO_DELIVERY_BOX', 'T8', 8000),
+    mk('Some_Unknown_Value', 'DELIVERED_TO_DELIVERY_BOX', 'T9', 9000)
+  ];
+  sb.dnrResultData = data;
+  const before = JSON.stringify(data);
+  vm.runInContext('renderDnrResults()', sb);
+  const rows = els['dnr-detail-tbody'].innerHTML.split('</tr>').filter(x => x.indexOf('<td') >= 0);
+  assert(rows.length === data.length, '明細行数は件数どおり: ' + rows.length);
+  const cells = r => [...r.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1]);
+  const sub = rows.map(r => cells(r)[6]);
+  const reason = rows.map(r => cells(r)[5]);
+  assert(sub.join('|') === [FRONT, MAIL, OTHERS, '宅配BOXに荷物なし', '宅配BOX番号/暗証番号間違い', '-', '-', '宅配BOXに荷物なし', 'Some Unknown Value'].join('|'), '詳細分類列: ' + sub);
+  assert(reason.join('|') === ['玄関前置き', '郵便受け投函', '同居人渡し', '宅配ボックス投函', '宅配ボックス投函', '宅配ボックス投函', '宅配ボックス投函', '宅配ボックス投函', '宅配ボックス投函'].join('|'), '既存の配送理由列は残り変換も従来どおり: ' + reason);
+  assert(rows.every(r => cells(r).length === 11), '各行11列（ヘッダーと一致）');
+  // 件数・集計・所属判定は変更なし
+  assert(els['dnr-total'].textContent === 9, '件数: ' + els['dnr-total'].textContent);
+  assert(els['dnr-cost-total'].textContent === '¥' + (45000).toLocaleString(), '金額合計は不変: ' + els['dnr-cost-total'].textContent);
+  assert(els['dnr-matched'].textContent === 9 && els['dnr-unmatched-count'].textContent === 0, '照合件数は不変');
+  assert(JSON.stringify(data) === before, '内部データは変更されない（元の英語表記を保持）');
+  // 理由ランキングの集計キーは shipment_reason のまま（詳細分類は集計に影響しない）
+  assert(/DELIVERED_TO_DELIVERY_BOX|宅配ボックス投函/.test(els['dnr-reason-ranking'].innerHTML) && els['dnr-reason-ranking'].innerHTML.indexOf('玄関前に荷物なし') < 0, '理由ランキングは配送理由で集計');
+  // Excelの列構成は従来どおり（詳細分類列は元から存在・列追加なし）
+  const aoa = vm.runInContext('(function(){' + extractVar('DNR_KEEP_COLS') + extractVar('DNR_COL_LABELS') + extractFn('buildDnrAoa') + ' return buildDnrAoa([]); })()', Object.assign(sb, {}));
+  assert(aoa[0].join() === 'ドライバー,配達日,DS,DSP名,TransportID,TrackingID,DNR理由,分類,詳細分類,都道府県,郵便番号,住所,緯度,経度,個数,金額(円)', 'Excelの列構成は変更なし');
+}
+
+const tests = [testCore, testTranslateReason, testExport, testUi, testServer, testDetailColumn];
 for (const t of tests) { t(); console.log('PASS ' + t.name); }
 console.log('dnr-detail-reason tests passed (' + tests.length + ')');
