@@ -11,7 +11,10 @@ const tags = [
   '<script src="/ofk3-time-window-board.js?v=20260923-driveraid"></script>',
   '<script src="/ofk3-bag-sheet.js?v=20261014-bag2"></script>',
   '<script src="/gds-fleet-audit-core.js?v=20260921-1"></script>',
-  '<script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>'
+  '<script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>',
+  '<script src="/harvest-core.js?v=20261002-1"></script>',
+  '<script src="/harvest-collectors-cortex.js?v=20261002-1"></script>',
+  '<script src="/ofk3-harvest-ui.js?v=20261002-1"></script>'
 ];
 
 try {
@@ -40,6 +43,15 @@ try {
   }
   if (html.indexOf('/ofk3-gds-fleet-audit-ui.js') < 0) {
     insert += '  ' + tags[6] + '\n';
+  }
+  if (html.indexOf('/harvest-core.js') < 0) {
+    insert += '  ' + tags[7] + '\n';
+  }
+  if (html.indexOf('/harvest-collectors-cortex.js') < 0) {
+    insert += '  ' + tags[8] + '\n';
+  }
+  if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
+    insert += '  ' + tags[9] + '\n';
   }
 
   if (insert) {
