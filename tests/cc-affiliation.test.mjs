@@ -167,9 +167,40 @@ function testExcel(r) {
   assert(nc.length === 173 && nc[0][10] === '所属', 'NC明細172件＋所属列');
 }
 
+function testTabView(r) {
+  const order = ['GDSダイレクト', 'JHS', 'AE物流'];
+  const tabs = Cc.buildCcAffiliationTabs(r, order);
+  assert(tabs.map(x => x.label).join() === '全体,GDSダイレクト,JHS,AE物流,所属未判定', 'タブ順（マスタ順→所属未判定）: ' + tabs.map(x => x.label));
+  assert(tabs[0].key === Cc.CC_TAB_ALL_KEY && tabs[0].total === 678 && tabs[0].compliant === 506 && tabs[0].nonCompliant === 172, '全体タブ=全体集計');
+  assert(tabs.slice(1).reduce((a, x) => a + x.total, 0) === 678 && tabs.slice(1).reduce((a, x) => a + x.nonCompliant, 0) === 172, '所属タブの合計=全体');
+  // マスタ順外の所属は後ろ、競合・未判定は最後
+  const withOther = JSON.parse(JSON.stringify(r));
+  withOther.byAffiliation.push({ affiliation: 'ZZ社', identified: true, total: 0, compliant: 0, nonCompliant: 0, rate: null, drivers: [], byReason: [] });
+  withOther.byAffiliation.push({ affiliation: '所属競合', identified: false, conflict: true, total: 0, compliant: 0, nonCompliant: 0, rate: null, drivers: [], byReason: [] });
+  assert(Cc.buildCcAffiliationTabs(withOther, order).map(x => x.label).join() === '全体,GDSダイレクト,JHS,AE物流,ZZ社,所属競合,所属未判定', '未知の所属→所属競合→所属未判定の順');
+  assert(Cc.buildCcAffiliationTabs(withOther, order)[5].kind === 'conflict', '競合タブのkind');
+  // 全体タブ: 全DA、各所属タブ: その所属のDAのみ
+  const all = Cc.buildCcTabRows(r, Cc.CC_TAB_ALL_KEY, 'nonCompliantDesc');
+  assert(all.length === r.byDriver.length && all.every(d => d.affiliation), '全体タブに全DA＋所属');
+  for (let i = 1; i < all.length; i++) assert(all[i - 1].nonCompliant >= all[i].nonCompliant, '全体タブはNC降順');
+  tabs.slice(1).forEach(tab => {
+    const rows = Cc.buildCcTabRows(r, tab.key, 'nonCompliantDesc');
+    assert(rows.length === tab.driverCount && rows.every(d => d.affiliation === tab.key), 'タブのDAは当該所属のみ: ' + tab.key);
+    assert(rows.reduce((a, d) => a + d.total, 0) === tab.total && rows.reduce((a, d) => a + d.compliant, 0) === tab.compliant && rows.reduce((a, d) => a + d.nonCompliant, 0) === tab.nonCompliant, 'DA合計=タブ上部の所属合計: ' + tab.key);
+    for (let q = 0; q < 4; q++) {
+      assert(rows.reduce((a, d) => a + d.byReason[q].total, 0) === r.byAffiliation.filter(g => g.affiliation === tab.key)[0].byReason[q].total, '理由別合計=所属の理由別: ' + tab.key + REASONS[q]);
+    }
+    rows.forEach(d => assert(d.byReason.map(x => x.reason).join() === REASONS.join(), '理由の列順は固定'));
+  });
+  assert(all.reduce((a, d) => a + d.total, 0) === 678, '全体タブのDA合計=678');
+  // 表示ビューは集計を変えない
+  assert(JSON.stringify(r.summary) === JSON.stringify(Cc.analyzeCcRows(w41LikeRows(), resolveName, resolveAff).summary), 'ビュー生成後もsummary不変');
+}
+
 const r = testW41Regression(); console.log('PASS testW41Regression');
 testAffiliationAggregation(r); console.log('PASS testAffiliationAggregation');
 testWk40Unchanged(); console.log('PASS testWk40Unchanged');
 testNotAttempt(); console.log('PASS testNotAttempt');
 testExcel(r); console.log('PASS testExcel');
-console.log('cc-affiliation tests passed (5)');
+testTabView(r); console.log('PASS testTabView');
+console.log('cc-affiliation tests passed (6)');

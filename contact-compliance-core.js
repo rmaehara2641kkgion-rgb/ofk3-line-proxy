@@ -525,6 +525,58 @@
     return { ok: errors.length === 0, errors: errors };
   }
 
+  // ---- 所属別タブ表示用ビュー（analyzeCcRows の結果を並べ替えて整形するだけ。再集計・判定はしない） ----
+
+  var CC_TAB_ALL_KEY = '__all__';
+
+  // タブ一覧: 全体 + 結果に存在する所属（マスタ順 → その他の所属 → 所属競合 → 所属未判定）。
+  // preferredOrder は所属名の並び（アプリのマスタ所属リスト）。結果に無い所属のタブは作らない。
+  function buildCcAffiliationTabs(result, preferredOrder) {
+    var groups = (result && result.byAffiliation) || [];
+    var order = preferredOrder || [];
+    var normal = [];
+    var conflict = null;
+    var unknown = null;
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].affiliation === CC_CONFLICT_AFFILIATION_LABEL) conflict = groups[i];
+      else if (groups[i].affiliation === CC_UNKNOWN_AFFILIATION_LABEL) unknown = groups[i];
+      else normal.push(groups[i]);
+    }
+    normal.sort(function (a, b) {
+      var ia = order.indexOf(a.affiliation);
+      var ib = order.indexOf(b.affiliation);
+      if (ia < 0 && ib < 0) return a.affiliation < b.affiliation ? -1 : (a.affiliation > b.affiliation ? 1 : 0);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+    var tabs = [];
+    var s = result.summary;
+    tabs.push({ key: CC_TAB_ALL_KEY, label: '全体', kind: 'all', total: s.total, compliant: s.compliant, nonCompliant: s.nonCompliant, rate: s.rate, driverCount: result.byDriver.length });
+    var rest = normal.concat(conflict ? [conflict] : [], unknown ? [unknown] : []);
+    for (var t = 0; t < rest.length; t++) {
+      var g = rest[t];
+      tabs.push({
+        key: g.affiliation, label: g.affiliation,
+        kind: g.conflict ? 'conflict' : (g.identified ? 'affiliation' : 'unknown'),
+        total: g.total, compliant: g.compliant, nonCompliant: g.nonCompliant, rate: g.rate, driverCount: g.drivers.length
+      });
+    }
+    return tabs;
+  }
+
+  // 1タブ分のDA一覧。全体タブは全所属のDA（affiliation 列付き）。sortMode は sortCcDriverStats と同じ。
+  // 各行: DA名・Transporter ID・所属・対象/Compliant/NC/CC率・理由別(byReason: CC_ELIGIBLE_REASONS の順)
+  function buildCcTabRows(result, tabKey, sortMode) {
+    var groups = (result && result.byAffiliation) || [];
+    var rows = [];
+    for (var i = 0; i < groups.length; i++) {
+      if (tabKey !== CC_TAB_ALL_KEY && groups[i].affiliation !== tabKey) continue;
+      for (var d = 0; d < groups[i].drivers.length; d++) rows.push(groups[i].drivers[d]);
+    }
+    return sortCcDriverStats(rows, sortMode || 'nonCompliantDesc');
+  }
+
   // Event Date 昇順
   function groupCcByDate(rows) {
     var byDate = {};
@@ -762,6 +814,9 @@
     groupCcByAffiliation: groupCcByAffiliation,
     sortCcAffiliationStats: sortCcAffiliationStats,
     verifyCcAggregation: verifyCcAggregation,
+    CC_TAB_ALL_KEY: CC_TAB_ALL_KEY,
+    buildCcAffiliationTabs: buildCcAffiliationTabs,
+    buildCcTabRows: buildCcTabRows,
     groupCcByDate: groupCcByDate,
     listCcNonCompliant: listCcNonCompliant,
     analyzeCcRows: analyzeCcRows
