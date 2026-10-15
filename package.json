@@ -23,7 +23,7 @@
     "test:gds-fleet-audit": "node tests/gds-fleet-audit-core.test.mjs",
     "test:driver-ability": "node tests/driver-ability-import.test.mjs",
     "test:harvest": "node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs",
-    "test:inoichi": "node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-wiring.test.mjs",
+    "test:inoichi": "node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-time-window-adapter.test.mjs && node tests/inoichi-wiring.test.mjs",
     "test:line-unlinked": "node tests/line-unlinked-and-qr-order.test.mjs",
     "test:billing": "node tests/billing-reconcile.test.mjs",
     "test:dnr": "node tests/dnr-datetime.test.mjs && node tests/dnr-detail-reason.test.mjs",
