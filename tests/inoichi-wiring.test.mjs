@@ -53,7 +53,7 @@ FILES.forEach(function (f) {
     assert(serverSrc.indexOf(s) >= 0 && injectSrc.indexOf(s) >= 0, 'existing injection kept: ' + s);
   });
 }
-assert(pkgJson.scripts['test:inoichi'] === 'node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-wiring.test.mjs', 'test:inoichi script');
+assert(pkgJson.scripts['test:inoichi'] === 'node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-time-window-adapter.test.mjs && node tests/inoichi-wiring.test.mjs', 'test:inoichi script');
 assert(pkgJson.scripts['test:all'].indexOf('npm run test:inoichi') >= 0, 'test:all includes test:inoichi');
 assert(pkgJson.scripts['test:all'].indexOf('npm run test:harvest') >= 0, 'test:all keeps test:harvest');
 assert(pkgJson.scripts['test:harvest'] === 'node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs', 'test:harvest unchanged');
