@@ -71,6 +71,27 @@ function stateOf(status) { return { timeWindow: F.makeHarvestState('timeWindow',
   eq(healed.alerts[0].status, 'resolved', 'recovery resolves');
 }
 {
+  // Invalid / missing now: never presented as a normal evaluation at a real time, and the
+  // engine's internal clock fallback cannot change the quality judgement.
+  const RealDate = Date;
+  function runWithEngineClock(iso, now) {
+    const fixed = RealDate.parse(iso);
+    globalThis.Date = class extends RealDate { constructor(...a) { if (a.length === 0) super(fixed); else super(...a); } static now() { return fixed; } };
+    try { return Q.evaluateTimeWindowQuality(envFor(), { now: now }); } finally { globalThis.Date = RealDate; }
+  }
+  [undefined, null, 'garbage'].forEach(function (bad) {
+    const a = runWithEngineClock('2026-10-03T01:00:00.000Z', bad);
+    const b = runWithEngineClock('2031-01-01T00:00:00.000Z', bad);
+    eq([a.adapterOutput.evaluable, a.adapterOutput.now, a.adapterOutput.freshness.state], [false, null, 'not-evaluated'], 'bad now -> not evaluable, no time shown: ' + String(bad));
+    assert(a.adapterOutput.notEvaluableReasons.some(function (c) { return c === 'now-missing' || c === 'now-invalid'; }), 'reason names the bad now');
+    eq(a.adapterOutput, b.adapterOutput, 'engine clock does not change the adapter output');
+    eq(a.alerts.map(function (x) { return [x.severity, x.summary]; }), b.alerts.map(function (x) { return [x.severity, x.summary]; }), 'engine clock does not change alert severity/text');
+    eq([a.alerts.length, a.alerts[0].detectedAt, a.alerts[0].updatedAt, a.timestampsFromEngineClock, a.detection.detectedAt], [1, null, null, true, null], 'no engine-clock timestamp is exposed');
+  });
+  const ok = Q.evaluateTimeWindowQuality(envFor(), { now: minutesAfter(5) });
+  eq([ok.timestampsFromEngineClock, ok.alerts[0].detectedAt], [false, minutesAfter(5)], 'valid now: timestamps are the explicit now');
+}
+{
   const r = Q.evaluateTimeWindowQuality(null, {});
   eq([r.error, r.adapterOutput.evaluable], [null, false], 'garbage input never throws, not evaluable');
   const src = read('inoichi-quality-dryrun.js').replace(/\/\*[\s\S]*?\*\//g, '');

@@ -46,7 +46,8 @@
       error: null,
       adapterOutput: null,
       alerts: [],
-      detection: null
+      detection: null,
+      timestampsFromEngineClock: false
     };
     try {
       if (!dependenciesOk()) {
@@ -71,6 +72,20 @@
       var det = Detect.detect(adapted, [runRule], detectOpts);
       out.detection = { diagnostics: det.diagnostics, detectedAt: det.detectedAt };
       out.alerts = det.alerts;
+      // Without a valid opts.now the engine falls back to its own clock for timestamps only.
+      // That fallback never feeds the quality judgement (the adapter output above is already
+      // final), and it must not look like a real evaluation time: blank the timestamps.
+      out.timestampsFromEngineClock = false;
+      if (!adapted.now) {
+        out.timestampsFromEngineClock = true;
+        out.detection.detectedAt = null;
+        out.alerts = det.alerts.map(function (a) {
+          var c = JSON.parse(JSON.stringify(a));
+          c.detectedAt = null;
+          c.updatedAt = null;
+          return c;
+        });
+      }
     } catch (e) {
       out.error = String(e && e.message ? e.message : e);
     }
