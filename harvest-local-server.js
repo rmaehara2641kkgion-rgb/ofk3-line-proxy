@@ -36,6 +36,9 @@ var DEFAULT_PORT = 3100;
 var UPSTREAM_TIMEOUT_MS = 5000;
 var UPSTREAM_MAX_BYTES = 20 * 1024 * 1024;
 var APP_ID = 'harvest-local';
+// Bump when the served pages / shell / assets change. start-harvest.cmd compares it with the running server's
+// /harvest-version and restarts an older process (a server started before an update keeps serving the old page).
+var APP_VERSION = '2';
 
 // Existing scripts are served as-is from the repository by a fixed table (no directory serving).
 var FILES = {
@@ -112,6 +115,7 @@ var SHELL_HTML = [
   '「データ読込を開始」を押すと、取得元(上記)から送信済みの素材を1回読み込みます。Cortex の取得そのものは開始しません。',
   '読込後、下の「HARVEST 確認」から各 Collector を手動で再確認してください。</p></div>',
   '<div id="dashboard-content"></div>',
+  '<p class="note" id="hv-version" style="margin-top:16px;">HARVEST local app v' + APP_VERSION + '</p>',
   '</div>',
   '<script src="/harvest-core.js"></script>',
   '<script src="/harvest-collectors-cortex.js"></script>',
@@ -343,9 +347,11 @@ function createServer(opts) {
       }
       if (p === '/harvest-shell.js') return send(res, 200, 'application/javascript; charset=utf-8', head ? '' : SHELL_JS);
       if (p === '/harvest.webmanifest') return send(res, 200, 'application/manifest+json; charset=utf-8', head ? '' : JSON.stringify(MANIFEST));
+      if (p === '/harvest-version') return send(res, 200, 'text/plain; charset=utf-8', head ? '' : APP_ID + ' ' + APP_VERSION);
       if (p === '/harvest-status.json') {
         return sendJson(res, 200, {
           app: APP_ID,
+          appVersion: APP_VERSION,
           upstreamOrigin: upstream.ok ? upstream.origin : null,
           upstreamError: upstream.ok ? null : upstream.error
         });
@@ -402,6 +408,7 @@ module.exports = {
   refusalReason: refusalReason,
   parsePort: parsePort,
   parseUpstream: parseUpstream,
+  APP_VERSION: APP_VERSION,
   FILES: FILES,
   MANIFEST: MANIFEST,
   SHELL_HTML: SHELL_HTML,
