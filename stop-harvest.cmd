@@ -1,6 +1,7 @@
 @echo off
 rem Stops the HARVEST local server that start-harvest.cmd started (identified by its PID file).
 rem It only stops a process whose command line contains harvest-local-server.js. ASCII only on purpose.
+rem stop-harvest.cmd /quiet  = no final pause (used by start-harvest.cmd when it replaces an outdated server).
 setlocal EnableExtensions
 set "PID_FILE=%LOCALAPPDATA%\OFK3-HARVEST\server.pid"
 
@@ -18,6 +19,7 @@ if errorlevel 1 (
 del "%PID_FILE%" >nul 2>nul
 
 :end
+if /i "%~1"=="/quiet" exit /b 0
 echo.
 pause
 exit /b 0

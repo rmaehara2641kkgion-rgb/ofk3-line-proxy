@@ -170,6 +170,22 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
     assert(html.indexOf('<img src="/assets/harvest-logo-192.png"') >= 0, 'page header still shows the original Renaissance logo');
     assert(html.indexOf('src="/assets/harvest-192.png') < 0, 'emblem icon is not used as the page logo');
     assert(html.indexOf('rel="icon" href="/assets/harvest.ico?v=') >= 0 && html.indexOf('rel="manifest" href="/harvest.webmanifest?v=') >= 0, 'favicon and manifest linked with a cache-busting version');
+    // The header image the page really loads is the original Renaissance logo, never an emblem icon file.
+    const headSrc = html.match(/<div class="head"><img src="([^"]+)"/)[1];
+    const headImg = await request(port, headSrc);
+    eq([headImg.status, sha256(headImg.buf)], [200, 'de2b1eb94b81ed5c3f394ba8e50bc6214af787d5ef1c5ed93f56252100698ad9'], 'header image is the Renaissance logo');
+    for (const iconPath of ['/assets/harvest-192.png', '/assets/harvest-512.png', '/assets/harvest.ico']) {
+      const ic = await request(port, iconPath);
+      assert(sha256(ic.buf) !== sha256(headImg.buf), 'header image differs from emblem icon ' + iconPath);
+      assert(headSrc.split('?')[0] !== iconPath, 'header does not point at ' + iconPath);
+    }
+    assert(headImg.headers['cache-control'] === 'no-store', 'images are served no-store (no stale cache)');
+    // version: visible in the page and exposed for the launcher
+    assert(html.indexOf('HARVEST local app v' + L.APP_VERSION) >= 0, 'running version shown in the page');
+    const ver = await request(port, '/harvest-version');
+    eq([ver.status, /text\/plain/.test(ver.headers['content-type']), ver.text], [200, true, 'harvest-local ' + L.APP_VERSION], '/harvest-version');
+    eq((await request(port, '/harvest-version', { method: 'HEAD' })).status, 200, '/harvest-version HEAD');
+    eq(json(await request(port, '/harvest-status.json')).appVersion, L.APP_VERSION, 'status reports appVersion');
     eq((await request(port, '/')).status, 302, '/ redirects to /harvest');
     eq((await request(port, '/harvest', { method: 'HEAD' })).status, 200, 'HEAD ok');
 
@@ -381,6 +397,12 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
   assert(!/0\.0\.0\.0|'::'/.test(code), 'never binds all interfaces');
   assert(!/method:\s*'(POST|PUT|DELETE|PATCH)'/.test(code), 'upstream method is GET only');
 
+  // The launcher reads the version with findstr /c:"var APP_VERSION" and 'for /f "tokens=2 delims=\'"'. Keep that contract.
+  const verLines = src.split(/\r?\n/).filter(function (l) { return l.indexOf('var APP_VERSION') >= 0; });
+  eq(verLines.length, 1, 'exactly one line contains "var APP_VERSION"');
+  eq(verLines[0].split("'")[1], L.APP_VERSION, 'tokens=2 delims=\' yields the version');
+  assert(/^\d+$/.test(L.APP_VERSION), 'APP_VERSION is a plain number');
+
   // Render / OFK3 start paths are untouched and do not reference this server.
   const pkg = JSON.parse(read('package.json'));
   eq(pkg.scripts.start, 'node inject-tenko-audit.js', 'npm start unchanged');
@@ -448,7 +470,18 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
   assert(s.indexOf('PID_FILE') >= 0 && s.indexOf('-RedirectStandardError') >= 0, 'records PID and logs');
   assert(s.indexOf('msedge.exe') >= 0 && s.indexOf('chrome.exe') >= 0 && s.indexOf('msedge.exe') < s.indexOf('chrome.exe'), 'Edge preferred, Chrome fallback');
   assert(s.indexOf('--app=%URL%') >= 0 && s.indexOf('/harvest') >= 0, 'opens the /harvest app window');
+  // outdated-server handling: reuse only a server of the current version, otherwise stop it (via stop-harvest.cmd) and restart
+  const iVerCheck = s.indexOf('harvest-version');
+  const iReuse = s.indexOf('goto :open_browser');
+  assert(iVerCheck > 0 && s.indexOf('findstr /x /c:"harvest-local %EXPECTED_VERSION%"') > 0, 'launcher compares the running version with the expected one');
+  assert(s.indexOf('var APP_VERSION') > 0 && s.indexOf('harvest-local-server.js') > 0, 'launcher reads the expected version from the server file');
+  assert(s.indexOf('call "%~dp0stop-harvest.cmd" /quiet') > iVerCheck && s.indexOf('goto :start_server', s.indexOf('/quiet')) > 0, 'outdated server is stopped through stop-harvest.cmd, then started again');
+  assert(s.indexOf('could not be stopped') > 0 && s.indexOf('goto :fail', s.indexOf('could not be stopped')) > 0, 'refuses to open the old page when the old server cannot be stopped');
+  assert(s.indexOf(':reuse_running') > 0 && iReuse > 0, 'current-version server is reused');
+  assert(!/taskkill|Stop-Process|wmic/i.test(s), 'launcher never kills processes itself (stop-harvest.cmd verifies the command line)');
   const stop = read('stop-harvest.cmd');
+  assert(/if \/i "%~1"=="\/quiet" exit \/b 0/.test(stop) && stop.indexOf('/quiet') < stop.lastIndexOf('pause'), 'stop-harvest.cmd /quiet skips the final pause');
+  assert(stop.indexOf('Stop-Process') > 0 && stop.indexOf("-like '*harvest-local-server.js*'") > 0, 'stop still verifies the command line before stopping');
   assert(stop.indexOf('harvest-local-server.js') >= 0 && stop.indexOf('server.pid') >= 0, 'stop script verifies the process before stopping it');
   assert(read('.gitattributes').indexOf('*.cmd text eol=crlf') >= 0, '.gitattributes keeps CRLF for .cmd');
 
