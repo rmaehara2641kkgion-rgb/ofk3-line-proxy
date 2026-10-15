@@ -10,7 +10,8 @@ function read(name) { return readFileSync(join(root, name), 'utf8'); }
 let passed = 0;
 function assert(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed += 1; }
 
-const FILES = ['inoichi-core.js', 'ofk3-inoichi-ui.js'];
+const FILES = ['inoichi-core.js', 'inoichi-detection-core.js', 'inoichi-detection-rules.js', 'inoichi-time-window-adapter.js', 'inoichi-quality-dryrun.js', 'ofk3-inoichi-ui.js'];
+const VM_FILES = ['inoichi-core.js', 'ofk3-inoichi-ui.js'];
 const serverSrc = read('render-webhook-server.js');
 const injectSrc = read('inject-tenko-audit.js');
 const html = read('index.html');
@@ -45,6 +46,11 @@ FILES.forEach(function (f) {
   const a = serverSrc.indexOf('/inoichi-core.js?v=');
   const b = serverSrc.indexOf('/ofk3-inoichi-ui.js?v=');
   assert(a > 0 && a < b, 'server order: core before ui');
+  ['/inoichi-detection-core.js?v=', '/inoichi-detection-rules.js?v=', '/inoichi-time-window-adapter.js?v=', '/inoichi-quality-dryrun.js?v='].forEach(function (s) {
+    assert(serverSrc.indexOf(s) > a && serverSrc.indexOf(s) < b, 'server order: ' + s + ' between core and ui');
+    assert(injectSrc.indexOf(s) > injectSrc.indexOf('/inoichi-core.js?v=') && injectSrc.indexOf(s) < injectSrc.indexOf('/ofk3-inoichi-ui.js?v='), 'inject order: ' + s + ' between core and ui');
+  });
+  assert(serverSrc.indexOf('/inoichi-time-window-adapter.js?v=') < serverSrc.indexOf('/inoichi-quality-dryrun.js?v='), 'adapter before glue (server)');
   assert(a > serverSrc.indexOf('/ofk3-harvest-ui.js?v='), 'INOICHI scripts after HARVEST scripts (server)');
   const ia = injectSrc.indexOf('/inoichi-core.js?v=');
   const ib = injectSrc.indexOf('/ofk3-inoichi-ui.js?v=');
@@ -53,7 +59,7 @@ FILES.forEach(function (f) {
     assert(serverSrc.indexOf(s) >= 0 && injectSrc.indexOf(s) >= 0, 'existing injection kept: ' + s);
   });
 }
-assert(pkgJson.scripts['test:inoichi'] === 'node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-time-window-adapter.test.mjs && node tests/inoichi-wiring.test.mjs', 'test:inoichi script');
+assert(pkgJson.scripts['test:inoichi'] === 'node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-time-window-adapter.test.mjs && node tests/inoichi-quality-dryrun.test.mjs && node tests/inoichi-wiring.test.mjs', 'test:inoichi script');
 assert(pkgJson.scripts['test:all'].indexOf('npm run test:inoichi') >= 0, 'test:all includes test:inoichi');
 assert(pkgJson.scripts['test:all'].indexOf('npm run test:harvest') >= 0, 'test:all keeps test:harvest');
 assert(pkgJson.scripts['test:harvest'] === 'node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs', 'test:harvest unchanged');
@@ -107,7 +113,7 @@ function boot(winExtra, opts) {
     alert: function (m) { dom.log.alerts.push(m); }, Intl, Date, JSON, Object, Array, String, Number, isFinite, Math, module: undefined
   };
   vm.createContext(ctx);
-  (opts.files || FILES).forEach(function (f) { vm.runInContext(read(f), ctx, { filename: f }); });
+  (opts.files || VM_FILES).forEach(function (f) { vm.runInContext(read(f), ctx, { filename: f }); });
   return { dom, win, warns, listeners };
 }
 

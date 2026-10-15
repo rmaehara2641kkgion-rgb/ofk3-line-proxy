@@ -16,7 +16,11 @@ const tags = [
   '<script src="/harvest-collectors-cortex.js?v=20261002-1"></script>',
   '<script src="/ofk3-harvest-ui.js?v=20261002-1"></script>',
   '<script src="/inoichi-core.js?v=20261003-1"></script>',
-  '<script src="/ofk3-inoichi-ui.js?v=20261003-1"></script>'
+  '<script src="/inoichi-detection-core.js?v=20261015-1"></script>',
+  '<script src="/inoichi-detection-rules.js?v=20261015-1"></script>',
+  '<script src="/inoichi-time-window-adapter.js?v=20261015-1"></script>',
+  '<script src="/inoichi-quality-dryrun.js?v=20261015-1"></script>',
+  '<script src="/ofk3-inoichi-ui.js?v=20261015-1"></script>'
 ];
 
 try {
@@ -58,8 +62,20 @@ try {
   if (html.indexOf('/inoichi-core.js') < 0) {
     insert += '  ' + tags[10] + '\n';
   }
-  if (html.indexOf('/ofk3-inoichi-ui.js') < 0) {
+  if (html.indexOf('/inoichi-detection-core.js') < 0) {
     insert += '  ' + tags[11] + '\n';
+  }
+  if (html.indexOf('/inoichi-detection-rules.js') < 0) {
+    insert += '  ' + tags[12] + '\n';
+  }
+  if (html.indexOf('/inoichi-time-window-adapter.js') < 0) {
+    insert += '  ' + tags[13] + '\n';
+  }
+  if (html.indexOf('/inoichi-quality-dryrun.js') < 0) {
+    insert += '  ' + tags[14] + '\n';
+  }
+  if (html.indexOf('/ofk3-inoichi-ui.js') < 0) {
+    insert += '  ' + tags[15] + '\n';
   }
 
   if (insert) {
