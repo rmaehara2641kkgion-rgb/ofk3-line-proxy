@@ -43,12 +43,16 @@ var FILES = {
   '/harvest-collectors-cortex.js': { file: 'harvest-collectors-cortex.js', type: 'application/javascript; charset=utf-8' },
   '/ofk3-harvest-ui.js': { file: 'ofk3-harvest-ui.js', type: 'application/javascript; charset=utf-8' },
   '/ofk3-cortex-priority-ui.js': { file: 'ofk3-cortex-priority-ui.js', type: 'application/javascript; charset=utf-8' },
+  '/assets/harvest-logo-192.png': { file: 'assets/harvest-logo-192.png', type: 'image/png' },
   '/assets/harvest-192.png': { file: 'assets/harvest-192.png', type: 'image/png' },
   '/assets/harvest-512.png': { file: 'assets/harvest-512.png', type: 'image/png' },
   '/assets/harvest.ico': { file: 'assets/harvest.ico', type: 'image/x-icon' }
 };
 
+var ICON_VERSION = '2'; // bump when the emblem files change (browsers cache favicon / manifest icons)
+
 var MANIFEST = {
+  id: '/harvest',
   name: 'HARVEST',
   short_name: 'HARVEST',
   description: 'HARVEST Data Collector (local)',
@@ -58,8 +62,8 @@ var MANIFEST = {
   background_color: '#f6efdc',
   theme_color: '#7a5c1e',
   icons: [
-    { src: '/assets/harvest-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-    { src: '/assets/harvest-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+    { src: '/assets/harvest-192.png?v=' + ICON_VERSION, sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/assets/harvest-512.png?v=' + ICON_VERSION, sizes: '512x512', type: 'image/png', purpose: 'any' }
   ]
 };
 
@@ -89,12 +93,12 @@ var SHELL_HTML = [
   '<html lang="ja"><head><meta charset="utf-8">',
   '<meta name="viewport" content="width=device-width,initial-scale=1">',
   '<title>HARVEST — Data Collector</title>',
-  '<link rel="icon" href="/assets/harvest.ico">',
-  '<link rel="manifest" href="/harvest.webmanifest">',
+  '<link rel="icon" href="/assets/harvest.ico?v=' + ICON_VERSION + '">',
+  '<link rel="manifest" href="/harvest.webmanifest?v=' + ICON_VERSION + '">',
   '<meta name="theme-color" content="#7a5c1e">',
   '<style>' + SHELL_CSS + '</style></head><body>',
   '<div class="wrap">',
-  '<div class="head"><img src="/assets/harvest-192.png" alt="HARVEST">',
+  '<div class="head"><img src="/assets/harvest-logo-192.png" alt="HARVEST">',
   '<div><h1>HARVEST</h1><p>DATA COLLECTOR ／ 餓鬼道: データ観測・検証・正規化・handoff準備 (ローカル専用)</p></div></div>',
   '<div class="panel"><h2>データ取得状態</h2>',
   '<dl class="kv">',

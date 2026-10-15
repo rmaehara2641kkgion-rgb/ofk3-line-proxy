@@ -3,6 +3,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import zlib from 'node:zlib';
 import http from 'node:http';
 import vm from 'node:vm';
 
@@ -57,6 +59,57 @@ async function withServer(opts, fn) {
   const server = L.createServer(opts);
   const port = await listen(server);
   try { await fn(port, server); } finally { await close(server); }
+}
+
+// ---- minimal PNG decoder (8-bit, non-interlaced, RGB / RGBA) so the icons can be verified pixel-wise ----
+function decodePng(buf) {
+  assert(buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'PNG signature');
+  let pos = 8; let w = 0; let h = 0; let depth = 0; let ctype = 0; let interlace = 0; const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos); const type = buf.toString('latin1', pos + 4, pos + 8); const data = buf.slice(pos + 8, pos + 8 + len);
+    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ctype = data[9]; interlace = data[12]; }
+    if (type === 'IDAT') idat.push(data);
+    pos += 12 + len;
+  }
+  assert(depth === 8 && interlace === 0 && (ctype === 2 || ctype === 6), 'decodable PNG (8-bit RGB/RGBA)');
+  const bpp = ctype === 6 ? 4 : 3; const stride = w * bpp;
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  const out = Buffer.alloc(h * stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)];
+    for (let x = 0; x < stride; x++) {
+      const v = raw[y * (stride + 1) + 1 + x];
+      const a = x >= bpp ? out[y * stride + x - bpp] : 0;
+      const b = y > 0 ? out[(y - 1) * stride + x] : 0;
+      const c = x >= bpp && y > 0 ? out[(y - 1) * stride + x - bpp] : 0;
+      let r;
+      if (f === 0) r = v; else if (f === 1) r = v + a; else if (f === 2) r = v + b; else if (f === 3) r = v + ((a + b) >> 1);
+      else { const pp = a + b - c; const pa = Math.abs(pp - a); const pb = Math.abs(pp - b); const pc = Math.abs(pp - c); r = v + (pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)); }
+      out[y * stride + x] = r & 255;
+    }
+  }
+  return { w, h, bpp, ctype, px: function (x, y) { const i = y * stride + x * bpp; return [out[i], out[i + 1], out[i + 2], bpp === 4 ? out[i + 3] : 255]; } };
+}
+function sha256(buf) { return createHash('sha256').update(buf).digest('hex'); }
+// Verifies a black-and-white emblem icon: RGBA, transparent corners, opaque neutral pixels only, both black and white present.
+function checkEmblem(img, label) {
+  eq(img.ctype, 6, label + ': RGBA');
+  [[0, 0], [img.w - 1, 0], [0, img.h - 1], [img.w - 1, img.h - 1]].forEach(function (c) { eq(img.px(c[0], c[1])[3], 0, label + ': transparent corner'); });
+  let opaque = 0; let dark = 0; let light = 0; let colourful = 0;
+  for (let y = 0; y < img.h; y++) {
+    for (let x = 0; x < img.w; x++) {
+      const p = img.px(x, y);
+      if (p[3] < 250) continue;
+      opaque += 1;
+      if (Math.max(Math.abs(p[0] - p[1]), Math.abs(p[1] - p[2])) > 10) colourful += 1;
+      if (p[0] < 60) dark += 1; else if (p[0] > 195) light += 1;
+    }
+  }
+  eq(colourful, 0, label + ': no colour (black / white only)');
+  assert(opaque > img.w * img.h * 0.55, label + ': emblem fills the icon');
+  assert(dark / opaque > 0.25 && light / opaque > 0.15, label + ': both black field and white tree are present');
+  // the centre of the top rim is white-on-black structure: outermost opaque pixel column of the vertical axis must exist
+  assert(img.px(Math.floor(img.w / 2), Math.floor(img.h / 2))[3] === 255, label + ': centre opaque');
 }
 function pngSize(buf) {
   assert(buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'PNG signature');
@@ -114,7 +167,9 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
     assert(order.every(function (i) { return i > 0; }) && order[0] < order[1] && order[1] < order[2] && order[2] < order[3], 'scripts present in order');
     assert(html.indexOf('ofk3-cortex-priority-ui.js') < 0, 'Cortex script is NOT loaded by the initial page');
     assert(html.indexOf('データ読込を開始') >= 0 && html.indexOf('id="dashboard-content"') >= 0, 'start button and HARVEST host present');
-    assert(html.indexOf('/assets/harvest-192.png') >= 0 && html.indexOf('rel="manifest"') >= 0 && html.indexOf('harvest.ico') >= 0, 'logo, manifest, favicon linked');
+    assert(html.indexOf('<img src="/assets/harvest-logo-192.png"') >= 0, 'page header still shows the original Renaissance logo');
+    assert(html.indexOf('src="/assets/harvest-192.png') < 0, 'emblem icon is not used as the page logo');
+    assert(html.indexOf('rel="icon" href="/assets/harvest.ico?v=') >= 0 && html.indexOf('rel="manifest" href="/harvest.webmanifest?v=') >= 0, 'favicon and manifest linked with a cache-busting version');
     eq((await request(port, '/')).status, 302, '/ redirects to /harvest');
     eq((await request(port, '/harvest', { method: 'HEAD' })).status, 200, 'HEAD ok');
 
@@ -124,13 +179,17 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
     assert(/manifest\+json/.test(mf.headers['content-type']), 'manifest content type');
     const m = json(mf);
     eq([m.name, m.short_name, m.start_url, m.scope, m.display], ['HARVEST', 'HARVEST', '/harvest', '/harvest', 'standalone'], 'manifest fields');
+    eq(m.id, '/harvest', 'manifest id');
+    assert(m.icons.every(function (i) { return /^\/assets\/harvest-(192|512)\.png\?v=\d+$/.test(i.src); }), 'manifest icons are the emblem files with a version');
     eq(m.icons.map(function (i) { return i.sizes; }), ['192x192', '512x512'], 'manifest icons');
     for (const ic of m.icons) {
       const r = await request(port, ic.src);
       eq([r.status, r.headers['content-type']], [200, 'image/png'], 'icon served ' + ic.src);
       eq(pngSize(r.buf).join('x'), ic.sizes, 'icon real size ' + ic.src);
     }
-    const ico = await request(port, '/assets/harvest.ico');
+    const logo192 = await request(port, '/assets/harvest-logo-192.png');
+    eq([logo192.status, sha256(logo192.buf)], [200, 'de2b1eb94b81ed5c3f394ba8e50bc6214af787d5ef1c5ed93f56252100698ad9'], 'original Renaissance logo served unchanged');
+    const ico = await request(port, '/assets/harvest.ico?v=2');
     eq([ico.status, ico.headers['content-type']], [200, 'image/x-icon'], 'ico served');
     assert(!/service-?worker|serviceWorker/i.test(html + L.SHELL_JS), 'no service worker / offline cache');
 
@@ -335,17 +394,40 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
   });
 }
 
-// ============ 5. logo assets ============
+// ============ 5. logo / icon assets ============
 {
+  // The in-page Renaissance logo and its master are byte-for-byte unchanged.
+  eq(sha256(readFileSync(join(root, 'assets/harvest-logo.png'))), 'b49876cfc9cc21707ea9b9496cea42ac982386d64da3bc58cf92ffe9eec97fc0', 'Renaissance master logo unchanged');
+  eq(sha256(readFileSync(join(root, 'assets/harvest-logo-192.png'))), 'de2b1eb94b81ed5c3f394ba8e50bc6214af787d5ef1c5ed93f56252100698ad9', 'Renaissance 192 logo unchanged');
   eq(pngSize(readFileSync(join(root, 'assets/harvest-logo.png'))), [1254, 1254], 'master logo kept at original size');
-  eq(pngSize(readFileSync(join(root, 'assets/harvest-192.png'))), [192, 192], '192 icon');
-  eq(pngSize(readFileSync(join(root, 'assets/harvest-512.png'))), [512, 512], '512 icon');
+
+  // The supplied black-and-white emblem is the icon source.
+  const master = decodePng(readFileSync(join(root, 'assets/harvest-emblem.png')));
+  eq([master.w, master.h], [1254, 1254], 'emblem master size');
+  let colourfulMaster = 0;
+  for (let y = 0; y < master.h; y += 3) for (let x = 0; x < master.w; x += 3) { const p = master.px(x, y); if (Math.max(Math.abs(p[0] - p[1]), Math.abs(p[1] - p[2])) > 12) colourfulMaster += 1; }
+  eq(colourfulMaster, 0, 'emblem master is black and white');
+
+  const i192 = decodePng(readFileSync(join(root, 'assets/harvest-192.png')));
+  const i512 = decodePng(readFileSync(join(root, 'assets/harvest-512.png')));
+  eq([i192.w, i192.h, i512.w, i512.h], [192, 192, 512, 512], 'icon PNG sizes');
+  checkEmblem(i192, '192');
+  checkEmblem(i512, '512');
+  assert(sha256(readFileSync(join(root, 'assets/harvest-192.png'))) !== 'de2b1eb94b81ed5c3f394ba8e50bc6214af787d5ef1c5ed93f56252100698ad9', '192 icon is the emblem, not the old logo');
+
   const ico = readFileSync(join(root, 'assets/harvest.ico'));
   eq([ico.readUInt16LE(0), ico.readUInt16LE(2)], [0, 1], 'ICO header');
   const n = ico.readUInt16LE(4);
   const sizes = [];
-  for (let i = 0; i < n; i++) { const w = ico[6 + i * 16]; sizes.push(w === 0 ? 256 : w); }
-  [16, 32, 48, 256].forEach(function (s) { assert(sizes.indexOf(s) >= 0, 'ICO contains ' + s + 'px'); });
+  for (let i = 0; i < n; i++) {
+    const e = 6 + i * 16; const w = ico[e] === 0 ? 256 : ico[e]; const h = ico[e + 1] === 0 ? 256 : ico[e + 1];
+    const len = ico.readUInt32LE(e + 8); const off = ico.readUInt32LE(e + 12);
+    sizes.push(w);
+    const frame = decodePng(ico.slice(off, off + len));
+    eq([frame.w, frame.h, h], [w, w, w], 'ICO frame ' + w + 'px is a real ' + w + 'x' + w + ' image');
+    checkEmblem(frame, 'ICO ' + w);
+  }
+  eq(sizes, [16, 24, 32, 48, 64, 128, 256], 'ICO contains exactly 16/24/32/48/64/128/256 px');
 }
 
 // ============ 6. Windows launcher (static; real behaviour needs Windows) ============
@@ -369,6 +451,26 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
   const stop = read('stop-harvest.cmd');
   assert(stop.indexOf('harvest-local-server.js') >= 0 && stop.indexOf('server.pid') >= 0, 'stop script verifies the process before stopping it');
   assert(read('.gitattributes').indexOf('*.cmd text eol=crlf') >= 0, '.gitattributes keeps CRLF for .cmd');
+
+  // shortcut helper: creates a shortcut only; never pins or changes Windows settings
+  ['create-harvest-shortcut.cmd', 'create-harvest-shortcut.ps1'].forEach(function (f) {
+    assert(existsSync(join(root, f)), f + ' exists');
+    const raw = readFileSync(join(root, f));
+    assert(raw.every(function (b) { return b < 128; }), f + ' is ASCII only');
+    const t = raw.toString('latin1');
+    assert(t.indexOf('\r\n') > 0 && !/[^\r]\n/.test(t), f + ' uses CRLF');
+  });
+  const ps = read('create-harvest-shortcut.ps1');
+  const psCode = ps.split('\r\n').filter(function (l) { return !/^\s*#/.test(l) && !/Write-Host/.test(l); }).join('\r\n');
+  assert(psCode.indexOf("assets\\harvest.ico") >= 0 && psCode.indexOf('IconLocation') >= 0, 'shortcut uses the emblem ICO');
+  assert(psCode.indexOf('start-harvest.cmd') >= 0 && /System32\\cmd\.exe/.test(psCode), 'shortcut runs start-harvest.cmd through cmd.exe (an executable target, so it can be pinned)');
+  assert(psCode.indexOf("CreateShortcut") >= 0 && psCode.indexOf('.Save()') >= 0, 'creates a .lnk');
+  assert(!/InvokeVerb|syspin|TaskBand|Set-ItemProperty|New-ItemProperty|reg(\.exe)? add|schtasks|Set-ExecutionPolicy|Register-ScheduledTask|Startup|Remove-Item|Invoke-WebRequest|Start-Process|netsh|powercfg/i.test(psCode), 'no pinning automation, registry / policy / scheduled-task changes, downloads or deletions');
+  assert(/Pin to taskbar/.test(ps), 'tells the user to pin it themselves');
+  const wrapper = read('create-harvest-shortcut.cmd');
+  assert(wrapper.indexOf('-ExecutionPolicy Bypass') >= 0 && !/Set-ExecutionPolicy/.test(wrapper), 'execution policy is bypassed for this one process only, never changed');
+  assert(wrapper.indexOf('create-harvest-shortcut.ps1') >= 0, 'wrapper runs the script');
+  assert(read('.gitattributes').indexOf('*.ps1 text eol=crlf') >= 0, '.gitattributes keeps CRLF for .ps1');
   assert(read('.gitignore').indexOf('/harvest-local.config.cmd') >= 0, 'user config is git-ignored');
 }
 
