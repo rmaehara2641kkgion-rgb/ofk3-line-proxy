@@ -5,6 +5,11 @@
  * - dry-run のみ。OFK3 (サーバー store / 既存UI state / ブラウザ保存領域) へは一切書き込まない。
  * - 変換は手動ボタンのみ。harvest:handoff 受信時は受領記録の更新だけで変換は起動しない。
  * - setInterval / MutationObserver / 外部通信は使わない。テンプレートリテラル不使用。
+ *
+ * Step 3: 「品質検知 (dry-run)」。ボタン押下時のみ、HARVEST確認済みの timeWindow を
+ *   アダプタ -> 検知エンジン(time-window-data-freshness-v1 のみ)で評価して画面に表示する。
+ *   ルール定義は enabled:false のまま。結果は画面内メモリのみ (保存・送信・通知なし)。
+ *   配送遅延・配送完了は判定しない。
  */
 (function () {
   'use strict';
@@ -27,6 +32,27 @@
   var lastResult = null;
   var lastInput = null;
   var lastError = null;
+  var lastQuality = null;
+  var qualityAlerts = [];
+  var QualityDryRun = (typeof window !== 'undefined') ? window.InoichiQualityDryRun : null;
+  var QUALITY_THRESHOLD_MINUTES = 30;
+
+  var ISSUE_LABEL = {
+    'now-missing': '評価時刻(now)が未指定', 'now-invalid': '評価時刻(now)が不正', 'threshold-invalid': '鮮度閾値が不正',
+    'target-date-invalid': '評価対象日が不正', 'envelope-invalid': 'Envelopeが不正', 'unsupported-data-type': 'timeWindow以外のデータ',
+    'unsupported-envelope-schema': 'Envelopeのschemaが非対応', 'handoff-schema-missing': 'handoffのschemaVersionがない',
+    'unsupported-schema-version': 'handoffのschemaVersionが非対応', 'handoff-not-confirmed': 'HARVEST確認済みのhandoffがない',
+    'handoff-source-mismatch': 'handoffのsourceがtimeWindowと不一致', 'envelope-rejected': 'Envelopeが却下された',
+    'envelope-partial': '一部の行が欠損・不正 (有効行は利用可)', 'duplicate-keys': 'route/trackingIdの重複',
+    'no-valid-rows': '有効な行が0件', 'payload-missing': 'payloadがない', 'payload-empty': 'payloadが空',
+    'harvest-partial': 'HARVESTが部分取得と判定', 'harvest-stale': 'HARVESTが古いデータと判定',
+    'harvest-error': 'HARVESTがエラー状態', 'harvest-not-ready': 'HARVESTが未確認/取得待ち',
+    'harvest-status-unknown': 'HARVEST状態が不明', 'harvest-status-unrecognized': 'HARVEST状態が未知の値',
+    'local-date-unknown': '日付(localDate)が不明', 'local-date-invalid': '日付(localDate)の形式が不正',
+    'local-date-mismatch': '評価対象日と不一致', 'captured-at-unknown': '取得時刻(capturedAt)が不明で鮮度を判定不可',
+    'captured-at-invalid': '取得時刻(capturedAt)が不正', 'captured-at-in-future': '取得時刻が未来(時刻異常)',
+    'refetch-recommended': '取得から閾値を超過 (再取得推奨。配送遅延の判定ではありません)'
+  };
 
   var STATUS_COLOR = { ok: '#15803d', partial: '#c2410c', rejected: '#b91c1c' };
 
@@ -45,6 +71,15 @@
     }
   }
 
+  // getter / hub の読み取りのみ (取得・再送信なし)。P0 dry-run と品質検知で共用。
+  function collectInput(api) {
+    var hub = getHub();
+    if (!hub) {
+      try { console.warn('OFK3Inoichi: HARVEST hub not available'); } catch (e1) {}
+    }
+    return Core.readInput(api, { hub: hub, handoffRecords: handoffRecords });
+  }
+
   function runDryRun() {
     lastError = null;
     try {
@@ -52,11 +87,7 @@
       if (!api) {
         try { console.warn('OFK3Inoichi: OFK3Cortex13 not found'); } catch (e0) {}
       }
-      var hub = getHub();
-      if (!hub) {
-        try { console.warn('OFK3Inoichi: HARVEST hub not available'); } catch (e1) {}
-      }
-      lastInput = Core.readInput(api, { hub: hub, handoffRecords: handoffRecords });
+      lastInput = collectInput(api);
       lastResult = Core.dryRun(lastInput);
     } catch (e) {
       lastResult = null;
@@ -64,6 +95,87 @@
       try { console.error('OFK3Inoichi.dryRun error:', e); } catch (e2) {}
     }
     return lastResult;
+  }
+
+  // 手動ボタン専用。HARVEST確認済みの timeWindow のみを対象に、現在時刻を明示的に渡して評価する。
+  function runQuality() {
+    var q = window.InoichiQualityDryRun || QualityDryRun;
+    if (!q) {
+      lastQuality = { error: 'dependency-missing', adapterOutput: null, alerts: [] };
+      return lastQuality;
+    }
+    try {
+      var api = window.OFK3Cortex13 || null;
+      var input = collectInput(api);
+      var env = Core.dryRun(input, ['timeWindow']).envelopes[0];
+      lastQuality = q.evaluateTimeWindowQuality(env, {
+        now: new Date().toISOString(),
+        freshnessThresholdMinutes: QUALITY_THRESHOLD_MINUTES,
+        existingAlerts: qualityAlerts
+      });
+      if (!lastQuality.error) qualityAlerts = lastQuality.alerts;
+    } catch (e) {
+      lastQuality = { error: String(e && e.message ? e.message : e), adapterOutput: null, alerts: [] };
+    }
+    return lastQuality;
+  }
+
+  function issueRowHtml(i) {
+    var color = i.level === 'blocking' ? '#b91c1c' : '#c2410c';
+    var label = ISSUE_LABEL[i.code] || '';
+    var h = '<li style="margin:4px 0;"><span style="color:' + color + ';font-weight:700;">[' + esc(i.level === 'blocking' ? '評価不能の要因' : '警告') + ']</span> '
+      + '<code>' + esc(i.code) + '</code>' + (label ? ' ' + esc(label) : '');
+    if (i.detail !== undefined) h += jsonBlock(i.detail);
+    return h + '</li>';
+  }
+
+  function qualityHtml() {
+    var h = '<div style="border:1px solid #c4b5fd;border-radius:8px;padding:12px;margin-top:16px;">';
+    h += '<div style="font-size:14px;margin-bottom:6px;"><b>品質検知 (dry-run)</b> <span style="font-size:11px;color:#6b7280;">time-window-data-freshness-v1 のみ</span></div>';
+    h += '<div style="font-size:12px;color:#6b7280;line-height:1.6;">取得したデータの信頼性だけを評価します。配送遅延・配送完了は判定しません (配送状態は取得していません)。'
+      + '鮮度閾値は暫定' + QUALITY_THRESHOLD_MINUTES + '分。ルール定義は無効のままで、押下時のこの画面内評価のみです。通知・保存・送信はしません。</div>';
+    h += '<button type="button" data-ino-act="quality" style="margin-top:10px;padding:8px 16px;background:#4f46e5;color:#fff;border:none;'
+      + 'border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">品質検知 (dry-run)</button>';
+    if (!lastQuality) {
+      return h + '<div style="margin-top:8px;font-size:12px;color:#6b7280;">未実行 (ボタンを押したときだけ評価します)</div></div>';
+    }
+    if (lastQuality.error) {
+      return h + '<div style="margin-top:10px;font-size:12px;color:#b91c1c;">評価できませんでした: ' + esc(lastQuality.error)
+        + (lastQuality.error === 'dependency-missing' ? ' (inoichi-time-window-adapter.js / inoichi-detection-*.js / inoichi-quality-dryrun.js の読込を確認してください)' : '') + '</div></div>';
+    }
+    var a = lastQuality.adapterOutput;
+    var badge = a.evaluable
+      ? '<span style="color:#15803d;font-weight:700;">evaluable: true (評価可能)</span>'
+      : '<span style="color:#b91c1c;font-weight:700;">evaluable: false (評価不能)</span>';
+    h += '<div style="margin:12px 0 6px;font-size:13px;">' + badge + '</div>';
+    h += '<table style="font-size:12px;border-collapse:collapse;">';
+    h += kv('評価時刻 (now)', a.now) + kv('capturedAt', a.capturedAt) + kv('鮮度', a.freshness.state
+        + (a.freshness.ageMinutes != null ? ' (' + Math.round(a.freshness.ageMinutes * 10) / 10 + '分経過 / 閾値' + a.freshness.thresholdMinutes + '分)' : ''))
+      + kv('localDate', a.localDate) + kv('日付判定', a.dateCheck) + kv('HARVEST状態', a.harvestStatus)
+      + kv('Envelope状態', a.envelopeStatus) + kv('行数 (有効)', a.rowCount)
+      + kv('評価不能の要因 / 警告', a.blockingCount + ' / ' + a.warningCount)
+      + kv('配送状態', a.unknowns.deliveryStatus + ' (配送遅延・完了は判定しません)');
+    h += '</table>';
+    h += '<div style="margin:10px 0 4px;font-size:12px;"><b>issues[]</b> (' + a.issueCount + ')</div>';
+    if (a.issues.length) {
+      h += '<ul style="font-size:12px;margin:0;padding-left:18px;">';
+      a.issues.forEach(function (i) { h += issueRowHtml(i); });
+      h += '</ul>';
+    } else {
+      h += '<div style="font-size:12px;color:#15803d;">品質上の問題は検出されませんでした</div>';
+    }
+    var d = lastQuality.detection && lastQuality.detection.diagnostics ? lastQuality.detection.diagnostics : {};
+    h += '<div style="margin:10px 0 4px;font-size:12px;"><b>アラート (画面内のみ)</b> 新規 ' + (d.created || 0) + ' / 更新 ' + (d.updated || 0) + ' / 解決 ' + (d.resolved || 0) + '</div>';
+    if (lastQuality.alerts.length) {
+      lastQuality.alerts.forEach(function (al) {
+        h += '<div style="font-size:12px;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:4px;">'
+          + '<b>' + esc(al.title) + '</b> [' + esc(al.severity) + ' / ' + esc(al.status) + ']<br>' + esc(al.summary) + '</div>';
+      });
+    } else {
+      h += '<div style="font-size:12px;color:#6b7280;">アラートなし</div>';
+    }
+    h += '<div style="margin-top:8px;font-size:12px;"><b>アダプタ出力 (診断)</b></div>' + jsonBlock(a);
+    return h + '</div>';
   }
 
   function kv(label, value) {
@@ -151,6 +263,7 @@
       lastResult.envelopes.forEach(function (env) { h += envelopeHtml(env); });
       h += '</div>';
     }
+    h += qualityHtml();
     return h;
   }
 
@@ -179,6 +292,7 @@
     var act = t.getAttribute('data-ino-act');
     if (!act || t.disabled) return;
     if (act === 'run') runDryRun();
+    else if (act === 'quality') runQuality();
     render();
   }
 
@@ -290,6 +404,8 @@
     buildHtml: buildHtml,
     insertButton: insertButton,
     runDryRun: runDryRun,
+    runQuality: runQuality,
+    getLastQuality: function () { return lastQuality; },
     getLastResult: function () { return lastResult; },
     getHandoffRecords: function () { return handoffRecords; }
   };

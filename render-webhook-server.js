@@ -259,10 +259,30 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (inoCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, inoCoreBodyPos) + '  <script src="/inoichi-core.js?v=20261003-1"></script>\n' + html.slice(inoCoreBodyPos);
     }
+    if (html.indexOf('/inoichi-detection-core.js') < 0) {
+      var inoDetCoreBodyPos = html.lastIndexOf('</body>');
+      if (inoDetCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoDetCoreBodyPos) + '  <script src="/inoichi-detection-core.js?v=20261015-1"></script>\n' + html.slice(inoDetCoreBodyPos);
+    }
+    if (html.indexOf('/inoichi-detection-rules.js') < 0) {
+      var inoDetRulesBodyPos = html.lastIndexOf('</body>');
+      if (inoDetRulesBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoDetRulesBodyPos) + '  <script src="/inoichi-detection-rules.js?v=20261015-1"></script>\n' + html.slice(inoDetRulesBodyPos);
+    }
+    if (html.indexOf('/inoichi-time-window-adapter.js') < 0) {
+      var inoTwAdapterBodyPos = html.lastIndexOf('</body>');
+      if (inoTwAdapterBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoTwAdapterBodyPos) + '  <script src="/inoichi-time-window-adapter.js?v=20261015-1"></script>\n' + html.slice(inoTwAdapterBodyPos);
+    }
+    if (html.indexOf('/inoichi-quality-dryrun.js') < 0) {
+      var inoQualityBodyPos = html.lastIndexOf('</body>');
+      if (inoQualityBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, inoQualityBodyPos) + '  <script src="/inoichi-quality-dryrun.js?v=20261015-1"></script>\n' + html.slice(inoQualityBodyPos);
+    }
     if (html.indexOf('/ofk3-inoichi-ui.js') < 0) {
       var inoUiBodyPos = html.lastIndexOf('</body>');
       if (inoUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
-      html = html.slice(0, inoUiBodyPos) + '  <script src="/ofk3-inoichi-ui.js?v=20261003-1"></script>\n' + html.slice(inoUiBodyPos);
+      html = html.slice(0, inoUiBodyPos) + '  <script src="/ofk3-inoichi-ui.js?v=20261015-1"></script>\n' + html.slice(inoUiBodyPos);
     }
     res.type('html').send(html);
   } catch (e) {
