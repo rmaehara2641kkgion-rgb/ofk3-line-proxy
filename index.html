@@ -14835,7 +14835,7 @@ var driverDB = {
       var totalCost = 0;
       var charterCost = 0;
       var headcount = entries.length;
-      var deptCounts = {};
+      var deptCounts = countExecDayComposition(entries).deptCounts;
       var typeBreakdown = {};
 
       for (var i = 0; i < entries.length; i++) {
@@ -14857,10 +14857,6 @@ var driverDB = {
           charterCost += rate.costOther;
         }
         totalCost += cost;
-
-        // 所属別カウント
-        var deptLabel = e.dept || '不明';
-        deptCounts[deptLabel] = (deptCounts[deptLabel] || 0) + 1;
 
         // コース種別明細
         if (!typeBreakdown[e.type]) typeBreakdown[e.type] = { direct: 0, staff: 0, other: 0, total: 0 };
@@ -15157,7 +15153,7 @@ var driverDB = {
       tbody.innerHTML = html;
     }
 
-    // 月間稼働分析の会社名。マスタ所属がシフト表記と揺れていても、集計ラベルだけを揃える。
+    // 経営ダッシュボードの会社名。マスタ所属がシフト表記と揺れていても、集計ラベルだけを揃える。
     // ドライバーマスタとシフト元データは書き換えない。
     function normalizeExecCompanyName(name) {
       if (name == null || name === '') return '不明';
@@ -15165,6 +15161,20 @@ var driverDB = {
       var folded = text.replace(/[\s\u3000]+/g, '').toLowerCase();
       if (folded === 'agentline') return 'AGENTLINE';
       return text;
+    }
+
+    // 所属別配送構成比。コース単価がある行だけを1件ずつ数える。
+    function countExecDayComposition(entries) {
+      var deptCounts = {};
+      var total = 0;
+      for (var i = 0; i < (entries || []).length; i++) {
+        var e = entries[i];
+        if (!e || !EXEC_RATE_TABLE[e.type]) continue;
+        total += 1;
+        var deptLabel = normalizeExecCompanyName(e.dept || '不明');
+        deptCounts[deptLabel] = (deptCounts[deptLabel] || 0) + 1;
+      }
+      return { total: total, deptCounts: deptCounts };
     }
 
     function summarizeExecMonthCompanies(days) {
