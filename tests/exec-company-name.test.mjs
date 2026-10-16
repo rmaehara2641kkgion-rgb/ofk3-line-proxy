@@ -14,8 +14,13 @@ const source = html.slice(start, end);
 assert(source.indexOf('localStorage') < 0 && source.indexOf('driverDepartments') < 0, 'normalization does not rewrite the driver master or saved shift');
 assert(html.indexOf('var effectiveDept = masterDept || currentDept;') > 0, 'shift rows still prefer the existing master department');
 assert(html.indexOf('totalVehicles += entries.length;') > 0, 'vehicle totals still count each worked row');
+assert(html.indexOf('var deptCounts = countExecDayComposition(entries).deptCounts;') > 0, 'the daily composition chart uses the shared company counter');
+assert(html.indexOf("var deptLabel = e.dept || '不明';") < 0, 'the daily composition no longer buckets the raw company spelling');
 
-const context = { EXEC_TYPE_LABELS: { maru: '○（11h）', c1: 'C1（6.5h）' } };
+const context = {
+  EXEC_TYPE_LABELS: { maru: '○（11h）', c1: 'C1（6.5h）' },
+  EXEC_RATE_TABLE: { maru: { hours: 11 }, c1: { hours: 6.5 } }
+};
 vm.createContext(context);
 vm.runInContext(source, context, { filename: 'index.html#exec-company-name' });
 
@@ -47,5 +52,13 @@ const repeat = context.summarizeExecMonthCompanies({
   2: [{ name: '同じ人', dept: 'Agent Line', type: 'c1' }]
 });
 assert(repeat.totalVehicles === 2 && repeat.driverCount === 1 && repeat.deptCounts.AGENTLINE === 2, 'a repeated person stays one driver and two vehicles');
+
+const dayRows = rows(53, 'AGENTLINE', 'sheet-').concat(rows(22, 'Agent Line', 'master-'), rows(4, 'JHS', 'jhs-'), rows(3, 'GDSダイレクト', 'gds-'));
+dayRows.push({ name: '単価なし', dept: 'AGENTLINE', type: 'unknown' });
+const composition = context.countExecDayComposition(dayRows);
+assert(composition.deptCounts.AGENTLINE === 75 && composition.deptCounts['Agent Line'] == null, 'the daily composition joins AGENTLINE and Agent Line');
+assert(composition.deptCounts.JHS === 4 && composition.deptCounts['GDSダイレクト'] === 3, 'other companies keep separate daily counts');
+assert(composition.total === 82 && composition.deptCounts.AGENTLINE + composition.deptCounts.JHS + composition.deptCounts['GDSダイレクト'] === 82, 'a row without a course rate stays out of the composition count');
+assert(context.countExecDayComposition([{ name: '空', dept: '', type: 'maru' }, { name: 'なし', dept: null, type: 'c1' }]).deptCounts['不明'] === 2, 'a blank daily company stays unknown');
 
 console.log('exec-company-name: ok');
