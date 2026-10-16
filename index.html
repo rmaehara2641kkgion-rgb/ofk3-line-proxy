@@ -15157,48 +15157,69 @@ var driverDB = {
       tbody.innerHTML = html;
     }
 
-    // 月間稼働分析
-    var execMonthPieInstance = null;
-    var execMonthTypeInstance = null;
-    function renderExecMonthlyAnalysis() {
-      if (!execShiftData) return;
-      var days = execShiftData.days;
+    // 月間稼働分析の会社名。マスタ所属がシフト表記と揺れていても、集計ラベルだけを揃える。
+    // ドライバーマスタとシフト元データは書き換えない。
+    function normalizeExecCompanyName(name) {
+      if (name == null || name === '') return '不明';
+      var text = String(name);
+      var folded = text.replace(/[\s\u3000]+/g, '').toLowerCase();
+      if (folded === 'agentline') return 'AGENTLINE';
+      return text;
+    }
+
+    function summarizeExecMonthCompanies(days) {
       var totalVehicles = 0;
       var activeDays = 0;
       var allDrivers = {};
       var deptCounts = {};
       var typeCounts = {};
-
       for (var d = 1; d <= 31; d++) {
-        var entries = days[d] || [];
+        var entries = (days && days[d]) || [];
         if (entries.length === 0) continue;
         activeDays++;
         totalVehicles += entries.length;
         for (var i = 0; i < entries.length; i++) {
           var e = entries[i];
-          allDrivers[e.name] = e.dept || '不明';
-          // 所属別集計
-          var deptLabel = e.dept || '不明';
+          var deptLabel = normalizeExecCompanyName(e.dept || '不明');
+          allDrivers[e.name] = deptLabel;
           deptCounts[deptLabel] = (deptCounts[deptLabel] || 0) + 1;
-          // コース種別集計
           var typeLabel = EXEC_TYPE_LABELS[e.type] || e.type;
           typeCounts[typeLabel] = (typeCounts[typeLabel] || 0) + 1;
         }
       }
+      var driverDeptCount = {};
+      for (var dn in allDrivers) {
+        driverDeptCount[allDrivers[dn] || '不明'] = (driverDeptCount[allDrivers[dn] || '不明'] || 0) + 1;
+      }
+      return {
+        totalVehicles: totalVehicles,
+        activeDays: activeDays,
+        driverCount: Object.keys(allDrivers).length,
+        deptCounts: deptCounts,
+        driverDeptCount: driverDeptCount,
+        typeCounts: typeCounts
+      };
+    }
+
+    // 月間稼働分析
+    var execMonthPieInstance = null;
+    var execMonthTypeInstance = null;
+    function renderExecMonthlyAnalysis() {
+      if (!execShiftData) return;
+      var summary = summarizeExecMonthCompanies(execShiftData.days);
+      var totalVehicles = summary.totalVehicles;
+      var activeDays = summary.activeDays;
+      var deptCounts = summary.deptCounts;
+      var typeCounts = summary.typeCounts;
+      var driverCount = summary.driverCount;
+      var driverDeptCount = summary.driverDeptCount;
 
       // KPIカード
       document.getElementById('exec-month-vehicles').textContent = totalVehicles.toLocaleString() + '台';
       document.getElementById('exec-month-vehicles-detail').textContent = '1日平均: ' + (activeDays > 0 ? Math.round(totalVehicles / activeDays) : 0) + '台';
       document.getElementById('exec-month-active-days').textContent = activeDays + '日';
       document.getElementById('exec-month-avg-vehicles').textContent = '1日平均: ' + (activeDays > 0 ? (totalVehicles / activeDays).toFixed(1) : 0) + '台/日';
-      var driverCount = Object.keys(allDrivers).length;
       document.getElementById('exec-month-drivers').textContent = driverCount + '名';
-      // 所属別ドライバー数
-      var driverDeptCount = {};
-      for (var dn in allDrivers) {
-        var dd = allDrivers[dn] || '不明';
-        driverDeptCount[dd] = (driverDeptCount[dd] || 0) + 1;
-      }
       var deptParts = [];
       for (var dk in driverDeptCount) deptParts.push(dk + ': ' + driverDeptCount[dk] + '名');
       document.getElementById('exec-month-drivers-detail').textContent = deptParts.join(' / ');
