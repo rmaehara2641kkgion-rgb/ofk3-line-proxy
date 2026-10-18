@@ -2,3 +2,4 @@ node_modules/
 
 # user-specific HARVEST local launcher settings
 /harvest-local.config.cmd
+local/

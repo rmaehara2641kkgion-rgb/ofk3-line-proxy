@@ -254,6 +254,19 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvUiBodyPos) + '  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>\n' + html.slice(hvUiBodyPos);
     }
+    if (html.indexOf('/harvest-collector-rolling60h.js') < 0) {
+      var hvRollTag = '  <script src="/inoichi-rolling-dryrun.js?v=20261018-rolling"></script>\n'
+        + '  <script src="/harvest-collector-rolling60h.js?v=20261018-rolling"></script>\n';
+      var hvUiMarker = html.indexOf('/ofk3-harvest-ui.js');
+      if (hvUiMarker >= 0) {
+        var hvUiScript = html.lastIndexOf('<script', hvUiMarker);
+        html = html.slice(0, hvUiScript) + hvRollTag + html.slice(hvUiScript);
+      } else {
+        var hvRollBodyPos = html.lastIndexOf('</body>');
+        if (hvRollBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+        html = html.slice(0, hvRollBodyPos) + hvRollTag + html.slice(hvRollBodyPos);
+      }
+    }
     if (html.indexOf('/inoichi-core.js') < 0) {
       var inoCoreBodyPos = html.lastIndexOf('</body>');
       if (inoCoreBodyPos < 0) return next(new Error('index.html body closing tag not found'));
@@ -3096,6 +3109,19 @@ app.post('/lat-export', function(req, res) {
       }
     });
   });
+});
+
+require('./harvest-rolling60h-route.js').mount(app, {
+  run: function () {
+    return require('./harvest-rolling60h-run.js').run({
+      fs: fs,
+      path: path,
+      xlsx: require('xlsx'),
+      rolling: require('./rolling60h-core.js'),
+      harvest: require('./harvest-daily-manifest.js'),
+      dryRun: require('./inoichi-rolling-dryrun.js'),
+    });
+  },
 });
 
 app.listen(PORT, () => {
