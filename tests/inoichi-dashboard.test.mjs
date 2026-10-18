@@ -216,6 +216,15 @@ function buildStoreWithAlerts(alerts, evaluatedInputs, now) {
   } catch (e) { source = ''; }
   ok('(20a) dashboard source has no fetch/xhr/POST', source.indexOf('fetch(') === -1 && source.indexOf('XMLHttpRequest') === -1 && source.indexOf('POST') === -1);
   ok('(20b) dashboard source has no LINE/FRIDAY/HARVEST writes', source.indexOf('line.me') === -1 && source.indexOf('friday') === -1 && source.indexOf('harvest') === -1);
+
+  var branded = { innerHTML: '' };
+  Dashboard.renderDashboard(branded, sampleState);
+  ok('(21) header shows the official logo and existing sections',
+    branded.innerHTML.indexOf('class="ino-logo"') !== -1 &&
+    branded.innerHTML.indexOf('./assets/inoichi-logo.png') !== -1 &&
+    branded.innerHTML.indexOf('A. サマリー') !== -1 &&
+    branded.innerHTML.indexOf('B. 欠車リスク一覧') !== -1);
+  ok('(21a) missing logo does not remove the dashboard', branded.innerHTML.indexOf("this.style.display='none'") !== -1);
 }());
 
 function documentMock() {

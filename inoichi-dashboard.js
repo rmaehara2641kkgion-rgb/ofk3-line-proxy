@@ -405,10 +405,17 @@
     if (!element) return;
     var meta = state.meta || {};
     var h = '';
+    var petals = '';
+    for (var pi = 0; pi < 14; pi++) { petals += '<i class="ino-petal ino-petal-' + (pi + 1) + '"></i>'; }
+    h += '<div class="ino-petals" aria-hidden="true">' + petals + '</div>';
     h += '<header class="ino-header">';
+    h += '<img class="ino-logo" src="./assets/inoichi-logo-light.webp" alt="INO-1 SENSORY INTELLIGENCE" decoding="async" onerror="if(!this.dataset.fb){this.dataset.fb=\'1\';this.src=\'./assets/inoichi-logo.png\';}else{this.style.display=\'none\'}">';
+    h += '<div class="ino-banner">';
+    h += '<div class="ino-header-tagline">人間道：勤務監視・異常検知・リスク予測（ローカル専用）</div>';
     h += '<div class="ino-header-title">' + escapeHtml(meta.title) + '</div>';
     h += '<div class="ino-header-subtitle">' + escapeHtml(meta.banner) + '</div>';
     h += '<div class="ino-header-meta">生成時刻: ' + escapeHtml(formatDateTime(meta.generatedAt)) + ' / データ取得元: ' + escapeHtml(meta.dataSource) + '</div>';
+    h += '</div>';
     h += '</header>';
     h += '<main class="ino-main">';
     h += card('A. サマリー', renderSummary(state.summary));

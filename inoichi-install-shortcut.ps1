@@ -1,9 +1,9 @@
 ﻿# INO-1 Prototype 1 Desktop Shortcut Installer
 # Usage: powershell -ExecutionPolicy Bypass -File inoichi-install-shortcut.ps1 [-IconPath "C:\path\to\inoichi.ico"]
 #
-# To replace the icon later with an approved INO-1 logo:
-#   magick convert logo.png -define icon:auto-resize=256,128,64,48,32,16 inoichi.ico
-# If ImageMagick is not installed, the script falls back to the default Windows icon.
+# With no -IconPath, the official icon assets\inoichi.ico is used.
+# An existing shortcut is updated only when its target is PowerShell and its
+# arguments point at this repository's INO-1 launch or stop script.
 
 param(
   [string]$IconPath = '',
@@ -46,9 +46,18 @@ if (-not $Force -and ($env:INO_ASSUME_YES -ne '1')) {
 }
 
 # ---- Icon handling ----
+$DefaultIcon = Join-Path $RepoRoot 'assets\inoichi.ico'
+if (-not $IconPath) {
+  if (Test-Path -LiteralPath $DefaultIcon) {
+    $IconPath = $DefaultIcon
+  } else {
+    Write-Warning "Official icon not found: $DefaultIcon (using default icon)"
+  }
+}
+
 $resolvedIcon = ''
-if ($IconPath -and (Test-Path $IconPath)) {
-  $resolvedIcon = $IconPath
+if ($IconPath -and (Test-Path -LiteralPath $IconPath)) {
+  $resolvedIcon = (Resolve-Path -LiteralPath $IconPath).Path
 } elseif ($IconPath) {
   Write-Warning "Icon file not found: $IconPath (using default icon)"
 }
@@ -70,8 +79,34 @@ function Get-UniqueShortcutPath($Path) {
 # ---- Create shortcuts ----
 $shell = New-Object -ComObject WScript.Shell
 
+function Test-InoichiOwnShortcut($ShortcutPath, $ArgumentFile) {
+  if (-not (Test-Path -LiteralPath $ShortcutPath)) { return $false }
+  try {
+    $existing = $shell.CreateShortcut($ShortcutPath)
+  } catch {
+    return $false
+  }
+  $target = [string]$existing.TargetPath
+  $argumentText = [string]$existing.Arguments
+  if ($target -notmatch '(?i)\\powershell(\.exe)?$') { return $false }
+  $expected = [System.IO.Path]::GetFullPath($ArgumentFile)
+  if ($argumentText.IndexOf($expected, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+  return $true
+}
+
 function New-InoichiShortcut($DisplayName, $PsPath, $ArgumentFile) {
-  $shortcutPath = Get-UniqueShortcutPath (Join-Path $DesktopDir "$DisplayName.lnk")
+  $desired = Join-Path $DesktopDir "$DisplayName.lnk"
+  if (Test-InoichiOwnShortcut $desired $ArgumentFile) {
+    $shortcut = $shell.CreateShortcut($desired)
+    if ($resolvedIcon) {
+      $shortcut.IconLocation = "$resolvedIcon,0"
+    }
+    $shortcut.Save()
+    Write-Host "Updated: $desired"
+    return
+  }
+
+  $shortcutPath = Get-UniqueShortcutPath $desired
   $shortcut = $shell.CreateShortcut($shortcutPath)
   $shortcut.TargetPath = $PsPath
   $shortcut.Arguments = "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ArgumentFile`""
