@@ -161,7 +161,18 @@ function runTests() {
   var rUndef = RollingCore.computeRolling60h(sUndef);
   assert(rUndef[0].hasUndefinedHours === true, '未定義記号を含むウィンドウはhasUndefinedHours=trueで検知される');
   assert(rUndef[0].undefinedDates.indexOf('2026-09-03') !== -1, '未定義記号の発生日が特定できる');
-  assertClose(rUndef[0].totalHours, 10 * 6, '未定義記号の日は合計に0として計上され、黙って握りつぶされない（かつ検知フラグは立つ）');
+  assertClose(rUndef[0].totalHours, 10 * 6, '未定義記号の日の既知分は参考値として残る');
+  assert(rUndef[0].judgment === 'undetermined', '未定義記号を含む窓は判定不能');
+  assert(rUndef[0].over === false && rUndef[0].warning === false, '未定義記号を含む窓は超過・接近にしない');
+
+  var mUndefOver = {};
+  ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06', '2026-09-07'].forEach(function (d) {
+    mUndefOver[d] = flatBlocks(11);
+  });
+  mUndefOver['2026-09-04'] = RollingCore.parseShiftCellToBlocks('嘉', 'roster').blocks;
+  var rUndefOver = RollingCore.computeRolling60h(daySeries(mUndefOver, '2026-09-01', '2026-09-07'));
+  assertClose(rUndefOver[0].totalHours, 66, '未定義日を除いた既知分が60を超えても参考値は残す');
+  assert(rUndefOver[0].judgment === 'undetermined' && rUndefOver[0].over === false, '既知分が60超でも未定義日があれば超過にしない');
 
   // =========================================================================
   // 7. roster_only 超過 と actual_progress 超過の判別
@@ -481,6 +492,22 @@ function runTests() {
     assert(mergeDup.merged['2026-09-11'], '重複していない9/11(ファイルA由来)はそのまま残る');
     assert(mergeDup.merged['2026-09-12'], '重複していない9/12(ファイルB由来)はそのまま残る');
   }
+
+  assert(RollingCore.pickReport5Sheet(['貼付', 'Report5_Daily_Data']) === 'Report5_Daily_Data', 'Report5を貼付より優先する');
+  assert(RollingCore.pickReport5Sheet(['貼付']) === null, '貼付だけではシートを選ばない');
+  var headerlessRows = [
+    ['x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'],
+    ['', '', '', '', '', '2026-09-01', 'OFK3', '', '', 'TID-H', '', '', '', '', 8],
+  ];
+  var headerless = RollingCore.parseAmazonDailyRows(headerlessRows);
+  assert(headerless.records.length === 0, 'ヘッダーが無い行は列位置を推測しない');
+  var headerlessAllowed = RollingCore.parseAmazonDailyRows(headerlessRows, { allowHeaderlessFallback: true });
+  assert(headerlessAllowed.records.length === 1, '明示したときだけ旧列位置を使える');
+  var badHour = RollingCore.parseAmazonDailyRows([
+    ['transporter_id', 'working_day', 'estimated_working_hour', 'station_code'],
+    ['TID-H', '2026-09-01', 'n/a', 'OFK3'],
+  ]);
+  assert(badHour.records.length === 1 && badHour.records[0].hoursOk === false && badHour.records[0].hours === null, '読めない推定時間は0にしない');
 
   console.log('rolling60h-core.test.mjs: ALL TESTS PASSED (' + 'checks executed' + ')');
 }
