@@ -30,9 +30,8 @@
  *   - 嘉（嘉麻応援）のブロック時間
  *   - 研修・唐津 等のブロック時間
  *   これらは SHIFT_HOUR_TABLE に存在しないため、自動的に
- *   defined:false / hours:null として検知され、Rolling合計には0として
- *   加算されるが、hasUndefinedHours / undefinedCodes で必ず可視化される。
- *   「黙って0h」にはしない。
+ *   defined:false / hours:null として検知される。その日を含む7日窓は
+ *   judgment:'undetermined'（判定不能）になり、超過・接近にはしない。
  *
  * 「休」の扱い（確定済み）:
  *   休 は正式に「勤務なし＝0時間・defined:true」として SHIFT_HOUR_TABLE に
@@ -449,8 +448,13 @@
       var complete = noDataDates.length === 0;
       var rawOver = total > limitHours;
       var rawWarning = !rawOver && total >= warningHours;
-      var over = complete && rawOver;
-      var warning = complete && rawWarning;
+      var hasUndefinedHours = undefinedDates.length > 0;
+      // 7日が揃わない、または未確定記号を含む窓は判定不能。
+      // 既知分の合計は totalHours に残すが、超過・接近にはしない。
+      var undetermined = !complete || hasUndefinedHours;
+      var over = !undetermined && rawOver;
+      var warning = !undetermined && rawWarning;
+      var judgment = undetermined ? 'undetermined' : over ? 'exceed' : warning ? 'approach' : 'within';
       results.push({
         startDate: windowDays[0].date,
         endDate: windowDays[6].date,
@@ -462,11 +466,12 @@
         over: over,
         overBy: over ? total - limitHours : 0,
         warning: warning,
+        judgment: judgment,
         complete: complete,
         availableDays: 7 - noDataDates.length,
         undefinedDates: undefinedDates,
         noDataDates: noDataDates,
-        hasUndefinedHours: undefinedDates.length > 0,
+        hasUndefinedHours: hasUndefinedHours,
       });
     }
     return results;
@@ -517,6 +522,14 @@
    * 「今週分のみ」フィルタは行わない（Rolling用に全期間保持するため）。
    * 既存関数・既存グローバル変数（wh60Data等）は一切参照/変更しない。
    */
+  function pickReport5Sheet(sheetNames) {
+    sheetNames = sheetNames || [];
+    for (var i = 0; i < sheetNames.length; i++) {
+      if (sheetNames[i] === 'Report5_Daily_Data') return sheetNames[i];
+    }
+    return null;
+  }
+
   function parseAmazonDailyRows(rows, options) {
     options = options || {};
     // 既定は既存WH60と同じ station_code === 'OFK3' 絞り込み。
@@ -539,9 +552,9 @@
       else if (h === 'estimated_start_time' || h === '開始時刻') col.start = c;
       else if (h === 'estimated_end_time' || h === '終了時刻') col.end = c;
     }
-    // 「貼付」シート等、ヘッダー名が無い/一致しない場合のフォールバック
-    // （既存 wh60LoadWHFile と同一の列位置想定: J=transporter_id, F=working_day, O=hours, I=dsp, G=station）
-    if (col.tid === -1) {
+    // ヘッダーが無い列位置の推測は、明示したときだけ行う。
+    // シフトブックの「貼付」は正式なデイリー取得元にしない。
+    if (col.tid === -1 && options.allowHeaderlessFallback) {
       col.tid = 9;
       col.day = 5;
       col.hour = 14;
@@ -571,14 +584,17 @@
       var station = col.station >= 0 ? String(row[col.station] || '').trim().toUpperCase() : '';
       if (stationFilter && station && station !== stationFilter) continue;
 
-      var hours = parseFloat(row[col.hour]);
-      if (isNaN(hours)) hours = 0;
+      var rawHour = row[col.hour];
+      var hours = typeof rawHour === 'number' ? rawHour : parseFloat(rawHour);
+      var hoursOk = rawHour !== null && rawHour !== undefined && rawHour !== '' && !isNaN(hours);
 
       records.push({
         transportId: tid,
         date: dateStr,
         dsp: col.dsp >= 0 ? String(row[col.dsp] || '').trim() : '',
-        hours: hours,
+        hours: hoursOk ? hours : null,
+        hoursOk: hoursOk,
+        hoursKind: 'estimated_working_hour',
         startTime: col.start >= 0 ? row[col.start] : null,
         endTime: col.end >= 0 ? row[col.end] : null,
       });
@@ -788,12 +804,14 @@
       if (!byTid[rec.transportId]) byTid[rec.transportId] = {};
       var d = byTid[rec.transportId];
       d[rec.date] = d[rec.date] || [];
+      var hoursOk = rec.hoursOk !== false && typeof rec.hours === 'number' && !isNaN(rec.hours);
       d[rec.date].push({
-        code: 'AMAZON_ACTUAL',
-        rawCode: '(Amazon実績)',
+        code: 'AMAZON_ESTIMATE',
+        rawCode: '(estimated_working_hour)',
         source: 'actual',
-        hours: rec.hours,
-        defined: true,
+        hours: hoursOk ? rec.hours : null,
+        defined: hoursOk,
+        hoursKind: 'estimated_working_hour',
       });
     });
     return byTid;
@@ -832,6 +850,7 @@
     computeRollingRisk: computeRollingRisk,
 
     // 行レベルパーサ
+    pickReport5Sheet: pickReport5Sheet,
     parseAmazonDailyRows: parseAmazonDailyRows,
     parseMonthlyRosterSheetRows: parseMonthlyRosterSheetRows,
 

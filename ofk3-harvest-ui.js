@@ -29,6 +29,11 @@
       try { console.error('OFK3Harvest: collector registration failed', e); } catch (e2) {}
     }
   }
+  if (typeof window !== 'undefined' && window.HarvestCollectorRolling60h && hub.listIds().indexOf('rolling60h') < 0) {
+    try { window.HarvestCollectorRolling60h.register(hub); } catch (e) {
+      try { console.error('OFK3Harvest: rolling60h registration failed', e); } catch (e2) {}
+    }
+  }
 
   var STATUS_COLOR = {
     'idle': '#6b7280',
@@ -133,7 +138,8 @@
       h += '<td style="padding:8px;border-bottom:1px solid #e5e7eb;">' + errorCell(s) + '</td>';
       h += '<td style="padding:8px;border-bottom:1px solid #e5e7eb;white-space:nowrap;">'
         + '<button type="button" data-hv-act="run" data-hv-id="' + esc(s.id) + '"' + (running ? ' disabled' : '')
-        + ' style="padding:5px 12px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;">再確認</button> '
+        + ' style="padding:5px 12px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;">'
+        + (s.id === 'rolling60h' ? '今すぐ回収' : '再確認') + '</button> '
         + '<button type="button" data-hv-act="handoff" data-hv-id="' + esc(s.id) + '"' + (canHandoff ? '' : ' disabled')
         + ' title="確認済みフラグを付けて harvest:handoff イベントを発火します (再POST・再保存はしません)"'
         + ' style="padding:5px 12px;background:#e5e7eb;color:#111;border:none;border-radius:6px;font-size:12px;cursor:pointer;">handoff準備</button>'
