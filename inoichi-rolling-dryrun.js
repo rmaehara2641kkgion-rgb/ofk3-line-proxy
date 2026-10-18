@@ -32,6 +32,7 @@
     });
     var alerts = [];
     var undetermined = [];
+    var dangerBreakdown = [];
     (drivers || []).forEach(function (driver) {
       var tid = transportIdOf(driver);
       (driver.windows || []).forEach(function (window) {
@@ -42,8 +43,19 @@
             startDate: window.startDate,
             endDate: window.endDate,
             knownHours: window.totalHours,
-            reason: window.complete === false ? 'incomplete-window' : 'undefined-hours',
+            reason: window.hasUnconfirmed ? 'unconfirmed-blank' : window.complete === false ? 'incomplete-window' : 'undefined-hours',
           });
+          // 未確定の空白を含んでも、確定済みの時間だけで上限超なら危険情報として別に残す（通知候補にはしない）。
+          if (window.knownOver) {
+            dangerBreakdown.push({
+              transportId: tid,
+              startDate: window.startDate,
+              endDate: window.endDate,
+              knownHours: window.totalHours,
+              knownOverBy: window.knownOverBy,
+              unconfirmedDates: window.unconfirmedDates || [],
+            });
+          }
           return;
         }
         if (window.judgment !== 'exceed' && window.judgment !== 'approach') return;
@@ -86,6 +98,7 @@
       suppressionReason: 'policy-not-confirmed',
       alerts: alerts,
       undetermined: undetermined,
+      dangerBreakdown: dangerBreakdown,
     };
   }
 

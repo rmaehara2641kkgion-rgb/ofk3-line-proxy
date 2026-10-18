@@ -185,9 +185,13 @@
     var rosterHours = 0;
     var hasUndefinedHours = false;
     var undefinedCodes = [];
+    var hasUnconfirmed = false;
 
     blocks.forEach(function (b) {
-      if (b.defined && typeof b.hours === 'number' && !isNaN(b.hours)) {
+      if (b.blank) {
+        // 勤務記号が混在する日付列の空白セル。休(0h)とは断定せず、時間は加算しない。
+        hasUnconfirmed = true;
+      } else if (b.defined && typeof b.hours === 'number' && !isNaN(b.hours)) {
         dailyTotalHours += b.hours;
         if (b.source === 'actual') actualHours += b.hours;
         else if (b.source === 'roster') rosterHours += b.hours;
@@ -205,6 +209,7 @@
       rosterHours: rosterHours,
       hasUndefinedHours: hasUndefinedHours,
       undefinedCodes: undefinedCodes,
+      hasUnconfirmed: hasUnconfirmed,
       noData: false,
     };
   }
@@ -301,6 +306,76 @@
   // 5. 実績＋予定の合成（過去=実績優先／未来=予定優先）
   // ===========================================================================
 
+  function isBlankPlaceholder(blocks) {
+    return !!blocks && blocks.length > 0 && blocks.every(function (b) { return b && b.blank; });
+  }
+
+  function hasValidHours(blocks) {
+    return !!blocks && blocks.length > 0 && blocks.every(function (b) {
+      return b && !b.blank && b.defined !== false && typeof b.hours === 'number' && !isNaN(b.hours);
+    });
+  }
+
+  /**
+   * 空白セルの意味を日付列単位で決める（HARVEST一括実行用。UIの読込経路は変えない）。
+   *   - 「休」は明示的な0h（ここでは触らない）。
+   *   - 勤務記号が1人でも入っている日付列の空白 → 未入力・未確定（blank ブロック。0hにしない）。
+   *   - 全員が空白の日付列 → シフト表の有効期間外候補（その日のレコード自体を作らない）。
+   *     過去デイリー側の記録は別マップなので、ここでは除外されない。
+   *
+   * @param {Object} rosterByTid  { tid: { date: blocks[] } }（空白は blocks=[]）
+   * @param {Object} [options]
+   * @param {Object} [options.extraSymbolDates] { date: true } 突合できない行など、記号が入っている日付の追加証拠
+   * @return {{byTid:Object, outsideDates:Array, mixedDates:Array, unconfirmedPersonDays:number, outsidePersonDays:number}}
+   */
+  function resolveRosterBlanks(rosterByTid, options) {
+    options = options || {};
+    var symbolDates = {};
+    var seenDates = {};
+    Object.keys(options.extraSymbolDates || {}).forEach(function (d) { symbolDates[d] = true; seenDates[d] = true; });
+    Object.keys(rosterByTid || {}).forEach(function (tid) {
+      var byDate = rosterByTid[tid] || {};
+      Object.keys(byDate).forEach(function (date) {
+        seenDates[date] = true;
+        if ((byDate[date] || []).length > 0) symbolDates[date] = true;
+      });
+    });
+    var outsideDates = [];
+    var mixedDates = [];
+    Object.keys(seenDates).sort().forEach(function (date) {
+      if (symbolDates[date]) mixedDates.push(date);
+      else outsideDates.push(date);
+    });
+    var outsideSet = {};
+    outsideDates.forEach(function (d) { outsideSet[d] = true; });
+    var unconfirmedPersonDays = 0;
+    var outsidePersonDays = 0;
+    var out = {};
+    Object.keys(rosterByTid || {}).forEach(function (tid) {
+      var byDate = rosterByTid[tid] || {};
+      var next = {};
+      Object.keys(byDate).forEach(function (date) {
+        var blocks = byDate[date] || [];
+        if (blocks.length > 0) {
+          next[date] = blocks;
+        } else if (outsideSet[date]) {
+          outsidePersonDays++;
+        } else {
+          unconfirmedPersonDays++;
+          next[date] = [{ code: 'BLANK', rawCode: '', source: 'roster', hours: null, defined: false, blank: true }];
+        }
+      });
+      out[tid] = next;
+    });
+    return {
+      byTid: out,
+      outsideDates: outsideDates,
+      mixedDates: mixedDates,
+      unconfirmedPersonDays: unconfirmedPersonDays,
+      outsidePersonDays: outsidePersonDays,
+    };
+  }
+
   /**
    * 過去=実績優先、未来=予定優先の合成タイムラインを構築する。
    * ブロック単位で source を保持しているため、将来的に同一日内で
@@ -327,6 +402,12 @@
       var hasRoster = Object.prototype.hasOwnProperty.call(rosterBlocksByDate || {}, date);
       var isPast = date < referenceDate;
 
+      // シフトが未確定の空白なら、有効な時間を持つデイリー実績を日付に関わらず優先する。
+      if (hasActual && hasRoster && isBlankPlaceholder(rosterBlocksByDate[date]) && hasValidHours(actualBlocksByDate[date])) {
+        merged[date] = actualBlocksByDate[date];
+        return;
+      }
+
       if (isPast) {
         merged[date] = hasActual ? actualBlocksByDate[date] : hasRoster ? rosterBlocksByDate[date] : [];
       } else {
@@ -343,9 +424,10 @@
    *
    * 「最大2か月分」等、複数ソースを読み込む場合の入力タイムライン生成専用の
    * 関数であり、computeRolling60h() 自体は一切変更していない
-   * （parseMonthlyRosterSheetRows() が空白セルも「範囲内だが勤務なし＝0h」の
-   * 明示レコードとして返すようになったため、日付が存在しない＝そのソースの
-   * 読み込み範囲外、と一意に判定できる。これにより buildContinuousDailySeries()
+   * （parseMonthlyRosterSheetRows() が空白セルも「範囲内」の空レコード
+   * （blocks=[]）として返すため、日付が存在しない＝そのソースの
+   * 読み込み範囲外、と一意に判定できる。空白の意味は0hではなく
+   * resolveRosterBlanks() が決める。これにより buildContinuousDailySeries()
    * の既存ロジックだけで「隣接月データが無い日を推測で0h扱いにしない」を実現する）。
    *
    * 重複日付（同一ドライバー・同一日付が複数ソースに存在する場合）は
@@ -434,11 +516,13 @@
         rosterHours = 0;
       var undefinedDates = [];
       var noDataDates = [];
+      var unconfirmedDates = [];
       windowDays.forEach(function (d) {
         total += d.dailyTotalHours;
         actualHours += d.actualHours;
         rosterHours += d.rosterHours;
         if (d.hasUndefinedHours) undefinedDates.push(d.date);
+        if (d.hasUnconfirmed) unconfirmedDates.push(d.date);
         if (d.noData) noDataDates.push(d.date);
       });
       // complete=false（このウィンドウ内に noData 日を含む＝隣接月データ未読込等で
@@ -451,7 +535,11 @@
       var hasUndefinedHours = undefinedDates.length > 0;
       // 7日が揃わない、または未確定記号を含む窓は判定不能。
       // 既知分の合計は totalHours に残すが、超過・接近にはしない。
-      var undetermined = !complete || hasUndefinedHours;
+      var hasUnconfirmed = unconfirmedDates.length > 0;
+      var undetermined = !complete || hasUndefinedHours || hasUnconfirmed;
+      // 未確定の空白を含む窓でも、確定済みの時間だけで上限を超えていれば危険情報として残す
+      // （未確定日は加算しないので、total は確定分のみの下限値）。判定自体は 'undetermined' のまま。
+      var knownOver = hasUnconfirmed && rawOver;
       var over = !undetermined && rawOver;
       var warning = !undetermined && rawWarning;
       var judgment = undetermined ? 'undetermined' : over ? 'exceed' : warning ? 'approach' : 'within';
@@ -472,6 +560,10 @@
         undefinedDates: undefinedDates,
         noDataDates: noDataDates,
         hasUndefinedHours: hasUndefinedHours,
+        hasUnconfirmed: hasUnconfirmed,
+        unconfirmedDates: unconfirmedDates,
+        knownOver: knownOver,
+        knownOverBy: knownOver ? total - limitHours : 0,
       });
     }
     return results;
@@ -718,8 +810,8 @@
     });
 
     // 5) データ行を走査してレコード化
-    // 空白セル（≠未読み込み日付）を「日付は読み込み範囲内だが勤務なし＝0h」の
-    // 明示レコードとして残す（rawCode:''）。これにより、後段の
+    // 空白セル（≠未読み込み日付）を「日付は読み込み範囲内」の空レコード
+    // として残す（rawCode:''。0hとは断定しない。意味づけは resolveRosterBlanks）。これにより、後段の
     // buildContinuousDailySeries()で「レコードが無い日付」＝「このシートの
     // 読み込み範囲外（＝月またぎ時に隣接月データが無い日）」と一意に区別できる
     // （月端の日付を推測で0h扱いにしないための土台。§複数月マージで利用）。
@@ -843,6 +935,7 @@
     // 系列構築・合成
     buildContinuousDailySeries: buildContinuousDailySeries,
     mergeActualAndRoster: mergeActualAndRoster,
+    resolveRosterBlanks: resolveRosterBlanks,
     mergeRosterBlocksByDateAcrossSources: mergeRosterBlocksByDateAcrossSources,
 
     // Rolling計算コア

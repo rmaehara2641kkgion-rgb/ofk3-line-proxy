@@ -45,8 +45,19 @@
       partialCount: 0,
       partialExceedCount: 0,
       partialApproachCount: 0,
+      partialKnownOverCount: 0,
       undeterminedCount: 0,
       unmatchedCount: 0,
+      blankUnconfirmedPersonDays: 0,
+      outsidePeriodDateCount: 0,
+      outsidePeriodKeptByDailyDays: 0,
+      knownOverWindows: 0,
+      blankFilledWindows: 0,
+      blankFilledPersons: 0,
+      blankFilledToAlertWindows: 0,
+      normalToExceedWindows: 0,
+      normalToExceedBySchedule: 0,
+      normalToExceedByDaily: 0,
       resolvedBySchedule: 0,
       resolvedByDaily: 0,
       resolvedByBoth: 0,
@@ -62,7 +73,7 @@
       historySaved: false,
       historyDuplicate: false,
       confirmedActual: false,
-      logicVersion: 'rolling60h-predict-2',
+      logicVersion: 'rolling60h-predict-3',
       sent: false,
       channel: 'dry-run',
     };
@@ -97,6 +108,7 @@
   function rosterBlocks(wb, rolling) {
     var sources = [];
     var unmatched = {};
+    var extraSymbolDates = {};
     (wb.SheetNames || []).forEach(function (sheetName) {
       if (ROSTER_SKIP[sheetName] || sheetName === 'Report5_Daily_Data') return;
       var rows = requireRows(wb, sheetName);
@@ -106,6 +118,10 @@
         var meta = grouped[key].meta || {};
         if (!meta.transportId || key.indexOf('NAME:') === 0) {
           unmatched[key] = true;
+          // 突合できない行でも、勤務記号が入っている日付列の証拠にはする。
+          Object.keys(grouped[key].blocksByDate || {}).forEach(function (date) {
+            if ((grouped[key].blocksByDate[date] || []).length > 0) extraSymbolDates[date] = true;
+          });
           return;
         }
         sources.push({ transportId: meta.transportId, label: sheetName, blocksByDate: grouped[key].blocksByDate });
@@ -133,7 +149,13 @@
       });
       out[tid] = blocks;
     });
-    return { byTid: out, unmatchedCount: Object.keys(unmatched).length };
+    var resolved = rolling.resolveRosterBlanks(out, { extraSymbolDates: extraSymbolDates });
+    return {
+      byTid: resolved.byTid,
+      unmatchedCount: Object.keys(unmatched).length,
+      outsideDates: resolved.outsideDates,
+      unconfirmedPersonDays: resolved.unconfirmedPersonDays,
+    };
   }
 
   function requireRows(wb, sheetName) {
@@ -168,15 +190,19 @@
     var partial = 0;
     var partialExceed = 0;
     var partialApproach = 0;
+    var partialKnownOver = 0;
     var undetermined = 0;
     (drivers || []).forEach(function (driver) {
       var windows = driver.windows || [];
       var hasExceed = windows.some(function (window) { return window.judgment === 'exceed'; });
       var hasApproach = windows.some(function (window) { return window.judgment === 'approach'; });
       var hasWithin = windows.some(function (window) { return window.judgment === 'within'; });
+      var hasKnownOver = windows.some(function (window) { return window.knownOver; });
       var hasGap = windows.length === 0 || driver.judgment === 'undetermined' || windows.some(windowGap);
-      if (hasGap && (hasExceed || hasApproach || hasWithin)) {
+      // 確定済みの時間だけで60時間超の窓がある人は、完全判定不能にせず部分欠損として危険内訳を残す。
+      if (hasGap && (hasExceed || hasApproach || hasWithin || hasKnownOver)) {
         partial++;
+        if (hasKnownOver) partialKnownOver++;
         if (hasExceed) partialExceed++;
         else if (hasApproach) partialApproach++;
         return;
@@ -189,8 +215,12 @@
       else if (hasApproach) approach++;
       else clear++;
     });
+    if (clear + exceed + approach + partial + undetermined !== (drivers || []).length) {
+      throw new Error('classification is not exclusive');
+    }
     return {
       driverCount: (drivers || []).length,
+      partialKnownOverCount: partialKnownOver,
       clearCount: clear,
       exceedCount: exceed,
       approachCount: approach,
@@ -219,6 +249,9 @@
     }
     if (day.hasUndefinedHours) {
       return { date: day.date, hours: null, origin: 'undefined', future: false };
+    }
+    if (day.hasUnconfirmed) {
+      return { date: day.date, hours: null, origin: 'roster-unconfirmed', future: day.date >= referenceDate };
     }
     var blocks = day.blocks || [];
     var archived = blocks.some(function (block) { return block && block.archived; });
@@ -349,6 +382,10 @@
     var windowApproach = 0;
     var windowExceed = 0;
     var windowUndetermined = 0;
+    var knownOverWindows = 0;
+    var outsideSet = {};
+    (roster.outsideDates || []).forEach(function (date) { outsideSet[date] = true; });
+    var outsideKeptByDaily = 0;
     Object.keys(actualByTid).forEach(function (tid) {
       Object.keys(actualByTid[tid] || {}).forEach(function (date) {
         var hours = blockHours(actualByTid[tid][date]);
@@ -373,6 +410,9 @@
           reusedArchiveDays++;
         });
       }
+      Object.keys(outsideSet).forEach(function (date) {
+        if (blockHours(actual[date]) != null) outsideKeptByDaily++;
+      });
       var span = dateSpan([actual, planned]);
       if (!span) return;
       var blended = rolling.mergeActualAndRoster(actual, planned, referenceDate);
@@ -407,7 +447,7 @@
       });
       Object.keys(planned).forEach(function (date) {
         (planned[date] || []).forEach(function (block) {
-          if (!block || block.defined !== false) return;
+          if (!block || block.defined !== false || block.blank) return;
           if (block.rawCode === 'duplicate') {
             duplicateHourDays++;
             personDuplicate = true;
@@ -424,6 +464,7 @@
         else if (window.judgment === 'approach') windowApproach++;
         else if (window.judgment === 'exceed') windowExceed++;
         else windowUndetermined++;
+        if (window.knownOver) knownOverWindows++;
         if (window.noDataDates && window.noDataDates.length) sawNoData = true;
         if (window.undefinedDates && window.undefinedDates.length) sawUndefined = true;
         var windowDays = [];
@@ -444,6 +485,9 @@
           end: window.endDate,
           predictedTotal: window.totalHours,
           level: window.judgment,
+          knownOver: !!window.knownOver,
+          knownOverBy: window.knownOverBy || 0,
+          unconfirmedDates: window.unconfirmedDates || [],
           future: hasFuture,
           days: windowDays,
         });
@@ -483,7 +527,18 @@
       partialCount: counts.partialCount,
       partialExceedCount: counts.partialExceedCount,
       partialApproachCount: counts.partialApproachCount,
+      partialKnownOverCount: counts.partialKnownOverCount,
       unmatchedCount: roster.unmatchedCount || 0,
+      blankUnconfirmedPersonDays: roster.unconfirmedPersonDays || 0,
+      outsidePeriodDateCount: (roster.outsideDates || []).length,
+      outsidePeriodKeptByDailyDays: outsideKeptByDaily,
+      knownOverWindows: knownOverWindows,
+      blankFilledWindows: 0,
+      blankFilledPersons: 0,
+      blankFilledToAlertWindows: 0,
+      normalToExceedWindows: 0,
+      normalToExceedBySchedule: 0,
+      normalToExceedByDaily: 0,
       resolvedBySchedule: 0,
       resolvedByDaily: 0,
       resolvedByBoth: 0,
@@ -499,7 +554,7 @@
       historySaved: false,
       historyDuplicate: false,
       confirmedActual: false,
-      logicVersion: 'rolling60h-predict-2',
+      logicVersion: 'rolling60h-predict-3',
       sent: false,
       channel: 'dry-run',
     };

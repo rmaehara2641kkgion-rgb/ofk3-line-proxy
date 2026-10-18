@@ -11,7 +11,7 @@
   'use strict';
 
   var crypto = require('crypto');
-  var RULE_VERSION = 'rolling60h-predict-2';
+  var RULE_VERSION = 'rolling60h-predict-3';
 
   function sha256(text) {
     return crypto.createHash('sha256').update(text).digest('hex');
@@ -37,6 +37,11 @@
       'future=roster-plan',
       'outside-daily=archived-estimate-or-unverified',
       'missing-hours=not-zero',
+      'rest-symbol=explicit-zero',
+      'blank-in-mixed-column=unconfirmed',
+      'blank-in-all-blank-column=outside-period-candidate',
+      'unconfirmed-window=undetermined-keep-known-over',
+      'daily-valid-over-shift-blank=daily',
     ];
     keys.forEach(function (key) { lines.push(key + '=' + table[key]); });
     return sha256(lines.join('\n'));
@@ -55,6 +60,12 @@
       stillAlert: 0,
       verifyUndetermined: 0,
       resolvedWithFuture: 0,
+      blankFilledWindows: 0,
+      blankFilledPersons: 0,
+      blankFilledToAlertWindows: 0,
+      normalToExceedWindows: 0,
+      normalToExceedBySchedule: 0,
+      normalToExceedByDaily: 0,
     };
   }
 
@@ -74,7 +85,7 @@
   function blocked(prediction) {
     if (!prediction || prediction.level === 'undetermined' || !prediction.days || prediction.days.length !== 7) return true;
     return prediction.days.some(function (day) {
-      return !day || day.origin === 'missing' || day.origin === 'undefined';
+      return !day || day.origin === 'missing' || day.origin === 'undefined' || day.origin === 'roster-unconfirmed';
     });
   }
 
@@ -126,6 +137,57 @@
       else if (scheduleChanged) counts.resolvedBySchedule++;
       else counts.resolvedCauseUnknown++;
     });
+    return counts;
+  }
+
+  /**
+   * 前回と今回で同じ7日窓を比べ、空白(未確定)→勤務記号への変化を予定変更として数える。
+   * 前回が未確定・正常でも追跡し、正常から超過・接近へ変わった窓は原因別に分ける。
+   * 同じ計算バージョン同士だけを渡すこと（旧版は空白を0hとして保存しており区別できない）。
+   */
+  function trackScheduleChanges(priorList, currentList) {
+    var counts = {
+      blankFilledWindows: 0,
+      blankFilledPersons: 0,
+      blankFilledToAlertWindows: 0,
+      normalToExceedWindows: 0,
+      normalToExceedBySchedule: 0,
+      normalToExceedByDaily: 0,
+    };
+    var priorByKey = {};
+    (priorList || []).forEach(function (item) {
+      if (!item) return;
+      priorByKey[item.subjectId + '\t' + item.start + '\t' + item.end] = item;
+    });
+    var persons = {};
+    (currentList || []).forEach(function (current) {
+      if (!current || !current.days) return;
+      var prior = priorByKey[current.subjectId + '\t' + current.start + '\t' + current.end];
+      if (!prior || !prior.days) return;
+      var storedDays = {};
+      prior.days.forEach(function (day) { if (day) storedDays[day.date] = day; });
+      var blankFilled = false;
+      var scheduleChanged = false;
+      var dailyChanged = false;
+      current.days.forEach(function (day) {
+        var stored = day && storedDays[day.date];
+        if (!stored) return;
+        if (stored.origin === 'roster-unconfirmed' && day.origin === 'roster-plan') blankFilled = true;
+        if (stored.origin === 'roster-plan' && day.origin === 'roster-plan' && differ(stored.hours, day.hours)) scheduleChanged = true;
+        if (isDaily(day.origin) && (stored.origin === 'roster-plan' || stored.origin === 'roster-unconfirmed' || (isDaily(stored.origin) && differ(stored.hours, day.hours)))) dailyChanged = true;
+      });
+      if (blankFilled) {
+        counts.blankFilledWindows++;
+        persons[current.subjectId] = true;
+        if (isAlert(current.level)) counts.blankFilledToAlertWindows++;
+      }
+      if (prior.level === 'within' && current.level === 'exceed') {
+        counts.normalToExceedWindows++;
+        if (blankFilled || scheduleChanged) counts.normalToExceedBySchedule++;
+        if (dailyChanged) counts.normalToExceedByDaily++;
+      }
+    });
+    counts.blankFilledPersons = Object.keys(persons).length;
     return counts;
   }
 
@@ -231,8 +293,13 @@
       base.historyDuplicate = true;
       return base;
     }
-    var prior = store.runs.length ? (store.runs[store.runs.length - 1].predictions || []) : [];
+    // 計算バージョンが違う旧履歴は削除せず残すが、比較には使わない（旧版は空白を0hで保存している）。
+    var version = options.logicVersion || RULE_VERSION;
+    var sameVersion = (store.runs || []).filter(function (run) { return run && run.logicVersion === version; });
+    var prior = sameVersion.length ? (sameVersion[sameVersion.length - 1].predictions || []) : [];
     var verdict = assess(prior, options.predictions || []);
+    var tracked = trackScheduleChanges(prior, options.predictions || []);
+    Object.keys(tracked).forEach(function (key) { verdict[key] = tracked[key]; });
     var next = {
       version: 1,
       runs: (store.runs || []).concat([{
@@ -276,6 +343,7 @@
     logicIdentity: logicIdentity,
     fingerprintOf: fingerprintOf,
     assess: assess,
+    trackScheduleChanges: trackScheduleChanges,
     load: load,
     saveAtomic: saveAtomic,
     commit: commit,
