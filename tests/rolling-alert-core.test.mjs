@@ -5,36 +5,12 @@ const require = createRequire(import.meta.url);
 const RC = require('../rolling60h-core.js');
 const AC = require('../rolling-alert-core.js');
 
-const TARGET = '2026-10-21'; // 過去6日 = 10-15..10-20
-const PAST = ['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'];
+const { TARGET, PAST, NOW, makeDriver, fleet, SCENARIOS } = await import('./fixtures/rolling-alert-fixtures.mjs');
 
 let passed = 0;
 function check(name, fn) {
   fn();
   passed++;
-}
-
-/**
- * 架空ドライバーの日次系列を、実アプリと同じ経路（実績＋予定の合成 → 連続系列）で作る。
- * pastActual: 過去6日の実績時間（数値配列。null は実績なし）
- * pastRoster: 実績が無い日の予定記号
- * today: 当日の予定記号（undefined = データなし、'' = 空白セル）
- */
-function makeDriver(key, { pastActual = [], pastRoster = {}, today }) {
-  const actualRecords = [];
-  PAST.forEach((date, i) => {
-    if (pastActual[i] !== undefined && pastActual[i] !== null) {
-      actualRecords.push({ transportId: key, date, hours: pastActual[i], hoursOk: true });
-    }
-  });
-  const actual = RC.groupActualRecordsByTransportId(actualRecords)[key] || {};
-  const roster = {};
-  Object.keys(pastRoster).forEach((d) => { roster[d] = RC.parseShiftCellToBlocks(pastRoster[d], 'roster').blocks; });
-  if (today !== undefined) roster[TARGET] = RC.parseShiftCellToBlocks(today, 'roster').blocks;
-  const dates = Object.keys(roster).concat(Object.keys(actual)).concat([PAST[0], TARGET]).sort();
-  const blended = RC.mergeActualAndRoster(actual, roster, TARGET);
-  const series = RC.buildContinuousDailySeries(blended, dates[0], dates[dates.length - 1]);
-  return { key, meta: { name: 'テスト' + key, transportId: key, company: 'DSP' }, series };
 }
 
 const ev = (d) => AC.evaluateDriver(d, { targetDate: TARGET });
@@ -142,21 +118,18 @@ check('未定義記号(C2)の日は未取得として扱う', () => {
   assert.equal(r.days[5].missing, 'undefined-code');
 });
 
+check('照合シナリオ表（HARVEST照合用）が現行ルールの期待区分と一致', () => {
+  SCENARIOS.forEach((sc) => {
+    const r = ev(makeDriver('S', { pastActual: sc.past, today: sc.today }));
+    assert.equal(r.alertClass, sc.expect, sc.id);
+  });
+});
+
 // ---- スナップショット ----
 const ctx = { targetDate: TARGET, dataImportedAt: '2026-10-21T00:00:00.000Z', computedAt: '2026-10-21T00:00:01.000Z' };
-const fleet = () => [
-  makeDriver('A1', { pastActual: [11, 11, 11, 11, 11, 11], today: '休' }),
-  makeDriver('A2', { pastActual: [9, 9, 9, 9, 9, 9], today: '○' }),
-  makeDriver('B1', { pastActual: [8.5, 8.5, 8.5, 8.5, 8.5, 8.5], today: '❽' }),
-  makeDriver('E1', { pastActual: [8.5, 8.5, 8.5, 8.5, 8.5, 8.5], today: '' }),
-  makeDriver('D1', { pastActual: [8.5, 8.5, 8.5, 8.5, 8.5, 8.5], today: '休' }),
-  makeDriver('F1', { pastActual: [8, 8, 8, 8, 8, null], today: '○' }),
-  makeDriver('N1', { pastActual: [5, 5, 5, 5, 5, 5], today: '❽' }),
-];
-
 check('初回: 区分別の集計と並び順（確定 → 予測 → 接近 → 未確認）', () => {
   const snap = AC.buildSnapshot(fleet(), ctx);
-  assert.equal(AC.validateSnapshot(snap).ok, true);
+  assert.equal(AC.validateSnapshot(snap, { now: NOW }).ok, true);
   assert.deepEqual(snap.alerts.map((a) => a.alertClass), ['exceed_confirmed', 'exceed_forecast', 'approach', 'schedule_unconfirmed']);
   assert.equal(snap.counts.alertCount, 4);
   assert.equal(snap.counts.undetermined, 1);
@@ -190,7 +163,7 @@ check('対象者0名: alerts が空', () => {
   const snap = AC.buildSnapshot([makeDriver('N1', { pastActual: [5, 5, 5, 5, 5, 5], today: '❽' })], ctx);
   assert.equal(snap.alerts.length, 0);
   assert.equal(snap.counts.alertCount, 0);
-  assert.equal(AC.validateSnapshot(snap).ok, true);
+  assert.equal(AC.validateSnapshot(snap, { now: NOW }).ok, true);
 });
 
 check('古い結果の判定: 対象日が基準日と違うスナップショットは stale', () => {
@@ -202,10 +175,34 @@ check('古い結果の判定: 対象日が基準日と違うスナップショ�
 
 check('検証: 壊れたスナップショットを拒否', () => {
   const snap = AC.buildSnapshot(fleet(), ctx);
-  assert.equal(AC.validateSnapshot({ ...snap, schemaVersion: 99 }).ok, false);
-  assert.equal(AC.validateSnapshot({ ...snap, targetDate: '2026/10/21' }).ok, false);
-  assert.equal(AC.validateSnapshot({ ...snap, alerts: [snap.alerts[0], snap.alerts[0]] }).reason, 'duplicate-driver');
+  assert.equal(AC.validateSnapshot({ ...snap, schemaVersion: 99 }, { now: NOW }).ok, false);
+  assert.equal(AC.validateSnapshot({ ...snap, targetDate: '2026/10/21' }, { now: NOW }).ok, false);
+  assert.equal(AC.validateSnapshot({ ...snap, alerts: [snap.alerts[0], snap.alerts[0]], counts: { ...snap.counts, alertCount: 2 } }, { now: NOW }).reason, 'duplicate-driver');
   assert.equal(AC.validateSnapshot(null).ok, false);
+});
+
+check('検証: 日時・形式・サイズ・数値の不正を拒否し、未知項目は捨てる', () => {
+  const good = AC.buildSnapshot(fleet(), ctx);
+  const bad = (patch, reason) => assert.equal(AC.validateSnapshot({ ...good, ...patch }, { now: NOW }).reason, reason, JSON.stringify(Object.keys(patch)));
+  bad({ computedAt: '2027-01-01T00:00:00Z' }, 'computed-at'); // 未来
+  bad({ computedAt: 'yesterday' }, 'computed-at');
+  bad({ dataImportedAt: '1999-01-01T00:00:00Z' }, 'data-imported-at');
+  bad({ targetDate: '2026-02-30' }, 'target-date');
+  bad({ targetDate: '2030-01-01' }, 'target-date-range');
+  bad({ inputFingerprint: '<script>' }, 'fingerprint');
+  bad({ ruleVersion: 'other' }, 'rule-version');
+  bad({ alerts: new Array(AC.LIMITS.maxAlerts + 1).fill(good.alerts[0]) }, 'alerts');
+  bad({ counts: { ...good.counts, alertCount: 99 } }, 'counts-mismatch');
+  const badNum = JSON.parse(JSON.stringify(good)); badNum.alerts[0].past6Hours = 1e9;
+  assert.equal(AC.validateSnapshot(badNum, { now: NOW }).ok, false);
+  const badCls = JSON.parse(JSON.stringify(good)); badCls.alerts[0].alertClass = 'admin';
+  assert.equal(AC.validateSnapshot(badCls, { now: NOW }).ok, false);
+  const extra = JSON.parse(JSON.stringify(good)); extra.evil = '<img onerror=x>'; extra.alerts[0].evil = 1; extra.alerts[0].name = 'x'.repeat(5000);
+  const r = AC.sanitizeSnapshot(extra, { now: NOW });
+  assert.equal(r.ok, true);
+  assert.equal(r.snapshot.evil, undefined);
+  assert.equal(r.snapshot.alerts[0].evil, undefined);
+  assert.equal(r.snapshot.alerts[0].name.length, AC.LIMITS.maxStr);
 });
 
 console.log('rolling-alert-core.test.mjs: ALL TESTS PASSED (' + passed + ' checks)');

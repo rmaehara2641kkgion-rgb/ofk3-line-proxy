@@ -231,7 +231,7 @@
       byKey[d.key] = evaluateDriver(d, { targetDate: ctx.targetDate, limitHours: limit, approachFromHours: approachFrom });
     });
     var results = Object.keys(byKey).map(function (k) { return byKey[k]; });
-    var counts = { driverCount: results.length };
+    var counts = { driverCount: results.length, skippedShortSeries: ctx.skippedShortSeries || 0 };
     Object.keys(CLASS_LABEL).forEach(function (c) { counts[c] = 0; });
     results.forEach(function (r) { counts[r.alertClass]++; });
     var alerts = results
@@ -260,24 +260,141 @@
     };
   }
 
-  /** 保存・復元されたスナップショットの形を検査する（サーバー受信時・復元時に使用） */
-  function validateSnapshot(s) {
-    if (!s || typeof s !== 'object') return { ok: false, reason: 'not-object' };
-    if (s.schemaVersion !== SCHEMA_VERSION) return { ok: false, reason: 'schema-version' };
-    if (typeof s.targetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s.targetDate)) return { ok: false, reason: 'target-date' };
-    if (typeof s.computedAt !== 'string' || isNaN(Date.parse(s.computedAt))) return { ok: false, reason: 'computed-at' };
-    if (s.dataImportedAt != null && (typeof s.dataImportedAt !== 'string' || isNaN(Date.parse(s.dataImportedAt)))) return { ok: false, reason: 'data-imported-at' };
-    if (typeof s.inputFingerprint !== 'string' || !s.inputFingerprint) return { ok: false, reason: 'fingerprint' };
-    if (!Array.isArray(s.alerts) || s.alerts.length > 5000) return { ok: false, reason: 'alerts' };
-    if (!s.counts || typeof s.counts !== 'object') return { ok: false, reason: 'counts' };
-    var seen = {};
-    for (var i = 0; i < s.alerts.length; i++) {
-      var a = s.alerts[i];
-      if (!a || ALERT_CLASSES.indexOf(a.alertClass) < 0 || typeof a.driverKey !== 'string') return { ok: false, reason: 'alert-item' };
-      if (seen[a.driverKey]) return { ok: false, reason: 'duplicate-driver' };
-      seen[a.driverKey] = true;
+  // ---- 保存データの検証（サーバー受信時・復元時）----
+  var LIMITS = {
+    maxAlerts: 2000,
+    maxSources: 10,
+    maxStr: 200,
+    maxBasis: 600,
+    maxNum: 1000,
+    futureSkewMs: 10 * 60 * 1000, // 端末時計のずれ許容（未来方向）
+    targetDateWindowDays: 400,
+  };
+  var TODAY_STATUS = ['work', 'off', 'unknown'];
+  var DAY_SOURCE = [null, 'actual', 'roster'];
+  var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function isDate(v) {
+    if (typeof v !== 'string' || !DATE_RE.test(v)) return false;
+    var t = Date.parse(v + 'T00:00:00Z');
+    return !isNaN(t) && new Date(t).toISOString().slice(0, 10) === v;
+  }
+  function str(v, max) {
+    return typeof v === 'string' ? v.slice(0, max || LIMITS.maxStr) : '';
+  }
+  function numOrNull(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'number' || !isFinite(v) || Math.abs(v) > LIMITS.maxNum) throw new Error('number');
+    return v;
+  }
+  function iso(v, field, now, allowNull) {
+    if (v === null || v === undefined) {
+      if (allowNull) return null;
+      throw new Error(field);
     }
-    return { ok: true };
+    var t = typeof v === 'string' ? Date.parse(v) : NaN;
+    if (isNaN(t) || t > now + LIMITS.futureSkewMs || t < Date.UTC(2020, 0, 1)) throw new Error(field);
+    return new Date(t).toISOString();
+  }
+
+  function sanitizeAlert(a) {
+    if (!a || typeof a !== 'object') throw new Error('alert-item');
+    if (ALERT_CLASSES.indexOf(a.alertClass) < 0) throw new Error('alert-class');
+    if (typeof a.driverKey !== 'string' || !a.driverKey || a.driverKey.length > LIMITS.maxStr) throw new Error('driver-key');
+    if (!isDate(a.targetDate)) throw new Error('alert-target-date');
+    if (TODAY_STATUS.indexOf(a.todayStatus) < 0) throw new Error('today-status');
+    if (typeof a.remainingExact !== 'boolean') throw new Error('remaining-exact');
+    if (!Array.isArray(a.days) || a.days.length > 7) throw new Error('days');
+    if (!Array.isArray(a.past6MissingDates) || a.past6MissingDates.length > 6 || !a.past6MissingDates.every(isDate)) throw new Error('missing-dates');
+    return {
+      driverKey: a.driverKey,
+      name: str(a.name),
+      transportId: str(a.transportId, 64),
+      company: str(a.company),
+      targetDate: a.targetDate,
+      alertClass: a.alertClass,
+      label: CLASS_LABEL[a.alertClass],
+      past6Hours: numOrNull(a.past6Hours),
+      past6KnownHours: numOrNull(a.past6KnownHours),
+      past6ActualHours: numOrNull(a.past6ActualHours),
+      past6PlanHours: numOrNull(a.past6PlanHours),
+      past6MissingDates: a.past6MissingDates.slice(),
+      todayStatus: a.todayStatus,
+      todayHours: numOrNull(a.todayHours),
+      todayMissingReason: a.todayMissingReason == null ? null : str(a.todayMissingReason, 40),
+      rollingTotalHours: numOrNull(a.rollingTotalHours),
+      remainingHours: numOrNull(a.remainingHours),
+      remainingExact: a.remainingExact,
+      basis: str(a.basis, LIMITS.maxBasis),
+      days: a.days.map(function (d) {
+        if (!d || !isDate(d.date) || DAY_SOURCE.indexOf(d.source === undefined ? null : d.source) < 0) throw new Error('day');
+        return { date: d.date, hours: numOrNull(d.hours), source: d.source === undefined ? null : d.source, missing: d.missing == null ? null : str(d.missing, 40) };
+      }),
+    };
+  }
+
+  /**
+   * 外部から届いた/復元したスナップショットを検査し、既知の項目だけで作り直す。
+   * 未知の項目は捨てる。形式・サイズ・日時が不正なら ok:false（呼び出し側は既存結果を触らない）。
+   * @return {{ok:true, snapshot:Object}|{ok:false, reason:string}}
+   */
+  function sanitizeSnapshot(s, options) {
+    var now = options && options.now != null ? options.now : Date.now();
+    try {
+      if (!s || typeof s !== 'object' || Array.isArray(s)) return { ok: false, reason: 'not-object' };
+      if (s.schemaVersion !== SCHEMA_VERSION) return { ok: false, reason: 'schema-version' };
+      if (s.ruleVersion !== RULE_VERSION) return { ok: false, reason: 'rule-version' };
+      if (!isDate(s.targetDate)) return { ok: false, reason: 'target-date' };
+      var dayDiff = Math.abs(Date.parse(s.targetDate + 'T00:00:00Z') - now) / 86400000;
+      if (dayDiff > LIMITS.targetDateWindowDays) return { ok: false, reason: 'target-date-range' };
+      if (typeof s.inputFingerprint !== 'string' || !/^[0-9a-f]{1,32}$/.test(s.inputFingerprint)) return { ok: false, reason: 'fingerprint' };
+      if (!Array.isArray(s.alerts) || s.alerts.length > LIMITS.maxAlerts) return { ok: false, reason: 'alerts' };
+      if (!s.counts || typeof s.counts !== 'object' || Array.isArray(s.counts)) return { ok: false, reason: 'counts' };
+      var computedAt, importedAt;
+      try {
+        computedAt = iso(s.computedAt, 'computed-at', now, false);
+        importedAt = iso(s.dataImportedAt, 'data-imported-at', now, true);
+      } catch (e) { return { ok: false, reason: e.message }; }
+      var counts = {};
+      Object.keys(CLASS_LABEL).concat(['driverCount', 'alertCount', 'skippedShortSeries']).forEach(function (k) {
+        var v = s.counts[k];
+        if (v === undefined && k === 'skippedShortSeries') v = 0;
+        if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > 1e6 || Math.floor(v) !== v) throw new Error('counts');
+        counts[k] = v;
+      });
+      var seen = {};
+      var alerts = s.alerts.map(function (a) {
+        var clean = sanitizeAlert(a);
+        if (seen[clean.driverKey]) throw new Error('duplicate-driver');
+        seen[clean.driverKey] = true;
+        return clean;
+      });
+      if (counts.alertCount !== alerts.length) return { ok: false, reason: 'counts-mismatch' };
+      var sources = Array.isArray(s.sources) ? s.sources.slice(0, LIMITS.maxSources).map(function (x) { return str(x, 120); }) : [];
+      return {
+        ok: true,
+        snapshot: {
+          schemaVersion: SCHEMA_VERSION,
+          ruleVersion: RULE_VERSION,
+          targetDate: s.targetDate,
+          limitHours: numOrNull(s.limitHours),
+          approachFromHours: numOrNull(s.approachFromHours),
+          dataImportedAt: importedAt,
+          computedAt: computedAt,
+          sources: sources,
+          inputFingerprint: s.inputFingerprint,
+          counts: counts,
+          alerts: alerts,
+        },
+      };
+    } catch (e) {
+      return { ok: false, reason: e && e.message ? e.message : 'invalid' };
+    }
+  }
+
+  function validateSnapshot(s, options) {
+    var r = sanitizeSnapshot(s, options);
+    return r.ok ? { ok: true } : r;
   }
 
   /** 表示中の対象日（基準日）と異なるスナップショットは古い結果として扱う */
@@ -295,6 +412,8 @@
     evaluateDriver: evaluateDriver,
     buildSnapshot: buildSnapshot,
     validateSnapshot: validateSnapshot,
+    sanitizeSnapshot: sanitizeSnapshot,
+    LIMITS: LIMITS,
     isStale: isStale,
     hashString: hashString,
   };

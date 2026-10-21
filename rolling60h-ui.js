@@ -390,6 +390,7 @@
 
     // 4) ドライバー毎にタイムライン構築 → Rolling判定
     var driverResults = [];
+    var skippedShort = 0;
     Object.keys(driverMeta).forEach(function (key) {
       var meta = driverMeta[key];
       var tid = meta.transportId;
@@ -406,7 +407,7 @@
       var blended = RollingCore.mergeActualAndRoster(actual, roster, STATE.referenceDate);
       var blendedSeries = RollingCore.buildContinuousDailySeries(blended, minDate, maxDate);
 
-      if (blendedSeries.length < 7) return; // 7日未満は判定対象外
+      if (blendedSeries.length < 7) { skippedShort++; return; } // 7日未満は判定対象外（件数は一覧に表示）
 
       var windows = RollingCore.computeRollingRisk(rosterOnlySeries, blendedSeries, {
         limitHours: STATE.limitHours,
@@ -428,6 +429,7 @@
     });
 
     STATE.drivers = driverResults;
+    STATE.skippedShortSeries = skippedShort;
     STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates };
     STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
       ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
@@ -449,8 +451,14 @@
     phase: 'no-data', // no-data | computing | ready | error
     snapshot: null,
     source: null, // 'computed'(今回の投入から集計) | 'restored'(保存済みを復元)
-    saveState: null, // saving | saved | unchanged | local-only | stale | error
+    saveState: null, // saving | saved | unchanged | local-only | no-token | auth-failed | not-configured | conflict | error
+    localSaveState: null, // ok | error（ブラウザ保存）
+    serverRevision: null, // 最後に確認したサーバー側リビジョン（保存時の競合判定に使う）
+    serverSavedAt: null,
+    conflict: null, // 他端末の結果 {revision, savedAt, snapshot}
     error: '',
+    inflight: false, // 保存リクエスト実行中
+    pending: null, // 実行中に来た次の保存（最新1件）
     seq: 0, // 新しい集計が始まったら古い非同期結果を捨てるための世代番号
   };
 
@@ -463,21 +471,45 @@
     return (input && input.value) || STATE.referenceDate;
   }
 
+  // 同期キーは既存の点呼同期と同じ端末localStorage（tenkoSyncToken）を流用する。ソースには埋め込まない。
+  function syncToken() {
+    try { return global.localStorage.getItem('tenkoSyncToken') || ''; } catch (e) { return ''; }
+  }
+
+  function apiHeaders() {
+    var h = { 'Content-Type': 'application/json' };
+    var t = syncToken();
+    if (t) h['X-Tenko-Sync-Token'] = t;
+    return h;
+  }
+
   function cacheSnapshot(snap) {
-    try { global.localStorage.setItem(ALERT_CACHE_KEY, JSON.stringify(snap)); } catch (e) {}
+    try {
+      global.localStorage.setItem(ALERT_CACHE_KEY, JSON.stringify({ snapshot: snap, revision: ALERT.serverRevision }));
+      ALERT.localSaveState = 'ok';
+    } catch (e) {
+      ALERT.localSaveState = 'error'; // 容量超過・プライベートモード等。画面に明示する
+    }
   }
 
   function readCachedSnapshot() {
     try {
-      var snap = JSON.parse(global.localStorage.getItem(ALERT_CACHE_KEY) || 'null');
-      return snap && alertCore().validateSnapshot(snap).ok ? snap : null;
+      var raw = JSON.parse(global.localStorage.getItem(ALERT_CACHE_KEY) || 'null');
+      var r = raw && raw.snapshot ? alertCore().sanitizeSnapshot(raw.snapshot) : { ok: false };
+      return r.ok ? { snapshot: r.snapshot, revision: typeof raw.revision === 'string' ? raw.revision : null } : null;
     } catch (e) {
       return null;
     }
   }
 
-  function snapshotStamp(snap) {
-    return Date.parse(snap.dataImportedAt || snap.computedAt) || 0;
+  function adopt(snapshot, revision, savedAt, source) {
+    ALERT.snapshot = snapshot;
+    ALERT.source = source;
+    ALERT.phase = 'ready';
+    ALERT.serverRevision = revision || null;
+    ALERT.serverSavedAt = savedAt || null;
+    ALERT.conflict = null;
+    cacheSnapshot(snapshot);
   }
 
   function runAlertPipeline() {
@@ -491,6 +523,7 @@
     }
     ALERT.phase = 'computing';
     ALERT.error = '';
+    ALERT.conflict = null;
     renderAlerts();
     // 「集計中」を描画してから判定する。途中で新しい投入があれば seq が進み、この結果は捨てる。
     setTimeout(function () {
@@ -502,6 +535,7 @@
           limitHours: STATE.limitHours,
           dataImportedAt: STATE.dataImportedAt,
           computedAt: new Date().toISOString(),
+          skippedShortSeries: STATE.skippedShortSeries || 0,
           sources: STATE.rosterSources.map(function (r) { return r.label; }).concat(STATE.amazonRows ? ['Amazon Daily Working Hour'] : []),
         });
       } catch (ex) {
@@ -516,61 +550,144 @@
       ALERT.saveState = 'saving';
       cacheSnapshot(snap);
       renderAlerts();
-      saveSnapshot(snap, seq);
+      saveSnapshot(snap, seq, false);
     }, 0);
   }
 
-  function saveSnapshot(snap, seq) {
+  // 保存は同時に1件だけ送る。連続投入（シフト→Amazon）で前の保存応答を待たずに次を送ると、
+  // 古いリビジョンのまま自分自身と競合するため、実行中に来た保存は最新の1件にまとめて後から送る。
+  function saveSnapshot(snap, seq, overwrite) {
     if (typeof global.fetch !== 'function') {
       ALERT.saveState = 'local-only';
       renderAlerts();
       return;
     }
+    if (!syncToken()) {
+      ALERT.saveState = 'no-token';
+      renderAlerts();
+      return;
+    }
+    if (ALERT.inflight) {
+      ALERT.pending = { snap: snap, seq: seq, overwrite: overwrite };
+      return;
+    }
+    ALERT.inflight = true;
+    var finish = function () {
+      ALERT.inflight = false;
+      var p = ALERT.pending;
+      ALERT.pending = null;
+      if (p && p.seq === ALERT.seq) saveSnapshot(p.snap, p.seq, p.overwrite);
+    };
     global.fetch('/rolling-alerts/save', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ snapshot: snap }),
+      headers: apiHeaders(),
+      body: JSON.stringify({ snapshot: snap, baseRevision: ALERT.serverRevision, overwrite: !!overwrite }),
     })
       .then(function (res) {
-        return res.json().then(function (body) { return { status: res.status, body: body }; });
+        return res.json().catch(function () { return {}; }).then(function (body) { return { status: res.status, body: body }; });
       })
       .then(function (r) {
+        // サーバーのリビジョンは事実なので、集計が新しくなっていても必ず反映する
+        if (r.status === 200) {
+          ALERT.serverRevision = r.body.revision || null;
+          ALERT.serverSavedAt = r.body.savedAt || null;
+        }
         if (seq !== ALERT.seq) return;
-        ALERT.saveState = r.status === 409 ? 'stale' : r.status >= 400 ? 'error' : r.body.status === 'unchanged' ? 'unchanged' : 'saved';
+        if (r.status === 200) {
+          ALERT.saveState = r.body.status === 'unchanged' ? 'unchanged' : 'saved';
+          cacheSnapshot(ALERT.snapshot);
+        } else if (r.status === 409 && r.body && r.body.snapshot) {
+          var v = alertCore().sanitizeSnapshot(r.body.snapshot);
+          ALERT.saveState = 'conflict';
+          ALERT.conflict = v.ok ? { revision: r.body.revision, savedAt: r.body.savedAt, snapshot: v.snapshot } : null;
+        } else if (r.status === 401 || r.status === 403) {
+          ALERT.saveState = 'auth-failed';
+        } else if (r.status === 503) {
+          ALERT.saveState = 'not-configured';
+        } else {
+          ALERT.saveState = 'error';
+        }
         renderAlerts();
       })
       .catch(function () {
         if (seq !== ALERT.seq) return;
         ALERT.saveState = 'local-only';
         renderAlerts();
-      });
+      })
+      .then(finish, finish);
   }
 
-  /** ページ再読み込み後: ブラウザ保存 → サーバー保存の順に、新しい方の最新結果を復元する */
+  /** 他端末の結果と競合したとき: 利用者の選択で、サーバー側の結果を採用する */
+  function acceptServerResult() {
+    if (!ALERT.conflict) return;
+    ALERT.seq++;
+    var c = ALERT.conflict;
+    adopt(c.snapshot, c.revision, c.savedAt, 'restored');
+    ALERT.saveState = 'saved';
+    renderAlerts();
+  }
+
+  /** 他端末の結果と競合したとき: 利用者の選択で、この端末の結果を上書き保存する */
+  function overwriteServerResult() {
+    if (!ALERT.conflict || !ALERT.snapshot) return;
+    var seq = ++ALERT.seq;
+    ALERT.serverRevision = ALERT.conflict.revision;
+    ALERT.conflict = null;
+    ALERT.saveState = 'saving';
+    renderAlerts();
+    saveSnapshot(ALERT.snapshot, seq, true);
+  }
+
+  /**
+   * ページ再読み込み後の復元。サーバー保存を正（リビジョン管理）とし、端末の時計で新旧を比べない。
+   * サーバーに届かない/キー未設定のときだけブラウザ保存を表示する。
+   * サーバーが空（再デプロイ等で消失）でブラウザ保存が残っていれば、それを再保存する。
+   */
   function restoreAlerts() {
     var core = alertCore();
     if (!core) return;
     var cached = readCachedSnapshot();
     if (cached && !ALERT.snapshot) {
-      ALERT.snapshot = cached;
+      ALERT.snapshot = cached.snapshot;
+      ALERT.serverRevision = cached.revision;
       ALERT.source = 'restored';
       ALERT.phase = 'ready';
       renderAlerts();
     }
     if (typeof global.fetch !== 'function') return;
-    global.fetch('/rolling-alerts/latest', { cache: 'no-store' })
-      .then(function (res) { return res.json(); })
-      .then(function (body) {
-        if (!body || body.status !== 'ok' || !core.validateSnapshot(body.snapshot).ok) return;
-        if (ALERT.source === 'computed') return; // 今回投入した集計を優先
-        if (ALERT.snapshot && snapshotStamp(ALERT.snapshot) >= snapshotStamp(body.snapshot)) return;
-        ALERT.snapshot = body.snapshot;
-        ALERT.source = 'restored';
-        ALERT.phase = 'ready';
-        cacheSnapshot(body.snapshot);
-        renderAlerts();
+    if (!syncToken()) {
+      ALERT.saveState = 'no-token';
+      renderAlerts();
+      return;
+    }
+    global.fetch('/rolling-alerts/latest', { cache: 'no-store', headers: apiHeaders() })
+      .then(function (res) {
+        if (res.status === 401 || res.status === 403) { ALERT.saveState = 'auth-failed'; renderAlerts(); return null; }
+        if (res.status === 503) { ALERT.saveState = 'not-configured'; renderAlerts(); return null; }
+        if (res.status !== 200) { ALERT.saveState = 'error'; renderAlerts(); return null; }
+        return res.json();
       })
-      .catch(function () {});
+      .then(function (body) {
+        if (!body) return;
+        if (ALERT.source === 'computed') return; // 今回投入した集計を優先（保存側で競合判定する）
+        if (body.status === 'ok') {
+          var v = core.sanitizeSnapshot(body.snapshot);
+          if (!v.ok) return;
+          adopt(v.snapshot, body.revision, body.savedAt, 'restored');
+          ALERT.saveState = 'saved';
+          renderAlerts();
+        } else if (body.status === 'empty' && ALERT.snapshot) {
+          // サーバー側の保存が消えている（再デプロイ等）。ブラウザ保存の結果を再保存する。
+          ALERT.serverRevision = null;
+          ALERT.saveState = 'saving';
+          renderAlerts();
+          saveSnapshot(ALERT.snapshot, ALERT.seq, false);
+        }
+      })
+      .catch(function () {
+        ALERT.saveState = 'local-only';
+        renderAlerts();
+      });
   }
 
   function esc(s) {
@@ -593,11 +710,14 @@
   };
   var SAVE_LABEL = {
     saving: '保存中…',
-    saved: '保存済み',
-    unchanged: '保存済み（同一データのため変更なし）',
-    'local-only': 'サーバー未保存（このブラウザにのみ保存）',
-    stale: 'サーバーにより新しい結果があるため保存しませんでした',
-    error: '保存失敗',
+    saved: 'サーバー保存済み',
+    unchanged: 'サーバー保存済み（同一データのため変更なし）',
+    'local-only': 'サーバーに接続できないため未保存（このブラウザにのみ保存）',
+    'no-token': '同期キー未設定のためサーバー未保存（点呼管理タブの「端末間同期キー」で設定）',
+    'auth-failed': '同期キーが正しくないためサーバー未保存',
+    'not-configured': 'サーバー側の同期設定が未完了のため未保存（管理者に確認）',
+    conflict: '他の端末がより新しい結果を保存しています（上書きしていません）',
+    error: 'サーバー保存に失敗しました',
   };
 
   function alertRowHtml(a, dataImportedAt) {
@@ -660,17 +780,32 @@
       : ALERT.source === 'restored'
       ? '<span style="color:#4b5563;font-weight:700;">保存済み結果を表示</span>'
       : '<span style="color:#15803d;font-weight:700;">最新</span>';
+    var conflictHtml = '';
+    if (ALERT.saveState === 'conflict' && ALERT.conflict) {
+      conflictHtml = '<div class="p-2 my-1 rounded" style="background:#fef3c7;color:#92400e;" data-alert-conflict="1">他の端末が ' + esc(fmtJst(ALERT.conflict.savedAt)) +
+        ' に別の結果（対象日 ' + esc(ALERT.conflict.snapshot.targetDate) + '）を保存しています。この端末の結果は上書きしていません。' +
+        ' <button id="rolling-alert-accept" class="px-2 py-0.5 rounded bg-gray-700 text-white">他端末の結果を表示</button>' +
+        ' <button id="rolling-alert-overwrite" class="px-2 py-0.5 rounded bg-red-600 text-white">この端末の結果で上書き保存</button></div>';
+    }
     metaEl.innerHTML =
       '対象日: <b>' + esc(snap.targetDate) + '</b>' +
       '　データ投入日時: <b>' + esc(fmtJst(snap.dataImportedAt)) + '</b>' +
       '　集計日時: <b>' + esc(fmtJst(snap.computedAt)) + '</b>' +
-      (ALERT.saveState && ALERT.source === 'computed' ? '　保存: ' + esc(SAVE_LABEL[ALERT.saveState] || '') : '') +
+      (ALERT.serverSavedAt ? '　サーバー保存日時: <b>' + esc(fmtJst(ALERT.serverSavedAt)) + '</b>' : '') +
+      (ALERT.saveState ? '<div>保存: ' + esc(SAVE_LABEL[ALERT.saveState] || '') + '</div>' : '') +
+      (ALERT.localSaveState === 'error' ? '<div style="color:#b91c1c;">ブラウザ保存に失敗しました（容量超過・プライベートモード等）。再読み込みすると、サーバー保存がない場合は結果が消えます。</div>' : '') +
+      (snap.sources && snap.sources.indexOf('Amazon Daily Working Hour') < 0 ? '<div style="color:#b45309;">Amazon実績が未投入の集計です。過去6日はシフト予定で判定しており、超過確定は出ません。</div>' : '') +
+      conflictHtml +
       (stale ? '<div style="color:#b45309;">この結果は対象日 ' + esc(snap.targetDate) + ' の集計で、現在の基準日 ' + esc(currentTargetDate()) + ' とは異なります。「再計算」で更新してください。</div>' : '');
+    var acceptBtn = document.getElementById('rolling-alert-accept');
+    var overwriteBtn = document.getElementById('rolling-alert-overwrite');
+    if (acceptBtn) acceptBtn.onclick = acceptServerResult;
+    if (overwriteBtn) overwriteBtn.onclick = overwriteServerResult;
 
     var c = snap.counts || {};
     countsEl.innerHTML =
       '超過確定 <b>' + (c.exceed_confirmed || 0) + '</b>名 / 超過予測 <b>' + (c.exceed_forecast || 0) + '</b>名 / 接近警告 <b>' + (c.approach || 0) +
-      '</b>名 / 勤務予定未確認 <b>' + (c.schedule_unconfirmed || 0) + '</b>名　（対象外: 判定不能 ' + (c.undetermined || 0) + '名 / 当日休で除外 ' + (c.day_off || 0) + '名 / 全' + (c.driverCount || 0) + '名）';
+      '</b>名 / 勤務予定未確認 <b>' + (c.schedule_unconfirmed || 0) + '</b>名　（対象外: 判定不能 ' + (c.undetermined || 0) + '名 / 当日休で除外 ' + (c.day_off || 0) + '名 / 7日未満で対象外 ' + (c.skippedShortSeries || 0) + '名 / 全' + (c.driverCount || 0) + '名）';
 
     if (!snap.alerts.length) {
       bodyEl.innerHTML = '<div class="text-center text-ink-lighter py-6" data-alert-state="empty">該当者なし</div>';

@@ -3118,7 +3118,12 @@ app.post('/lat-export', function(req, res) {
     filePath: path.join(os.tmpdir(), 'rolling-alerts-latest.json')
   });
   store.load();
-  require('./rolling-alert-route.js').mount(app, { store: store });
+  // 認証は既存の点呼同期キー（TENKO_SYNC_TOKEN）を流用。専用に分けたい場合は ROLLING_ALERT_TOKEN を設定する。
+  // どちらも未設定なら 503（fail-closed）。トークンはソースに埋め込まない。
+  require('./rolling-alert-route.js').mount(app, {
+    store: store,
+    getTokens: function() { return [process.env.ROLLING_ALERT_TOKEN, TENKO_SYNC_TOKEN]; }
+  });
 })();
 
 require('./harvest-rolling60h-route.js').mount(app, {

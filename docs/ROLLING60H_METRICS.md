@@ -58,5 +58,5 @@ OFK3「Rolling 60h」画面の「アラート者」一覧。`rolling-alert-core.
 | （対象外）判定不能 | 過去6日に未取得日（空白・データなし・未定義記号）があり、既知分でも超過でない |
 
 - 超過予測が成立する人は接近警告に重複計上しない。空白セルは 0h にしない。
-- 結果は `GET /rolling-alerts/latest` / `POST /rolling-alerts/save` で最新1件を保存（一時ディスクJSON＋ブラウザ localStorage）。同一データ（指紋一致）の再投入は置換も追記もしない。
+- 結果は `GET /rolling-alerts/latest` / `POST /rolling-alerts/save`（**要認証**）で最新1件を保存（一時ディスクJSON＋ブラウザ localStorage）。同一データ（指紋一致）の再投入は置換も追記もしない。認証・保存・移行は `docs/ROLLING_ALERT_API.md`、HARVEST との差分は `docs/ROLLING_ALERT_HARVEST_COMPARISON.md`（HARVEST側は未確認）。
 - テスト: `npm run test:rolling-alert`（判定・保存）、`npm run test:rolling-alert-browser`（Chromium実機）。
