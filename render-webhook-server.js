@@ -254,6 +254,11 @@ app.get(['/', '/index.html'], function(req, res, next) {
       if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvUiBodyPos) + '  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>\n' + html.slice(hvUiBodyPos);
     }
+    if (html.indexOf('/harvest-daily-archive-ui.js') < 0) {
+      var dailyArchiveUiPos = html.lastIndexOf('</body>');
+      if (dailyArchiveUiPos < 0) return next(new Error('index.html body closing tag not found'));
+      html = html.slice(0, dailyArchiveUiPos) + '  <script src="/harvest-daily-archive-ui.js?v=20261022-daily-archive"></script>\n' + html.slice(dailyArchiveUiPos);
+    }
     if (html.indexOf('/harvest-collector-rolling60h.js') < 0) {
       var hvRollTag = '  <script src="/inoichi-rolling-dryrun.js?v=20261018-rolling"></script>\n'
         + '  <script src="/harvest-collector-rolling60h.js?v=20261018-rolling"></script>\n';
@@ -3144,6 +3149,28 @@ function dutyRiskGasClient() {
   };
 }
 
+var dailyArchiveService = null;
+try {
+  dailyArchiveService = require('./harvest-daily-archive.js').create({
+    fs: fs,
+    path: path,
+    xlsx: require('xlsx'),
+    rolling: require('./rolling60h-core.js'),
+    sourceDir: require('./harvest-rolling60h-run.js').DAILY_DIR,
+    root: path.join(__dirname, 'local', 'harvest-daily-archive'),
+  });
+} catch (dailyArchiveInitErr) {
+  dailyArchiveService = null;
+  try { log('harvest daily archive unavailable'); } catch (dailyArchiveLogErr) {}
+}
+try {
+  require('./harvest-daily-archive-route.js').mount(app, {
+    isLoopback: require('./harvest-rolling60h-route.js').isLoopback,
+    service: dailyArchiveService,
+  });
+} catch (dailyArchiveRouteErr) {
+  try { log('harvest daily archive route unavailable'); } catch (dailyArchiveRouteLogErr) {}
+}
 require('./harvest-rolling60h-route.js').mount(app, {
   run: function () {
     var captured = require('./harvest-rolling60h-run.js').capture({
@@ -3153,6 +3180,7 @@ require('./harvest-rolling60h-route.js').mount(app, {
       rolling: require('./rolling60h-core.js'),
       harvest: require('./harvest-daily-manifest.js'),
       dryRun: require('./inoichi-rolling-dryrun.js'),
+      dailyArchive: dailyArchiveService,
     });
     var summary = captured.summary;
     try {
@@ -3212,6 +3240,12 @@ require('./duty-risk-republish-route.js').mount(app, {
     });
   },
 });
+
+try {
+  if (dailyArchiveService) dailyArchiveService.start();
+} catch (dailyArchiveStartErr) {
+  try { log('harvest daily archive not started'); } catch (dailyArchiveStartLogErr) {}
+}
 
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
