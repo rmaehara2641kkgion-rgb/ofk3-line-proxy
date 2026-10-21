@@ -6,6 +6,7 @@ Render 本番からプロキシ経由で呼び出される GAS の**ソース正
 |----------|------|--------------|
 | `addr-master.gs` | 住所マスタ（lookup / geocode / batchSave） | `render-webhook-server.js` の `/addr-master` が GAS Web App URL へ中継。UI は `index.html` の `addr-master-gas-url` 設定 |
 | `mentor-notified.gs` | メンター通知済みログ・activeDrivers 永続化 | Activepieces → Render `/mentor-alert` から GAS URL 経由で参照 |
+| `duty-risk-store.gs` | 勤務時間リスクの公開スナップショットと一致する履歴run | Render `/duty-risk-feed` がトークン付きで参照。DAマスタや既存Excelは更新しない |
 
 ## 秘密情報
 

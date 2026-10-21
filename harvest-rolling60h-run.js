@@ -583,6 +583,9 @@
     }
     return {
       summary: summary,
+      drivers: drivers,
+      predictions: predictions,
+      historyFile: historyFile,
       stats: {
         referenceDate: referenceDate,
         overlapPersonDays: overlapPersonDays,
@@ -613,6 +616,16 @@
     return execute(options).summary;
   }
 
+  function capture(options) {
+    var executed = execute(options);
+    return {
+      summary: executed.summary,
+      drivers: executed.drivers || [],
+      predictions: executed.predictions || [],
+      historyFile: executed.historyFile,
+    };
+  }
+
   function audit(options) {
     var copy = {};
     Object.keys(options || {}).forEach(function (key) { copy[key] = options[key]; });
@@ -625,6 +638,7 @@
     SHIFT_DIR: SHIFT_DIR,
     selectLatestShift: selectLatestShift,
     run: run,
+    capture: capture,
     audit: audit,
     emptySummary: emptySummary,
   };
