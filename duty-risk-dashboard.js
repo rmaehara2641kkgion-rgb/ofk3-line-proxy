@@ -353,8 +353,9 @@
 
   function render(rootEl, view, query) {
     if (!rootEl) return;
+    var notice = state.feedNotice ? '<div class="card p-4 mb-4 text-sm">' + escapeHtml(state.feedNotice) + '</div>' : '';
     if (!view || !view.ok) {
-      rootEl.innerHTML = '<div class="card p-4 text-sm">保存データを表示できません。' + escapeHtml(view && view.reason ? view.reason : '') + '</div>';
+      rootEl.innerHTML = notice + '<div class="card p-4 text-sm">保存データを表示できません。' + escapeHtml(view && view.reason ? view.reason : '') + '</div>';
       return;
     }
     var q = String(query || '').trim().toLowerCase();
@@ -364,6 +365,7 @@
     var gaps = view.gaps.filter(function (row) { return matches(row, q); });
     var selected = view.selectedId ? view.ranking.concat(view.gaps).filter(function (row) { return row.transportId === view.selectedId; })[0] : null;
     var html = '';
+    html += notice;
     html += '<div class="mb-4"><h2 class="text-lg font-bold">勤務時間リスク</h2>';
     html += '<p class="text-sm text-ink-lighter">対象 ' + escapeHtml(view.windowStart || '') + ' 〜 ' + escapeHtml(view.referenceDate) + '。取得日時 ' + escapeHtml(checkedAtText(view.checkedAt)) + '。この取得日時は保存データの時刻です。</p>';
     html += '<p class="text-sm text-ink-lighter">本日要注意・本日監視は管理者用の追加指標です。正式な超過確定とは別です。予定込みで60時間以上は予測超過と表示します。</p></div>';
@@ -499,7 +501,19 @@
     return html;
   }
 
-  var state = { view: null, loading: false, root: null, snapshot: null, history: null, query: '' };
+  var state = { view: null, loading: false, root: null, snapshot: null, history: null, query: '', feedNotice: '' };
+
+  function failureText(body, previousCheckedAt) {
+    var when = body && body.lastSuccessAt ? body.lastSuccessAt : (previousCheckedAt || '');
+    return '勤務時間データを取得できませんでした。最終成功データの取得日時: ' + (when ? checkedAtText(when) : '不明');
+  }
+
+  function feedHeaders() {
+    try {
+      if (typeof dutyRiskAuthHeaders === 'function') return dutyRiskAuthHeaders() || {};
+    } catch (e) {}
+    return {};
+  }
 
   function refresh() {
     if (!state.snapshot || !state.history) return state.view;
@@ -520,20 +534,37 @@
     if (state.view && state.snapshot) { render(rootEl, state.view, state.query || ''); return; }
     state.loading = true;
     rootEl.innerHTML = '<p class="text-sm">保存データを読み込んでいます。</p>';
-    Promise.all([
-      fetch('/local/inoichi-rolling-snapshot.json', { cache: 'no-store' }).then(function (res) { return res.json(); }),
-      fetch('/local/rolling60h-history.json', { cache: 'no-store' }).then(function (res) { return res.json(); }),
-    ]).then(function (pair) {
-      state.snapshot = pair[0];
-      state.history = pair[1];
-      state.view = buildView(state.snapshot, state.history);
+    var previousCheckedAt = state.view && state.view.checkedAt ? state.view.checkedAt : '';
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
+    fetch('/duty-risk-feed', {
+      cache: 'no-store',
+      headers: feedHeaders(),
+      signal: controller ? controller.signal : undefined,
+    }).then(function (res) {
+      return res.json().then(function (body) { return body; }, function () { return { ok: false, reason: 'read-failed' }; });
+    }).then(function (body) {
+      if (timer) clearTimeout(timer);
       state.loading = false;
+      if (!body || body.ok !== true || !body.snapshot || !body.historyRun) {
+        state.feedNotice = failureText(body, previousCheckedAt);
+        if (state.view) render(rootEl, state.view, state.query || '');
+        else rootEl.innerHTML = '<div class="card p-4 text-sm">' + escapeHtml(state.feedNotice) + '</div>';
+        return;
+      }
+      state.feedNotice = '';
+      state.snapshot = body.snapshot;
+      state.history = { runs: [body.historyRun] };
+      state.view = buildView(state.snapshot, state.history);
       render(rootEl, state.view, state.query || '');
     }).catch(function () {
+      if (timer) clearTimeout(timer);
       state.loading = false;
-      rootEl.innerHTML = '<div class="card p-4 text-sm">保存データを読めませんでした。再回収は行っていません。</div>';
+      state.feedNotice = failureText({ reason: 'timeout', lastSuccessAt: previousCheckedAt }, previousCheckedAt);
+      if (state.view) render(rootEl, state.view, state.query || '');
+      else rootEl.innerHTML = '<div class="card p-4 text-sm">' + escapeHtml(state.feedNotice) + '</div>';
     });
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, mount: mount, refresh: refresh };
+  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, failureText: failureText, mount: mount, refresh: refresh };
 });

@@ -3786,6 +3786,12 @@ var driverDB = {
       return headers;
     }
 
+    function dutyRiskAuthHeaders() {
+      var headers = {};
+      if (lineSettings.proxySecret) headers['X-Proxy-Secret'] = lineSettings.proxySecret;
+      return headers;
+    }
+
     function escapeHtml(str) {
       var div = document.createElement('div');
       div.appendChild(document.createTextNode(str || ''));

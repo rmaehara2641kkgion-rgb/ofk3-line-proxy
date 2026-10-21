@@ -13,5 +13,9 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
+      - key: DUTY_RISK_GAS_URL
+        sync: false
+      - key: DUTY_RISK_GAS_TOKEN
+        sync: false
       - key: PORT
         value: 10000

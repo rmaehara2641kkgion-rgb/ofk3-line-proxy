@@ -3111,15 +3111,104 @@ app.post('/lat-export', function(req, res) {
   });
 });
 
+function dutyRiskPublicError(err) {
+  var message = err && err.message ? String(err.message) : String(err || '');
+  var token = process.env.DUTY_RISK_GAS_TOKEN || '';
+  if (token) message = message.split(token).join('[redacted]');
+  return message;
+}
+
+function dutyRiskGasClient() {
+  var dutyRiskUrl = process.env.DUTY_RISK_GAS_URL || '';
+  var dutyRiskToken = process.env.DUTY_RISK_GAS_TOKEN || '';
+  if (!dutyRiskUrl || !dutyRiskToken) return null;
+  return {
+    publish: function (body) {
+      return axios.post(dutyRiskUrl, {
+        action: 'publish',
+        token: dutyRiskToken,
+        snapshot: body.snapshot,
+        historyRun: body.historyRun,
+      }, {
+        timeout: body.timeoutMs || 60000,
+        headers: { 'X-Duty-Risk-Token': dutyRiskToken },
+      }).then(function (response) { return response.data; });
+    },
+    current: function (options) {
+      return axios.get(dutyRiskUrl, {
+        timeout: (options && options.timeoutMs) || 60000,
+        params: { action: 'current', token: dutyRiskToken },
+        headers: { 'X-Duty-Risk-Token': dutyRiskToken },
+      }).then(function (response) { return response.data; });
+    },
+  };
+}
+
 require('./harvest-rolling60h-route.js').mount(app, {
   run: function () {
-    return require('./harvest-rolling60h-run.js').run({
+    var captured = require('./harvest-rolling60h-run.js').capture({
       fs: fs,
       path: path,
       xlsx: require('xlsx'),
       rolling: require('./rolling60h-core.js'),
       harvest: require('./harvest-daily-manifest.js'),
       dryRun: require('./inoichi-rolling-dryrun.js'),
+    });
+    var summary = captured.summary;
+    try {
+      require('./duty-risk-snapshot.js').finish({
+        fs: fs,
+        path: path,
+        captured: captured,
+        snapshotFile: path.join(__dirname, 'local', 'inoichi-rolling-snapshot.json'),
+        historyFile: path.join(__dirname, 'local', 'rolling60h-history.json'),
+        client: dutyRiskGasClient(),
+        log: log,
+      }).catch(function (snapshotErr) {
+        log('duty-risk snapshot failed: ' + dutyRiskPublicError(snapshotErr));
+      });
+    } catch (dutyRiskErr) {
+      log('duty-risk snapshot skipped: ' + dutyRiskPublicError(dutyRiskErr));
+    }
+    return summary;
+  },
+});
+
+var dutyRiskFeedState = { lastSuccessAt: null };
+require('./duty-risk-feed-route.js').mount(app, {
+  proxySecret: function () { return process.env.PROXY_SECRET || ''; },
+  get lastSuccessAt() { return dutyRiskFeedState.lastSuccessAt; },
+  set lastSuccessAt(value) { dutyRiskFeedState.lastSuccessAt = value; },
+  load: function () {
+    var dutyRiskUrl = process.env.DUTY_RISK_GAS_URL || '';
+    var dutyRiskToken = process.env.DUTY_RISK_GAS_TOKEN || '';
+    return require('./duty-risk-gas-client.js').fetchCurrent({
+      lastSuccessAt: dutyRiskFeedState.lastSuccessAt,
+      client: {
+        current: function () {
+          if (!dutyRiskUrl || !dutyRiskToken) {
+            return Promise.resolve({ ok: false, reason: 'not-configured', lastSuccessAt: dutyRiskFeedState.lastSuccessAt });
+          }
+          return axios.get(dutyRiskUrl, {
+            timeout: 60000,
+            params: { action: 'current', token: dutyRiskToken },
+            headers: { 'X-Duty-Risk-Token': dutyRiskToken },
+          }).then(function (response) { return response.data; });
+        },
+      },
+    });
+  },
+});
+
+require('./duty-risk-republish-route.js').mount(app, {
+  isLoopback: require('./harvest-rolling60h-route.js').isLoopback,
+  retry: function () {
+    return require('./duty-risk-republish.js').retrySaved({
+      fs: fs,
+      path: path,
+      queueFile: path.join(__dirname, 'local', 'duty-risk-publish-queue.json'),
+      client: dutyRiskGasClient(),
+      log: log,
     });
   },
 });
