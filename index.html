@@ -5379,9 +5379,11 @@ var driverDB = {
             console.warn('マスタ読み込みパースエラー:', e.message);
           }
         }
+        notifyDutyRiskNames();
       };
       xhr.onerror = function() {
         console.warn('マスタ読み込み失敗（オフライン）');
+        notifyDutyRiskNames();
       };
       xhr.send();
     }
@@ -20334,6 +20336,21 @@ var driverDB = {
       return '';
     }
 
+    function resolveDutyRiskMasterName(tid) {
+      var key = '';
+      try { key = resolveDriverKeyByTid(tid); } catch (e) { return null; }
+      if (!key) return null;
+      var jp = '';
+      try { jp = driverJapaneseNames && driverJapaneseNames[key] ? driverJapaneseNames[key] : ''; } catch (e2) { jp = ''; }
+      return { japaneseName: jp, englishName: key };
+    }
+
+    function notifyDutyRiskNames() {
+      if (window.DutyRiskDashboard && typeof DutyRiskDashboard.refresh === 'function') {
+        try { DutyRiskDashboard.refresh(); } catch (e) { console.warn('勤務時間リスクの氏名再描画に失敗:', e && e.message ? e.message : e); }
+      }
+    }
+
     function getCompanyStats(snapshot, filteredDrivers) {
       var companies = {};
       var deptOrder = DEPARTMENTS.concat(['未所属']);
@@ -21691,7 +21708,7 @@ var driverDB = {
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
   <script src="/rolling60h-core.js?v=20260904-1"></script>
   <script src="/rolling60h-ui.js?v=20260904-1"></script>
-  <script src="/duty-risk-dashboard.js?v=20261021-duty-risk-5"></script>
+  <script src="/duty-risk-dashboard.js?v=20261021-duty-risk-6"></script>
   <script src="/cortex-13-priority-core.js?v=20260921-3"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
   <script src="/ofk3-cortex-priority-ui.js?v=20260921-3"></script>

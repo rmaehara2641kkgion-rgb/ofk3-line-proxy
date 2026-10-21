@@ -206,10 +206,12 @@
       return alert && alert.disposition === 'exceed' && alert.basis === 'forecast' && alert.endDate > referenceDate;
     }).map(function (alert) {
       var ids = index[predictionKey(alert.startDate, alert.endDate, alert.totalHours)] || [];
+      var joined = ids.length === 1 ? ids[0] : '';
+      var transportId = alert.transportId || joined;
       return {
         name: alert.name || '',
-        transportId: ids.length === 1 ? ids[0] : '',
-        transportNote: ids.length === 1 ? '' : '保存データ上、Transport IDを一意に結び付けられない',
+        transportId: transportId,
+        transportNote: transportId ? '' : '保存データ上、Transport IDを一意に結び付けられない',
         windowLabel: alert.windowLabel || ((alert.startDate || '') + ' 〜 ' + (alert.endDate || '')),
         startDate: alert.startDate || '',
         endDate: alert.endDate || '',
@@ -221,7 +223,45 @@
     });
   }
 
-  function buildView(snapshot, history) {
+  function masterText(value) {
+    return value == null ? '' : String(value).trim();
+  }
+
+  function masterRecord(master, transportId) {
+    if (!master || transportId == null || transportId === '') return null;
+    var id = String(transportId);
+    var record = null;
+    try {
+      if (typeof master === 'function') record = master(id);
+      else if (typeof master.lookup === 'function') record = master.lookup(id);
+      else if (master.byTransportId && Object.prototype.hasOwnProperty.call(master.byTransportId, id)) record = master.byTransportId[id];
+    } catch (e) {
+      return null;
+    }
+    return record || null;
+  }
+
+  function masterDisplayName(record) {
+    if (!record) return '';
+    if (typeof record === 'string') return masterText(record);
+    return masterText(record.japaneseName) || masterText(record.englishName);
+  }
+
+  function applyMasterNames(rows, master) {
+    (rows || []).forEach(function (row) {
+      if (!row || row.transportId == null || row.transportId === '') return;
+      var name = masterDisplayName(masterRecord(master, row.transportId));
+      if (name) row.name = name;
+    });
+  }
+
+  function liveMaster(transportId) {
+    if (typeof resolveDutyRiskMasterName !== 'function') return null;
+    try { return resolveDutyRiskMasterName(transportId); } catch (e) { return null; }
+  }
+
+  function buildView(snapshot, history, master) {
+    var lookup = master === undefined ? liveMaster : master;
     var checkedAt = snapshot && snapshot.checkedAt ? snapshot.checkedAt : '';
     var run = pickRun(history, checkedAt);
     if (!run || !/^\d{4}-\d{2}-\d{2}$/.test(run.referenceDate || '')) {
@@ -240,6 +280,7 @@
     });
     attachNames(rows, snapshot && snapshot.alerts);
     attachSavedTotalNames(rows, snapshot && snapshot.alerts);
+    applyMasterNames(rows, lookup);
     rows.forEach(function (row) { if (!row.name) row.name = ''; });
     var ranking = rows.filter(function (row) { return row.seriesComplete; }).sort(function (a, b) {
       if (a.remaining !== b.remaining) return a.remaining - b.remaining;
@@ -265,7 +306,12 @@
       watchSoon: attention.filter(function (row) { return row.adminLabel === '本日監視'; }).length,
       attention: attention,
       ranking: ranking,
-      future: futureRows(snapshot, referenceDate, run.predictions),
+      future: (function () {
+        var future = futureRows(snapshot, referenceDate, run.predictions);
+        applyMasterNames(future, lookup);
+        future.forEach(function (row) { if (!row.name) row.name = ''; });
+        return future;
+      })(),
       gaps: gaps,
     };
   }
@@ -453,25 +499,41 @@
     return html;
   }
 
-  var state = { view: null, loading: false };
+  var state = { view: null, loading: false, root: null, snapshot: null, history: null, query: '' };
+
+  function refresh() {
+    if (!state.snapshot || !state.history) return state.view;
+    var query = state.query || '';
+    if (state.root && typeof document !== 'undefined') {
+      var search = document.getElementById('duty-risk-search');
+      if (search) query = search.value;
+    }
+    state.query = query;
+    state.view = buildView(state.snapshot, state.history);
+    if (state.root) render(state.root, state.view, query);
+    return state.view;
+  }
 
   function mount(rootEl) {
     if (!rootEl || state.loading) return;
-    if (state.view) { render(rootEl, state.view, ''); return; }
+    state.root = rootEl;
+    if (state.view && state.snapshot) { render(rootEl, state.view, state.query || ''); return; }
     state.loading = true;
     rootEl.innerHTML = '<p class="text-sm">保存データを読み込んでいます。</p>';
     Promise.all([
       fetch('/local/inoichi-rolling-snapshot.json', { cache: 'no-store' }).then(function (res) { return res.json(); }),
       fetch('/local/rolling60h-history.json', { cache: 'no-store' }).then(function (res) { return res.json(); }),
     ]).then(function (pair) {
-      state.view = buildView(pair[0], pair[1]);
+      state.snapshot = pair[0];
+      state.history = pair[1];
+      state.view = buildView(state.snapshot, state.history);
       state.loading = false;
-      render(rootEl, state.view, '');
+      render(rootEl, state.view, state.query || '');
     }).catch(function () {
       state.loading = false;
       rootEl.innerHTML = '<div class="card p-4 text-sm">保存データを読めませんでした。再回収は行っていません。</div>';
     });
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, mount: mount };
+  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, mount: mount, refresh: refresh };
 });
