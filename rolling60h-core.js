@@ -913,6 +913,25 @@
   // Public API
   // ===========================================================================
 
+  function formatHourText(hours) {
+    var rounded = Math.round(hours * 100) / 100;
+    return rounded.toFixed(2).replace(/\.?0+$/, '') + 'h';
+  }
+
+  function formatRollingBlockLabel(block) {
+    if (!block) return '未取得';
+    if (block.blank) return '未取得';
+    var actual = block.source === 'actual' || block.code === 'AMAZON_ESTIMATE' || block.code === 'AMAZON_ACTUAL';
+    if (actual) {
+      if (block.defined && typeof block.hours === 'number' && !isNaN(block.hours)) return formatHourText(block.hours) + ' 実績';
+      return '未取得';
+    }
+    if (block.code === 'KYU' || block.rawCode === '休') return '休';
+    if (!block.defined || typeof block.hours !== 'number' || isNaN(block.hours)) return '判定不能';
+    var mark = block.rawCode && block.rawCode !== '(estimated_working_hour)' ? block.rawCode : formatHourText(block.hours);
+    return mark + ' 予定';
+  }
+
   var RollingCore = {
     // 定数
     SHIFT_HOUR_TABLE: SHIFT_HOUR_TABLE,
@@ -950,6 +969,7 @@
     // 統合ヘルパー
     groupRosterRecordsByDriver: groupRosterRecordsByDriver,
     groupActualRecordsByTransportId: groupActualRecordsByTransportId,
+    formatRollingBlockLabel: formatRollingBlockLabel,
   };
 
   global.RollingCore = RollingCore;
