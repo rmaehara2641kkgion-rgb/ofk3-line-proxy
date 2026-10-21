@@ -41,9 +41,40 @@
     }
   }
 
+  function unavailablePayload() {
+    return {
+      ok: false,
+      app: 'harvest-rolling60h',
+      connected: false,
+      fetchStatus: '',
+      stale: true,
+      checkedAt: null,
+      approachRule: '',
+      referenceDate: '',
+      alerts: []
+    };
+  }
+
   function mount(app, deps) {
     app.post('/harvest/rolling60h/run', function (req, res) {
       handle(req, res, deps);
+    });
+    app.get('/harvest/rolling60h/alerts', function (req, res) {
+      if (!isLoopback(req)) {
+        send(res, 403, unavailablePayload());
+        return;
+      }
+      var payload = null;
+      try {
+        payload = deps && typeof deps.readDispatch === 'function' ? deps.readDispatch() : null;
+      } catch (e) {
+        payload = null;
+      }
+      if (!payload || payload.app !== 'harvest-rolling60h') {
+        send(res, 200, unavailablePayload());
+        return;
+      }
+      send(res, 200, payload);
     });
   }
 
