@@ -315,8 +315,14 @@
     var fileSuccess = 0;
     var dailyRows = null;
     var shiftBook = null;
-
-    var loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
+    var referenceDate = options.referenceDate || todayJst();
+    var loadedDaily = null;
+    if (options.dailyArchive && typeof options.dailyArchive.rowsForDate === 'function') {
+      try { loadedDaily = options.dailyArchive.rowsForDate(referenceDate); } catch (archiveErr) { loadedDaily = null; }
+    }
+    if (!loadedDaily || loadedDaily.ok !== true || loadedDaily.sheet !== 'Report5_Daily_Data') {
+      loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
+    }
     if (loadedDaily && loadedDaily.ok && loadedDaily.sheet === 'Report5_Daily_Data') {
       fileSuccess++;
       dailyFile = baseName(loadedDaily.file);
@@ -342,7 +348,6 @@
     Object.keys(actualByTid).forEach(function (tid) { tids[tid] = true; });
     Object.keys(rosterByTid).forEach(function (tid) { tids[tid] = true; });
 
-    var referenceDate = options.referenceDate || todayJst();
     var dayValues = (parsed.records || []).map(function (rec) { return rec.date; }).filter(Boolean).sort();
     var coverageMin = dayValues[0] || '';
     var coverageMax = dayValues.length ? dayValues[dayValues.length - 1] : '';

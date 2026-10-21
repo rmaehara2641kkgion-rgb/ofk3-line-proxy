@@ -59,6 +59,9 @@ try {
   if (html.indexOf('/ofk3-harvest-ui.js') < 0) {
     insert += '  ' + tags[9] + '\n';
   }
+  if (html.indexOf('/harvest-daily-archive-ui.js') < 0) {
+    insert += '  <script src="/harvest-daily-archive-ui.js?v=20261022-daily-archive"></script>\n';
+  }
   if (html.indexOf('/inoichi-core.js') < 0) {
     insert += '  ' + tags[10] + '\n';
   }
