@@ -558,7 +558,7 @@
           } else {
             cellText = dayRec.blocks
               .map(function (b) {
-                return b.code === 'AMAZON_ACTUAL' ? '(実)' + b.hours.toFixed(1) : b.rawCode;
+                return RollingCore.formatRollingBlockLabel(b);
               })
               .join('+');
             if (dayRec.blocks.some(function (b) { return b.source === 'actual'; })) cellCls += ' text-blue-500';
