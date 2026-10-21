@@ -340,6 +340,7 @@
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko')" id="tab-tenko">点呼管理</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('tenko-match')" id="tab-tenko-match">点呼照合</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('wh60')" id="tab-wh60">⏱ WH60管理</button>
+        <button class="tab-inactive pb-3 text-sm whitespace-nowrap" onclick="switchTab('duty-risk')" id="tab-duty-risk">勤務時間リスク</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('scan')" id="tab-scan">仕分けスキャン</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('addr-search')" id="tab-addr-search">住所検索</button>
         <button class="tab-inactive pb-3 text-sm" onclick="switchTab('map-master')" id="tab-map-master">MAP管理</button>
@@ -2511,6 +2512,10 @@
         <div id="wh60-rolling-subpanel"></div>
       </div>
 
+      <div id="panel-duty-risk" class="hidden">
+        <div id="duty-risk-root"></div>
+      </div>
+
       <!-- 時間指定抽出 Tab -->
       <div id="panel-tw-extract" class="hidden">
         <div class="flex items-center justify-between mb-4">
@@ -3891,7 +3896,7 @@ var driverDB = {
       for (var i = 0; i < tabClasses.length; i++) { document.body.classList.remove(tabClasses[i]); }
       var tabMap = {'exec':'tab-exec','dashboard':'tab-dashboard','drivers':'tab-drivers','master':'tab-master','optimization':'tab-optimization','tenko':'tab-tenko','tenko-match':'tab-tenko-match','map-master':'tab-map-master','scan':'tab-scan','addr-search':'tab-addr-search','billing':'tab-billing','ftds':'tab-ftds','fleet':'tab-fleet','volume':'tab-volume','wh60':'tab-wh60','tw-extract':'tab-tw-extract','quality':'tab-quality','team-quality':'tab-team-quality'};
       if (tabMap[tab]) { document.body.classList.add(tabMap[tab]); }
-      var allTabs = ['dashboard', 'optimization', 'manual-assign', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'quality', 'team-quality', 'exec', 'billing'];
+      var allTabs = ['dashboard', 'optimization', 'manual-assign', 'tw-extract', 'master', 'drivers', 'tenko', 'tenko-match', 'wh60', 'duty-risk', 'scan', 'addr-search', 'map-master', 'volume', 'fleet', 'ftds', 'quality', 'team-quality', 'exec', 'billing'];
       for (var i = 0; i < allTabs.length; i++) {
         var t = allTabs[i];
         var panel = document.getElementById('panel-' + t);
@@ -3919,6 +3924,10 @@ var driverDB = {
       if (tab === 'billing') renderBillingTable();
       if (tab === 'map-master') wh60LoadAddrStats();
       if (tab === 'wh60') { if (typeof RollingUI !== 'undefined' && RollingUI.onShown) RollingUI.onShown(); }
+      if (tab === 'duty-risk' && window.DutyRiskDashboard) {
+        var dutyRoot = document.getElementById('duty-risk-root');
+        if (dutyRoot) DutyRiskDashboard.mount(dutyRoot);
+      }
       if (tab === 'team-quality') renderTeamQualityDashboard();
       if (tab === 'optimization' && typeof AssignSupport !== 'undefined') {
         if (AssignSupport.syncShiftFromGlobals) AssignSupport.syncShiftFromGlobals();
@@ -5564,9 +5573,11 @@ var driverDB = {
             console.warn('マスタ読み込みパースエラー:', e.message);
           }
         }
+        notifyDutyRiskNames();
       };
       xhr.onerror = function() {
         console.warn('マスタ読み込み失敗（オフライン）');
+        notifyDutyRiskNames();
       };
       xhr.send();
     }
@@ -21713,6 +21724,21 @@ var driverDB = {
       return '';
     }
 
+    function resolveDutyRiskMasterName(tid) {
+      var key = '';
+      try { key = resolveDriverKeyByTid(tid); } catch (e) { return null; }
+      if (!key) return null;
+      var jp = '';
+      try { jp = driverJapaneseNames && driverJapaneseNames[key] ? driverJapaneseNames[key] : ''; } catch (e2) { jp = ''; }
+      return { japaneseName: jp, englishName: key };
+    }
+
+    function notifyDutyRiskNames() {
+      if (window.DutyRiskDashboard && typeof DutyRiskDashboard.refresh === 'function') {
+        try { DutyRiskDashboard.refresh(); } catch (e) { console.warn('勤務時間リスクの氏名再描画に失敗:', e && e.message ? e.message : e); }
+      }
+    }
+
     function getCompanyStats(snapshot, filteredDrivers) {
       var companies = {};
       var deptOrder = DEPARTMENTS.concat(['未所属']);
@@ -23072,6 +23098,7 @@ var driverDB = {
   <script src="/rolling60h-core.js?v=20261018-rolling"></script>
   <script src="/harvest-daily-manifest.js?v=20261018-rolling"></script>
   <script src="/rolling60h-ui.js?v=20261018-rolling"></script>
+  <script src="/duty-risk-dashboard.js?v=20261021-duty-risk-6"></script>
   <script src="/cortex-13-priority-core.js?v=20260921-3"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
   <script src="/ofk3-cortex-priority-ui.js?v=20260927-1"></script>
