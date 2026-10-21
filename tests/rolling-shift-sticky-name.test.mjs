@@ -23,7 +23,7 @@ assert.match(ui, /class="p-2 rolling-name-col font-medium"/);
 assert.doesNotMatch(ui, /td:first-child|th:first-child/);
 assert.match(ui, /b\.rawCode/);
 assert.match(ui, /cellText = '休'/);
-assert.match(index, /rolling60h-ui\.js\?v=20261007-1/);
+assert.match(index, /rolling60h-ui\.js\?v=20261021-alert/);
 assert.doesNotMatch(index, /td:first-child[\s\S]{0,80}sticky/);
 
 console.log('rolling shift sticky name tests passed');

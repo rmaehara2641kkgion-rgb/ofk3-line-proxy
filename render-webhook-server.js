@@ -3111,6 +3111,16 @@ app.post('/lat-export', function(req, res) {
   });
 });
 
+// ローリングシフト アラート者（最新結果の保存・復元）。点呼同期と同じ一時ディスク方式。
+(function mountRollingAlerts() {
+  var store = require('./rolling-alert-store.js').createStore({
+    fs: fs,
+    filePath: path.join(os.tmpdir(), 'rolling-alerts-latest.json')
+  });
+  store.load();
+  require('./rolling-alert-route.js').mount(app, { store: store });
+})();
+
 require('./harvest-rolling60h-route.js').mount(app, {
   run: function () {
     return require('./harvest-rolling60h-run.js').run({

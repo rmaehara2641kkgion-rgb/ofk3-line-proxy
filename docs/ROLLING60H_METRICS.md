@@ -43,3 +43,20 @@ dry-run 専用。LINE 送信はしない（`sent=false` / `channel=dry-run`）�
 - 履歴の比較は同じ `logicVersion` の直近の実行とだけ行う。旧版（predict-2）の履歴は削除せず保持し、比較には使わない。
 - 初回の predict-3 は比較対象がないため、変更系の指標（blankFilled* / normalToExceed* / resolved* / stillAlert）は 0。
 - 空白セル・数式の空文字は未確定。「休」は確定 0h。不明な記号は 0h にせず判定不能。
+
+# OFK3 ローリングシフト アラート者一覧（rolling-alert-v1）
+OFK3「Rolling 60h」画面の「アラート者」一覧。`rolling-alert-core.js` が判定し、`rolling60h-ui.js` が表示する。
+上の INO-1 / HARVEST の「任意7日窓の全スライド判定」（`computeRolling60h`）とは別の、**対象日（基準日）を当日とする1点判定**。
+
+| 区分 | 条件 |
+|---|---|
+| 超過確定 | 過去6日の**実績**だけで 60h 超 |
+| 超過予測 | 予定（過去の予定日・当日予定）を含めて 60h 超。60h ちょうどは超過ではない |
+| 接近警告 | 過去6日が 49〜60h、かつ当日>0h、かつ合計 60h 以内 |
+| 勤務予定未確認 | 過去6日が 49〜60h だが当日の予定が不明（空白・データなし） |
+| （対象外）当日休 | 過去6日が 49〜60h で当日0h。超過でなければ除外 |
+| （対象外）判定不能 | 過去6日に未取得日（空白・データなし・未定義記号）があり、既知分でも超過でない |
+
+- 超過予測が成立する人は接近警告に重複計上しない。空白セルは 0h にしない。
+- 結果は `GET /rolling-alerts/latest` / `POST /rolling-alerts/save` で最新1件を保存（一時ディスクJSON＋ブラウザ localStorage）。同一データ（指紋一致）の再投入は置換も追記もしない。
+- テスト: `npm run test:rolling-alert`（判定・保存）、`npm run test:rolling-alert-browser`（Chromium実機）。

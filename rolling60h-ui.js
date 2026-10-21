@@ -38,6 +38,7 @@
     limitHours: 60.0,
     warningHours: 60.0,
     stationFilter: 'OFK3',
+    dataImportedAt: null, // 最後にシフト/実績ファイルを投入した時刻(ISO)。集計時刻とは別に保持する
     // 計算結果
     drivers: [], // [{ key, meta, dateList, windows, seriesByDate }]
     diagnostics: { undefinedCodeCounts: {}, warnings: [], rosterDuplicates: [] },
@@ -112,6 +113,16 @@
       '<div id="rolling-undefined-detail" class="text-xs text-ink-lighter mb-3"></div>' +
       '<div id="rolling-duplicate-detail" class="text-xs text-orange-500 mb-3"></div>' +
       '<div id="rolling-period-detail" class="text-xs text-ink-lighter mb-3"></div>' +
+      '<div class="card p-4 mb-4" id="rolling-alert-card">' +
+      '  <div class="flex flex-wrap items-center justify-between gap-2 mb-2">' +
+      '    <h3 class="text-sm font-bold">🚨 ローリングシフト アラート者（過去6日＋当日の7日間）</h3>' +
+      '    <span id="rolling-alert-phase" class="text-xs"></span>' +
+      '  </div>' +
+      '  <div id="rolling-alert-meta" class="text-xs text-ink-lighter mb-2"></div>' +
+      '  <div id="rolling-alert-counts" class="text-xs mb-2"></div>' +
+      '  <div id="rolling-alert-body"></div>' +
+      '  <p class="text-[10px] text-ink-lighter mt-2">判定: 60hちょうどは超過ではありません。接近警告は過去6日が49〜60hで当日の勤務が確認できる人のみ（当日休は除外）。空白・データなしの日は0hにせず「未取得」として扱います。</p>' +
+      '</div>' +
       '<style id="rolling-name-sticky-style">' +
       '#wh60-rolling-subpanel .rolling-grid-scroll{overflow-x:auto;max-width:100%;min-width:0;}' +
       '#wh60-rolling-subpanel .rolling-grid-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;}' +
@@ -133,6 +144,7 @@
     };
     document.getElementById('rolling-btn-roster-reset').onclick = function () {
       STATE.rosterSources = [];
+      STATE.dataImportedAt = null;
       document.getElementById('rolling-roster-status').textContent = '';
       readOptionsFromUI();
       recomputeAndRender();
@@ -161,8 +173,12 @@
     }
     document.getElementById('rolling-reference-date').value = todayStr;
     STATE.referenceDate = todayStr;
+    document.getElementById('rolling-reference-date').addEventListener('change', function () {
+      renderAlerts(); // 基準日が集計済みの対象日とずれたら古い結果の警告を出す
+    });
 
     STATE.initialized = true;
+    restoreAlerts();
   }
 
   function readOptionsFromUI() {
@@ -180,6 +196,7 @@
   function handleRosterFile(evt) {
     var file = evt.target.files[0];
     if (!file) return;
+    evt.target.value = ''; // 同じファイルを選び直しても change が発火するようにする
     var statusEl = document.getElementById('rolling-roster-status');
     statusEl.textContent = '読み込み中...';
     var reader = new FileReader();
@@ -198,6 +215,7 @@
 
         // 「最大2か月分」＝最大2ファイルまで保持。3件目以降は最も古いファイルを
         // 追い出す（FIFO）。既存のクリアボタンで明示的にリセットも可能。
+        STATE.dataImportedAt = new Date().toISOString();
         STATE.rosterSources.push({ label: file.name || 'ファイル' + (STATE.rosterSources.length + 1), sheetsData: sheetsData });
         var evicted = null;
         if (STATE.rosterSources.length > MAX_ROSTER_SOURCES) {
@@ -230,6 +248,7 @@
   function handleAmazonFile(evt) {
     var file = evt.target.files[0];
     if (!file) return;
+    evt.target.value = ''; // 同じファイルを選び直しても change が発火するようにする
     var statusEl = document.getElementById('rolling-amazon-status');
     statusEl.textContent = '読み込み中...';
     var reader = new FileReader();
@@ -248,6 +267,7 @@
         }
         var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, raw: true });
         STATE.amazonRows = rows;
+        STATE.dataImportedAt = new Date().toISOString();
         statusEl.innerHTML = '<span class="text-green-400">✓ ' + sheetName + ' シート読込（' + (rows.length - 1) + '行）</span>';
         readOptionsFromUI();
         recomputeAndRender();
@@ -262,7 +282,24 @@
   // 計算 → 描画
   // ===========================================================================
   function recomputeAndRender() {
-    if (STATE.rosterSources.length === 0 && !STATE.amazonRows) return;
+    try {
+      recomputeAndRenderInner();
+    } catch (ex) {
+      ALERT.seq++;
+      ALERT.phase = 'error';
+      ALERT.error = ex && ex.message ? ex.message : String(ex);
+      renderAlerts();
+      throw ex;
+    }
+  }
+
+  function recomputeAndRenderInner() {
+    if (STATE.rosterSources.length === 0 && !STATE.amazonRows) {
+      ALERT.seq++;
+      ALERT.phase = ALERT.snapshot && ALERT.source === 'restored' ? 'ready' : 'no-data';
+      renderAlerts();
+      return;
+    }
     var RollingCore = global.RollingCore;
     if (!RollingCore) return;
 
@@ -401,6 +438,252 @@
 
     renderSummary();
     renderGrid();
+    runAlertPipeline();
+  }
+
+  // ===========================================================================
+  // アラート者一覧（データ投入 → 判定 → 一覧更新 → 保存）
+  // ===========================================================================
+  var ALERT_CACHE_KEY = 'ofk3.rollingAlerts.latest.v1';
+  var ALERT = {
+    phase: 'no-data', // no-data | computing | ready | error
+    snapshot: null,
+    source: null, // 'computed'(今回の投入から集計) | 'restored'(保存済みを復元)
+    saveState: null, // saving | saved | unchanged | local-only | stale | error
+    error: '',
+    seq: 0, // 新しい集計が始まったら古い非同期結果を捨てるための世代番号
+  };
+
+  function alertCore() {
+    return global.RollingAlertCore;
+  }
+
+  function currentTargetDate() {
+    var input = document.getElementById('rolling-reference-date');
+    return (input && input.value) || STATE.referenceDate;
+  }
+
+  function cacheSnapshot(snap) {
+    try { global.localStorage.setItem(ALERT_CACHE_KEY, JSON.stringify(snap)); } catch (e) {}
+  }
+
+  function readCachedSnapshot() {
+    try {
+      var snap = JSON.parse(global.localStorage.getItem(ALERT_CACHE_KEY) || 'null');
+      return snap && alertCore().validateSnapshot(snap).ok ? snap : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function snapshotStamp(snap) {
+    return Date.parse(snap.dataImportedAt || snap.computedAt) || 0;
+  }
+
+  function runAlertPipeline() {
+    var core = alertCore();
+    var seq = ++ALERT.seq;
+    if (!core) {
+      ALERT.phase = 'error';
+      ALERT.error = 'rolling-alert-core.js が読み込まれていません';
+      renderAlerts();
+      return;
+    }
+    ALERT.phase = 'computing';
+    ALERT.error = '';
+    renderAlerts();
+    // 「集計中」を描画してから判定する。途中で新しい投入があれば seq が進み、この結果は捨てる。
+    setTimeout(function () {
+      if (seq !== ALERT.seq) return;
+      var snap;
+      try {
+        snap = core.buildSnapshot(STATE.drivers, {
+          targetDate: STATE.referenceDate,
+          limitHours: STATE.limitHours,
+          dataImportedAt: STATE.dataImportedAt,
+          computedAt: new Date().toISOString(),
+          sources: STATE.rosterSources.map(function (r) { return r.label; }).concat(STATE.amazonRows ? ['Amazon Daily Working Hour'] : []),
+        });
+      } catch (ex) {
+        ALERT.phase = 'error';
+        ALERT.error = ex && ex.message ? ex.message : String(ex);
+        renderAlerts();
+        return;
+      }
+      ALERT.snapshot = snap;
+      ALERT.source = 'computed';
+      ALERT.phase = 'ready';
+      ALERT.saveState = 'saving';
+      cacheSnapshot(snap);
+      renderAlerts();
+      saveSnapshot(snap, seq);
+    }, 0);
+  }
+
+  function saveSnapshot(snap, seq) {
+    if (typeof global.fetch !== 'function') {
+      ALERT.saveState = 'local-only';
+      renderAlerts();
+      return;
+    }
+    global.fetch('/rolling-alerts/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshot: snap }),
+    })
+      .then(function (res) {
+        return res.json().then(function (body) { return { status: res.status, body: body }; });
+      })
+      .then(function (r) {
+        if (seq !== ALERT.seq) return;
+        ALERT.saveState = r.status === 409 ? 'stale' : r.status >= 400 ? 'error' : r.body.status === 'unchanged' ? 'unchanged' : 'saved';
+        renderAlerts();
+      })
+      .catch(function () {
+        if (seq !== ALERT.seq) return;
+        ALERT.saveState = 'local-only';
+        renderAlerts();
+      });
+  }
+
+  /** ページ再読み込み後: ブラウザ保存 → サーバー保存の順に、新しい方の最新結果を復元する */
+  function restoreAlerts() {
+    var core = alertCore();
+    if (!core) return;
+    var cached = readCachedSnapshot();
+    if (cached && !ALERT.snapshot) {
+      ALERT.snapshot = cached;
+      ALERT.source = 'restored';
+      ALERT.phase = 'ready';
+      renderAlerts();
+    }
+    if (typeof global.fetch !== 'function') return;
+    global.fetch('/rolling-alerts/latest', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (!body || body.status !== 'ok' || !core.validateSnapshot(body.snapshot).ok) return;
+        if (ALERT.source === 'computed') return; // 今回投入した集計を優先
+        if (ALERT.snapshot && snapshotStamp(ALERT.snapshot) >= snapshotStamp(body.snapshot)) return;
+        ALERT.snapshot = body.snapshot;
+        ALERT.source = 'restored';
+        ALERT.phase = 'ready';
+        cacheSnapshot(body.snapshot);
+        renderAlerts();
+      })
+      .catch(function () {});
+  }
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function fmtJst(iso) {
+    if (!iso) return '未取得';
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '未取得';
+    return new Date(t).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false });
+  }
+
+  var CLASS_BADGE = {
+    exceed_confirmed: 'background:#fee2e2;color:#b91c1c;',
+    exceed_forecast: 'background:#ffedd5;color:#c2410c;',
+    approach: 'background:#fef9c3;color:#a16207;',
+    schedule_unconfirmed: 'background:#e5e7eb;color:#374151;',
+  };
+  var SAVE_LABEL = {
+    saving: '保存中…',
+    saved: '保存済み',
+    unchanged: '保存済み（同一データのため変更なし）',
+    'local-only': 'サーバー未保存（このブラウザにのみ保存）',
+    stale: 'サーバーにより新しい結果があるため保存しませんでした',
+    error: '保存失敗',
+  };
+
+  function alertRowHtml(a, dataImportedAt) {
+    var past = a.past6Hours !== null
+      ? fmtHours(a.past6Hours) + '<div class="text-[10px] text-ink-lighter">実績 ' + fmtHours(a.past6ActualHours) + ' / 予定 ' + fmtHours(a.past6PlanHours) + '</div>'
+      : '既知 ' + fmtHours(a.past6KnownHours) + '<div class="text-[10px] text-ink-lighter">未取得 ' + a.past6MissingDates.length + '日</div>';
+    var today = a.todayStatus === 'work' ? fmtHours(a.todayHours)
+      : a.todayStatus === 'off' ? '休 (0.0h)' : '勤務予定未確認';
+    var total = a.rollingTotalHours !== null ? fmtHours(a.rollingTotalHours) : '未確認';
+    var rem;
+    if (!a.remainingExact) {
+      rem = a.remainingHours < 0 ? '超過 +' + fmtHours(-a.remainingHours) + ' 以上' : '未確認';
+    } else {
+      rem = a.remainingHours < 0 ? '超過 +' + fmtHours(-a.remainingHours) : a.remainingHours === 0 ? '残り 0.0h（ちょうど60h）' : '残り ' + fmtHours(a.remainingHours);
+    }
+    return '<tr class="border-b border-gray-700 align-top">' +
+      '<td class="p-2 font-medium">' + esc(a.name || '(氏名未特定)') + '<div class="text-[10px] text-ink-lighter">' + esc(a.transportId || 'Transport ID 未取得') + '</div></td>' +
+      '<td class="p-2 whitespace-nowrap">' + esc(a.targetDate) + '</td>' +
+      '<td class="p-2 whitespace-nowrap"><span class="px-2 py-0.5 rounded font-bold" style="' + CLASS_BADGE[a.alertClass] + '">' + esc(a.label) + '</span></td>' +
+      '<td class="p-2 whitespace-nowrap">' + past + '</td>' +
+      '<td class="p-2 whitespace-nowrap">' + today + '</td>' +
+      '<td class="p-2 whitespace-nowrap">' + total + '</td>' +
+      '<td class="p-2 whitespace-nowrap">' + rem + '</td>' +
+      '<td class="p-2" style="min-width:260px;">' + esc(a.basis) + '</td>' +
+      '<td class="p-2 whitespace-nowrap">' + esc(fmtJst(dataImportedAt)) + '</td>' +
+      '</tr>';
+  }
+
+  function renderAlerts() {
+    var phaseEl = document.getElementById('rolling-alert-phase');
+    var metaEl = document.getElementById('rolling-alert-meta');
+    var countsEl = document.getElementById('rolling-alert-counts');
+    var bodyEl = document.getElementById('rolling-alert-body');
+    if (!phaseEl || !bodyEl) return;
+    var core = alertCore();
+    var snap = ALERT.snapshot;
+    metaEl.innerHTML = '';
+    countsEl.innerHTML = '';
+    phaseEl.innerHTML = '';
+
+    if (ALERT.phase === 'computing') {
+      phaseEl.innerHTML = '<span style="color:#2563eb;font-weight:700;">集計中…</span>';
+      bodyEl.innerHTML = '<div class="text-center text-ink-lighter py-6" data-alert-state="computing">集計中</div>';
+      return;
+    }
+    if (ALERT.phase === 'error') {
+      phaseEl.innerHTML = '<span style="color:#dc2626;font-weight:700;">集計失敗</span>';
+      bodyEl.innerHTML = '<div class="p-3 rounded" style="background:#fee2e2;color:#991b1b;" data-alert-state="error">アラート者の集計に失敗しました: ' + esc(ALERT.error) +
+        '<div class="text-xs mt-1">前回の結果は最新として表示していません。ファイルを確認して「再計算」を押してください。</div></div>';
+      return;
+    }
+    if (ALERT.phase === 'no-data' || !snap) {
+      bodyEl.innerHTML = '<div class="text-center text-ink-lighter py-6" data-alert-state="no-data">シフトデータ未投入</div>';
+      return;
+    }
+
+    var stale = core.isStale(snap, currentTargetDate());
+    phaseEl.innerHTML = stale
+      ? '<span style="color:#b45309;font-weight:700;">⚠ 古い集計結果</span>'
+      : ALERT.source === 'restored'
+      ? '<span style="color:#4b5563;font-weight:700;">保存済み結果を表示</span>'
+      : '<span style="color:#15803d;font-weight:700;">最新</span>';
+    metaEl.innerHTML =
+      '対象日: <b>' + esc(snap.targetDate) + '</b>' +
+      '　データ投入日時: <b>' + esc(fmtJst(snap.dataImportedAt)) + '</b>' +
+      '　集計日時: <b>' + esc(fmtJst(snap.computedAt)) + '</b>' +
+      (ALERT.saveState && ALERT.source === 'computed' ? '　保存: ' + esc(SAVE_LABEL[ALERT.saveState] || '') : '') +
+      (stale ? '<div style="color:#b45309;">この結果は対象日 ' + esc(snap.targetDate) + ' の集計で、現在の基準日 ' + esc(currentTargetDate()) + ' とは異なります。「再計算」で更新してください。</div>' : '');
+
+    var c = snap.counts || {};
+    countsEl.innerHTML =
+      '超過確定 <b>' + (c.exceed_confirmed || 0) + '</b>名 / 超過予測 <b>' + (c.exceed_forecast || 0) + '</b>名 / 接近警告 <b>' + (c.approach || 0) +
+      '</b>名 / 勤務予定未確認 <b>' + (c.schedule_unconfirmed || 0) + '</b>名　（対象外: 判定不能 ' + (c.undetermined || 0) + '名 / 当日休で除外 ' + (c.day_off || 0) + '名 / 全' + (c.driverCount || 0) + '名）';
+
+    if (!snap.alerts.length) {
+      bodyEl.innerHTML = '<div class="text-center text-ink-lighter py-6" data-alert-state="empty">該当者なし</div>';
+      return;
+    }
+    var html = '<div class="rolling-grid-scroll" style="' + (stale ? 'opacity:.55;' : '') + '"><table class="text-xs" style="width:max-content;min-width:100%;border-collapse:collapse;" data-alert-state="list">' +
+      '<thead><tr class="text-left text-ink-lighter border-b border-gray-700">' +
+      ['対象者名', '対象日', 'アラート区分', '過去6日の勤務時間', '当日の勤務予定', 'ローリング7日合計', '60hまで', '判定根拠', 'データ更新日時']
+        .map(function (h) { return '<th class="p-2 whitespace-nowrap">' + h + '</th>'; }).join('') +
+      '</tr></thead><tbody>';
+    snap.alerts.forEach(function (a) { html += alertRowHtml(a, snap.dataImportedAt); });
+    html += '</tbody></table></div>';
+    bodyEl.innerHTML = html;
   }
 
   function renderSummary() {
@@ -676,6 +959,7 @@
       }
     },
     closeModal: closeModal,
+    _alertState: ALERT, // テスト用: 画面の状態確認
   };
 
   global.RollingUI = RollingUI;
