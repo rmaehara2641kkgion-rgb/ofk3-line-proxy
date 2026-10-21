@@ -40,6 +40,7 @@
     stationFilter: 'OFK3',
     // 計算結果
     drivers: [], // [{ key, meta, dateList, windows, seriesByDate }]
+    dispatchOverrides: {},
     diagnostics: { undefinedCodeCounts: {}, warnings: [], rosterDuplicates: [] },
   };
 
@@ -112,6 +113,7 @@
       '<div id="rolling-undefined-detail" class="text-xs text-ink-lighter mb-3"></div>' +
       '<div id="rolling-duplicate-detail" class="text-xs text-orange-500 mb-3"></div>' +
       '<div id="rolling-period-detail" class="text-xs text-ink-lighter mb-3"></div>' +
+      '<div id="rolling-dispatch-host"></div>' +
       '<style id="rolling-name-sticky-style">' +
       '#wh60-rolling-subpanel .rolling-grid-scroll{overflow-x:auto;max-width:100%;min-width:0;}' +
       '#wh60-rolling-subpanel .rolling-grid-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;}' +
@@ -353,11 +355,18 @@
 
     // 4) ドライバー毎にタイムライン構築 → Rolling判定
     var driverResults = [];
+    var dispatchInputs = [];
     Object.keys(driverMeta).forEach(function (key) {
       var meta = driverMeta[key];
       var tid = meta.transportId;
       var roster = rosterBlocksByDriver[key] || {};
       var actual = (tid && actualBlocksByTid[tid]) || {};
+      dispatchInputs.push({
+        transportId: tid || key,
+        name: meta.name || '',
+        actualBlocksByDate: actual,
+        rosterBlocksByDate: roster,
+      });
 
       var allDates = Object.keys(roster).concat(Object.keys(actual));
       if (allDates.length === 0) return;
@@ -392,6 +401,14 @@
 
     STATE.drivers = driverResults;
     STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates };
+    if (global.RollingDispatchUI && document.getElementById('rolling-dispatch-host')) {
+      global.RollingDispatchUI.mount(document.getElementById('rolling-dispatch-host'), {
+        today: STATE.referenceDate,
+        limitHours: STATE.limitHours,
+        drivers: dispatchInputs,
+        overrides: STATE.dispatchOverrides,
+      });
+    }
     STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
       ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
       : null;
