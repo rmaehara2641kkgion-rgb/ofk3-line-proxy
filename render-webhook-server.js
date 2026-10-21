@@ -11,6 +11,7 @@ const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/t
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
 const LineUnlinked = require('./line-unlinked-core.js');
 const MentorActive = require('./mentor-active-store.js');
+const MentorStartup = require('./mentor-startup-route.js');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -779,6 +780,12 @@ app.get('/mentor-active', function(req, res) {
     return res.status(404).json({ status: 'empty', source: 'mentor', activeCount: 0, drivers: [] });
   }
   res.json(Object.assign({ status: 'ok' }, entry));
+});
+
+MentorStartup.mount(app, {
+  dir: path.join(__dirname, 'local'),
+  staleMs: require('./cortex-capture-extension/id-diag-core.js').STALE_MS,
+  log: function (line) { log(line); }
 });
 
 // 住所→緯度経度取得

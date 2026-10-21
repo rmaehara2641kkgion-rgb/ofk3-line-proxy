@@ -1748,6 +1748,27 @@
         view.identityProven = false;
         return view;
       },
+      captureStamps: function () {
+        return {
+          schedulingCapturedAt: scheduling && typeof scheduling.capturedAt === 'string' ? scheduling.capturedAt : null,
+          mentorCapturedAt: mentor && typeof mentor.capturedAt === 'string' ? mentor.capturedAt : null
+        };
+      },
+      startupHandoff: function (selectedDate) {
+        var sink = { rows: [] };
+        var view = buildSuspectList(scheduling, mentor, master, currentNow(), selectedDate, true, identityLinks, sink);
+        view.identityGeneration = identityGeneration;
+        view.identityProven = false;
+        return {
+          view: view,
+          identities: (sink.rows || []).map(function (row) {
+            return {
+              schedulingId: row && typeof row.schedulingId === 'string' ? row.schedulingId : '',
+              status: row && row.status ? row.status : ''
+            };
+          })
+        };
+      },
       exportIdentityLinks: function () {
         return normalizeIdentityLinks(identityLinks).map(function (item) {
           return {

@@ -1,1 +1,5 @@
 node_modules/
+local/mentor-startup-notice.json
+local/mentor-startup-spoken.json
+local/mentor-startup-settings.json
+local/*.tmp
