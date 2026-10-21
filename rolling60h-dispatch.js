@@ -386,6 +386,16 @@
       });
     }
 
+    function noticeKindFor(scope, category) {
+      if (scope === 'today' && category === 'forecast_exceed') return 'today-emergency';
+      if (scope === 'tomorrow' && category === 'forecast_exceed') return 'tomorrow-advance';
+      if (scope === 'today' && category === 'approach') return 'today-approach';
+      if (scope === 'tomorrow' && category === 'approach') return 'tomorrow-approach';
+      if (scope === 'today') return 'today-undetermined';
+      if (scope === 'tomorrow') return 'tomorrow-undetermined';
+      return '';
+    }
+
     function fridayPayload(board, checkedAt) {
       var today = board && board.today ? board.today : '';
       if (!board || board.ok !== true) {
@@ -397,6 +407,8 @@
           stale: true,
           checkedAt: checkedAt || null,
           approachRule: '',
+          noticeKind: 'limit60',
+          safe: false,
           referenceDate: today,
           alerts: [{
             id: 'rolling60h|unavailable|insufficient',
@@ -421,7 +433,9 @@
             : 'insufficient';
           var item = {
             id: ['rolling60h', row.transportId || 'unknown', side.startDate, side.endDate, category].join('|'),
+            noticeKind: noticeKindFor(scope, category),
             category: category,
+            transportId: row.transportId || '',
             driver: row.name || '氏名未設定',
             period: side.startDate && side.endDate ? side.startDate + ' 〜 ' + side.endDate : '',
             startDate: side.startDate || '',
@@ -449,6 +463,8 @@
         stale: false,
         checkedAt: checkedAt || null,
         approachRule: '',
+        noticeKind: 'limit60',
+        safe: board.safe === true,
         referenceDate: today,
         alerts: alerts
       };
