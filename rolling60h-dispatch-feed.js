@@ -128,7 +128,7 @@
         Object.keys(options.rosterByTid[transportId] || {}).forEach(function (date) { rosterDates[date] = true; });
       });
       var rosterList = Object.keys(rosterDates).sort();
-      roster = { ok: true, byTid: options.rosterByTid, file: options.shiftReference || 'fixture', min: rosterList[0] || '', max: rosterList[rosterList.length - 1] || '', dates: rosterList };
+      roster = { ok: true, byTid: options.rosterByTid, names: options.rosterNames || {}, file: options.shiftReference || 'fixture', min: rosterList[0] || '', max: rosterList[rosterList.length - 1] || '', dates: rosterList };
     } else if (options.shiftDir) {
       try {
         roster = require('./harvest-rolling60h-run.js').loadRoster({
@@ -157,7 +157,7 @@
       var rosterDays = roster.byTid ? futureRoster(roster.byTid[transportId], today, actualThrough) : {};
       return {
         transportId: transportId,
-        name: transportId,
+        name: roster.names && roster.names[transportId] ? roster.names[transportId] : '氏名未照合',
         actualBlocksByDate: {},
         rosterBlocksByDate: rosterDays,
         archiveBlocksByDate: coverConfirmedRest(archive.blocksByTransportId[transportId], actualDates, actualThrough)

@@ -319,7 +319,7 @@ const forecastRoster = {
 };
 const forecast = Feed.read({
   fs: fs, path: path, xlsx: XLSX, rolling: Core, root: forecastRoot, today: '2026-10-22',
-  rosterByTid: forecastRoster, shiftReference: 'fixture-shift.xlsx',
+  rosterByTid: forecastRoster, rosterNames: { 'TID-ARCHIVE': '架空太郎' }, shiftReference: 'fixture-shift.xlsx',
   now: function () { return new Date('2026-10-22T00:00:00.000Z'); },
 });
 assert.equal(forecast.actualThrough, '2026-10-21');
@@ -331,6 +331,7 @@ assert.equal(forecast.stale, false);
 const todayAlert = forecast.alerts.find((alert) => alert.endDate === '2026-10-22' && alert.category === 'forecast_exceed');
 const tomorrowAlert = forecast.alerts.find((alert) => alert.endDate === '2026-10-23' && alert.category === 'forecast_exceed');
 assert.equal(todayAlert.noticeKind, 'today-emergency');
+assert.equal(todayAlert.driver, '架空太郎');
 assert.equal(todayAlert.forecastHours, 61);
 assert.equal(tomorrowAlert.noticeKind, 'tomorrow-advance');
 assert.equal(tomorrowAlert.forecastHours, 66);

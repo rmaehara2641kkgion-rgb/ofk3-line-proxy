@@ -124,13 +124,17 @@
           });
           return;
         }
-        sources.push({ transportId: meta.transportId, label: sheetName, blocksByDate: grouped[key].blocksByDate });
+        sources.push({ transportId: meta.transportId, name: meta.name || '', label: sheetName, blocksByDate: grouped[key].blocksByDate });
       });
     });
     var byTid = {};
     sources.forEach(function (source) {
       if (!byTid[source.transportId]) byTid[source.transportId] = [];
       byTid[source.transportId].push({ label: source.label, blocksByDate: source.blocksByDate });
+    });
+    var names = {};
+    sources.forEach(function (source) {
+      if (source.name && !names[source.transportId]) names[source.transportId] = source.name;
     });
     var out = {};
     Object.keys(byTid).forEach(function (tid) {
@@ -152,6 +156,7 @@
     var resolved = rolling.resolveRosterBlanks(out, { extraSymbolDates: extraSymbolDates });
     return {
       byTid: resolved.byTid,
+      names: names,
       unmatchedCount: Object.keys(unmatched).length,
       outsideDates: resolved.outsideDates,
       unconfirmedPersonDays: resolved.unconfirmedPersonDays,
@@ -669,6 +674,7 @@
         reason: 'roster',
         file: baseName(picked.name),
         byTid: roster.byTid,
+        names: roster.names || {},
         min: list[0] || '',
         max: list[list.length - 1] || '',
         dates: list,
