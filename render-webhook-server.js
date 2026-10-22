@@ -3144,6 +3144,38 @@ function dutyRiskGasClient() {
   };
 }
 
+var dailyArchiveService = null;
+try {
+  dailyArchiveService = require('./harvest-daily-archive.js').create({
+    fs: fs,
+    path: path,
+    xlsx: require('xlsx'),
+    rolling: require('./rolling60h-core.js'),
+    sourceDir: require('./harvest-rolling60h-run.js').DAILY_DIR,
+    root: path.join(__dirname, 'local', 'harvest-daily-archive'),
+  });
+} catch (dailyArchiveInitErr) {
+  dailyArchiveService = null;
+  try { log('harvest daily archive unavailable'); } catch (dailyArchiveLogErr) {}
+}
+try {
+  require('./harvest-daily-archive-route.js').mount(app, {
+    isLoopback: require('./harvest-rolling60h-route.js').isLoopback,
+    service: dailyArchiveService,
+  });
+} catch (dailyArchiveRouteErr) {
+  try { log('harvest daily archive route unavailable'); } catch (dailyArchiveRouteLogErr) {}
+}
+try {
+  require('./mentor-startup-route.js').mount(app, {
+    dir: path.join(__dirname, 'local'),
+    staleMs: require('./mentor-startup-schedule.js').DEFAULT_STALE_MS,
+    log: function (line) { log(line); },
+  });
+} catch (mentorStartupErr) {
+  try { log('mentor startup route unavailable'); } catch (mentorStartupLogErr) {}
+}
+
 require('./harvest-rolling60h-route.js').mount(app, {
   run: function () {
     var captured = require('./harvest-rolling60h-run.js').capture({
@@ -3153,6 +3185,7 @@ require('./harvest-rolling60h-route.js').mount(app, {
       rolling: require('./rolling60h-core.js'),
       harvest: require('./harvest-daily-manifest.js'),
       dryRun: require('./inoichi-rolling-dryrun.js'),
+      dailyArchive: dailyArchiveService,
     });
     var summary = captured.summary;
     try {
@@ -3225,6 +3258,12 @@ require('./duty-risk-republish-route.js').mount(app, {
     });
   },
 });
+
+try {
+  if (dailyArchiveService) dailyArchiveService.start();
+} catch (dailyArchiveStartErr) {
+  try { log('harvest daily archive not started'); } catch (dailyArchiveStartLogErr) {}
+}
 
 app.listen(PORT, () => {
   log(`Server running on port ${PORT}`);
