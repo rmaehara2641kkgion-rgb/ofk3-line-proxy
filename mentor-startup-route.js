@@ -60,21 +60,18 @@ function createApi(opts) {
 
   function choose(notices, config, spoken, now) {
     var limit = limitFor(config);
-    var minute = Schedule.tokyoMinute(now);
     var numbered = notices.filter(function (notice) { return notice && notice.cycle; });
     function slot(notice) {
       return config && config.cycles ? config.cycles[notice.cycle] : null;
     }
     var due = numbered.filter(function (notice) {
       var item = slot(notice);
-      return !!(item && item.time && item.time === minute);
+      return !!(item && item.time && Schedule.slotDue(item.time, now));
     });
     var timed = numbered.filter(function (notice) {
       var item = slot(notice);
       return !!(item && item.time);
     });
-    var overallConfigured = !!(config && config.overallTime);
-    var overallDue = overallConfigured && config.overallTime === minute;
     due.sort(function (a, b) { return String(a.cycle).localeCompare(String(b.cycle), 'en'); });
     var state = spoken;
     var texts = [];
@@ -82,6 +79,7 @@ function createApi(opts) {
     var outcome = '';
     var notice = null;
     var scope = '';
+    var slotId = '';
     due.forEach(function (item) {
       var result = Schedule.plan(item, config, state, now, limit);
       if (result.spoken) state = result.spoken;
@@ -92,21 +90,20 @@ function createApi(opts) {
       if (!notice) notice = item;
       scope = 'cycle';
     });
-    if (overallDue) {
-      var aggregate = Notice.overallFromNotices(notices);
-      var overall = Schedule.planOverall(aggregate, config, state, now, limit);
-      if (overall.spoken) state = overall.spoken;
-      if (overall.speak) {
-        texts.push(overall.text);
-        keys.push(overall.key);
-        if (!notice) {
-          notice = aggregate;
-          outcome = overall.outcome;
-          scope = 'overall';
-        }
-      } else if (!texts.length) {
-        return { speak: false, reason: overall.reason, notice: aggregate, text: overall.text, outcome: overall.outcome, key: overall.key || '', scope: 'overall' };
+    var aggregate = Notice.overallFromNotices(notices);
+    var slotResult = Schedule.planSlots(aggregate, config, state, now, limit);
+    if (slotResult.spoken) state = slotResult.spoken;
+    if (slotResult.speak) {
+      texts.push(slotResult.text);
+      keys.push(slotResult.key);
+      slotId = slotResult.slotId || '';
+      if (!notice) {
+        notice = aggregate;
+        outcome = slotResult.outcome;
+        scope = 'slot';
       }
+    } else if (!texts.length && slotResult.reason && slotResult.reason !== 'unset' && slotResult.reason !== 'not-due') {
+      return { speak: false, reason: slotResult.reason, notice: aggregate, text: slotResult.text, outcome: slotResult.outcome, key: slotResult.key || '', scope: 'slot', slotId: slotResult.slotId || '' };
     }
     if (!texts.length && due.length) {
       var blocked = Schedule.plan(due[0], config, spoken, now, limit);
@@ -115,9 +112,10 @@ function createApi(opts) {
     if (!texts.length) {
       var sample = timed[0] || numbered[0] || notices[0] || null;
       var said = Schedule.speech(sample, now, limit);
-      return { speak: false, reason: timed.length || overallConfigured ? 'not-due' : 'unset', notice: sample, text: said.text, outcome: said.outcome, scope: '' };
+      var slotConfigured = Schedule.enabledSlots(config).length > 0;
+      return { speak: false, reason: timed.length || slotConfigured ? 'not-due' : 'unset', notice: sample, text: said.text, outcome: said.outcome, scope: '' };
     }
-    return { speak: true, reason: 'due', notice: notice, text: texts.join(''), outcome: outcome, spoken: state, key: keys[0], keys: keys, scope: scope };
+    return { speak: true, reason: 'due', notice: notice, text: texts.join(''), outcome: outcome, spoken: state, key: keys[0], keys: keys, scope: scope, slotId: slotId };
   }
 
   function readSettings() {
@@ -141,6 +139,38 @@ function createApi(opts) {
     return settings && typeof settings.freshnessMs === 'number' ? settings.freshnessMs : staleMs;
   }
 
+  function noticeFingerprint(notice) {
+    var people = (Array.isArray(notice && notice.unconfirmed) ? notice.unconfirmed : []).map(function (row) {
+      return [row && row.schedulingId || '', row && row.name || '', row && row.status || ''].join('~');
+    }).join(';');
+    return [
+      notice && notice.date || '',
+      notice && notice.cycle || '',
+      notice && notice.outcome || '',
+      notice && notice.outcomeReason || '',
+      notice && notice.evaluatedCount,
+      notice && notice.suspectCount,
+      notice && notice.undeterminedCount,
+      notice && notice.activeCandidateCount,
+      notice && notice.schedulingCapturedAt || '',
+      notice && notice.mentorCapturedAt || '',
+      people
+    ].join('|');
+  }
+
+  function keepExistingJudgedAt(existing, incoming) {
+    var previous = {};
+    (existing || []).forEach(function (notice) {
+      previous[noticeFingerprint(notice)] = notice;
+    });
+    return (incoming || []).map(function (notice) {
+      var stored = previous[noticeFingerprint(notice)];
+      if (!stored || !stored.judgedAt) return notice;
+      notice.judgedAt = stored.judgedAt;
+      return notice;
+    });
+  }
+
   function summary(notice) {
     return {
       ok: true,
@@ -154,7 +184,17 @@ function createApi(opts) {
       endedReferenceCount: notice ? notice.endedReferenceCount : null,
       suspectCount: notice ? notice.suspectCount : null,
       undeterminedCount: notice ? notice.undeterminedCount : null,
-      confirmedUnstartedCount: notice ? notice.confirmedUnstartedCount : 0
+      confirmedUnstartedCount: notice ? notice.confirmedUnstartedCount : 0,
+      mentorCapturedAt: notice ? notice.mentorCapturedAt || null : null,
+      judgedAt: notice ? notice.judgedAt || null : null,
+      sample: !!(notice && notice.sample),
+      people: Array.isArray(notice && notice.unconfirmed) ? notice.unconfirmed.map(function (row) {
+        return {
+          schedulingId: row && typeof row.schedulingId === 'string' ? row.schedulingId : '',
+          name: row && typeof row.name === 'string' ? row.name : '',
+          status: row && typeof row.status === 'string' ? row.status : ''
+        };
+      }) : []
     };
   }
 
@@ -172,8 +212,16 @@ function createApi(opts) {
           assignments: body.assignments,
           schedulingCapturedAt: body.schedulingCapturedAt,
           mentorCapturedAt: body.mentorCapturedAt,
-          judgedAt: body.judgedAt
+          judgedAt: body.judgedAt,
+          sample: body.sample === true
         });
+        var existing = readNotices();
+        var incomingUnavailable = notices.length > 0 && notices.every(function (notice) { return notice.outcome === 'unavailable'; });
+        var existingUseful = existing.some(function (notice) { return notice && notice.outcome && notice.outcome !== 'unavailable'; });
+        if (incomingUnavailable && existingUseful) {
+          return { status: 200, body: Object.assign(summary(existing[0]), { kept: true }) };
+        }
+        notices = keepExistingJudgedAt(existing, notices);
         writeJson(noticeFile, { version: 2, notices: notices });
         log('mentor-startup saved notices=' + notices.length + ' cycles=' + notices.map(function (notice) { return notice.cycle || '-'; }).join(','));
         if (notices.length === 1) return { status: 200, body: summary(notices[0]) };
@@ -214,9 +262,7 @@ function createApi(opts) {
         var config = readSettings();
         if (pathname === '/mentor-startup/manual') {
           var day = Schedule.speechOverall(Notice.overallFromNotices(currentNotices), now, limitFor(config));
-          var manualText = day.text + currentNotices.map(function (notice) {
-            return Schedule.speech(notice, now, limitFor(config)).text;
-          }).join('');
+          var manualText = day.text;
           var manualNotice = currentNotices[0] || null;
           return { status: 200, body: Object.assign(summary(manualNotice), { speak: false, text: manualText || Schedule.FAILURE, reason: 'manual', scope: 'overall', notices: currentNotices.map(summary) }) };
         }
@@ -224,7 +270,7 @@ function createApi(opts) {
         var result = choose(currentNotices, config, spoken, now);
         if (result.spoken) writeJson(spokenFile, result.spoken);
         if (result.speak) log('mentor-startup due outcome=' + result.outcome + ' scope=' + (result.scope || '-'));
-        return { status: 200, body: Object.assign(summary(result.notice), speechSummary(result.notice, result), { speak: result.speak, text: result.text, key: result.key || '', keys: result.keys || [], reason: result.reason, scope: result.scope || '' }) };
+        return { status: 200, body: Object.assign(summary(result.notice), speechSummary(result.notice, result), { speak: result.speak, text: result.text, key: result.key || '', keys: result.keys || [], reason: result.reason, scope: result.scope || '', slotId: result.slotId || '' }) };
       }
       return { status: 404, body: { ok: false, reason: 'not-found' } };
     } catch (e) {
