@@ -48,6 +48,16 @@
     return missing;
   }
 
+  function coverConfirmedRest(blocks, coveredDates, actualThrough) {
+    var out = {};
+    Object.keys(blocks || {}).forEach(function (date) { out[date] = blocks[date]; });
+    (coveredDates || []).forEach(function (date) {
+      if (actualThrough && date > actualThrough) return;
+      if (!Object.prototype.hasOwnProperty.call(out, date)) out[date] = [];
+    });
+    return out;
+  }
+
   function futureRoster(blocks, today, actualThrough) {
     var out = {};
     Object.keys(blocks || {}).forEach(function (date) {
@@ -150,7 +160,7 @@
         name: transportId,
         actualBlocksByDate: {},
         rosterBlocksByDate: rosterDays,
-        archiveBlocksByDate: archive.blocksByTransportId[transportId]
+        archiveBlocksByDate: coverConfirmedRest(archive.blocksByTransportId[transportId], actualDates, actualThrough)
       };
     });
     if ((options.shiftDir || options.rosterByTid) && !drivers.some(function (driver) { return Object.keys(driver.rosterBlocksByDate).length; })) {

@@ -358,6 +358,44 @@ assert.equal(stopped.actualThrough, '2026-10-19');
 assert.equal(stopped.safe, false);
 assert.equal(stopped.stale, true);
 assert.equal(stopped.alerts.some((alert) => alert.category === 'forecast_exceed'), false);
+
+const sparseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'r60-sparse-'));
+const sparseRows = [header];
+['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21'].forEach((date) => {
+  sparseRows.push(['TID-COVER', date, 1, 'OFK3']);
+});
+sparseRows.push(['TID-ARCHIVE', '2026-10-21', 8, 'OFK3']);
+sparseRows.push(['TID-OTHER', '2026-10-16', 8, 'OFK3']);
+const sparseBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(sparseBook, XLSX.utils.aoa_to_sheet(sparseRows), 'Report5_Daily_Data');
+const sparseRaw = XLSX.write(sparseBook, { type: 'buffer', bookType: 'xlsx' });
+const sparseHash = crypto.createHash('sha256').update(sparseRaw).digest('hex');
+fs.mkdirSync(path.join(sparseRoot, 'files', '2026-10-21'), { recursive: true });
+fs.writeFileSync(path.join(sparseRoot, 'files', '2026-10-21', sparseHash + '.xlsx'), sparseRaw);
+fs.writeFileSync(path.join(sparseRoot, 'state.json'), JSON.stringify({
+  version: 1,
+  revisions: [{ filenameDate: '2026-10-21', maxDate: '2026-10-21', contentHash: sparseHash, sourceName: 'Daily_AMZL_JP_Working_Hour_2026-10-21_fixture.xlsx' }],
+}));
+function blankRoster() {
+  return [{ code: 'BLANK', rawCode: '', source: 'roster', hours: null, defined: false, blank: true }];
+}
+const sparse = Feed.read({
+  fs: fs, path: path, xlsx: XLSX, rolling: Core, root: sparseRoot, today: '2026-10-22',
+  rosterByTid: {
+    'TID-COVER': { '2026-10-22': rosterBlock(1), '2026-10-23': rosterBlock(1) },
+    'TID-ARCHIVE': { '2026-10-22': rosterBlock(13), '2026-10-23': rosterBlock(13) },
+    'TID-OTHER': { '2026-10-22': blankRoster(), '2026-10-23': rosterBlock(13) },
+  },
+  now: function () { return new Date('2026-10-22T00:00:00.000Z'); },
+});
+const sparseToday = sparse.alerts.find((alert) => alert.transportId === 'TID-ARCHIVE' && alert.endDate === '2026-10-22');
+const sparseTomorrow = sparse.alerts.find((alert) => alert.transportId === 'TID-ARCHIVE' && alert.endDate === '2026-10-23');
+assert.equal(sparseToday, undefined);
+assert.equal(sparseTomorrow, undefined);
+assert.equal(sparse.safe, false);
+assert.equal(sparse.alerts.find((alert) => alert.transportId === 'TID-OTHER' && alert.endDate === '2026-10-22').category, 'duty_unconfirmed');
+assert.equal(sparse.alerts.some((alert) => alert.category === 'forecast_exceed'), false);
+fs.rmSync(sparseRoot, { recursive: true, force: true });
 fs.rmSync(forecastRoot, { recursive: true, force: true });
 fs.rmSync(stoppedRoot, { recursive: true, force: true });
 
