@@ -15,8 +15,11 @@
   "host_permissions": [
     "https://logistics.amazon.co.jp/*",
     "https://logistics.amazon.com/*",
+    "https://vrm-mentor.edriving.com/*",
     "https://ofk3-line-proxy-1.onrender.com/*",
-    "https://ofk3-cortex-preview.onrender.com/*"
+    "https://ofk3-cortex-preview.onrender.com/*",
+    "http://127.0.0.1:3000/*",
+    "http://localhost:3000/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -41,6 +44,72 @@
       ],
       "js": [
         "bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://logistics.amazon.co.jp/scheduling/*"
+      ],
+      "js": [
+        "id-diag-core.js",
+        "scheduling-capture.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://logistics.amazon.co.jp/scheduling/*"
+      ],
+      "js": [
+        "scheduling-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://vrm-mentor.edriving.com/*"
+      ],
+      "js": [
+        "id-diag-core.js",
+        "mentor-capture.js",
+        "id-diag-panel.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://vrm-mentor.edriving.com/*"
+      ],
+      "js": [
+        "mentor-bridge.js",
+        "mentor-diag-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://ofk3-line-proxy-1.onrender.com/index.html",
+        "https://ofk3-line-proxy-1.onrender.com/"
+      ],
+      "js": [
+        "master-capture.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://ofk3-line-proxy-1.onrender.com/index.html",
+        "https://ofk3-line-proxy-1.onrender.com/"
+      ],
+      "js": [
+        "master-bridge.js"
       ],
       "run_at": "document_start",
       "world": "ISOLATED"

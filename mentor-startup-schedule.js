@@ -11,6 +11,8 @@
 
   var FAILURE = 'Mentorの最新起動状況を確認できませんでした。画面を確認してください。';
   var WITHHELD = 'Mentor起動状況を報告します。未起動と断定できる人はいません。画面で確認してください。';
+  var SUSPECT = 'Mentor未起動疑い（要確認）';
+  var UNKNOWN = '判定不能（原因付き）';
   var DEFAULT_STALE_MS = 15 * 60 * 1000;
   var PENDING_MS = 3 * 60 * 1000;
   var TIME_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -33,6 +35,65 @@
 
   function clearText(cycle) {
     return 'Mentor起動状況を確認しました。' + cyclePhrase(cycle) + '未起動者は0名です。';
+  }
+
+  function personWho(row) {
+    var name = speakableName(row && row.name);
+    if (name) return name + 'さん';
+    var id = row && typeof row.schedulingId === 'string' ? row.schedulingId.trim() : '';
+    if (!id || id.length > 40 || /[。、\n\r<>]/.test(id)) return '';
+    return '識別子' + id;
+  }
+
+  function personStatus(row) {
+    if (row && row.status === SUSPECT) return '未起動の疑い';
+    if (row && row.status === UNKNOWN) return '判定不能';
+    return '状況は未確認';
+  }
+
+  function peopleSentences(rows) {
+    var lines = [];
+    var hidden = 0;
+    (Array.isArray(rows) ? rows : []).forEach(function (row) {
+      var who = personWho(row);
+      if (!who) {
+        hidden += 1;
+        return;
+      }
+      if (lines.length >= 5) {
+        hidden += 1;
+        return;
+      }
+      lines.push(who + 'は' + personStatus(row) + 'です。');
+    });
+    var text = lines.join('');
+    if (hidden > 0) text += 'ほか' + hidden + '名は画面で確認してください。';
+    return text;
+  }
+
+  function capturedPhrase(notice) {
+    var iso = notice && (notice.mentorCapturedAt || notice.judgedAt);
+    var time = Date.parse(iso || '');
+    if (!isFinite(time)) return '';
+    var parts = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(new Date(time));
+    var month = '';
+    var day = '';
+    var hour = '';
+    var minute = '';
+    parts.forEach(function (part) {
+      if (part.type === 'month') month = part.value;
+      if (part.type === 'day') day = part.value;
+      if (part.type === 'hour') hour = part.value;
+      if (part.type === 'minute') minute = part.value;
+    });
+    return 'Mentorの取得時刻は' + month + '月' + day + '日' + hour + '時' + minute + '分です。';
   }
 
   function countText(cycle, suspectCount, undeterminedCount) {
@@ -68,7 +129,7 @@
     if ((notice.suspectCount || 0) > 0 || (notice.undeterminedCount || 0) > 0) {
       return {
         outcome: 'withheld',
-        text: countText(notice.cycle, notice.suspectCount || 0, notice.undeterminedCount || 0)
+        text: countText(notice.cycle, notice.suspectCount || 0, notice.undeterminedCount || 0) + peopleSentences(notice.unconfirmed) + capturedPhrase(notice)
       };
     }
     var people = Array.isArray(notice.confirmedUnstarted) ? notice.confirmedUnstarted : [];
@@ -112,7 +173,7 @@
     }
     return {
       outcome: 'withheld',
-      text: overallText(notice.suspectCount || 0, notice.undeterminedCount || 0)
+      text: overallText(notice.suspectCount || 0, notice.undeterminedCount || 0) + peopleSentences(notice.unconfirmed) + capturedPhrase(notice)
     };
   }
 

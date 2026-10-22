@@ -49,12 +49,21 @@
       '判定不能 ' + (payload.undeterminedCount == null ? '不明' : payload.undeterminedCount),
       '未起動断定 ' + (payload.confirmedUnstartedCount == null ? 0 : payload.confirmedUnstartedCount)
     ];
+    var captured = payload.mentorCapturedAt || payload.judgedAt || '';
+    if (captured) lines.push('取得時刻 ' + captured);
+    (Array.isArray(payload.people) ? payload.people : []).forEach(function (person) {
+      var name = person && typeof person.name === 'string' ? person.name.trim() : '';
+      var who = name && name !== '要確認' && name !== '取得不可' ? name : (person && person.schedulingId ? '識別子 ' + person.schedulingId : '識別子なし');
+      lines.push(who + ' / ' + (person && person.status ? person.status : '状況は未確認'));
+    });
+    if (payload.sample === true) lines.push('これはテストデータです');
     if (payload.text) lines.push(payload.text);
     box.textContent = lines.join(' / ');
   }
   function audioBusy() {
     return window.__FRIDAY_CALENDAR_SPEAKING === true
       || window.__FRIDAY_CALENDAR_STARTUP === 'pending'
+      || window.__FRIDAY_SPEECH_BUSY === true
       || !!(window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending));
   }
   function waitIdle() {

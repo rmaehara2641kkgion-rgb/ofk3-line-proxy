@@ -141,6 +141,38 @@ function createApi(opts) {
     return settings && typeof settings.freshnessMs === 'number' ? settings.freshnessMs : staleMs;
   }
 
+  function noticeFingerprint(notice) {
+    var people = (Array.isArray(notice && notice.unconfirmed) ? notice.unconfirmed : []).map(function (row) {
+      return [row && row.schedulingId || '', row && row.name || '', row && row.status || ''].join('~');
+    }).join(';');
+    return [
+      notice && notice.date || '',
+      notice && notice.cycle || '',
+      notice && notice.outcome || '',
+      notice && notice.outcomeReason || '',
+      notice && notice.evaluatedCount,
+      notice && notice.suspectCount,
+      notice && notice.undeterminedCount,
+      notice && notice.activeCandidateCount,
+      notice && notice.schedulingCapturedAt || '',
+      notice && notice.mentorCapturedAt || '',
+      people
+    ].join('|');
+  }
+
+  function keepExistingJudgedAt(existing, incoming) {
+    var previous = {};
+    (existing || []).forEach(function (notice) {
+      previous[noticeFingerprint(notice)] = notice;
+    });
+    return (incoming || []).map(function (notice) {
+      var stored = previous[noticeFingerprint(notice)];
+      if (!stored || !stored.judgedAt) return notice;
+      notice.judgedAt = stored.judgedAt;
+      return notice;
+    });
+  }
+
   function summary(notice) {
     return {
       ok: true,
@@ -154,7 +186,17 @@ function createApi(opts) {
       endedReferenceCount: notice ? notice.endedReferenceCount : null,
       suspectCount: notice ? notice.suspectCount : null,
       undeterminedCount: notice ? notice.undeterminedCount : null,
-      confirmedUnstartedCount: notice ? notice.confirmedUnstartedCount : 0
+      confirmedUnstartedCount: notice ? notice.confirmedUnstartedCount : 0,
+      mentorCapturedAt: notice ? notice.mentorCapturedAt || null : null,
+      judgedAt: notice ? notice.judgedAt || null : null,
+      sample: !!(notice && notice.sample),
+      people: Array.isArray(notice && notice.unconfirmed) ? notice.unconfirmed.map(function (row) {
+        return {
+          schedulingId: row && typeof row.schedulingId === 'string' ? row.schedulingId : '',
+          name: row && typeof row.name === 'string' ? row.name : '',
+          status: row && typeof row.status === 'string' ? row.status : ''
+        };
+      }) : []
     };
   }
 
@@ -172,8 +214,16 @@ function createApi(opts) {
           assignments: body.assignments,
           schedulingCapturedAt: body.schedulingCapturedAt,
           mentorCapturedAt: body.mentorCapturedAt,
-          judgedAt: body.judgedAt
+          judgedAt: body.judgedAt,
+          sample: body.sample === true
         });
+        var existing = readNotices();
+        var incomingUnavailable = notices.length > 0 && notices.every(function (notice) { return notice.outcome === 'unavailable'; });
+        var existingUseful = existing.some(function (notice) { return notice && notice.outcome && notice.outcome !== 'unavailable'; });
+        if (incomingUnavailable && existingUseful) {
+          return { status: 200, body: Object.assign(summary(existing[0]), { kept: true }) };
+        }
+        notices = keepExistingJudgedAt(existing, notices);
         writeJson(noticeFile, { version: 2, notices: notices });
         log('mentor-startup saved notices=' + notices.length + ' cycles=' + notices.map(function (notice) { return notice.cycle || '-'; }).join(','));
         if (notices.length === 1) return { status: 200, body: summary(notices[0]) };

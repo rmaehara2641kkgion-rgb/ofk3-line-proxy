@@ -107,6 +107,7 @@ var MentorStartupCycle = (function () {
       schedulingCapturedAt: stamp(meta.schedulingCapturedAt),
       mentorCapturedAt: stamp(meta.mentorCapturedAt),
       judgedAt: stamp(meta.judgedAt),
+      sample: meta.sample === true,
       outcome: outcome,
       outcomeReason: reason,
       sources: sources
@@ -130,7 +131,8 @@ var MentorStartupCycle = (function () {
       identities: identities,
       schedulingCapturedAt: meta.schedulingCapturedAt,
       mentorCapturedAt: meta.mentorCapturedAt,
-      judgedAt: meta.judgedAt
+      judgedAt: meta.judgedAt,
+      sample: meta.sample === true
     });
     notice.confirmedUnstartedCount = 0;
     notice.confirmedUnstarted = [];
@@ -143,7 +145,8 @@ var MentorStartupCycle = (function () {
       identities: meta.identities,
       schedulingCapturedAt: meta.schedulingCapturedAt,
       mentorCapturedAt: meta.mentorCapturedAt,
-      judgedAt: meta.judgedAt
+      judgedAt: meta.judgedAt,
+      sample: meta.sample === true
     });
     if (base.outcome === 'unavailable' || !Array.isArray(meta.assignments)) {
       if (!base.cycle) base.cycleReason = base.outcome === 'unavailable' ? base.outcomeReason : (MentorStartupCycle ? MentorStartupCycle.NO_FIELD : '');
@@ -182,6 +185,7 @@ var MentorStartupCycle = (function () {
     var seen = Object.create(null);
     var suspect = 0;
     var undetermined = 0;
+    var people = [];
     if (!unavailable) {
       list.forEach(function (notice) {
         (Array.isArray(notice.unconfirmed) ? notice.unconfirmed : []).forEach(function (row) {
@@ -193,6 +197,7 @@ var MentorStartupCycle = (function () {
           }
           if (row.status === SUSPECT) suspect += 1;
           else if (row.status === UNKNOWN) undetermined += 1;
+          people.push({ schedulingId: id, name: typeof row.name === 'string' ? row.name : '', status: row.status || '' });
         });
       });
     }
@@ -205,6 +210,8 @@ var MentorStartupCycle = (function () {
       undeterminedCount: unavailable ? null : undetermined,
       confirmedUnstartedCount: 0,
       confirmedUnstarted: [],
+      unconfirmed: people,
+      sample: list.some(function (notice) { return notice.sample === true; }),
       outcome: unavailable ? 'unavailable' : 'withheld',
       outcomeReason: unavailable ? (first.outcomeReason || '未取得') : '全体',
       schedulingCapturedAt: first.schedulingCapturedAt || null,

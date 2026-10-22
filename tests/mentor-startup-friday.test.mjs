@@ -89,8 +89,10 @@ const suspectNotice = Route.handle({ method: 'GET', path: '/mentor-startup/notic
 assert(suspectNotice.confirmedUnstarted.length === 0, 'stored notice has no confirmed unstarted people');
 assert(suspectNotice.unconfirmed.map(function (row) { return row.schedulingId; }).sort().join() === [sched, other].sort().join(), 'each scheduling id stays attached');
 const suspectSpeech = Schedule.speech(suspectNotice, NOW, Core.STALE_MS);
-assert(suspectSpeech.outcome === 'withheld' && suspectSpeech.text === 'Mentor起動状況を報告します。サイクル1で未起動の疑いが2名います。画面で確認してください。', 'suspects are reported as a count');
-assert(suspectSpeech.text.indexOf('山田') < 0 && suspectSpeech.text.indexOf('佐藤') < 0, 'unconfirmed names are absent from speech');
+assert(suspectSpeech.outcome === 'withheld' && suspectSpeech.text.indexOf('サイクル1で未起動の疑いが2名') >= 0, 'suspects are reported as a count');
+assert(suspectSpeech.text.indexOf('佐藤 花子さんは未起動の疑いです。') >= 0 && suspectSpeech.text.indexOf('山田 太郎さんは未起動の疑いです。') >= 0, 'each suspect is named with that status');
+assert(suspectSpeech.text.indexOf('未起動者は') < 0, 'a suspect is not spoken as a confirmed unstarted person');
+assert(suspectSpeech.text.indexOf('Mentorの取得時刻は10月14日10時00分です。') >= 0, 'the capture time is spoken once');
 
 const activeBook = load([person(sched, '山田', '太郎')], [mentorRow(sched, '山田', '太郎')]);
 const activeView = activeBook.suspectView(DAY, true);
@@ -176,7 +178,7 @@ const unset = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote
 assert(unset.body.speak === false && unset.body.reason === 'unset', 'an unset cycle time does not speak');
 publish(dir, suspectHandoff, assigned([sched, other], 'DCX47'));
 const due = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: NOW, dir: dir });
-assert(due.body.speak === true && due.body.cycle === '1' && due.body.text === 'Mentor起動状況を報告します。サイクル1で未起動の疑いが2名います。画面で確認してください。' && due.body.text.indexOf('山田') < 0, 'the due cycle speaks its own suspect count');
+assert(due.body.speak === true && due.body.cycle === '1' && due.body.text.indexOf('サイクル1で未起動の疑いが2名') >= 0 && due.body.text.indexOf('山田 太郎さんは未起動の疑いです。') >= 0, 'the due cycle speaks its own suspect count and names');
 const second = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: NOW, dir: dir });
 assert(second.body.speak === false && second.body.reason === 'in-flight', 'the same generation is not spoken twice');
 const failed = Route.handle({ method: 'POST', path: '/mentor-startup/ack', remote: '127.0.0.1', now: NOW, dir: dir, body: { key: due.body.key, ok: false } });
@@ -195,7 +197,7 @@ const restarted = JSON.parse(child.stdout);
 assert(restarted.speak === false && restarted.reason === 'already-spoken', 'a restarted process does not repeat the generation');
 
 const manual = Route.handle({ method: 'GET', path: '/mentor-startup/manual', remote: '127.0.0.1', now: NOW, dir: dir });
-assert(manual.body.reason === 'manual' && manual.body.text.indexOf('未起動の疑いが2名') >= 0 && manual.body.text.indexOf('山田') < 0, 'manual readout does not require the clock');
+assert(manual.body.reason === 'manual' && manual.body.text.indexOf('未起動の疑いが2名') >= 0 && manual.body.text.indexOf('山田 太郎さんは未起動の疑いです。') >= 0, 'manual readout names the suspects without waiting for the clock');
 const afterManual = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: NOW, dir: dir });
 assert(afterManual.body.reason === 'already-spoken', 'manual readout does not erase the auto-speech record');
 
@@ -261,7 +263,7 @@ const splitSaved = publish(splitDir, suspectHandoff, [
 ]);
 assert(splitSaved.body.notices.length === 2, 'one route cycle each');
 const atCycle1 = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: NOW, dir: splitDir });
-assert(atCycle1.body.speak === true && atCycle1.body.cycle === '1' && atCycle1.body.text === 'Mentor起動状況を報告します。サイクル1で未起動の疑いが1名います。画面で確認してください。', 'cycle 1 time speaks only cycle 1');
+assert(atCycle1.body.speak === true && atCycle1.body.cycle === '1' && atCycle1.body.text.indexOf('サイクル1で未起動の疑いが1名') >= 0 && atCycle1.body.text.indexOf('未起動者は') < 0, 'cycle 1 time speaks only cycle 1');
 assert(atCycle1.body.text.indexOf('サイクル2') < 0 && atCycle1.body.text.indexOf('佐藤') < 0, 'cycle 1 speech does not take another cycle or a name');
 Route.handle({ method: 'POST', path: '/mentor-startup/ack', remote: '127.0.0.1', now: NOW, dir: splitDir, body: { key: atCycle1.body.key, ok: true } });
 const atCycle2 = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: new Date('2026-10-14T01:05:00.000Z'), dir: splitDir });
@@ -322,8 +324,8 @@ const counted = Notice.noticesFromSuspectView({
   ]
 }, meta()));
 const countedText = Schedule.speech(counted[0], NOW, Core.STALE_MS).text;
-assert(counted.length === 1 && countedText === 'Mentor起動状況を報告します。サイクル1で未起動の疑いが3名います。判定不能は1名です。画面で確認してください。', 'undetermined people are counted apart from suspects');
-assert(countedText.indexOf('山田') < 0 && countedText.indexOf('高橋') < 0 && counted[0].confirmedUnstartedCount === 0, 'neither group is named or confirmed unstarted');
+assert(counted.length === 1 && countedText.indexOf('未起動の疑いが3名') >= 0 && countedText.indexOf('判定不能は1名') >= 0, 'undetermined people are counted apart from suspects');
+assert(countedText.indexOf('山田 太郎さんは未起動の疑いです。') >= 0 && countedText.indexOf('高橋') >= 0 && countedText.indexOf('判定不能です。') >= 0 && counted[0].confirmedUnstartedCount === 0, 'each person keeps their own status and nobody is confirmed unstarted');
 
 const doubled = Notice.overallFromNotices([{
   outcome: 'withheld',
@@ -339,7 +341,7 @@ const doubled = Notice.overallFromNotices([{
   judgedAt: FRESH
 }]);
 assert(doubled.suspectCount === 1 && doubled.undeterminedCount === 1 && doubled.confirmedUnstartedCount === 0, 'the same scheduling id is counted once');
-assert(Schedule.speechOverall(doubled, NOW, Core.STALE_MS).text === 'Mentor起動状況を報告します。本日の未起動の疑いは1名、判定不能は1名です。画面で確認してください。', 'the day report names neither group as confirmed unstarted');
+assert(Schedule.speechOverall(doubled, NOW, Core.STALE_MS).text.indexOf('本日の未起動の疑いは1名、判定不能は1名です。') >= 0 && Schedule.speechOverall(doubled, NOW, Core.STALE_MS).text.indexOf('未起動者は') < 0, 'the day report keeps the two statuses separate');
 
 const dayDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mentor-startup-day-'));
 const daySettings = Route.handle({ method: 'GET', path: '/mentor-startup/settings', remote: '127.0.0.1', now: NOW, dir: dayDir });
@@ -354,8 +356,8 @@ Route.handle({
 });
 publish(dayDir, suspectHandoff, [{ transportId: sched, routeCode: 'DCX47' }]);
 const dayPlan = Route.handle({ method: 'GET', path: '/mentor-startup/plan', remote: '127.0.0.1', now: NOW, dir: dayDir });
-assert(dayPlan.body.speak === true && dayPlan.body.scope === 'overall' && dayPlan.body.text === 'Mentor起動状況を報告します。本日の未起動の疑いは2名、判定不能は0名です。画面で確認してください。', 'the day clock includes people whose cycle is unknown');
-assert(dayPlan.body.text.indexOf('サイクル') < 0 && dayPlan.body.text.indexOf('未起動者') < 0 && dayPlan.body.text.indexOf('山田') < 0, 'the day report does not assign a cycle or read a name');
+assert(dayPlan.body.speak === true && dayPlan.body.scope === 'overall' && dayPlan.body.text.indexOf('本日の未起動の疑いは2名、判定不能は0名です。') >= 0, 'the day clock includes people whose cycle is unknown');
+assert(dayPlan.body.text.indexOf('サイクル') < 0 && dayPlan.body.text.indexOf('未起動者は') < 0 && dayPlan.body.text.indexOf('山田 太郎さんは未起動の疑いです。') >= 0, 'the day report names the person without assigning a cycle or a confirmed unstarted judgment');
 const dayKey = dayPlan.body.key;
 assert(dayKey.indexOf('|overall|') >= 0, 'the day report uses its own generation key');
 Route.handle({ method: 'POST', path: '/mentor-startup/ack', remote: '127.0.0.1', now: NOW, dir: dayDir, body: { key: dayKey, ok: true } });
@@ -408,5 +410,27 @@ assert(fs.existsSync(path.join(repo, 'duty-risk-feed-route.js')) && fs.existsSyn
 const friday = fs.readFileSync(path.join(repo, 'friday/mentor-startup-alerts.js'), 'utf8');
 assert(friday.indexOf('/mentor-startup/plan') >= 0 && friday.indexOf('/mentor-startup/ack') >= 0 && friday.indexOf('/mentor-startup/manual') >= 0, 'FRIDAY uses the scheduled, ack, and manual paths');
 assert(friday.indexOf('localStorage') >= 0, 'FRIDAY remembers spoken generations in the browser');
+assert(friday.indexOf('payload.people') >= 0 && friday.indexOf('__FRIDAY_SPEECH_BUSY') >= 0 && friday.indexOf('これはテストデータです') >= 0, 'FRIDAY shows each person, waits for the speech queue, and labels test data');
+const unnamed = Notice.noticesFromSuspectView({
+  enabled: true,
+  reason: '',
+  date: DAY,
+  counts: { total: 2, active: 0, ended: 0, suspect: 2, undetermined: 0 },
+  sources: { scheduling: 'ready', mentor: 'ready' },
+  rows: [
+    { status: 'Mentor未起動疑い（要確認）', schedulingName: '', cause: '' },
+    { status: 'Mentor未起動疑い（要確認）', schedulingName: '山田 太郎', cause: '' }
+  ]
+}, Object.assign({
+  identities: [{ schedulingId: 'ID-ONLY' }, { schedulingId: 'ID-NAMED' }],
+  assignments: [{ transportId: 'ID-ONLY', routeCode: 'DCX1' }, { transportId: 'ID-NAMED', routeCode: 'DCX1' }]
+}, meta()));
+const unnamedText = Schedule.speech(unnamed[0], NOW, Core.STALE_MS).text;
+assert(unnamedText.indexOf('識別子ID-ONLYは未起動の疑いです。') >= 0, 'a missing name uses the scheduling id');
+assert(unnamedText.split('山田').length === 2, 'the named person is not substituted for the unnamed row');
+const manifest = fs.readFileSync(path.join(repo, 'cortex-capture-extension/manifest.json'), 'utf8');
+assert(background.indexOf('function publishIfCaptured') >= 0 && background.indexOf('function mentorSourcesReady') >= 0 && background.indexOf("sources.mentor !== 'missing'") >= 0 && background.indexOf('attempt >= 2') >= 0, 'a capture publishes only after both sources exist and a failed send retries twice');
+assert(manifest.indexOf('https://vrm-mentor.edriving.com/*') >= 0 && manifest.indexOf('http://127.0.0.1:3000/*') >= 0 && manifest.indexOf('mentor-capture.js') >= 0, 'the extension can observe Mentor and post to local OFK3');
+assert(dayPlan.body.sample === false, 'a live-shaped notice is not marked as test data');
 
 console.log('mentor-startup-friday: ok');

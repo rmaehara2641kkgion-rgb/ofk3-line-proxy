@@ -30,22 +30,63 @@ function idDiagPing(url) {
   } catch (e2) {}
 }
 
+var lastMentorPublishKey = '';
+
+function mentorSourcesReady(sources) {
+  return !!(sources
+    && sources.scheduling !== 'missing' && sources.scheduling !== 'failed'
+    && sources.mentor !== 'missing' && sources.mentor !== 'failed');
+}
+
+function mentorPublishKey(handoff, stamps) {
+  var view = handoff && handoff.view ? handoff.view : handoff;
+  var counts = view && view.counts ? view.counts : {};
+  var rows = Array.isArray(view && view.rows) ? view.rows : [];
+  return [
+    view && view.date || '',
+    counts.total, counts.active, counts.suspect, counts.undetermined,
+    stamps && stamps.schedulingCapturedAt || '',
+    stamps && stamps.mentorCapturedAt || '',
+    rows.map(function (row) { return (row && row.status || '') + ':' + (row && row.schedulingName || ''); }).join(',')
+  ].join('|');
+}
+
+function publishIfCaptured(date) {
+  if (!idDiagSession || typeof idDiagSession.startupHandoff !== 'function') return;
+  var handoff = idDiagSession.startupHandoff(date);
+  var sources = handoff && handoff.view && handoff.view.sources;
+  if (!mentorSourcesReady(sources)) return;
+  publishMentorStartup(handoff);
+}
+
+function postMentorNotice(payload, key, attempt) {
+  fetch('http://127.0.0.1:3000/mentor-startup/notice', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function (res) {
+    if (!res || !res.ok) throw new Error('mentor-startup');
+    lastMentorPublishKey = key;
+  }).catch(function () {
+    if (attempt >= 2) return;
+    setTimeout(function () { postMentorNotice(payload, key, attempt + 1); }, 1500);
+  });
+}
+
 function publishMentorStartup(handoff) {
   try {
     var stamps = idDiagSession && typeof idDiagSession.captureStamps === 'function' ? idDiagSession.captureStamps() : {};
+    var key = mentorPublishKey(handoff, stamps);
+    if (key && key === lastMentorPublishKey) return;
     var view = handoff && handoff.view ? handoff.view : handoff;
-    fetch('http://127.0.0.1:3000/mentor-startup/notice', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        view: view,
-        identities: handoff && Array.isArray(handoff.identities) ? handoff.identities : [],
-        schedulingCapturedAt: stamps.schedulingCapturedAt || null,
-        mentorCapturedAt: stamps.mentorCapturedAt || null,
-        judgedAt: new Date().toISOString(),
-        cycle: null
-      })
-    }).then(function () {}, function () {});
+    postMentorNotice({
+      view: view,
+      identities: handoff && Array.isArray(handoff.identities) ? handoff.identities : [],
+      schedulingCapturedAt: stamps.schedulingCapturedAt || null,
+      mentorCapturedAt: stamps.mentorCapturedAt || null,
+      judgedAt: new Date().toISOString(),
+      cycle: null
+    }, key, 0);
   } catch (e) {}
 }
 
@@ -82,7 +123,7 @@ function handleIdDiag(msg, sendResponse) {
   } else if (msg.type === 'id-diag-suspect') {
     var suspectView = idDiagSession.suspectView(msg.date, msg.includeRows === true);
     sendResponse({ ok: true, suspect: suspectView });
-    publishMentorStartup(typeof idDiagSession.startupHandoff === 'function' ? idDiagSession.startupHandoff(msg.date) : { view: suspectView, identities: [] });
+    publishIfCaptured(msg.date);
     return;
   } else if (msg.type === 'id-diag-confirm') {
     sendResponse({ ok: true, confirmation: idDiagSession.setConfirmation(msg.date, msg.index, msg.status, msg.generation) });
@@ -109,7 +150,10 @@ function handleIdDiag(msg, sendResponse) {
     idDiagPing('https://ofk3-line-proxy-1.onrender.com/index.html');
     idDiagPing('https://ofk3-line-proxy-1.onrender.com/');
   }
-  if (msg.type === 'id-diag-scheduling' || msg.type === 'id-diag-mentor' || msg.type === 'id-diag-master') idDiagNotify(diagnostic);
+  if (msg.type === 'id-diag-scheduling' || msg.type === 'id-diag-mentor' || msg.type === 'id-diag-master') {
+    idDiagNotify(diagnostic);
+    if (msg.type === 'id-diag-scheduling' || msg.type === 'id-diag-mentor') publishIfCaptured();
+  }
 }
 function resolveOfk3BaseUrl() {
   return new Promise(function (resolve) {
