@@ -3213,6 +3213,7 @@ require('./harvest-rolling60h-route.js').mount(app, {
         xlsx: require('xlsx'),
         rolling: require('./rolling60h-core.js'),
         root: path.join(__dirname, 'local', 'harvest-daily-archive'),
+        shiftDir: require('./harvest-rolling60h-run.js').SHIFT_DIR,
       });
     } catch (dispatchReadErr) {
       return null;

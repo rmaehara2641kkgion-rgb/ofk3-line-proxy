@@ -282,17 +282,24 @@
         }
         if (!sourceDir || !fs.existsSync(sourceDir)) return wait('file-absent');
         var names = fs.readdirSync(sourceDir).filter(function (name) {
-          return filenameDate(name) === targetDate && baseName(name).indexOf('~$') !== 0;
+          return filenameDate(name) && baseName(name).indexOf('~$') !== 0;
         });
-        if (!names.length) return wait('file-absent');
-        if (names.length > 1) return fail('ambiguous-latest', now);
-        var sourcePath = pathMod.join(sourceDir, names[0]);
+        var eligible = names.filter(function (name) { return filenameDate(name) <= targetDate; });
+        if (!eligible.length) return wait('file-absent');
+        var latestDate = '';
+        eligible.forEach(function (name) {
+          var fileDate = filenameDate(name);
+          if (fileDate > latestDate) latestDate = fileDate;
+        });
+        var chosen = eligible.filter(function (name) { return filenameDate(name) === latestDate; });
+        if (chosen.length > 1) return fail('ambiguous-latest', now);
+        var sourcePath = pathMod.join(sourceDir, chosen[0]);
         var report = readReport(sourcePath);
         if (!report.ok) return fail(report.reason || 'read-failed', now);
-        var verdict = judge(targetDate, datesOf(report.rows, rolling), targetDate);
+        var verdict = judge(latestDate, datesOf(report.rows, rolling), latestDate);
         if (!verdict.ok) return verdict.waiting ? wait(verdict.reason) : fail(verdict.reason, now);
         var contentHash = hashFile(fs, sourcePath);
-        var current = latestRevision(targetDate);
+        var current = latestRevision(latestDate);
         if (current && current.contentHash === contentHash) {
           state.status = 'ok';
           state.reason = 'unchanged';

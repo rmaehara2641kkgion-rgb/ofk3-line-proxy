@@ -290,6 +290,77 @@ const missingFeed = Feed.read({ fs: fs, path: path, xlsx: XLSX, rolling: Core, r
 assert.equal(missingFeed.ok, false);
 assert.equal(missingFeed.connected, false);
 assert.equal(missingFeed.alerts[0].category, 'insufficient');
+
+function archiveFixture(root, end, dates) {
+  const rows = [header];
+  dates.forEach((date) => rows.push(['TID-ARCHIVE', date, 8, 'OFK3']));
+  const fixtureBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(fixtureBook, XLSX.utils.aoa_to_sheet(rows), 'Report5_Daily_Data');
+  const fixtureRaw = XLSX.write(fixtureBook, { type: 'buffer', bookType: 'xlsx' });
+  const fixtureHash = crypto.createHash('sha256').update(fixtureRaw).digest('hex');
+  fs.mkdirSync(path.join(root, 'files', end), { recursive: true });
+  fs.writeFileSync(path.join(root, 'files', end, fixtureHash + '.xlsx'), fixtureRaw);
+  fs.writeFileSync(path.join(root, 'state.json'), JSON.stringify({
+    version: 1,
+    revisions: [{ filenameDate: end, maxDate: end, contentHash: fixtureHash, sourceName: 'Daily_AMZL_JP_Working_Hour_' + end + '_fixture.xlsx' }],
+  }));
+}
+function rosterBlock(hours) {
+  return [{ code: 'H', rawCode: String(hours), source: 'roster', hours: hours, defined: true }];
+}
+const forecastRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'r60-forecast-'));
+archiveFixture(forecastRoot, '2026-10-21', ['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21']);
+const forecastRoster = {
+  'TID-ARCHIVE': {
+    '2026-10-21': rosterBlock(20),
+    '2026-10-22': rosterBlock(13),
+    '2026-10-23': rosterBlock(13),
+  },
+};
+const forecast = Feed.read({
+  fs: fs, path: path, xlsx: XLSX, rolling: Core, root: forecastRoot, today: '2026-10-22',
+  rosterByTid: forecastRoster, shiftReference: 'fixture-shift.xlsx',
+  now: function () { return new Date('2026-10-22T00:00:00.000Z'); },
+});
+assert.equal(forecast.actualThrough, '2026-10-21');
+assert.equal(forecast.shiftReference, 'fixture-shift.xlsx');
+assert.deepEqual(forecast.forecastDates, ['2026-10-22', '2026-10-23']);
+assert.equal(forecast.gap, '');
+assert.equal(forecast.safe, false);
+assert.equal(forecast.stale, false);
+const todayAlert = forecast.alerts.find((alert) => alert.endDate === '2026-10-22' && alert.category === 'forecast_exceed');
+const tomorrowAlert = forecast.alerts.find((alert) => alert.endDate === '2026-10-23' && alert.category === 'forecast_exceed');
+assert.equal(todayAlert.noticeKind, 'today-emergency');
+assert.equal(todayAlert.forecastHours, 61);
+assert.equal(tomorrowAlert.noticeKind, 'tomorrow-advance');
+assert.equal(tomorrowAlert.forecastHours, 66);
+assert.equal(forecast.alerts.some((alert) => alert.forecastHours === 81 || alert.forecastHours === 73), false);
+
+const shiftMissing = Feed.read({
+  fs: fs, path: path, xlsx: XLSX, rolling: Core, root: forecastRoot, today: '2026-10-22',
+  rosterByTid: { 'TID-ARCHIVE': { '2026-10-21': rosterBlock(20) } },
+  now: function () { return new Date('2026-10-22T00:00:00.000Z'); },
+});
+assert.equal(shiftMissing.gap, 'shift-missing');
+assert.equal(shiftMissing.safe, false);
+assert.equal(shiftMissing.stale, false);
+assert.equal(shiftMissing.alerts.some((alert) => alert.category === 'forecast_exceed'), false);
+
+const stoppedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'r60-stopped-'));
+archiveFixture(stoppedRoot, '2026-10-19', ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19']);
+const stopped = Feed.read({
+  fs: fs, path: path, xlsx: XLSX, rolling: Core, root: stoppedRoot, today: '2026-10-22',
+  rosterByTid: forecastRoster,
+  now: function () { return new Date('2026-10-22T00:00:00.000Z'); },
+});
+assert.equal(stopped.gap, 'update-stopped');
+assert.equal(stopped.actualThrough, '2026-10-19');
+assert.equal(stopped.safe, false);
+assert.equal(stopped.stale, true);
+assert.equal(stopped.alerts.some((alert) => alert.category === 'forecast_exceed'), false);
+fs.rmSync(forecastRoot, { recursive: true, force: true });
+fs.rmSync(stoppedRoot, { recursive: true, force: true });
+
 let ran = false;
 const app = {
   post: function (route, handler) { app.postHandler = handler; app.postRoute = route; },

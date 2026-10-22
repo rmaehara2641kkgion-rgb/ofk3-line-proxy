@@ -33,7 +33,13 @@
     }
     var found = null;
     state.revisions.forEach(function (revision) {
-      if (!revision || revision.filenameDate !== date || revision.maxDate !== date || !revision.contentHash) return;
+      if (!revision || revision.filenameDate !== revision.maxDate || !revision.contentHash) return;
+      if (options.latest === true) {
+        if (revision.filenameDate > date) return;
+        if (!found || revision.filenameDate >= found.filenameDate) found = revision;
+        return;
+      }
+      if (revision.filenameDate !== date || revision.maxDate !== date) return;
       found = revision;
     });
     if (!found) return { ok: false, reason: 'not-archived', blocksByTransportId: {} };
@@ -50,11 +56,17 @@
     (parsed.records || []).forEach(function (record) {
       if (record && record.date && record.date > maxDate) maxDate = record.date;
     });
-    if (maxDate !== date) return { ok: false, reason: 'date-mismatch', blocksByTransportId: {} };
+    if (maxDate !== found.maxDate) return { ok: false, reason: 'date-mismatch', blocksByTransportId: {} };
+    var dates = {};
+    (parsed.records || []).forEach(function (record) {
+      if (record && record.date) dates[record.date] = true;
+    });
     return {
       ok: true,
       reason: 'archived',
       file: found.sourceName || '',
+      actualThrough: found.maxDate,
+      dates: Object.keys(dates).sort(),
       blocksByTransportId: rolling.groupActualRecordsByTransportId(parsed.records)
     };
   }

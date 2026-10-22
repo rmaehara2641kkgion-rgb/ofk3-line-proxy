@@ -642,6 +642,38 @@
     DAILY_DIR: DAILY_DIR,
     SHIFT_DIR: SHIFT_DIR,
     selectLatestShift: selectLatestShift,
+    loadRoster: function (options) {
+      options = options || {};
+      var fs = options.fs;
+      var pathMod = options.path;
+      var XLSX = options.xlsx;
+      var rolling = options.rolling;
+      var shiftDir = options.shiftDir || SHIFT_DIR;
+      if (!fs || !pathMod || !XLSX || !rolling) return { ok: false, reason: 'reader-missing', byTid: {}, dates: [] };
+      requireRows.xlsx = XLSX;
+      var entries = listShiftEntries(shiftDir, fs, pathMod);
+      if (!entries) return { ok: false, reason: 'shift-missing', byTid: {}, dates: [] };
+      var picked = selectLatestShift(entries);
+      if (!picked.ok) {
+        return { ok: false, reason: picked.reason === 'no-shift-file' ? 'shift-missing' : picked.reason, byTid: {}, dates: [] };
+      }
+      var book = XLSX.readFile(pathMod.join(shiftDir, baseName(picked.name)), { cellDates: true });
+      var roster = rosterBlocks(book, rolling);
+      var dates = {};
+      Object.keys(roster.byTid || {}).forEach(function (transportId) {
+        Object.keys(roster.byTid[transportId] || {}).forEach(function (date) { dates[date] = true; });
+      });
+      var list = Object.keys(dates).sort();
+      return {
+        ok: true,
+        reason: 'roster',
+        file: baseName(picked.name),
+        byTid: roster.byTid,
+        min: list[0] || '',
+        max: list[list.length - 1] || '',
+        dates: list,
+      };
+    },
     run: run,
     capture: capture,
     audit: audit,

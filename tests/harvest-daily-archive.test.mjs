@@ -203,4 +203,46 @@ const restarted = Archive.create({ fs: fs, path: path, xlsx: XLSX, rolling: Roll
 assert(restarted.settings().hour === 7 && restarted.settings().minute === 15 && restarted.settings().intervalMinutes === 10, 'ルート保存も再起動後に残る');
 restarted.stop();
 
+const priorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-prior-'));
+const priorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-prior-root-'));
+const priorName = 'Daily_AMZL_JP_Working_Hour_2026-10-21_(FICTION).xlsx';
+const priorFile = path.join(priorDir, priorName);
+writeBook(priorFile, dailyRows(weekEnding('2026-10-21'), 8));
+const priorHash = sha(priorFile);
+const prior = Archive.create({
+  fs: fs, path: path, xlsx: XLSX, rolling: Rolling, sourceDir: priorDir, root: priorRoot, now: function () { return now; },
+});
+const priorResult = prior.tick();
+assert(priorResult.status === 'ok' && priorResult.reason === 'archived' && priorResult.archivedDate === '2026-10-21', '前日が最終稼働日でも保管する');
+assert(sha(priorFile) === priorHash, '前日ファイルの原本は保管後も同じ');
+const priorAgain = prior.tick();
+assert(priorAgain.reason === 'unchanged' && priorAgain.revisionCount === 1, '前日ファイルの同じ内容は重複保管しない');
+prior.stop();
+
+const bothDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-both-'));
+const bothRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-both-root-'));
+writeBook(path.join(bothDir, priorName), dailyRows(weekEnding('2026-10-21'), 8));
+const bothToday = path.join(bothDir, todayName);
+writeBook(bothToday, dailyRows(weekEnding('2026-10-22'), 8));
+const bothTodayHash = sha(bothToday);
+const both = Archive.create({
+  fs: fs, path: path, xlsx: XLSX, rolling: Rolling, sourceDir: bothDir, root: bothRoot, now: function () { return now; },
+});
+const bothResult = both.tick();
+assert(bothResult.status === 'ok' && bothResult.archivedDate === '2026-10-22', '当日と前日が揃っているときは当日を保管する');
+assert(sha(bothToday) === bothTodayHash, '当日と前日が揃っていても原本は変えない');
+both.stop();
+
+const badTodayDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-bad-today-'));
+const badTodayRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-bad-today-root-'));
+writeBook(path.join(badTodayDir, priorName), dailyRows(weekEnding('2026-10-21'), 8));
+writeBook(path.join(badTodayDir, todayName), dailyRows(weekEnding('2026-10-23'), 8));
+const badToday = Archive.create({
+  fs: fs, path: path, xlsx: XLSX, rolling: Rolling, sourceDir: badTodayDir, root: badTodayRoot, now: function () { return now; },
+});
+const badTodayResult = badToday.tick();
+assert(badTodayResult.status === 'error' && badTodayResult.reason === 'next-day' && badTodayResult.archivedDate == null, '壊れた当日ファイルがあるときは前日へ戻さない');
+assert(fs.existsSync(path.join(badTodayRoot, 'files')) === false, '壊れた当日ファイルも前日ファイルも保管しない');
+badToday.stop();
+
 console.log('harvest-daily-archive.test.mjs: ALL TESTS PASSED');
