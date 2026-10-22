@@ -8733,9 +8733,13 @@ var driverDB = {
     // Load saved settings on init
     function initLineSettings() {
       if (lineSettings.notifyToken) {
-        document.getElementById('line-notify-token').value = lineSettings.notifyToken;
-        document.getElementById('notify-status').textContent = '設定済み';
-        document.getElementById('notify-status').className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+        const notifyTokenInput = document.getElementById('line-notify-token');
+        if (notifyTokenInput) notifyTokenInput.value = lineSettings.notifyToken;
+        const notifyStatusInit = document.getElementById('notify-status');
+        if (notifyStatusInit) {
+          notifyStatusInit.textContent = '設定済み';
+          notifyStatusInit.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+        }
       }
       if (lineSettings.channelToken) {
         document.getElementById('line-channel-token').value = lineSettings.channelToken;
@@ -8786,14 +8790,16 @@ var driverDB = {
       };
       localStorage.setItem('lineSettings', JSON.stringify(lineSettings));
 
-      // Update status badges
+      // Update status badges. #notify-status was removed with the LINE Notify UI.
       const notifyStatus = document.getElementById('notify-status');
-      if (lineSettings.notifyToken) {
-        notifyStatus.textContent = '設定済み';
-        notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
-      } else {
-        notifyStatus.textContent = '未設定';
-        notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700';
+      if (notifyStatus) {
+        if (lineSettings.notifyToken) {
+          notifyStatus.textContent = '設定済み';
+          notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium';
+        } else {
+          notifyStatus.textContent = '未設定';
+          notifyStatus.className = 'text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700';
+        }
       }
       const msgStatus = document.getElementById('messaging-status');
       if (lineSettings.channelToken && lineSettings.channelSecret) {
