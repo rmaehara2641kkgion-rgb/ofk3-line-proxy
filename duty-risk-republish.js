@@ -14,21 +14,43 @@
   var Publication = null;
   try { Publication = require('./duty-risk-publication.js'); } catch (e) { Publication = null; }
 
-  var REASONS = [
-    'timeout', 'incomplete', 'verify-snapshot', 'verify-run', 'mismatch', 'stale', 'already-published', 'published',
-    'not-configured', 'unauthorized', 'busy', 'read-failed', 'queue-unreadable',
-    'queue-not-saved', 'nothing-pending', 'duplicate'
-  ];
-
   function reasonCode(value) {
-    return REASONS.indexOf(value) >= 0 ? value : 'incomplete';
+    var text = value == null ? '' : String(value);
+    if (!text) return 'incomplete';
+    if (/token|secret|bearer|password|authorization/i.test(text)) return 'redacted';
+    return /^[a-z][a-z0-9-]{0,40}$/.test(text) ? text : 'redacted';
+  }
+
+  function diagnosticOfError(error) {
+    var code = error && error.code;
+    var message = error && error.message ? String(error.message) : '';
+    var response = error && error.response;
+    var status = response && typeof response.status === 'number' ? response.status : null;
+    var data = response && response.data;
+    var timedOut = code === 'timeout' || code === 'ECONNABORTED' || message === 'timeout';
+    if (timedOut) return { reason: 'timeout', httpStatus: status, stage: 'transport', revision: null };
+    var reason = data && typeof data === 'object' ? reasonCode(data.reason) : '';
+    if (status >= 400 && (!data || typeof data !== 'object' || !data.reason)) reason = 'http-error';
+    if (!reason) reason = 'incomplete';
+    return {
+      reason: reason,
+      httpStatus: status,
+      stage: data && typeof data === 'object' && data.stage ? reasonCode(data.stage) : 'transport',
+      revision: data && typeof data === 'object' && data.revision ? reasonCode(data.revision) : null,
+    };
   }
 
   function reasonOfError(error) {
-    var code = error && error.code;
-    var message = error && error.message ? String(error.message) : '';
-    if (code === 'timeout' || code === 'ECONNABORTED' || message === 'timeout' || message.indexOf('timeout') >= 0) return 'timeout';
-    return 'incomplete';
+    return diagnosticOfError(error).reason;
+  }
+
+  function metaFrom(value) {
+    var source = value || {};
+    return {
+      stage: source.stage || null,
+      httpStatus: typeof source.httpStatus === 'number' ? source.httpStatus : null,
+      revision: source.revision || null,
+    };
   }
 
   function clone(value) {
@@ -149,18 +171,25 @@
     });
   }
 
-  function publicResult(checkedAt, published, reason, generation, duplicate) {
-    return {
+  function publicResult(checkedAt, published, reason, generation, duplicate, meta) {
+    meta = meta || {};
+    var result = {
       checkedAt: checkedAt || null,
       published: published === true,
       reason: reasonCode(reason),
       generation: generation || null,
       duplicate: duplicate === true,
     };
+    var stage = meta.stage ? reasonCode(meta.stage) : '';
+    if (stage && stage !== 'incomplete' && stage !== 'redacted') result.stage = stage;
+    if (typeof meta.httpStatus === 'number') result.httpStatus = meta.httpStatus;
+    var revision = meta.revision ? reasonCode(meta.revision) : '';
+    if (revision && revision !== 'incomplete' && revision !== 'redacted') result.revision = revision;
+    return result;
   }
 
   function emit(options, logs, result) {
-    var line = '再送結果 ' + JSON.stringify(publicResult(result.checkedAt, result.published, result.reason, result.generation, result.duplicate));
+    var line = '再送結果 ' + JSON.stringify(publicResult(result.checkedAt, result.published, result.reason, result.generation, result.duplicate, result));
     logs.push(line);
     if (typeof options.log === 'function') options.log(line);
   }
@@ -173,12 +202,12 @@
     try {
       pending = options.client.current({ timeoutMs: timeoutMs });
     } catch (error) {
-      return Promise.resolve({ ok: false, reason: reasonOfError(error) });
+      return Promise.resolve(diagnosticOfError(error));
     }
     return withTimeout(pending, timeoutMs).then(function (value) {
-      return value || { ok: false, reason: 'read-failed' };
+      return value || { ok: false, reason: 'read-failed', stage: 'transport' };
     }, function (error) {
-      return { ok: false, reason: reasonOfError(error) };
+      return diagnosticOfError(error);
     });
   }
 
@@ -191,18 +220,23 @@
         timeoutMs: timeoutMs,
       });
     } catch (error) {
-      return Promise.resolve({ ok: false, published: false, reason: reasonOfError(error) });
+      var thrown = diagnosticOfError(error);
+      thrown.ok = false;
+      thrown.published = false;
+      return Promise.resolve(thrown);
     }
     return withTimeout(pending, timeoutMs).then(function (value) {
-      return value || { ok: false, published: false, reason: 'incomplete' };
+      return value || { ok: false, published: false, reason: 'incomplete', stage: 'transport' };
     }, function (error) {
-      return { ok: false, published: false, reason: reasonOfError(error) };
+      var failed = diagnosticOfError(error);
+      failed.ok = false;
+      failed.published = false;
+      return failed;
     });
   }
 
   function blockingReason(reason) {
-    return reason === 'timeout' || reason === 'incomplete' || reason === 'unauthorized'
-      || reason === 'not-configured' || reason === 'busy' || reason === 'read-failed' || reason === 'queue-not-saved';
+    return reason !== 'mismatch' && reason !== 'stale' && reason !== 'already-published';
   }
 
   function attempt(options, item, timeoutMs) {
@@ -224,7 +258,7 @@
             var stopped = reasonCode(current && current.reason);
             item.status = 'pending';
             item.lastReason = stopped;
-            return { result: publicResult(pair.snapshot.checkedAt, false, stopped, null, false), stop: true };
+            return { result: publicResult(pair.snapshot.checkedAt, false, stopped, null, false, metaFrom(current)), stop: true };
           }
         } else {
           var relation = Publication.compareGeneration(current.checkedAt, pair.snapshot.checkedAt);
@@ -267,7 +301,7 @@
         var reason = reasonCode(value && value.reason);
         item.status = 'pending';
         item.lastReason = reason;
-        return { result: publicResult(pair.snapshot.checkedAt, false, reason, null, false), stop: blockingReason(reason) };
+        return { result: publicResult(pair.snapshot.checkedAt, false, reason, null, false, metaFrom(value)), stop: blockingReason(reason) };
       });
     });
   }

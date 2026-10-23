@@ -23,13 +23,19 @@
       ok: !!(result && result.ok === true),
       results: results.map(function (item) {
         var reason = Republish ? Republish.reasonCode(item && item.reason) : 'incomplete';
-        return {
+        var stage = item && item.stage && Republish ? Republish.reasonCode(item.stage) : null;
+        var revision = item && item.revision && Republish ? Republish.reasonCode(item.revision) : null;
+        var body = {
           checkedAt: item && item.checkedAt ? item.checkedAt : null,
           published: !!(item && item.published === true),
           reason: reason,
           generation: item && item.generation ? item.generation : null,
           duplicate: !!(item && item.duplicate === true),
         };
+        if (stage && stage !== 'incomplete' && stage !== 'redacted') body.stage = stage;
+        if (revision && revision !== 'incomplete' && revision !== 'redacted') body.revision = revision;
+        if (item && typeof item.httpStatus === 'number') body.httpStatus = item.httpStatus;
+        return body;
       }),
     };
   }

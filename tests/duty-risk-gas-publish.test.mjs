@@ -168,4 +168,20 @@ assert.ok(body.indexOf('var historyFile = dutyRiskWriteJson_') < body.indexOf('d
 assert.ok(body.indexOf('dutyRiskReadJson_(historyFile)') < body.indexOf('DUTY_RISK_POINTER_NAME, {'));
 assert.equal(body.includes('dutyRiskReadJson_(dutyRiskFind_(folder, generation'), false);
 
+const doGet = gas.slice(gas.indexOf('function doGet'), postAt);
+assert.ok(doGet.indexOf("e.parameter.action === 'revision'") < doGet.indexOf('dutyRiskFolder_('));
+assert.equal(doGet.includes('DriveApp'), false);
+assert.ok(doGet.includes('readsDrive: false'));
+assert.ok(body.includes("stage = 'write-snapshot'"));
+assert.ok(body.includes("stage = 'write-history'"));
+assert.ok(body.includes("stage = 'verify-snapshot'"));
+assert.ok(body.includes("stage = 'verify-run'"));
+assert.ok(body.includes("stage = 'pointer'"));
+assert.ok(body.includes('dutyRiskFaultReason_(err)'));
+const logs = gas.split('\n').filter((line) => line.includes('Logger.log'));
+assert.ok(logs.length >= 3);
+for (const line of logs) {
+  assert.equal(/token|snapshot|predictions|postData|historyRun|password|secret/i.test(line), false, line);
+}
+
 console.log('duty-risk-gas-publish: ok');

@@ -3122,9 +3122,10 @@ function dutyRiskGasClient() {
   var dutyRiskUrl = process.env.DUTY_RISK_GAS_URL || '';
   var dutyRiskToken = process.env.DUTY_RISK_GAS_TOKEN || '';
   if (!dutyRiskUrl || !dutyRiskToken) return null;
+  var transport = require('./duty-risk-gas-transport.js');
   return {
     publish: function (body) {
-      return axios.post(dutyRiskUrl, {
+      return transport.postJson(axios, dutyRiskUrl, {
         action: 'publish',
         token: dutyRiskToken,
         snapshot: body.snapshot,
@@ -3132,14 +3133,14 @@ function dutyRiskGasClient() {
       }, {
         timeout: body.timeoutMs || 60000,
         headers: { 'X-Duty-Risk-Token': dutyRiskToken },
-      }).then(function (response) { return response.data; });
+      });
     },
     current: function (options) {
-      return axios.get(dutyRiskUrl, {
+      return transport.getJson(axios, dutyRiskUrl, {
         timeout: (options && options.timeoutMs) || 60000,
         params: { action: 'current', token: dutyRiskToken },
         headers: { 'X-Duty-Risk-Token': dutyRiskToken },
-      }).then(function (response) { return response.data; });
+      });
     },
   };
 }
@@ -3236,11 +3237,11 @@ require('./duty-risk-feed-route.js').mount(app, {
           if (!dutyRiskUrl || !dutyRiskToken) {
             return Promise.resolve({ ok: false, reason: 'not-configured', lastSuccessAt: dutyRiskFeedState.lastSuccessAt });
           }
-          return axios.get(dutyRiskUrl, {
+          return require('./duty-risk-gas-transport.js').getJson(axios, dutyRiskUrl, {
             timeout: 60000,
             params: { action: 'current', token: dutyRiskToken },
             headers: { 'X-Duty-Risk-Token': dutyRiskToken },
-          }).then(function (response) { return response.data; });
+          });
         },
       },
     });
