@@ -172,10 +172,10 @@ function doPost(e) {
       return dutyRiskJson_({ ok: false, published: false, reason: 'mismatch', lastSuccessAt: lastSuccessAt });
     }
     var generation = 'gen-' + Utilities.getUuid();
-    dutyRiskWriteJson_(folder, generation + '-snapshot.json', pair.snapshot);
-    dutyRiskWriteJson_(folder, generation + '-history-run.json', pair.historyRun);
-    var savedSnapshot = dutyRiskReadJson_(dutyRiskFind_(folder, generation + '-snapshot.json'));
-    var savedRun = dutyRiskReadJson_(dutyRiskFind_(folder, generation + '-history-run.json'));
+    var snapshotFile = dutyRiskWriteJson_(folder, generation + '-snapshot.json', pair.snapshot);
+    var historyFile = dutyRiskWriteJson_(folder, generation + '-history-run.json', pair.historyRun);
+    var savedSnapshot = dutyRiskReadJson_(snapshotFile);
+    var savedRun = dutyRiskReadJson_(historyFile);
     if (!savedSnapshot || savedSnapshot.checkedAt !== pair.snapshot.checkedAt) throw new Error('verify-snapshot');
     if (!savedRun || savedRun.predictedAt !== pair.snapshot.checkedAt) throw new Error('verify-run');
     if (!savedRun.predictions || savedRun.predictions.length !== pair.historyRun.predictions.length) throw new Error('verify-run');
@@ -185,7 +185,10 @@ function doPost(e) {
     });
     return dutyRiskJson_({ ok: true, published: true, generation: generation, checkedAt: pair.snapshot.checkedAt });
   } catch (err) {
-    return dutyRiskJson_({ ok: false, published: false, reason: 'incomplete', lastSuccessAt: lastSuccessAt });
+    var detail = err && err.message ? String(err.message) : '';
+    var reason = 'incomplete';
+    if (detail === 'verify-snapshot' || detail === 'verify-run') reason = detail;
+    return dutyRiskJson_({ ok: false, published: false, reason: reason, lastSuccessAt: lastSuccessAt });
   } finally {
     lock.releaseLock();
   }

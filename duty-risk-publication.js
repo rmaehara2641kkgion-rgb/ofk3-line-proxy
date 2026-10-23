@@ -96,7 +96,8 @@
       });
       return { ok: true, published: true, generation: generation, checkedAt: pair.snapshot.checkedAt };
     } catch (e) {
-      var reason = e && e.message === 'timeout' ? 'timeout' : 'incomplete';
+      var detail = e && e.message ? String(e.message) : '';
+      var reason = detail === 'timeout' || detail === 'verify-snapshot' || detail === 'verify-run' ? detail : 'incomplete';
       return { ok: false, published: false, reason: reason, lastSuccessAt: readPointerCheckedAt(store) || previous };
     }
   }

@@ -15,7 +15,7 @@
   try { Publication = require('./duty-risk-publication.js'); } catch (e) { Publication = null; }
 
   var REASONS = [
-    'timeout', 'incomplete', 'mismatch', 'stale', 'already-published', 'published',
+    'timeout', 'incomplete', 'verify-snapshot', 'verify-run', 'mismatch', 'stale', 'already-published', 'published',
     'not-configured', 'unauthorized', 'busy', 'read-failed', 'queue-unreadable',
     'queue-not-saved', 'nothing-pending', 'duplicate'
   ];
