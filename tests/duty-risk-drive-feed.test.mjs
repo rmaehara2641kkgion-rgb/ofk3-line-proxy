@@ -248,3 +248,13 @@ assert.equal(page.includes('function dutyRiskAuthHeaders'), true);
 assert.equal(page.includes('function resolveDutyRiskMasterName'), true);
 
 console.log('duty-risk-drive-feed.test.mjs: ALL PASSED');
+
+// 失敗理由の表示（固定の一覧だけ。秘密情報・任意文字列は出さない）
+['unauthorized', 'not-configured', 'not-published', 'timeout'].forEach((reason) => {
+  assert.equal(dash.failureText({ ok: false, reason }).includes('[' + reason + ']'), true);
+});
+assert.equal(dash.failureText({ ok: false, reason: 'unauthorized' }).includes('不明'), true);
+const leaked = dash.failureText({ ok: false, reason: 'https://script.google.com/x?token=SECRET123' });
+assert.equal(leaked.includes('SECRET123') || leaked.includes('script.google.com'), false);
+assert.equal(dash.failureText({ ok: false }).includes('原因'), false);
+console.log('duty-risk failure reasons ok');

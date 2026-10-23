@@ -503,9 +503,31 @@
 
   var state = { view: null, loading: false, root: null, snapshot: null, history: null, query: '', feedNotice: '' };
 
+  // 画面に出してよい理由は固定の一覧だけ。サーバーが返した文字列はそのまま出さない。
+  var FAILURE_REASONS = {
+    'unauthorized': '認証エラー（PROXY_SECRETの不一致）',
+    'not-configured': 'サーバー設定なし（PROXY_SECRET / 公開先の未設定）',
+    'not-published': '未公開（回収結果がまだ公開されていない）',
+    'timeout': '時間切れ',
+    'read-failed': '読み取り失敗',
+    'incomplete': '公開が未完了',
+    'mismatch': '保存データの不一致',
+    'stale': '古いデータ',
+    'snapshot-missing': '保存データなし',
+    'snapshot-not-usable': '保存データが使用不可',
+    'snapshot-not-success': '回収が未成功'
+  };
+
+  function failureReasonText(body) {
+    var reason = body && typeof body.reason === 'string' ? body.reason : '';
+    return Object.prototype.hasOwnProperty.call(FAILURE_REASONS, reason) ? FAILURE_REASONS[reason] + ' [' + reason + ']' : '';
+  }
+
   function failureText(body, previousCheckedAt) {
     var when = body && body.lastSuccessAt ? body.lastSuccessAt : (previousCheckedAt || '');
-    return '勤務時間データを取得できませんでした。最終成功データの取得日時: ' + (when ? checkedAtText(when) : '不明');
+    var text = '勤務時間データを取得できませんでした。最終成功データの取得日時: ' + (when ? checkedAtText(when) : '不明');
+    var reasonText = failureReasonText(body);
+    return reasonText ? text + '。原因: ' + reasonText : text;
   }
 
   function feedHeaders() {
@@ -542,7 +564,10 @@
       headers: feedHeaders(),
       signal: controller ? controller.signal : undefined,
     }).then(function (res) {
-      return res.json().then(function (body) { return body; }, function () { return { ok: false, reason: 'read-failed' }; });
+      return res.json().then(function (body) { return body; }, function () { return { ok: false, reason: 'read-failed' }; }).then(function (body) {
+        if (body && body.ok !== true && !body.reason) body.reason = res.status === 401 ? 'unauthorized' : (res.status === 504 ? 'timeout' : 'read-failed');
+        return body;
+      });
     }).then(function (body) {
       if (timer) clearTimeout(timer);
       state.loading = false;
