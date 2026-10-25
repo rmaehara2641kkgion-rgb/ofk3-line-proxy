@@ -16,10 +16,23 @@
     return isFinite(n) && n >= 0 ? Math.floor(n) : 0;
   }
 
+  function reasonCode(value) {
+    return String(value || '').replace(/[^\w-]/g, '').slice(0, 40);
+  }
+
   function fileName(value) {
     var name = String(value || '').split(/[/\\]/).pop();
     if (name.length > 180) name = name.slice(0, 180);
     return name;
+  }
+
+  function sourceErrors(body) {
+    var out = [];
+    var daily = reasonCode(body.dailyReason);
+    var shift = reasonCode(body.shiftReason);
+    if (daily && daily !== 'ok') out.push({ code: 'daily-' + daily, message: 'デイリー実績を読めません（原因コード: ' + daily + '）' });
+    if (shift && shift !== 'ok') out.push({ code: 'shift-' + shift, message: 'シフト表を読めません（原因コード: ' + shift + '）' });
+    return out;
   }
 
   function createCollector(env) {
@@ -62,10 +75,12 @@
             failure: num(body.fileFailure),
             total: num(body.fileSuccess) + num(body.fileFailure),
           },
-          errors: denied ? [{ code: 'local-only', message: 'このPC以外からは実行できません' }] : [],
+          errors: denied ? [{ code: 'local-only', message: 'このPC以外からは実行できません' }] : sourceErrors(body),
           details: {
             dailyFile: fileName(body.dailyFile),
             shiftFile: fileName(body.shiftFile),
+            dailyReason: reasonCode(body.dailyReason),
+            shiftReason: reasonCode(body.shiftReason),
             driverCount: num(body.driverCount),
             clearCount: num(body.clearCount),
             exceedCount: num(body.exceedCount),

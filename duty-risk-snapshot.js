@@ -135,6 +135,8 @@
       fileFailure: summary.fileFailure == null ? null : summary.fileFailure,
       historyCreated: summary.historyCreated == null ? 0 : summary.historyCreated,
       historyDuplicate: summary.historyDuplicate === true,
+      dailyReason: summary.dailyReason || null,
+      shiftReason: summary.shiftReason || null,
     };
     function done(save, publish) {
       var result = {

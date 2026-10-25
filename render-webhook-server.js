@@ -3144,7 +3144,25 @@ function dutyRiskGasClient() {
   };
 }
 
+// 直近の回収・公開の結果コード（氏名・パス・秘密情報は含めない）。
+var dutyRiskLastRun = { at: null, collection: null, save: null, publish: null };
+function dutyRiskPublishStatus() {
+  var pending = null;
+  try {
+    var queue = JSON.parse(fs.readFileSync(path.join(__dirname, 'local', 'duty-risk-publish-queue.json'), 'utf8'));
+    pending = (queue.items || []).filter(function (item) { return item && item.status === 'pending'; }).length;
+  } catch (queueErr) { pending = null; }
+  return {
+    ok: true,
+    gasUrlConfigured: !!process.env.DUTY_RISK_GAS_URL,
+    gasTokenConfigured: !!process.env.DUTY_RISK_GAS_TOKEN,
+    lastRun: dutyRiskLastRun,
+    pendingQueueItems: pending,
+  };
+}
+
 require('./harvest-rolling60h-route.js').mount(app, {
+  publishStatus: dutyRiskPublishStatus,
   run: function () {
     var captured = require('./harvest-rolling60h-run.js').capture({
       fs: fs,
@@ -3164,6 +3182,8 @@ require('./harvest-rolling60h-route.js').mount(app, {
         historyFile: path.join(__dirname, 'local', 'rolling60h-history.json'),
         client: dutyRiskGasClient(),
         log: log,
+      }).then(function (result) {
+        dutyRiskLastRun = { at: new Date().toISOString(), collection: result.collection, save: result.save, publish: result.publish };
       }).catch(function (snapshotErr) {
         log('duty-risk snapshot failed: ' + dutyRiskPublicError(snapshotErr));
       });

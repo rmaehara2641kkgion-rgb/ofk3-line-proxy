@@ -41,15 +41,37 @@
     }
   }
 
+  // 直近の回収・GAS公開の結果コードだけを返す。ローカル専用。
+  function handleStatus(req, res, deps) {
+    if (!isLoopback(req) || !localHeaderOk(req)) {
+      send(res, 403, { ok: false, reason: 'local-only' });
+      return;
+    }
+    var read = deps && deps.publishStatus;
+    if (typeof read !== 'function') {
+      send(res, 404, { ok: false, reason: 'status-missing' });
+      return;
+    }
+    try {
+      send(res, 200, read());
+    } catch (e) {
+      send(res, 500, { ok: false, reason: 'status-failed' });
+    }
+  }
+
   function mount(app, deps) {
     app.post('/harvest/rolling60h/run', function (req, res) {
       handle(req, res, deps);
+    });
+    app.get('/harvest/rolling60h/publish-status', function (req, res) {
+      handleStatus(req, res, deps);
     });
   }
 
   return {
     isLoopback: isLoopback,
     handle: handle,
+    handleStatus: handleStatus,
     mount: mount,
   };
 });

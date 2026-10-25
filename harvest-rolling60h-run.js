@@ -36,6 +36,8 @@
       checkedAt: new Date().toISOString(),
       dailyFile: '',
       shiftFile: '',
+      dailyReason: '',
+      shiftReason: '',
       fileSuccess: 0,
       fileFailure: 2,
       driverCount: 0,
@@ -316,22 +318,38 @@
     var dailyRows = null;
     var shiftBook = null;
 
-    var loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
+    // 失敗理由はコードだけを残す（パス・氏名は含めない）。
+    var dailyReason = '';
+    var shiftReason = '';
+    var loadedDaily = null;
+    try {
+      loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
+    } catch (dailyErr) {
+      loadedDaily = { ok: false, reason: 'read-failed' };
+    }
     if (loadedDaily && loadedDaily.ok && loadedDaily.sheet === 'Report5_Daily_Data') {
       fileSuccess++;
       dailyFile = baseName(loadedDaily.file);
       dailyRows = loadedDaily.rows;
+      dailyReason = 'ok';
+    } else {
+      dailyReason = (loadedDaily && loadedDaily.reason) || 'report5-missing';
     }
-    var shiftEntries = listShiftEntries(shiftDir, fs, pathMod);
-    var pickedShift = shiftEntries ? selectLatestShift(shiftEntries) : { ok: false, reason: 'source-unavailable' };
+    var shiftEntries = null;
+    try { shiftEntries = listShiftEntries(shiftDir, fs, pathMod); } catch (listErr) { shiftEntries = null; shiftReason = 'read-failed'; }
+    var pickedShift = shiftEntries ? selectLatestShift(shiftEntries) : { ok: false, reason: shiftReason || 'source-unavailable' };
     if (pickedShift.ok) {
       try {
         shiftBook = XLSX.readFile(pathMod.join(shiftDir, baseName(pickedShift.name)), { cellDates: true });
         fileSuccess++;
         shiftFile = baseName(pickedShift.name);
+        shiftReason = 'ok';
       } catch (e) {
         shiftBook = null;
+        shiftReason = 'read-failed';
       }
+    } else {
+      shiftReason = pickedShift.reason || 'source-unavailable';
     }
 
     var parsed = dailyRows ? rolling.parseAmazonDailyRows(dailyRows, { stationFilter: 'OFK3', allowHeaderlessFallback: false }) : { records: [] };
@@ -517,6 +535,8 @@
       checkedAt: new Date().toISOString(),
       dailyFile: dailyFile,
       shiftFile: shiftFile,
+      dailyReason: dailyReason,
+      shiftReason: shiftReason,
       fileSuccess: fileSuccess,
       fileFailure: 2 - fileSuccess,
       driverCount: counts.driverCount,
