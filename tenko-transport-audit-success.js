@@ -36,9 +36,13 @@
 // Waits for OFK3's real address master, then sends route centers to local CHAPPY.
 (function () {
   'use strict';
-  var URLS = ['http://127.0.0.1:3000/api/ops/snapshot','http://localhost:3000/api/ops/snapshot'];
   var lastHash = '';
   var lastEmptyLog = false;
+  var sendState = { lastOkAt: 0, lastHash: '', failureCount: 0, nextAttemptAt: 0 };
+  var scriptEndpointAtLoad = '';
+  try {
+    if (document.currentScript && document.currentScript.src) scriptEndpointAtLoad = new URL(document.currentScript.src).searchParams.get('fridayEndpoint') || '';
+  } catch (endpointError) { scriptEndpointAtLoad = ''; }
   var lastAssignmentRef = null;
   var loadSequence = 0;
   var mapMasterPromise = null;
@@ -119,21 +123,33 @@
     try { payload = buildSnapshot(); } catch(e) { console.warn('[CHAPPY OPS] snapshot build failed:', e.message || e); return {ok:false,error:String(e.message||e)}; }
     if (!payload.routes.length) { if (!lastEmptyLog) { console.log('[CHAPPY OPS] bridge ready; waiting for assignment data'); lastEmptyLog=true; } return {ok:false,standby:true}; }
     lastEmptyLog=false;
-    var stable = payload.eventId + '|' + JSON.stringify(payload.routes);
-    if (!force && stable === lastHash) return {ok:true,unchanged:true};
+    var bridge = window.FridaySnapshotBridge;
+    if (!bridge) return {ok:false,error:'snapshot-bridge-missing'};
+    var storedEndpoint = '';
+    try { storedEndpoint = localStorage.getItem('friday.snapshot.endpoint') || ''; } catch (storageError) { storedEndpoint = ''; }
+    var endpoint = bridge.resolveEndpoint({
+      windowEndpoint: typeof window.FRIDAY_SNAPSHOT_ENDPOINT === 'string' ? window.FRIDAY_SNAPSHOT_ENDPOINT : '',
+      queryEndpoint: scriptEndpointAtLoad,
+      storedEndpoint: storedEndpoint
+    });
+    if (!endpoint.ok) return {ok:false,error:endpoint.error};
+    var stable = JSON.stringify(payload.routes);
+    var decision = bridge.decideSend(sendState, Date.now(), stable, force === true);
+    if (!decision.send) return {ok:true,skipped:decision.reason};
     var mapped = payload.routes.filter(function(r){ return r.lat != null && r.lon != null; }).length;
     console.log('[CHAPPY OPS] sending ' + payload.routes.length + ' routes / ' + payload.eventId + ' / MAP ' + mapped + '...');
-    var lastError=null;
-    for (var i=0;i<URLS.length;i++) {
-      try {
-        var res=await fetch(URLS[i],{method:'POST',mode:'cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
-        if (!res.ok) throw new Error('CHAPPY HTTP ' + res.status);
-        var body=await res.json(); lastHash=stable;
-        console.log('[CHAPPY OPS] ONLINE via ' + URLS[i], body.summary || body); return body;
-      } catch(e) { lastError=e; console.warn('[CHAPPY OPS] connection failed via ' + URLS[i] + ':', e.message || e); }
+    try {
+      var res=await fetch(endpoint.url,{method:'POST',mode:'cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
+      if (!res.ok) throw new Error('CHAPPY HTTP ' + res.status);
+      var body=await res.json();
+      bridge.noteSuccess(sendState, Date.now(), stable);
+      lastHash = stable;
+      console.log('[CHAPPY OPS] ONLINE via ' + endpoint.url, body.summary || body); return body;
+    } catch(e) {
+      bridge.noteFailure(sendState, Date.now());
+      console.warn('[CHAPPY OPS] STANDBY:', e.message || e);
+      return {ok:false,error:String(e.message||e)};
     }
-    console.warn('[CHAPPY OPS] STANDBY:', lastError ? (lastError.message || lastError) : 'connection failed');
-    return {ok:false,error:String(lastError && (lastError.message||lastError) || 'connection failed')};
   }
 
   window.CHAPPY_OPS_BRIDGE={publish:publish,snapshot:buildSnapshot};
