@@ -22,6 +22,9 @@
   <script src="/lat-departure-core.js?v=20260823-1"></script>
   <script src="/lat-timeline-core.js?v=20260916-1"></script>
   <script src="/driver-ability-import-core.js?v=20261001-1"></script>
+  <script src="/driver-cumulative-core.js?v=20261025-1"></script>
+  <script src="/driver-cumulative-xlsx.js?v=20261025-1"></script>
+  <script src="/driver-cumulative-ui.js?v=20261025-1"></script>
   <script src="/line-unlinked-core.js?v=20261002-1"></script>
   <script src="/qr-print-order-core.js?v=20261002-1"></script>
   <script src="/billing-reconcile-core.js?v=20261007-3"></script>
@@ -649,6 +652,11 @@
 
       <!-- Drivers Tab -->
       <div id="panel-drivers" class="hidden">
+        <div class="flex gap-2 mb-4">
+          <button id="driver-mode-normal-btn" class="btn-primary text-xs px-3 py-1.5 rounded">通常集計</button>
+          <button id="driver-mode-cumulative-btn" class="btn-secondary text-xs px-3 py-1.5 rounded">累計データ作成</button>
+        </div>
+        <div id="driver-normal-mode">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-sm font-medium">ドライバー能力データベース <span id="driver-unlinked-count" class="text-xs font-normal text-ink-lighter ml-2"></span></h2>
           <div class="flex gap-2">
@@ -703,6 +711,59 @@
             </table>
           </div>
         </div>
+        </div><!-- /driver-normal-mode -->
+
+        <!-- 累計データ作成モード -->
+        <div id="driver-cumulative-mode" class="hidden">
+          <p class="text-xs text-ink-lighter mb-4">過去の累計Excelに新しい週のドライバー別配送データを加算し、新しい累計Excelを作成します。元ファイルは変更せず、期間・内容が重複する追加は停止します。</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div class="card p-4">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-medium">基準累計ファイル</h3>
+                <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('cum-base-input').click()">📂 選択</button>
+                <input type="file" id="cum-base-input" accept=".xlsx" class="hidden">
+              </div>
+              <div id="cum-base-name" class="text-xs"></div>
+              <div id="cum-base-override-wrap" class="hidden mt-2 text-xs">基準の対象期間（ファイルから読み取れないため手入力）: <input type="text" id="cum-base-override" class="border border-border rounded px-1 w-32" placeholder="例: W22〜W40"></div>
+            </div>
+            <div class="card p-4">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-medium">追加週ファイル（複数選択可）</h3>
+                <button class="btn-secondary text-xs px-3 py-1.5 rounded" onclick="document.getElementById('cum-add-input').click()">📂 追加</button>
+                <input type="file" id="cum-add-input" accept=".xlsx" multiple class="hidden">
+              </div>
+              <div id="cum-add-list"></div>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div class="card p-3"><p class="text-xs text-ink-lighter">対象期間</p><p id="cum-stat-period" class="text-lg font-medium">—</p></div>
+            <div class="card p-3"><p class="text-xs text-ink-lighter">統合対象ドライバー数</p><p id="cum-stat-merge" class="text-lg font-medium">—</p></div>
+            <div class="card p-3"><p class="text-xs text-ink-lighter">新規ドライバー数</p><p id="cum-stat-new" class="text-lg font-medium">—</p></div>
+            <div class="card p-3"><p class="text-xs text-ink-lighter">警告件数</p><p id="cum-stat-warn" class="text-lg font-medium">—</p></div>
+          </div>
+          <div class="card mb-4">
+            <div class="flex flex-wrap items-center gap-2 p-3 border-b border-border">
+              <h3 class="text-sm font-medium mr-2">統合プレビュー（統合前 / 追加分 / 統合後）</h3>
+              <select id="cum-role" class="border border-border rounded text-xs px-1 py-1"><option value="main">ドライバー別集計</option><option value="simple">簡易版</option></select>
+              <select id="cum-row-filter" class="border border-border rounded text-xs px-1 py-1"><option value="all">全員</option><option value="merged">統合のみ</option><option value="new">新規のみ</option><option value="baseOnly">基準のみ</option></select>
+            </div>
+            <div id="cum-preview"></div>
+          </div>
+          <div class="card mb-4">
+            <div class="flex items-center gap-2 p-3 border-b border-border">
+              <h3 class="text-sm font-medium mr-2">エラー・警告</h3>
+              <select id="cum-issue-filter" class="border border-border rounded text-xs px-1 py-1"><option value="all">すべて</option><option value="error">エラー</option><option value="warn">警告</option><option value="info">情報</option></select>
+            </div>
+            <div id="cum-issues"></div>
+          </div>
+          <label id="cum-ack-wrap" class="hidden flex items-center gap-2 text-xs mb-3 cursor-pointer"><input type="checkbox" id="cum-ack"> 基準ファイルの内容（対象期間・追加済みの週）を確認しました。統合履歴が不十分であることを理解したうえで進めます</label>
+          <div class="flex flex-wrap items-center gap-2">
+            <button id="cum-validate-btn" class="btn-secondary text-xs px-3 py-2 rounded" disabled>データ検証</button>
+            <button id="cum-generate-btn" class="btn-primary text-xs px-3 py-2 rounded" disabled>累計データ生成</button>
+            <button id="cum-download-btn" class="btn-secondary text-xs px-3 py-2 rounded" disabled>Excelダウンロード</button>
+            <span id="cum-status" class="text-xs text-ink-lighter ml-2"></span>
+          </div>
+        </div><!-- /driver-cumulative-mode -->
       </div>
 
       <!-- Master Management Tab -->
