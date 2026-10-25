@@ -32,7 +32,17 @@ var ALLOWED_FILES = {
   '/inoichi-detection-rules.js': true,
   '/inoichi-fleet-adapter.js': true,
   '/inoichi-alert-store.js': true,
-  '/inoichi-notification-adapter.js': true
+  '/inoichi-notification-adapter.js': true,
+  '/inoichi-rolling-live.js': true,
+  '/inoichi-alert-view.js': true,
+  '/local/inoichi-rolling-snapshot.json': true,
+  '/local/inoichi-rolling-snapshot-run-status.json': true,
+  '/assets/inoichi-logo.png': true,
+  '/assets/inoichi.ico': true,
+  '/assets/inoichi-app.png': true,
+  '/assets/inoichi-app.ico': true,
+  '/assets/inoichi-logo-light.webp': true,
+  '/assets/inoichi-castle-bg.webp': true
 };
 
 var DASHBOARD_ALIASES = {
@@ -50,6 +60,7 @@ var CONTENT_TYPES = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
