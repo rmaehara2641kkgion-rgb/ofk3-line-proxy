@@ -366,6 +366,12 @@
     var selected = view.selectedId ? view.ranking.concat(view.gaps).filter(function (row) { return row.transportId === view.selectedId; })[0] : null;
     var html = '';
     html += notice;
+    if (view.stale) {
+      html += '<div class="card p-4 mb-4 text-sm" role="alert" style="background:#fffbeb">以下は前回取得できた保存データ（' + escapeHtml(checkedAtText(view.checkedAt)) + '）です。最新のデータではありません。</div>';
+    }
+    if (!view.ranking.length && !view.gaps.length) {
+      html += '<div class="card p-4 mb-4 text-sm">保存データに対象者がいません（取得は成功しています）。</div>';
+    }
     html += '<div class="mb-4"><h2 class="text-lg font-bold">勤務時間リスク</h2>';
     html += '<p class="text-sm text-ink-lighter">対象 ' + escapeHtml(view.windowStart || '') + ' 〜 ' + escapeHtml(view.referenceDate) + '。取得日時 ' + escapeHtml(checkedAtText(view.checkedAt)) + '。この取得日時は保存データの時刻です。</p>';
     html += '<p class="text-sm text-ink-lighter">本日要注意・本日監視は管理者用の追加指標です。正式な超過確定とは別です。予定込みで60時間以上は予測超過と表示します。</p></div>';
@@ -429,7 +435,9 @@
       html += '<p class="text-sm">7日間の合計: ' + (selected.seriesComplete ? forecastText(selected) : '判定不能') + '</p>';
       html += '<p class="text-sm">今日の勤務可能上限: ' + hourText(selected.workable) + '。今日の予定終了後の余裕: ' + marginText(selected.marginAfterPlan) + '</p>';
     }
+    html += reloadButton();
     rootEl.innerHTML = html;
+    bindReload(rootEl);
     var search = document.getElementById('duty-risk-search');
     if (search) {
       search.addEventListener('input', function () {
@@ -503,9 +511,41 @@
 
   var state = { view: null, loading: false, root: null, snapshot: null, history: null, query: '', feedNotice: '' };
 
+  var FAILURE_REASONS = {
+    'unauthorized': '認証に失敗しました（アプリ設定のプロキシ認証キーを確認してください）',
+    'not-configured': 'サーバー側の取得設定（DUTY_RISK_GAS_URL / DUTY_RISK_GAS_TOKEN / PROXY_SECRET）が未設定です',
+    'timeout': '取得がタイムアウトしました',
+    'network': 'サーバーから保存データ元（GAS）へ接続できませんでした',
+    'upstream-http': '保存データ元（GAS）がエラー応答を返しました',
+    'invalid-response': '保存データ元（GAS）の応答を読み取れませんでした（GASの公開設定・デプロイURLを確認してください）',
+    'read-failed': '保存データの読み出しに失敗しました',
+    'client-network': 'ブラウザからサーバーへ接続できませんでした',
+    'client-timeout': 'サーバーからの応答がタイムアウトしました',
+    'client-invalid-response': 'サーバーの応答を読み取れませんでした',
+  };
+
+  // 失敗・データなし・成功を区別する。'not-published' は失敗ではなく「まだ公開データがない」。
+  function classifyFeed(body, httpStatus) {
+    if (body && body.ok === true && body.snapshot && body.historyRun) return { kind: 'ok', reason: '' };
+    if (body && body.ok === false && body.reason === 'not-published') return { kind: 'empty', reason: 'not-published' };
+    var reason = body && typeof body === 'object' && body.reason ? String(body.reason) : '';
+    if (!reason) reason = httpStatus ? 'upstream-http' : 'client-invalid-response';
+    return { kind: 'failure', reason: reason, httpStatus: httpStatus || null };
+  }
+
+  function reasonText(reason) {
+    return FAILURE_REASONS[reason] || ('原因コード: ' + String(reason || 'unknown').replace(/[^\w-]/g, ''));
+  }
+
   function failureText(body, previousCheckedAt) {
     var when = body && body.lastSuccessAt ? body.lastSuccessAt : (previousCheckedAt || '');
-    return '勤務時間データを取得できませんでした。最終成功データの取得日時: ' + (when ? checkedAtText(when) : '不明');
+    var head = '勤務時間データを取得できませんでした。';
+    var reason = body && body.reason ? reasonText(body.reason) + '。' : '';
+    return head + reason + '最終成功データの取得日時: ' + (when ? checkedAtText(when) : '不明');
+  }
+
+  function emptyText(view) {
+    return '勤務時間データはまだ公開されていません（取得失敗ではありません）。ローカル回収後の公開をお待ちください。';
   }
 
   function feedHeaders() {
@@ -523,48 +563,92 @@
       if (search) query = search.value;
     }
     state.query = query;
+    var wasStale = !!(state.view && state.view.stale);
     state.view = buildView(state.snapshot, state.history);
+    if (state.view) state.view.stale = wasStale;
     if (state.root) render(state.root, state.view, query);
     return state.view;
   }
 
-  function mount(rootEl) {
-    if (!rootEl || state.loading) return;
-    state.root = rootEl;
-    if (state.view && state.snapshot) { render(rootEl, state.view, state.query || ''); return; }
-    state.loading = true;
-    rootEl.innerHTML = '<p class="text-sm">保存データを読み込んでいます。</p>';
+  function showFailure(rootEl, body, httpStatus) {
     var previousCheckedAt = state.view && state.view.checkedAt ? state.view.checkedAt : '';
+    var text = failureText(body, previousCheckedAt);
+    if (httpStatus && body && body.reason === 'upstream-http') text += '（HTTP ' + httpStatus + '）';
+    state.feedNotice = text;
+    if (state.view) {
+      // 前回成功分は「最新ではない」と明示して残す。最新データとしては見せない。
+      state.view.stale = true;
+      render(rootEl, state.view, state.query || '');
+    } else {
+      rootEl.innerHTML = '<div class="card p-4 text-sm" role="alert">' + escapeHtml(text) + '</div>' + reloadButton();
+      bindReload(rootEl);
+    }
+  }
+
+  function reloadButton() {
+    return '<div class="mt-3"><button type="button" class="underline text-sm" data-duty-reload="1">再読み込み</button></div>';
+  }
+
+  function bindReload(rootEl) {
+    var button = rootEl.querySelector ? rootEl.querySelector('[data-duty-reload]') : null;
+    if (button) button.addEventListener('click', function () { load(rootEl); });
+  }
+
+  function logFailure(info) {
+    try { if (typeof console !== 'undefined') console.warn('勤務時間リスクの取得失敗:', info); } catch (e) {}
+  }
+
+  function load(rootEl) {
+    if (!rootEl || state.loading) return Promise.resolve();
+    state.root = rootEl;
+    state.loading = true;
+    if (!state.view) rootEl.innerHTML = '<p class="text-sm">保存データを読み込んでいます。</p>';
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
-    fetch('/duty-risk-feed', {
+    var httpStatus = 0;
+    return fetch('/duty-risk-feed', {
       cache: 'no-store',
       headers: feedHeaders(),
       signal: controller ? controller.signal : undefined,
     }).then(function (res) {
-      return res.json().then(function (body) { return body; }, function () { return { ok: false, reason: 'read-failed' }; });
+      httpStatus = res.status;
+      return res.json().then(function (body) { return body; }, function () { return { ok: false, reason: 'client-invalid-response' }; });
     }).then(function (body) {
       if (timer) clearTimeout(timer);
       state.loading = false;
-      if (!body || body.ok !== true || !body.snapshot || !body.historyRun) {
-        state.feedNotice = failureText(body, previousCheckedAt);
-        if (state.view) render(rootEl, state.view, state.query || '');
-        else rootEl.innerHTML = '<div class="card p-4 text-sm">' + escapeHtml(state.feedNotice) + '</div>';
+      var result = classifyFeed(body, httpStatus);
+      if (result.kind === 'failure') {
+        logFailure({ reason: result.reason, httpStatus: httpStatus });
+        showFailure(rootEl, { reason: result.reason, lastSuccessAt: body && body.lastSuccessAt }, httpStatus);
         return;
       }
       state.feedNotice = '';
+      if (result.kind === 'empty') {
+        state.view = null; state.snapshot = null; state.history = null;
+        rootEl.innerHTML = '<div class="card p-4 text-sm">' + escapeHtml(emptyText()) + '</div>' + reloadButton();
+        bindReload(rootEl);
+        return;
+      }
       state.snapshot = body.snapshot;
       state.history = { runs: [body.historyRun] };
       state.view = buildView(state.snapshot, state.history);
+      if (state.view) state.view.stale = false;
       render(rootEl, state.view, state.query || '');
-    }).catch(function () {
+    }).catch(function (err) {
       if (timer) clearTimeout(timer);
       state.loading = false;
-      state.feedNotice = failureText({ reason: 'timeout', lastSuccessAt: previousCheckedAt }, previousCheckedAt);
-      if (state.view) render(rootEl, state.view, state.query || '');
-      else rootEl.innerHTML = '<div class="card p-4 text-sm">' + escapeHtml(state.feedNotice) + '</div>';
+      var aborted = err && err.name === 'AbortError';
+      logFailure({ reason: aborted ? 'client-timeout' : 'client-network', message: err && err.message ? err.message : '' });
+      showFailure(rootEl, { reason: aborted ? 'client-timeout' : 'client-network' }, 0);
     });
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, failureText: failureText, mount: mount, refresh: refresh };
+  // タブを開くたびに取得し直す（成功済みの古い表示を最新として使い回さない）。
+  function mount(rootEl) {
+    if (!rootEl) return Promise.resolve();
+    if (state.view && !state.loading) render(rootEl, state.view, state.query || '');
+    return load(rootEl);
+  }
+
+  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, failureText: failureText, classifyFeed: classifyFeed, emptyText: emptyText, mount: mount, refresh: refresh, _state: state };
 });

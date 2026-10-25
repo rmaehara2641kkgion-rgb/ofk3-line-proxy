@@ -35,12 +35,21 @@
       res.status(503).json({ ok: false, reason: 'not-configured', lastSuccessAt: deps.lastSuccessAt || null });
       return;
     }
+    var log = typeof deps.log === 'function' ? deps.log : function () {};
     Promise.resolve(loader()).then(function (body) {
-      if (body && body.ok === true && body.checkedAt) deps.lastSuccessAt = body.checkedAt;
-      var status = body && body.ok === true ? 200 : (body && body.reason === 'timeout' ? 504 : 502);
-      if (body && body.ok !== true && !body.lastSuccessAt && deps.lastSuccessAt) body.lastSuccessAt = deps.lastSuccessAt;
-      res.status(status).json(body || { ok: false, reason: 'read-failed', lastSuccessAt: deps.lastSuccessAt || null });
-    }).catch(function () {
+      if (!body || typeof body !== 'object') body = { ok: false, reason: 'invalid-response' };
+      if (body.ok === true && body.checkedAt) deps.lastSuccessAt = body.checkedAt;
+      // 成功していない応答に snapshot 等の本文が混ざっていても画面へ渡さない。
+      var status = body.ok === true ? 200 : (body.reason === 'timeout' ? 504 : (body.reason === 'not-published' ? 200 : 502));
+      if (body.ok !== true) {
+        if (!body.lastSuccessAt && deps.lastSuccessAt) body.lastSuccessAt = deps.lastSuccessAt;
+        delete body.snapshot;
+        delete body.historyRun;
+        log('duty-risk-feed not ok: reason=' + String(body.reason || 'unknown').replace(/[^\w-]/g, ''));
+      }
+      res.status(status).json(body);
+    }).catch(function (error) {
+      log('duty-risk-feed loader threw: ' + (error && error.name ? error.name : 'Error'));
       res.status(502).json({ ok: false, reason: 'read-failed', lastSuccessAt: deps.lastSuccessAt || null });
     });
   }

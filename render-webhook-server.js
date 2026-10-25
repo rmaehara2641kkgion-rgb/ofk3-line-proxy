@@ -3176,6 +3176,7 @@ require('./harvest-rolling60h-route.js').mount(app, {
 
 var dutyRiskFeedState = { lastSuccessAt: null };
 require('./duty-risk-feed-route.js').mount(app, {
+  log: log,
   proxySecret: function () { return process.env.PROXY_SECRET || ''; },
   get lastSuccessAt() { return dutyRiskFeedState.lastSuccessAt; },
   set lastSuccessAt(value) { dutyRiskFeedState.lastSuccessAt = value; },
@@ -3183,6 +3184,7 @@ require('./duty-risk-feed-route.js').mount(app, {
     var dutyRiskUrl = process.env.DUTY_RISK_GAS_URL || '';
     var dutyRiskToken = process.env.DUTY_RISK_GAS_TOKEN || '';
     return require('./duty-risk-gas-client.js').fetchCurrent({
+      log: log,
       lastSuccessAt: dutyRiskFeedState.lastSuccessAt,
       client: {
         current: function () {

@@ -62,23 +62,53 @@
     });
   }
 
+  // 秘密情報を含めず、原因の切り分けに足りる最小情報だけを返す。
+  function describeError(error) {
+    var response = error && error.response;
+    var status = response && response.status ? response.status : null;
+    var code = error && error.code ? String(error.code) : '';
+    var reason = 'network';
+    if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || (error && error.message === 'timeout')) reason = 'timeout';
+    else if (status) reason = 'upstream-http';
+    return { reason: reason, httpStatus: status, code: code };
+  }
+
   function fetchCurrent(options) {
     options = options || {};
+    var log = typeof options.log === 'function' ? options.log : function () {};
     if (!options.client || typeof options.client.current !== 'function') {
-      return Promise.resolve({ ok: false, reason: 'not-configured', lastSuccessAt: null });
+      return Promise.resolve({ ok: false, reason: 'not-configured', lastSuccessAt: options.lastSuccessAt || null });
     }
     var timeoutMs = options.timeoutMs || 60000;
-    var pending = options.client.current({ timeoutMs: timeoutMs });
+    var lastSuccessAt = options.lastSuccessAt || null;
+    var pending;
+    try {
+      pending = options.client.current({ timeoutMs: timeoutMs });
+    } catch (syncError) {
+      pending = Promise.reject(syncError);
+    }
     return new Promise(function (resolve) {
       var timer = setTimeout(function () {
-        resolve({ ok: false, reason: 'timeout', lastSuccessAt: options.lastSuccessAt || null });
+        log('duty-risk fetchCurrent failed: reason=timeout');
+        resolve({ ok: false, reason: 'timeout', lastSuccessAt: lastSuccessAt });
       }, timeoutMs);
       Promise.resolve(pending).then(function (value) {
         clearTimeout(timer);
-        resolve(value || { ok: false, reason: 'read-failed', lastSuccessAt: options.lastSuccessAt || null });
-      }, function () {
+        // GAS が JSON ではなくログイン画面等のHTMLを返した場合は文字列になる。
+        if (!value || typeof value !== 'object') {
+          log('duty-risk fetchCurrent failed: reason=invalid-response type=' + typeof value);
+          resolve({ ok: false, reason: 'invalid-response', lastSuccessAt: lastSuccessAt });
+          return;
+        }
+        if (value.ok !== true) {
+          log('duty-risk fetchCurrent not ok: reason=' + String(value.reason || 'unknown').replace(/[^\w-]/g, ''));
+        }
+        resolve(value);
+      }, function (error) {
         clearTimeout(timer);
-        resolve({ ok: false, reason: 'read-failed', lastSuccessAt: options.lastSuccessAt || null });
+        var info = describeError(error);
+        log('duty-risk fetchCurrent failed: reason=' + info.reason + ' http=' + (info.httpStatus || '-') + ' code=' + (info.code || '-'));
+        resolve({ ok: false, reason: info.reason, httpStatus: info.httpStatus, lastSuccessAt: lastSuccessAt });
       });
     });
   }
