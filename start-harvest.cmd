@@ -16,6 +16,7 @@ if exist "%~dp0harvest-local.config.cmd" call "%~dp0harvest-local.config.cmd"
 if not defined HARVEST_PORT set "HARVEST_PORT=3100"
 set "URL=http://127.0.0.1:%HARVEST_PORT%/harvest"
 set "STATUS_URL=http://127.0.0.1:%HARVEST_PORT%/harvest-status.json"
+set "VERSION_URL=http://127.0.0.1:%HARVEST_PORT%/harvest-version"
 set "STATE_DIR=%LOCALAPPDATA%\OFK3-HARVEST"
 set "PID_FILE=%STATE_DIR%\server.pid"
 set "LOG_OUT=%STATE_DIR%\server.log"
@@ -38,6 +39,26 @@ if errorlevel 1 (
   echo         Stop that application or set HARVEST_PORT in harvest-local.config.cmd.
   goto :fail
 )
+
+rem It is the HARVEST local server. Is it the current version? A server started before an update keeps serving the
+rem old page from memory, so an outdated one is stopped (stop-harvest.cmd checks the process) and started again.
+set "EXPECTED_VERSION="
+for /f "tokens=2 delims='" %%v in ('findstr /c:"var APP_VERSION" "%~dp0harvest-local-server.js"') do set "EXPECTED_VERSION=%%v"
+if not defined EXPECTED_VERSION goto :reuse_running
+curl.exe -s --max-time 2 "%VERSION_URL%" | findstr /x /c:"harvest-local %EXPECTED_VERSION%" >nul
+if not errorlevel 1 goto :reuse_running
+echo The running HARVEST local server is an older version. Restarting it ...
+call "%~dp0stop-harvest.cmd" /quiet
+for /l %%i in (1,1,10) do (
+  powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HARVEST_PORT% -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+  if not errorlevel 1 goto :start_server
+  timeout /t 1 /nobreak >nul
+)
+echo [ERROR] The older HARVEST server could not be stopped by this launcher.
+echo         It was probably not started by start-harvest.cmd. Close it in Task Manager - node.exe running harvest-local-server.js - and try again.
+goto :fail
+
+:reuse_running
 echo HARVEST local server is already running on port %HARVEST_PORT%.
 goto :open_browser
 

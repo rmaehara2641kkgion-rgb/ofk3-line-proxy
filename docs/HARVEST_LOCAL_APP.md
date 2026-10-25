@@ -15,6 +15,8 @@ OFK3 本体 (`render-webhook-server.js`) は起動しません。Render 本番�
 2. 未起動なら `harvest-local-server.js` を非表示で起動します (PID とログは `%LOCALAPPDATA%\OFK3-HARVEST\` に保存)。
 3. 起動を待ってから、Edge (なければ Chrome) の専用ウィンドウ (`--app`) で画面を開きます。
 
+更新後の初回起動では、動いているサーバーが古い版なら `start-harvest.cmd` が止めて起動し直します (`stop-harvest.cmd /quiet` を内部で使います)。
+
 停止は `stop-harvest.cmd` です (PID ファイルで特定し、コマンドラインが `harvest-local-server.js` のプロセスだけを停止します)。
 
 手動起動: `npm run harvest:local` (または `node harvest-local-server.js`)。
@@ -103,6 +105,7 @@ Edge で `http://127.0.0.1:3100/harvest` を開き、`…` →「アプリ」→
 
 | 症状 | 対処 |
 |---|---|
+| 画面左上のロゴが白黒の世界樹になる / 古い画面のまま | 更新前から動いているサーバーが古い画面を返しています (ブラウザの Ctrl+Shift+R では直りません)。`start-harvest.cmd` は、画面最下部の「HARVEST local app vN」と `http://127.0.0.1:3100/harvest-version` で版を確認し、古ければ自動で再起動します。自動で止められない場合 (手動起動など) は、タスクマネージャーで `harvest-local-server.js` を実行している `node.exe` を終了して、もう一度起動してください |
 | 「Port 3100 is used by another application」 | 別アプリを止めるか、`harvest-local.config.cmd` で `HARVEST_PORT` を変更 |
 | 起動に失敗 | `%LOCALAPPDATA%\OFK3-HARVEST\server.err.log` / `server.log` を確認 |
 | 「refuses to start」 | `NODE_ENV=production` や `RENDER*` が設定されていないか確認 (ローカル専用です) |
