@@ -226,12 +226,22 @@
   }
 
   function parseNoteSheet(aoa, fileName, issues) {
-    var map = {}, histories = [];
+    var map = {}, histories = [], hasWeights = false, rateWeights = { main: {}, simple: {} };
     for (var r = 0; r < (aoa || []).length; r++) {
       var row = aoa[r] || [];
       if (row[0] == null) continue;
       var k = squash(row[0]);
       var val = row[1] == null ? '' : String(row[1]);
+      if (k.indexOf('配管率重み(JSON)') === 0) {
+        try {
+          var wj = JSON.parse(val);
+          ['main', 'simple'].forEach(function (role) {
+            for (var wk in (wj[role] || {})) rateWeights[role][wk] = wj[role][wk];
+          });
+          hasWeights = true;
+        } catch (e) { issues.push(issue('warn', 'RATE_WEIGHT_UNREADABLE', fileName, '', '配管率重み', '配管率の重み(JSON)を読み取れません。稼働日数で代替します')); }
+        continue;
+      }
       if (k.indexOf('統合履歴(JSON)') === 0) {
         try { histories.push(JSON.parse(val)); }
         catch (e) { issues.push(issue('warn', 'HISTORY_UNREADABLE', fileName, '', '統合履歴', '統合履歴(JSON)を読み取れません。履歴が不十分なものとして扱います')); }
@@ -239,7 +249,7 @@
       }
       if (map[k] == null) map[k] = val;
     }
-    var meta = { weeks: [], dates: [], hashes: [], histories: histories, kind: 'unknown', historyLevel: 'none', periodText: '' };
+    var meta = { weeks: [], dates: [], hashes: [], histories: histories, kind: 'unknown', historyLevel: 'none', periodText: '', rateWeights: hasWeights ? rateWeights : null };
     if (map['統合済み週'] != null) {
       meta.weeks = expandWeeks(map['統合済み週']).weeks;
     } else if (map['対象期間'] != null) {
@@ -286,6 +296,20 @@
     out.note = nn ? parseNoteSheet(input.aoa[nn] || [], fileName, issues)
       : { weeks: [], dates: [], hashes: [], histories: [], kind: 'unknown', historyLevel: 'none', periodText: '' };
     if (!nn) issues.push(issue('warn', 'NOTE_MISSING', fileName, '', SHEET_NOTE, '算出方法・注記シートがないため対象期間を読み取れません'));
+    // 累計ファイルに保存された「配管率の有効重み」を各行へ復元（無ければ稼働日数で代替）
+    ['main', 'simple'].forEach(function (role) {
+      var wt = out.note.rateWeights && out.note.rateWeights[role];
+      if (!out[role] || !wt) return;
+      out[role].rows.forEach(function (rec) {
+        var w = wt[rec.key];
+        if (w == null) return;
+        if (typeof w !== 'number' || !isFinite(w) || w < 0 || (rec.v.days != null && w > rec.v.days + 1e-9)) {
+          issues.push(issue('warn', 'RATE_WEIGHT_INVALID', fileName, rec.name, '配管率重み', SHEETS[role].title + ': 保存された重みが不正なため稼働日数で代替します'));
+          return;
+        }
+        rec.rateW = w;
+      });
+    });
     out.ok = !!(out.main && out.simple && out.main.ok && out.simple.ok);
     return out;
   }
@@ -310,7 +334,7 @@
     return {
       name: rec.name, key: rec.key, fromBase: fromBase, touched: false,
       before: fromBase ? cloneVals(rec.v) : null, added: null,
-      v: v, rateW: v.rate != null ? (v.days || 0) : 0
+      v: v, rateW: v.rate == null ? 0 : (rec.rateW != null ? rec.rateW : (v.days || 0))
     };
   }
 
@@ -318,10 +342,11 @@
     var v = acc.v, a = rec.v;
     ADDITIVE[role].forEach(function (k) { v[k] = sumNullable(v[k], a[k]); });
     if (a.rate != null) {
-      if (v.rate == null) { v.rate = a.rate; acc.rateW = a.days || 0; }
+      var aw = rec.rateW != null ? rec.rateW : (a.days || 0);
+      if (v.rate == null) { v.rate = a.rate; acc.rateW = aw; }
       else {
-        var w = acc.rateW + (a.days || 0);
-        if (w > 0) { v.rate = (v.rate * acc.rateW + a.rate * (a.days || 0)) / w; acc.rateW = w; }
+        var w = acc.rateW + aw;
+        if (w > 0) { v.rate = (v.rate * acc.rateW + a.rate * aw) / w; acc.rateW = w; }
         else {
           v.rate = null;
           issues.push(issue('warn', 'RATE_WEIGHT_ZERO', file, acc.name, FIELD_LABEL.rate, title + ': 稼働日数が0のため加重平均できず、配管率を空欄にしました（推測値は出力しません）'));
@@ -545,6 +570,16 @@
     rows.push(['統合履歴(JSON)', JSON.stringify(hist)]);
     added.forEach(function (a) { rows.push(['ファイル識別情報(SHA-256)', (a.name || '') + ' : ' + (a.hash || '(未取得)')]); });
     var issues = result.issues.filter(function (i) { return i.level === 'warn'; });
+    // 配管率の有効重み（次回統合で加重平均を正確に復元するため）。ドライバー名キーで保存
+    var wCount = 0, chunk = { main: {}, simple: {} };
+    ['main', 'simple'].forEach(function (role) {
+      result.rows[role].forEach(function (r) {
+        if (r.v.rate == null) return;
+        chunk[role][r.key] = r.rateW;
+        if (++wCount % 150 === 0) { rows.push(['配管率重み(JSON)', JSON.stringify(chunk)]); chunk = { main: {}, simple: {} }; }
+      });
+    });
+    if (Object.keys(chunk.main).length || Object.keys(chunk.simple).length) rows.push(['配管率重み(JSON)', JSON.stringify(chunk)]);
     rows.push(['統合時の警告件数', String(issues.length)]);
     issues.slice(0, 30).forEach(function (i) { rows.push(['警告', [i.file, i.driver, i.field, i.cause].filter(Boolean).join(' / ')]); });
     return rows;

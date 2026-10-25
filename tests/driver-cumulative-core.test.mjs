@@ -233,6 +233,12 @@ await test('出力xlsx: 3シート・見出し・書式・精度を既存レイ�
   assert.equal(only[11], null);
   // 書式: ヘッダー色、固定ペイン、0.00_ 表示形式
   const zip = await JSZip.loadAsync(bytes);
+  assert.deepEqual(Object.keys(zip.files).filter(n => n.endsWith('/')), [], 'ディレクトリエントリを含まない');
+  assert.ok(zip.file('[Content_Types].xml') && zip.file('_rels/.rels') && zip.file('xl/workbook.xml') && zip.file('xl/_rels/workbook.xml.rels'));
+  for (const n of Object.keys(zip.files)) {
+    const xml = await zip.file(n).async('string');
+    assert.ok(!/<f[ >]/.test(xml), '数式セルを含まない（全て値）: ' + n);
+  }
   const styles = await zip.file('xl/styles.xml').async('string');
   assert.ok(styles.includes('FF17365D') && styles.includes('0.00_ '));
   const sheet1 = await zip.file('xl/worksheets/sheet1.xml').async('string');
@@ -242,6 +248,74 @@ await test('出力xlsx: 3シート・見出し・書式・精度を既存レイ�
     aoa: Object.fromEntries(wb.SheetNames.map(n => [n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null })])) });
   assert.equal(reread.ok, true); assert.equal(reread.note.historyLevel, 'full');
   assert.deepEqual(reread.note.weeks.length, 20);
+});
+
+// 出力xlsxを実際に書き出して読み直し、次回の基準として使う（保存された重み・履歴を経由する）
+async function roundTrip(plan, nowIso) {
+  const model = C.buildOutputModel(plan, { nowIso: nowIso || '2026-10-25T00:00:00.000Z' });
+  const bytes = await W.buildXlsx(model, JSZip);
+  const wb = XLSX.read(Buffer.from(bytes), { type: 'buffer' });
+  return C.parseWorkbook({ fileName: model.fileName, fileHash: createHash('sha256').update(bytes).digest('hex'), sheetNames: wb.SheetNames,
+    aoa: Object.fromEntries(wb.SheetNames.map(n => [n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null })])) });
+}
+function sameRows(p1, p2) {
+  for (const role of ['main', 'simple']) {
+    const m = new Map(p2.rows[role].map(r => [r.key, r]));
+    assert.equal(p1.rows[role].length, p2.rows[role].length);
+    for (const r of p1.rows[role]) {
+      const x = m.get(r.key); assert.ok(x, r.key);
+      for (const k of Object.keys(r.v)) {
+        if (r.v[k] == null || x.v[k] == null) assert.equal(r.v[k], x.v[k], `${role}.${k}`);
+        else near(r.v[k], x.v[k], `${role}.${k}`);
+      }
+    }
+  }
+}
+
+await test('連続統合（W22-W40+W41 → +W42）がまとめて統合した結果と一致する（配管率の重みを保存・復元）', async () => {
+  // 中間週で配管率が空欄になるドライバーがいると、重み=稼働日数では誤差が出る
+  const base = () => cumulativeFile('b.xlsx', 'W22〜W40', [D('X', { days: 10, hours: 40, pkg: 800, rate: 99 }), D('Y', { days: 4, rate: 90 })]);
+  const w41 = () => weeklyFile('w41.xlsx', 'W41', '2026/10/4 〜 2026/10/10', [D('X', { days: 5, hours: 20, pkg: 400, rate: null }), D('Z', { days: 2, rate: 80 })]);
+  const w42 = () => weeklyFile('w42.xlsx', 'W42', '2026/10/11 〜 2026/10/17', [D('X', { days: 5, hours: 20, pkg: 380, rate: 90 }), D('Z', { days: 3, rate: 70 }), D('N', { days: 1, rate: 60 })]);
+  const oneShot = C.planMerge(base(), [w41(), w42()], ack);
+  const step1 = C.planMerge(base(), [w41()], ack);
+  assert.equal(byName(step1, 'main', 'X').rateW, 10, '空欄週の稼働日数は重みに含めない');
+  const reread = await roundTrip(step1);
+  assert.equal(reread.note.historyLevel, 'full');
+  assert.equal(reread.main.rows.find(r => r.name === 'X').rateW, 10, '重みが保存・復元される');
+  const step2 = C.planMerge(reread, [w42()], {});
+  assert.equal(step2.canGenerate, true);
+  sameRows(oneShot, step2);
+  near(byName(step2, 'main', 'X').v.rate, (99 * 10 + 90 * 5) / 15);
+  // 重みを使わない場合（稼働日数で代替）は誤差が出ることの確認＝保存が必要な理由
+  const legacy = cumulativeFile('legacy.xlsx', 'W22〜W41', step1.rows.main.map(r => ({ name: r.name, days: r.v.days, hours: r.v.hours, pkg: r.v.pkg, km: r.v.km, rate: r.v.rate })));
+  const wrong = C.planMerge(legacy, [w42()], ack);
+  assert.ok(Math.abs(byName(wrong, 'main', 'X').v.rate - byName(oneShot, 'main', 'X').v.rate) > 0.1);
+  // 3段階・簡易版も一致
+  const w43 = () => weeklyFile('w43.xlsx', 'W43', '2026/10/18 〜 2026/10/24', [D('Z', { days: 1, rate: 50 })]);
+  const step3 = C.planMerge(await roundTrip(step2), [w43()], {});
+  const oneShot3 = C.planMerge(base(), [w41(), w42(), w43()], ack);
+  sameRows(oneShot3, step3);
+  assert.equal(step3.periodLabel, 'W22〜W43');
+});
+
+await test('連続統合の性質テスト: 任意の分割で一致（空欄・新規・欠席ドライバーを含む乱数ケース）', async () => {
+  let seed = 12345; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let trial = 0; trial < 6; trial++) {
+    const names = ['A', 'B', 'C', 'D', 'E', 'F'];
+    const gen = (label, week, dates, pool) => weeklyFile(label, week, dates, pool.filter(() => rnd() > 0.3).map(n => D(n, {
+      days: 1 + Math.floor(rnd() * 5), hours: 5 + Math.floor(rnd() * 30) + 0.0137, pkg: 50 + Math.floor(rnd() * 500), km: Math.floor(rnd() * 200),
+      kaishu: Math.floor(rnd() * 2), gohai: Math.floor(rnd() * 2), rate: rnd() > 0.35 ? 90 + rnd() * 10 : null })));
+    const b0 = cumulativeFile('b.xlsx', 'W1〜W3', names.slice(0, 4).map(n => D(n, { days: 6, hours: 30, pkg: 600, rate: rnd() > 0.3 ? 95 + rnd() * 4 : null })));
+    const weeks = [4, 5, 6, 7].map(w => gen(`w${w}.xlsx`, 'W' + w, `2026/${w}/1 〜 2026/${w}/7`, names));
+    const one = C.planMerge(b0, weeks, ack);
+    assert.equal(one.canGenerate, true);
+    let cur = b0, last = null;
+    for (const wk of weeks) { last = C.planMerge(cur, [wk], cur === b0 ? ack : {}); assert.equal(last.canGenerate, true); cur = await roundTrip(last); }
+    sameRows(one, last);
+    const half = C.planMerge(await roundTrip(C.planMerge(b0, weeks.slice(0, 2), ack)), weeks.slice(2), {});
+    sameRows(one, half);
+  }
 });
 
 await test('index.html: 通常モードの要素を維持したまま累計モードが追加されている', () => {

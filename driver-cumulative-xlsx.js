@@ -23,6 +23,7 @@
     return '<c r="' + ref + '"' + (style ? ' s="' + style + '"' : '') + '><v>' + String(n) + '</v></c>';
   }
 
+  var NO_DIRS = { createFolders: false }; // ディレクトリエントリを作らない（Excel互換のため通常のxlsxと同じ構成にする）
   var STYLES = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
     '<numFmts count="1"><numFmt numFmtId="176" formatCode="0.00_ "/></numFmts>' +
@@ -88,14 +89,14 @@
       ct += '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
       wbSheets += '<sheet name="' + esc(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>';
       wbRels += '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>';
-      zip.file('xl/worksheets/sheet' + (i + 1) + '.xml', s.kind === 'note' ? noteSheetXml(s) : dataSheetXml(s, i === 0));
+      zip.file('xl/worksheets/sheet' + (i + 1) + '.xml', s.kind === 'note' ? noteSheetXml(s) : dataSheetXml(s, i === 0), NO_DIRS);
     });
     wbRels += '<Relationship Id="rId' + (n + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>';
-    zip.file('[Content_Types].xml', ct + '</Types>');
-    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
-    zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + wbSheets + '</sheets></workbook>');
-    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + wbRels + '</Relationships>');
-    zip.file('xl/styles.xml', STYLES);
+    zip.file('[Content_Types].xml', ct + '</Types>', NO_DIRS);
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>', NO_DIRS);
+    zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + wbSheets + '</sheets></workbook>', NO_DIRS);
+    zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + wbRels + '</Relationships>', NO_DIRS);
+    zip.file('xl/styles.xml', STYLES, NO_DIRS);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
 
