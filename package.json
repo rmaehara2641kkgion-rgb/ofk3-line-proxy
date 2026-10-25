@@ -13,6 +13,7 @@
     "test:manual-assign-board": "node tests/manual-assign-board-core.test.mjs",
     "test:rolling60h": "node tests/rolling60h-core.test.mjs && node tests/harvest-daily-manifest.test.mjs && node tests/inoichi-rolling-dryrun.test.mjs && node tests/harvest-rolling60h-collector.test.mjs && node tests/harvest-rolling60h-history.test.mjs && node tests/rolling60h-blank-cell.test.mjs && node tests/rolling60h-history-compare.test.mjs && node tests/harvest-rolling60h-source-reason.test.mjs",
     "test:duty-risk": "node tests/duty-risk-dashboard.test.mjs && node tests/duty-risk-drive-feed.test.mjs && node tests/duty-risk-feed-failure.test.mjs && node tests/duty-risk-republish.test.mjs && node tests/duty-risk-snapshot.test.mjs",
+    "test:tenko-sync": "node tests/tenko-sync-503.test.mjs",
     "test:twc": "node tests/twc-core.test.mjs",
     "test:cortex-13": "node tests/cortex-13-priority-core.test.mjs && node tests/cortex-package-sequence-index.test.mjs && node tests/cortex-dashboard-card.test.mjs && node tests/unified-delivery-map.test.mjs && node tests/cortex-route-sequence.test.mjs && node tests/cortex-route-line-map.test.mjs && node tests/cortex-package-assist-index.test.mjs && node tests/cortex-bag-enrichment.test.mjs",
     "test:cortex-package-sequence-index": "node tests/cortex-package-sequence-index.test.mjs",
@@ -32,7 +33,7 @@
     "test:billing": "node tests/billing-reconcile.test.mjs",
     "test:dnr": "node tests/dnr-datetime.test.mjs && node tests/dnr-detail-reason.test.mjs",
     "test:contact-compliance": "node tests/contact-compliance-core.test.mjs && node tests/cc-export-ui.test.mjs && node tests/cc-affiliation.test.mjs",
-    "test:all": "npm run test:area-experience && npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:duty-risk && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13 && npm run test:time-window-board && npm run test:dashboard-map && npm run test:gds-fleet-audit && npm run test:driver-ability && npm run test:driver-cumulative && npm run test:harvest && npm run test:harvest-local && npm run test:inoichi && npm run test:line-unlinked && npm run test:billing && npm run test:contact-compliance && npm run test:dnr"
+    "test:all": "npm run test:area-experience && npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:duty-risk && npm run test:tenko-sync && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13 && npm run test:time-window-board && npm run test:dashboard-map && npm run test:gds-fleet-audit && npm run test:driver-ability && npm run test:driver-cumulative && npm run test:harvest && npm run test:harvest-local && npm run test:inoichi && npm run test:line-unlinked && npm run test:billing && npm run test:contact-compliance && npm run test:dnr"
   },
   "engines": {
     "node": ">=18.0.0"

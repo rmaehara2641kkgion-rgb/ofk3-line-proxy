@@ -6113,6 +6113,7 @@ var driverDB = {
         'no-token': ['⚪ 点呼同期キーが未設定です', 'text-xs text-gray-400'],
         'auth-failed': ['🔴 同期キーが正しくありません（同期停止中・データは保持されています）', 'text-xs text-red-500'],
         'server-not-configured': ['🔴 サーバー側の同期設定が未完了です', 'text-xs text-red-500'],
+        'server-unavailable': ['🟡 サーバーが一時的に利用できません（起動中の可能性・データは保持されています）', 'text-xs text-amber-500'],
         'network-error': ['🟡 通信エラー（同期一時停止・データは保持されています）', 'text-xs text-amber-500'],
         'error': ['🟡 同期エラー', 'text-xs text-amber-500'],
         'ok': ['🟢 同期OK', 'text-xs text-emerald-600'],
@@ -6121,6 +6122,14 @@ var driverDB = {
       var entry = map[state] || ['', 'text-xs text-ink-lighter'];
       el.textContent = entry[0];
       el.className = entry[1];
+    }
+
+    // 503の判別: このアプリのサーバーが返す「sync not configured」だけを設定未完了とみなす。
+    // Renderの起動中・デプロイ中などプラットフォームの503(本文が違う)は一時的な利用不可として扱う。
+    function tenkoSyncStateFor503(xhr) {
+      var message = '';
+      try { message = (JSON.parse(xhr.responseText || '{}') || {}).message || ''; } catch (e) { message = ''; }
+      return message === 'sync not configured' ? 'server-not-configured' : 'server-unavailable';
     }
 
     // PC側: tenkoScheduleをサーバーに送信
@@ -6155,8 +6164,11 @@ var driverDB = {
           updateTenkoSyncStatusIndicator('auth-failed');
           if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
         } else if (xhr.status === 503) {
-          alert('サーバー側の同期設定が未完了です。管理者にご確認ください。');
-          updateTenkoSyncStatusIndicator('server-not-configured');
+          var state503 = tenkoSyncStateFor503(xhr);
+          alert(state503 === 'server-not-configured'
+            ? 'サーバー側の同期設定が未完了です。管理者にご確認ください。'
+            : 'サーバーが一時的に利用できません（起動中の可能性があります）。しばらくして再度お試しください。（ローカルデータは変更されていません）');
+          updateTenkoSyncStatusIndicator(state503);
           if (btn) { btn.textContent = '📤 タブレットに同期'; btn.disabled = false; }
         } else {
           alert('同期エラー: ' + xhr.status);
@@ -6190,7 +6202,7 @@ var driverDB = {
           return;
         }
         if (xhr.status === 503) {
-          updateTenkoSyncStatusIndicator('server-not-configured');
+          updateTenkoSyncStatusIndicator(tenkoSyncStateFor503(xhr));
           return;
         }
         if (xhr.status !== 200) { updateTenkoSyncStatusIndicator('error'); return; }
@@ -6329,7 +6341,7 @@ var driverDB = {
         xhr.setRequestHeader('X-Tenko-Sync-Token', token);
         xhr.onload = function() {
           if (xhr.status === 401 || xhr.status === 403) { updateTenkoSyncStatusIndicator('auth-failed'); }
-          else if (xhr.status === 503) { updateTenkoSyncStatusIndicator('server-not-configured'); }
+          else if (xhr.status === 503) { updateTenkoSyncStatusIndicator(tenkoSyncStateFor503(xhr)); }
           else if (xhr.status === 200) { updateTenkoSyncStatusIndicator('ok'); }
           else { updateTenkoSyncStatusIndicator('error'); }
         };
@@ -6480,7 +6492,7 @@ var driverDB = {
             console.warn('双方向同期エラー: 同期キーが正しくありません');
             updateTenkoSyncStatusIndicator('auth-failed');
           } else if (xhr.status === 503) {
-            updateTenkoSyncStatusIndicator('server-not-configured');
+            updateTenkoSyncStatusIndicator(tenkoSyncStateFor503(xhr));
           } else {
             console.warn('双方向同期エラー:', xhr.status);
             updateTenkoSyncStatusIndicator('error');
