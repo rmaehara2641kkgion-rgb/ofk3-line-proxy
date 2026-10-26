@@ -2570,7 +2570,9 @@
       <div id="panel-wh60" class="hidden">
         <!-- Rolling 60h サブパネル。内容は rolling60h-ui.js が動的に描画する
              （index.html への直書きを避けるため、コンテナのみここに置く）。 -->
-        <div id="wh60-rolling-subpanel"></div>
+        <!-- ローカル完結の60時間ボード（データ取込 / 残り時間・リスク一覧）。rolling60h-board-ui.js が描画する。 -->
+        <div id="wh60-local-root"></div>
+        <div id="wh60-rolling-subpanel" style="display:none;"></div>
       </div>
 
       <div id="panel-duty-risk" class="hidden">
@@ -3990,7 +3992,7 @@ var driverDB = {
       if (tab === 'addr-search') { updateAddrSearchStatus(); var el = document.getElementById('addr-search-input'); if (el) el.focus(); }
       if (tab === 'billing') renderBillingTable();
       if (tab === 'map-master') wh60LoadAddrStats();
-      if (tab === 'wh60') { if (typeof RollingUI !== 'undefined' && RollingUI.onShown) RollingUI.onShown(); }
+      if (tab === 'wh60') { if (typeof RollingUI !== 'undefined' && RollingUI.onShown) RollingUI.onShown(); if (typeof Rolling60hBoardUI !== 'undefined') Rolling60hBoardUI.onShown(); }
       if (tab === 'duty-risk' && window.DutyRiskDashboard) {
         var dutyRoot = document.getElementById('duty-risk-root');
         if (dutyRoot) DutyRiskDashboard.mount(dutyRoot);
@@ -23178,6 +23180,12 @@ var driverDB = {
   <script src="/harvest-daily-manifest.js?v=20261018-rolling"></script>
   <script src="/rolling60h-ui.js?v=20261018-rolling"></script>
   <script src="/duty-risk-dashboard.js?v=20261025-duty-risk-7"></script>
+  <script src="/inoichi-rolling-dryrun.js?v=20261026-local60"></script>
+  <script src="/harvest-rolling60h-run.js?v=20261026-local60"></script>
+  <script src="/duty-risk-snapshot.js?v=20261026-local60"></script>
+  <script src="/rolling60h-local-board.js?v=20261026-local60"></script>
+  <script src="/rolling60h-local-store.js?v=20261026-local60"></script>
+  <script src="/rolling60h-board-ui.js?v=20261026-local60"></script>
   <script src="/cortex-13-priority-core.js?v=20260921-3"></script>
   <script src="/cortex-13-priority.js?v=20260918-5"></script>
   <script src="/ofk3-cortex-priority-ui.js?v=20260927-1"></script>

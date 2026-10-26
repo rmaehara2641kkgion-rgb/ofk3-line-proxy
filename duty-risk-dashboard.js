@@ -650,5 +650,5 @@
     return load(rootEl);
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, failureText: failureText, classifyFeed: classifyFeed, emptyText: emptyText, mount: mount, refresh: refresh, _state: state };
+  return { analyzePrediction: analyzePrediction, buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, failureText: failureText, classifyFeed: classifyFeed, emptyText: emptyText, mount: mount, refresh: refresh, _state: state };
 });

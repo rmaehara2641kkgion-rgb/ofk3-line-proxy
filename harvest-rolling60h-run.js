@@ -305,7 +305,9 @@
     var rolling = options.rolling;
     var harvest = options.harvest;
     var dryRun = options.dryRun;
-    if (!fs || !pathMod || !XLSX || !rolling || !harvest || !dryRun) {
+    // OFK3画面など、読み込み済みのブックを直接渡す場合（ファイル探索・履歴保存は行わない）。
+    var injected = options.dailyRows !== undefined || options.shiftBook !== undefined;
+    if ((!injected && (!fs || !pathMod)) || !XLSX || !rolling || !harvest || !dryRun) {
       return { summary: emptySummary({ reason: 'runner-missing' }), stats: null };
     }
     requireRows.xlsx = XLSX;
@@ -321,35 +323,54 @@
     // 失敗理由はコードだけを残す（パス・氏名は含めない）。
     var dailyReason = '';
     var shiftReason = '';
-    var loadedDaily = null;
-    try {
-      loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
-    } catch (dailyErr) {
-      loadedDaily = { ok: false, reason: 'read-failed' };
-    }
-    if (loadedDaily && loadedDaily.ok && loadedDaily.sheet === 'Report5_Daily_Data') {
-      fileSuccess++;
-      dailyFile = baseName(loadedDaily.file);
-      dailyRows = loadedDaily.rows;
-      dailyReason = 'ok';
-    } else {
-      dailyReason = (loadedDaily && loadedDaily.reason) || 'report5-missing';
-    }
-    var shiftEntries = null;
-    try { shiftEntries = listShiftEntries(shiftDir, fs, pathMod); } catch (listErr) { shiftEntries = null; shiftReason = 'read-failed'; }
-    var pickedShift = shiftEntries ? selectLatestShift(shiftEntries) : { ok: false, reason: shiftReason || 'source-unavailable' };
-    if (pickedShift.ok) {
-      try {
-        shiftBook = XLSX.readFile(pathMod.join(shiftDir, baseName(pickedShift.name)), { cellDates: true });
+    if (injected) {
+      if (options.dailyRows && options.dailyRows.length) {
         fileSuccess++;
-        shiftFile = baseName(pickedShift.name);
+        dailyFile = baseName(options.dailyFileName);
+        dailyRows = options.dailyRows;
+        dailyReason = 'ok';
+      } else {
+        dailyReason = 'not-provided';
+      }
+      if (options.shiftBook) {
+        fileSuccess++;
+        shiftFile = baseName(options.shiftFileName);
+        shiftBook = options.shiftBook;
         shiftReason = 'ok';
-      } catch (e) {
-        shiftBook = null;
-        shiftReason = 'read-failed';
+      } else {
+        shiftReason = 'not-provided';
       }
     } else {
-      shiftReason = pickedShift.reason || 'source-unavailable';
+      var loadedDaily = null;
+      try {
+        loadedDaily = harvest.loadFromDirectory(dailyDir, { fs: fs, path: pathMod, xlsx: XLSX, rolling: rolling });
+      } catch (dailyErr) {
+        loadedDaily = { ok: false, reason: 'read-failed' };
+      }
+      if (loadedDaily && loadedDaily.ok && loadedDaily.sheet === 'Report5_Daily_Data') {
+        fileSuccess++;
+        dailyFile = baseName(loadedDaily.file);
+        dailyRows = loadedDaily.rows;
+        dailyReason = 'ok';
+      } else {
+        dailyReason = (loadedDaily && loadedDaily.reason) || 'report5-missing';
+      }
+      var shiftEntries = null;
+      try { shiftEntries = listShiftEntries(shiftDir, fs, pathMod); } catch (listErr) { shiftEntries = null; shiftReason = 'read-failed'; }
+      var pickedShift = shiftEntries ? selectLatestShift(shiftEntries) : { ok: false, reason: shiftReason || 'source-unavailable' };
+      if (pickedShift.ok) {
+        try {
+          shiftBook = XLSX.readFile(pathMod.join(shiftDir, baseName(pickedShift.name)), { cellDates: true });
+          fileSuccess++;
+          shiftFile = baseName(pickedShift.name);
+          shiftReason = 'ok';
+        } catch (e) {
+          shiftBook = null;
+          shiftReason = 'read-failed';
+        }
+      } else {
+        shiftReason = pickedShift.reason || 'source-unavailable';
+      }
     }
 
     var parsed = dailyRows ? rolling.parseAmazonDailyRows(dailyRows, { stationFilter: 'OFK3', allowHeaderlessFallback: false }) : { records: [] };
@@ -365,6 +386,7 @@
     var coverageMin = dayValues[0] || '';
     var coverageMax = dayValues.length ? dayValues[dayValues.length - 1] : '';
     var historyFile = options.historyFile;
+    if (injected && historyFile == null) historyFile = false;
     if (historyFile == null && typeof __dirname === 'string') {
       historyFile = pathMod.join(__dirname, 'local', 'rolling60h-history.json');
     }
@@ -657,6 +679,7 @@
     DAILY_DIR: DAILY_DIR,
     SHIFT_DIR: SHIFT_DIR,
     selectLatestShift: selectLatestShift,
+    ROSTER_SKIP: ROSTER_SKIP,
     run: run,
     capture: capture,
     audit: audit,
