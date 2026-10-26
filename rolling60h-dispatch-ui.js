@@ -24,7 +24,12 @@
 
   function fmt(value) {
     if (typeof value !== 'number' || !isFinite(value)) return '—';
-    return (Math.round(value * 10) / 10).toFixed(1);
+    var api = root && root.DutyHoursFormat;
+    if (!api && typeof require === 'function') {
+      try { api = require('./duty-hours-format.js'); } catch (e) { api = null; }
+    }
+    if (api && api.durationText) return api.durationText(value);
+    return (Math.round(value * 10) / 10).toFixed(1) + 'h';
   }
 
   function determined(side) {
@@ -35,8 +40,8 @@
     if (!side || side.status === 'missing' || side.origin === 'missing') return '実績未取得';
     var origin = originLabel(side.origin);
     if (typeof side.totalHours !== 'number') return side.label || '判定不能';
-    if (!determined(side)) return origin + ' ' + fmt(side.totalHours) + 'h（' + (side.label || '判定不能') + '）';
-    return origin + ' ' + fmt(side.totalHours) + 'h';
+    if (!determined(side)) return origin + ' ' + fmt(side.totalHours) + '（' + (side.label || '判定不能') + '）';
+    return origin + ' ' + fmt(side.totalHours);
   }
 
   function avoidText(row) {
@@ -98,7 +103,7 @@
 
   function overText(side) {
     if (!determined(side) || typeof side.overHours !== 'number') return '判定不能';
-    if (side.overHours > 0) return '超過' + fmt(side.overHours) + 'h';
+    if (side.overHours > 0) return '超過' + fmt(side.overHours);
     return '超過なし';
   }
 
@@ -180,13 +185,13 @@
 
   function personCard(row, overrides, prominent, slot) {
     var value = overrides && overrides[row.transportId] != null ? overrides[row.transportId] : '';
-    var cut = typeof row.requiredCutHours === 'number' ? fmt(row.requiredCutHours) + 'h短縮' : '短縮時間は判定不能';
+    var cut = typeof row.requiredCutHours === 'number' ? fmt(row.requiredCutHours) + '短縮' : '短縮時間は判定不能';
     return '<article data-driver="' + escapeHtml(row.transportId) + '" style="' + toneStyle(tone(row)) + 'border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.35;">' +
       '<div style="font-weight:700;">' + escapeHtml(personName(row)) + '</div>' +
       '<div style="font-size:' + (prominent ? '15px' : '13px') + ';font-weight:700;">今日 ' + escapeHtml(cut) + '</div>' +
       '<div>明日 ' + escapeHtml(hoursView(row.tomorrow)) + ' / ' + escapeHtml(overText(row.tomorrow)) + '</div>' +
       '<div>今日の予測 ' + escapeHtml(hoursView(row.today)) + ' → 調整後 ' + escapeHtml(hoursView(row.simulatedTomorrow)) + '</div>' +
-      '<div>60hまでの残り 今日 ' + escapeHtml(fmt(row.today && row.today.remainingHours)) + 'h / 明日 ' + escapeHtml(fmt(row.tomorrow && row.tomorrow.remainingHours)) + 'h</div>' +
+      '<div>60hまでの残り 今日 ' + escapeHtml(fmt(row.today && row.today.remainingHours)) + ' / 明日 ' + escapeHtml(fmt(row.tomorrow && row.tomorrow.remainingHours)) + '</div>' +
       '<div>結果 ' + escapeHtml(avoidText(row)) + (trialText(row) ? '。' + escapeHtml(trialText(row)) : '') + '</div>' +
       (tone(row) === 'unknown' ? '<div>' + escapeHtml(reasonText(row)) + '</div>' : '') +
       '<label style="display:block;margin-top:6px;font-size:12px;">仮の今日（dry-run）' +
