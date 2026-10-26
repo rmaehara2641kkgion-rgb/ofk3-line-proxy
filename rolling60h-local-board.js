@@ -5,6 +5,8 @@
  *   勤務可能上限       = 60 - 過去6日の合計        （過去6日が実績だけのときだけ確定値）
  *   予定終了後の余裕   = 60 - 対象7日の予測合計     （実績確定のときだけ確定値、予定込みは暫定）
  * 欠損は0にしない。数値を出せない項目は null。
+ * 未確定日があっても、既存エンジンが確定分だけで上限超過（knownOver）と出しているときは、
+ * その合計を超過予測として残す。未確定日の時間は足さない。安全側の正常にはしない。
  * Amazon の estimated_working_hour は推定であり、法的な労働時間の確定値ではない。
  */
 (function (root, factory) {
@@ -46,10 +48,104 @@
   }
 
   function adoptedLabel(day) {
+    if (day && day.origin === 'roster-unconfirmed') return 'シフト未入力';
     if (!day || !isNum(day.hours)) return '未取得';
     if (day.origin === 'daily-estimate' || day.origin === 'archived-daily') return '実績（Amazon推定）';
     if (day.origin === 'roster-plan') return '予定';
     return '未取得';
+  }
+
+  function isActualOrigin(origin) {
+    return origin === 'daily-estimate' || origin === 'archived-daily';
+  }
+
+  function knownSum(days) {
+    var sum = 0;
+    var missing = 0;
+    (days || []).forEach(function (day) {
+      if (day && isNum(day.hours)) sum += day.hours;
+      else missing += 1;
+    });
+    return { sum: sum, missing: missing, count: (days || []).length };
+  }
+
+  function pastIsActual(days) {
+    var numeric = (days || []).filter(function (day) { return day && isNum(day.hours); });
+    return numeric.length > 0 && numeric.every(function (day) { return isActualOrigin(day.origin); });
+  }
+
+  // 既存エンジンの knownOver / predictedTotal を、欠損で捨てずに一覧へ載せる。
+  // 未確定日は加算しない（0時間にもしない）。
+  function revealKnown(row, pred) {
+    if (!pred || !Array.isArray(pred.days)) return;
+    var byDate = {};
+    pred.days.forEach(function (day) { if (day && day.date) byDate[day.date] = day; });
+    row.gaps = (row.gaps || []).map(function (gap) {
+      var day = byDate[gap.date];
+      if (day && day.origin === 'roster-unconfirmed') {
+        return { date: gap.date, reason: 'シフト未入力。0時間にはしていません' };
+      }
+      return gap;
+    });
+    var pastDays = pred.days.slice(0, 6);
+    var past = knownSum(pastDays);
+    var today = pred.days.length > 6 ? pred.days[6] : null;
+    var engineTotal = isNum(pred.predictedTotal) ? pred.predictedTotal : null;
+    var pastAlreadyOver = past.count === 6 && past.missing < past.count && past.sum > LIMIT && pastIsActual(pastDays);
+    if (!pred.knownOver && !pastAlreadyOver) return;
+    if (row.past6.hours == null && past.count === 6 && past.missing < past.count) {
+      row.past6.hours = past.sum;
+      row.past6.kind = pastIsActual(pastDays) ? '実績' : '確定分';
+      row.past6.provisional = past.missing > 0;
+      row.past6.note = past.missing ? '未確定の日は含みません。0時間にはしていません。' : '';
+    }
+    if (row.workable.hours == null && isNum(row.past6.hours)) {
+      row.workable.hours = LIMIT - row.past6.hours;
+      row.workable.confirmed = false;
+      row.workable.note = past.missing
+        ? '未確定の日を除いた残りです。実際の残りはこれ以下です。'
+        : '予定を含む暫定値';
+    }
+    if (row.todayPlan == null && today && isNum(today.hours) && today.origin === 'roster-plan') {
+      row.todayPlan = today.hours;
+    }
+    if (row.forecast.hours == null && engineTotal != null) {
+      row.forecast.hours = engineTotal;
+      row.forecast.kind = '予測';
+      row.forecast.provisional = true;
+      row.forecast.note = '未確定の日は加算していません。確定している時間だけで上限を超えています。';
+    }
+    if (row.marginAfterPlan.hours == null && isNum(row.forecast.hours)) {
+      row.marginAfterPlan.hours = LIMIT - row.forecast.hours;
+      row.marginAfterPlan.confirmed = false;
+      row.marginAfterPlan.note = '暫定。未確定日を0時間にはしていません。';
+    }
+  }
+
+  function judge(row) {
+    var pastHours = row.past6.hours;
+    var forecastHours = row.forecast.hours;
+    var pastOver = isNum(pastHours) && pastHours > LIMIT && row.past6.kind === '実績';
+    var forecastOver = isNum(forecastHours) && forecastHours > LIMIT;
+    var windowOver = row.status === 'exceed' || row.status === 'partial-exceed' || row.knownOver === true;
+    if (pastOver) {
+      return { code: 'actual-exceed', label: '実績超過', provisional: row.past6.provisional === true, rank: 0 };
+    }
+    if (forecastOver || windowOver) {
+      return {
+        code: 'forecast-exceed',
+        label: '超過予測',
+        provisional: row.forecast.provisional === true || row.knownOver === true && row.dataClass === '判定不能',
+        rank: 1,
+      };
+    }
+    if (row.status === 'approach' || row.status === 'partial-approach' || (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours === LIMIT)) {
+      return { code: 'caution', label: '注意', provisional: row.dataClass === '予定込み予測' || row.status === 'partial-approach', rank: 2 };
+    }
+    if (row.status === 'clear' && row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours < LIMIT) {
+      return { code: 'ok', label: '正常', provisional: row.dataClass !== '実績確定', rank: 4 };
+    }
+    return { code: 'review', label: '要確認', provisional: true, rank: 3 };
   }
 
   function statusOf(disposition) {
@@ -100,7 +196,7 @@
         workable: {
           hours: pastOk ? a.workable : null,
           confirmed: pastActualOnly,
-          note: pastActualOnly ? '' : (pastOk ? '予定を含む暫定値' : '過去6日に欠損があり算出不可'),
+          note: pastActualOnly ? '' : (pastOk ? '予定を含む暫定値' : '過去6日に欠損があり、残り許容は確定できません'),
         },
         todayPlan: a && isNum(a.todayPlan) ? a.todayPlan : null,
         forecast: {
@@ -115,9 +211,16 @@
         dataClass: a ? a.dataClass : '判定不能',
         gaps: a ? a.gaps : [{ date: '', reason: '今日を終端とする7日窓がない' }],
         days: pred ? (pred.days || []).map(function (d) {
-          return { date: d.date || '', hours: isNum(d.hours) ? d.hours : null, adopted: adoptedLabel(d) };
+          return { date: d.date || '', hours: isNum(d.hours) ? d.hours : null, adopted: adoptedLabel(d), origin: d && d.origin ? d.origin : '' };
         }) : [],
+        knownOver: !!(pred && pred.knownOver),
       };
+      revealKnown(row, pred);
+      var judgment = judge(row);
+      row.judgment = judgment.code;
+      row.judgmentLabel = judgment.label;
+      row.judgmentProvisional = judgment.provisional;
+      row.judgmentRank = judgment.rank;
       return row;
     });
     var counts = {
@@ -179,7 +282,9 @@
 
   var SORTS = {
     risk: function (a, b) {
-      if (a.rank !== b.rank) return a.rank - b.rank;
+      var ar = a.judgmentRank != null ? a.judgmentRank : a.rank;
+      var br = b.judgmentRank != null ? b.judgmentRank : b.rank;
+      if (ar !== br) return ar - br;
       return marginCompare(a, b) || idCompare(a, b);
     },
     margin: function (a, b) { return marginCompare(a, b) || idCompare(a, b); },

@@ -42,10 +42,20 @@
     if (!isFinite(t)) return '—';
     return new Date(t + 9 * 3600000).toISOString().replace('T', ' ').slice(0, 19);
   }
-  function hours(v) {
-    if (typeof v !== 'number' || !isFinite(v)) return '算出不可';
-    return (Math.round(v * 100) / 100).toFixed(2).replace(/\.?0+$/, '') + 'h';
+  function clock(v) {
+    var format = global.DutyHoursFormat;
+    if (format && typeof format.clockText === 'function') return format.clockText(v);
+    if (typeof v !== 'number' || !isFinite(v)) return '要確認';
+    var sign = v < 0 ? -1 : 1;
+    var total = Math.round(Math.abs(v) * 60);
+    var hour = Math.floor(total / 60);
+    var minute = total % 60;
+    var hourText = hour < 10 ? '0' + hour : String(hour);
+    var minuteText = minute < 10 ? '0' + minute : String(minute);
+    return (sign < 0 ? '-' : '') + hourText + ':' + minuteText;
   }
+  var TIME_STYLE = 'white-space:nowrap;font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;text-align:right;font-size:18px;line-height:1.2;padding:10px 12px;';
+  var JUDGMENT_COLOR = { 'actual-exceed': '#9f1239', 'forecast-exceed': '#c2410c', caution: '#b45309', review: '#92400e', ok: '#15803d' };
   function root() { return document.getElementById('wh60-local-root'); }
 
   // ---- 取込 ----
@@ -230,11 +240,6 @@
   }
 
   // ---- 描画 ----
-  function badge(status, label) {
-    var colors = { exceed: '#dc2626', approach: '#d97706', partial: '#7c3aed', undetermined: '#6b7280', clear: '#059669' };
-    return '<span style="background:' + (colors[status] || '#6b7280') + ';color:#fff;border-radius:9999px;padding:2px 8px;font-size:12px;white-space:nowrap;">' + esc(label) + '</span>';
-  }
-
   function tabBar() {
     function btn(id, label) {
       var on = STATE.sub === id;
@@ -312,8 +317,17 @@
       '<br>基準日（7日窓の終端） <b>' + esc(board.referenceDate) + '</b>　対象7日 ' + esc(board.windowStart + ' 〜 ' + board.referenceDate) +
       (genDay && genDay !== board.referenceDate ? '<br><span style="color:#92400e;">⚠ 基準日（' + esc(board.referenceDate) + '）は集計日（' + esc(genDay) + '）と異なります。表示は基準日時点の7日窓です。</span>' : '') +
       '<br>シフト: ' + esc(board.files.shift.name || '未取込') + '　Daily: ' + esc(board.files.daily.name || '未取込') + '</p>';
+    var judged = { 'actual-exceed': 0, 'forecast-exceed': 0, caution: 0, review: 0, ok: 0 };
+    (board.rows || []).forEach(function (r) {
+      var code = r.judgment && Object.prototype.hasOwnProperty.call(judged, r.judgment) ? r.judgment : '';
+      if (code) judged[code] += 1;
+    });
+    var useJudgment = (board.rows || []).length > 0 && (board.rows || []).every(function (r) { return !!r.judgment; });
     h += '<div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">';
-    [['超過', c.exceed, 'exceed'], ['接近', c.approach, 'approach'], ['部分欠損', c.partial, 'partial'], ['判定不能', c.undetermined, 'undetermined'], ['正常', c.clear, 'clear'], ['対象', c.driverCount, '']].forEach(function (x) {
+    var cards = useJudgment
+      ? [['実績超過', judged['actual-exceed'], 'actual-exceed'], ['超過予測', judged['forecast-exceed'], 'forecast-exceed'], ['注意', judged.caution, 'caution'], ['要確認', judged.review, 'review'], ['正常', judged.ok, 'ok'], ['対象', c.driverCount, '']]
+      : [['超過', c.exceed, 'exceed'], ['接近', c.approach, 'approach'], ['部分欠損', c.partial, 'partial'], ['要確認', c.undetermined, 'undetermined'], ['正常', c.clear, 'clear'], ['対象', c.driverCount, '']];
+    cards.forEach(function (x) {
       h += '<div class="card p-2"><div class="text-xs text-ink-lighter">' + x[0] + '</div><div class="text-xl font-bold">' + x[1] + '</div></div>';
     });
     h += '</div>';
@@ -323,28 +337,40 @@
       [['risk', 'リスク順'], ['margin', '余裕が少ない順'], ['name', '氏名順']].map(function (o) { return '<option value="' + o[0] + '"' + (STATE.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
       '</select></div>';
     var rows = Board.sortRows(Board.filterRows(board.rows, STATE.query), STATE.sort);
-    h += '<div class="overflow-x-auto card"><table class="w-full text-sm"><thead><tr>' +
-      ['氏名', 'DA番号', '判定', '過去6日', '勤務可能上限', '今日の予定', '7日合計（予測）', '予定終了後の余裕', '欠損'].map(function (t) { return '<th class="text-left p-2">' + t + '</th>'; }).join('') +
+    h += '<div class="overflow-x-auto card"><table class="w-full" style="border-collapse:collapse;min-width:720px;"><thead><tr>' +
+      [['DA名', 'left'], ['実績累計', 'right'], ['予定込み予測', 'right'], ['残り許容', 'right'], ['判定', 'left']].map(function (col) {
+        return '<th style="text-align:' + col[1] + ';padding:10px 12px;white-space:nowrap;font-size:13px;">' + col[0] + '</th>';
+      }).join('') +
       '</tr></thead><tbody>';
-    if (!rows.length) h += '<tr><td class="p-2" colspan="9">該当なし</td></tr>';
+    if (!rows.length) h += '<tr><td class="p-2" colspan="5">該当なし</td></tr>';
     rows.forEach(function (r) {
-      var provisional = function (obj) { return obj.confirmed ? '' : ' <span style="color:#92400e;font-size:11px;">暫定</span>'; };
-      h += '<tr class="border-t" data-tid="' + esc(r.transportId) + '" style="cursor:pointer;">' +
-        '<td class="p-2">' + esc(r.name || '氏名なし') + '</td><td class="p-2">' + esc(r.transportId) + '</td>' +
-        '<td class="p-2">' + badge(r.status, r.statusLabel) + (r.statusDetail ? '<div style="font-size:11px;">' + esc(r.statusDetail) + '</div>' : '') + '</td>' +
-        '<td class="p-2">' + hours(r.past6.hours) + (r.past6.kind ? '<div style="font-size:11px;">' + esc(r.past6.kind) + '</div>' : '') + '</td>' +
-        '<td class="p-2">' + hours(r.workable.hours) + (r.workable.hours == null ? '' : provisional(r.workable)) + (r.workable.note && r.workable.hours == null ? '<div style="font-size:11px;">' + esc(r.workable.note) + '</div>' : '') + '</td>' +
-        '<td class="p-2">' + (r.todayPlan == null ? '予定なし' : hours(r.todayPlan)) + '</td>' +
-        '<td class="p-2">' + hours(r.forecast.hours) + (r.forecast.kind ? '<div style="font-size:11px;">' + esc(r.forecast.kind) + '</div>' : '') + '</td>' +
-        '<td class="p-2">' + hours(r.marginAfterPlan.hours) + (r.marginAfterPlan.hours == null ? '' : provisional(r.marginAfterPlan)) + '</td>' +
-        '<td class="p-2" style="font-size:12px;">' + esc(r.gaps.map(function (g) { return (g.date || '') + ' ' + g.reason; }).join('、')) + '</td></tr>';
+      var code = r.judgment || 'review';
+      var label = (r.judgmentLabel || '要確認') + (r.judgmentProvisional ? '・暫定' : '');
+      var color = JUDGMENT_COLOR[code] || JUDGMENT_COLOR.review;
+      var tint = code === 'actual-exceed' ? '#fff1f2' : code === 'forecast-exceed' ? '#fff7ed' : code === 'caution' ? '#fffbeb' : code === 'review' ? '#fffbeb' : '';
+      h += '<tr class="border-t" data-tid="' + esc(r.transportId) + '" style="cursor:pointer;' + (tint ? 'background:' + tint + ';' : '') + '">' +
+        '<td style="padding:10px 12px;white-space:nowrap;font-weight:700;font-size:16px;">' + esc(r.name || '氏名なし') + '</td>' +
+        '<td style="' + TIME_STYLE + '" title="' + esc(r.past6.note || '') + '">' + clock(r.past6.hours) + '</td>' +
+        '<td style="' + TIME_STYLE + '" title="' + esc(r.forecast.note || '') + '">' + clock(r.forecast.hours) + '</td>' +
+        '<td style="' + TIME_STYLE + '" title="' + esc(r.workable.note || '') + '">' + clock(r.workable.hours) + '</td>' +
+        '<td style="padding:10px 12px;white-space:nowrap;"><span style="background:' + color + ';color:#fff;border-radius:9999px;padding:2px 8px;font-size:13px;white-space:nowrap;">' + esc(label) + '</span></td></tr>';
       if (STATE.selected === r.transportId) {
-        h += '<tr><td class="p-2" colspan="9" style="background:#f9fafb;font-size:12px;">7日の内訳（' + esc(r.windowStart + ' 〜 ' + r.windowEnd) + '）: ' +
-          r.days.map(function (d) { return esc(d.date) + ' ' + esc(d.adopted) + ' ' + (d.hours == null ? '—' : hours(d.hours)); }).join(' ／ ') + '</td></tr>';
+        var gapText = (r.gaps || []).map(function (g) { return (g.date || '日付不明') + ' ' + g.reason; }).join('、');
+        h += '<tr data-detail="' + esc(r.transportId) + '"><td colspan="5" style="background:#f8fafc;padding:10px 12px;font-size:13px;">' +
+          '<div style="margin-bottom:6px;">DA ID ' + esc(r.transportId || 'なし') +
+          (r.todayPlan == null ? '' : '　今日の予定 ' + esc(clock(r.todayPlan))) +
+          '　対象 ' + esc((r.windowStart || '') + ' 〜 ' + (r.windowEnd || '')) + '</div>' +
+          '<div style="white-space:nowrap;overflow-x:auto;">' + (r.days || []).map(function (d) {
+            return esc(d.date) + ' ' + esc(d.adopted) + ' ' + (d.hours == null ? '要確認' : esc(clock(d.hours)));
+          }).join(' ／ ') + '</div>' +
+          (gapText ? '<div style="margin-top:6px;">欠損: ' + esc(gapText) + '</div>' : '') +
+          (r.forecast.note ? '<div style="margin-top:4px;">' + esc(r.forecast.note) + '</div>' : '') +
+          (r.workable.note ? '<div>' + esc(r.workable.note) + '</div>' : '') +
+          '</td></tr>';
       }
     });
     h += '</tbody></table></div>';
-    h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 「暫定」は予定を含む値、「算出不可」は欠損のため確定値を出していません。</p>';
+    h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 時間は HH:MM です。超過予測は今日の予定を含めた合計が60時間を超える人です。実績超過は予定を足す前から超えている人です。「・暫定」は未確定の日を0時間にせず、確定している時間だけを使った値です。要確認は、その情報だけでは安全と判断できない人です。</p>';
     h += noHistoryNotice();
     return h;
   }
