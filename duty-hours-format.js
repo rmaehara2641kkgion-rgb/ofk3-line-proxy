@@ -50,10 +50,20 @@
     return label + ' ' + body(parts);
   }
 
+  // 一覧用。24時間で折り返さない。時は最低2桁、分は2桁。欠損は要確認。
+  function clockText(hours) {
+    var parts = splitHours(hours);
+    if (!parts) return '要確認';
+    var hourText = String(parts.hours);
+    if (hourText.length < 2) hourText = '0' + hourText;
+    return (parts.sign < 0 ? '-' : '') + hourText + ':' + pad2(parts.minutes);
+  }
+
   return {
     splitHours: splitHours,
     durationText: durationText,
     remainingText: remainingText,
     overText: overText,
+    clockText: clockText,
   };
 });
