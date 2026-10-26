@@ -61,7 +61,7 @@ const blocked = row({
 
 assert.equal(ui.avoidText(missing), '判定不能');
 assert.equal(ui.hoursView(missing.today), '実績未取得');
-assert.equal(ui.hoursView(zero.today), '実績 0.0h');
+assert.equal(ui.hoursView(zero.today), '実績 0時間00分');
 assert.equal(ui.avoidText(zero), '超過なし');
 assert.equal(ui.avoidText(adjustable), '回避可能');
 assert.equal(ui.avoidText(blocked), '回避不可');
@@ -90,9 +90,9 @@ assert.match(html, /人数ではない/);
 assert.match(html, /超過78／接近39／継続117／判定不能43/);
 assert.match(html, /今日の調整で回避できるDA/);
 assert.match(html, /架空調整/);
-assert.match(html, /予定 63\.5h/);
-assert.match(html, /超過3\.5h/);
-assert.match(html, /3\.5h/);
+assert.match(html, /予定 63時間30分/);
+assert.match(html, /超過3時間30分/);
+assert.match(html, /3時間30分短縮/);
 assert.match(html, /回避可能/);
 assert.match(html, /回避不可/);
 assert.match(html, /判定不能者/);

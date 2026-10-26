@@ -18,7 +18,7 @@ const byTid = RC.groupActualRecordsByTransportId(parsed.records);
 const dayA = RC.buildDayRecord('2026-10-20', byTid['TID-A']['2026-10-20']);
 assert.equal(dayA.dailyTotalHours, 10.355277);
 assert.equal(dayA.blocks[0].rawCode, '(estimated_working_hour)');
-assert.equal(RC.formatRollingBlockLabel(dayA.blocks[0]), '10.36h 実績');
+assert.equal(RC.formatRollingBlockLabel(dayA.blocks[0]), '10時間21分 実績');
 assert.equal(RC.formatRollingBlockLabel(dayA.blocks[0]).includes('estimated_working_hour'), false);
 
 const missing = RC.buildDayRecord('2026-10-19', byTid['TID-A']['2026-10-19']);
@@ -37,7 +37,7 @@ assert.equal(leakedHeader.blocks[0].hours, null);
 assert.equal(leakedHeader.hasUndefinedHours, true);
 assert.equal(RC.formatRollingBlockLabel(leakedHeader.blocks[0]), '未取得');
 
-assert.equal(RC.formatRollingBlockLabel(byTid['TID-B']['2026-10-20'][0]), '9.99h 実績');
+assert.equal(RC.formatRollingBlockLabel(byTid['TID-B']['2026-10-20'][0]), '9時間59分 実績');
 assert.notEqual(byTid['TID-SAME']['2026-10-20'][0].hours, byTid['TID-OTHER']['2026-10-20'][0].hours);
 
 const off = RC.parseShiftCellToBlocks('休', 'roster').blocks[0];
