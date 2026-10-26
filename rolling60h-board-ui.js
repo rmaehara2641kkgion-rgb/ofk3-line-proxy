@@ -149,6 +149,19 @@
     });
   }
 
+  function publishDispatch(ref) {
+    try {
+      if (!global.RollingUI || typeof global.RollingUI.ingestLoadedFiles !== 'function') return;
+      if (!STATE.shift || !STATE.shift.workbook) return;
+      global.RollingUI.ingestLoadedFiles({
+        workbook: STATE.shift.workbook,
+        amazonRows: STATE.daily && STATE.daily.rows ? STATE.daily.rows : null,
+        referenceDate: ref,
+        rosterLabel: STATE.shift.name || 'シフト'
+      });
+    } catch (e) {}
+  }
+
   function aggregate() {
     var ref = STATE.referenceDate || Board.jstDate(nowIso());
     // InoichiRollingDryRun はサーバーが index.html に差し込む（既存のRolling画面と共通）。無いときは集計しない。
@@ -178,6 +191,7 @@
       STATE.message = '集計対象者が0人でした。ファイルの内容を確認してください。前回の保存済み集計は変更していません。';
       return render();
     }
+    publishDispatch(ref);
     var board = Board.buildBoard({
       executed: executed,
       referenceDate: ref,

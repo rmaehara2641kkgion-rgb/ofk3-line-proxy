@@ -40,6 +40,7 @@
     stationFilter: 'OFK3',
     // 計算結果
     drivers: [], // [{ key, meta, dateList, windows, seriesByDate }]
+    dispatchOverrides: {},
     diagnostics: { undefinedCodeCounts: {}, warnings: [], rosterDuplicates: [] },
   };
 
@@ -353,11 +354,18 @@
 
     // 4) ドライバー毎にタイムライン構築 → Rolling判定
     var driverResults = [];
+    var dispatchInputs = [];
     Object.keys(driverMeta).forEach(function (key) {
       var meta = driverMeta[key];
       var tid = meta.transportId;
       var roster = rosterBlocksByDriver[key] || {};
       var actual = (tid && actualBlocksByTid[tid]) || {};
+      dispatchInputs.push({
+        transportId: tid || key,
+        name: meta.name || '',
+        actualBlocksByDate: actual,
+        rosterBlocksByDate: roster,
+      });
 
       var allDates = Object.keys(roster).concat(Object.keys(actual));
       if (allDates.length === 0) return;
@@ -398,12 +406,36 @@
     if (STATE.dryRun) {
       STATE.dryRunKeys = (STATE.dryRun.alerts || []).map(function (alert) { return alert.alertKey; });
     }
+    if (global.RollingDispatchUI && document.getElementById('rolling-dispatch-host')) {
+      var exceedN = 0;
+      var approachN = 0;
+      var ongoingN = 0;
+      ((STATE.dryRun && STATE.dryRun.alerts) || []).forEach(function (alert) {
+        if (alert.status === 'ONGOING') ongoingN++;
+        if (alert.level === 'exceed') exceedN++;
+        else if (alert.level === 'approach') approachN++;
+      });
+      global.RollingDispatchUI.mount(document.getElementById('rolling-dispatch-host'), {
+        today: STATE.referenceDate,
+        limitHours: STATE.limitHours,
+        drivers: dispatchInputs,
+        overrides: STATE.dispatchOverrides,
+        summary: {
+          unit: '7日窓の判定件数',
+          exceed: exceedN,
+          approach: approachN,
+          ongoing: ongoingN,
+          undetermined: STATE.dryRun && STATE.dryRun.undetermined ? STATE.dryRun.undetermined.length : null
+        }
+      });
+    }
 
     renderSummary();
     renderGrid();
   }
 
   function renderSummary() {
+    if (!document.getElementById('rolling-total-drivers')) return;
     var totalDrivers = STATE.drivers.length;
     var rosterOnlyCount = 0,
       actualProgressCount = 0;
@@ -477,13 +509,14 @@
         if (alert.level === 'exceed') exceedN++;
         else if (alert.level === 'approach') approachN++;
       });
-      periodLines.push('INO-1 dry-run（未送信） 超過 ' + exceedN + ' / 接近 ' + approachN + ' / 継続 ' + ongoingN + ' / 判定不能 ' + (STATE.dryRun.undetermined || []).length);
+      periodLines.push('INO-1 dry-run（未送信・7日窓の判定件数。人数ではない。継続は超過・接近と重複し得る） 超過 ' + exceedN + ' / 接近 ' + approachN + ' / 継続 ' + ongoingN + ' / 判定不能 ' + (STATE.dryRun.undetermined || []).length);
     }
     periodEl.innerHTML = periodLines.join('<br>');
   }
 
   function renderGrid() {
     var wrap = document.getElementById('rolling-grid-wrap');
+    if (!wrap) return;
     if (STATE.drivers.length === 0) {
       wrap.innerHTML = '<div id="rolling-grid-empty" class="text-center text-ink-lighter py-8">月間シフト表とAmazon実績を読み込んでください</div>';
       return;
@@ -668,6 +701,22 @@
   // ===========================================================================
   // Public API
   // ===========================================================================
+  function ingestLoadedFiles(payload) {
+    payload = payload || {};
+    if (payload.referenceDate) STATE.referenceDate = payload.referenceDate;
+    if (payload.workbook && global.XLSX) {
+      var sheetsData = {};
+      (payload.workbook.SheetNames || []).forEach(function (sn) {
+        if (ROSTER_SHEET_BLACKLIST.indexOf(sn) !== -1) return;
+        sheetsData[sn] = global.XLSX.utils.sheet_to_json(payload.workbook.Sheets[sn], { header: 1, raw: true });
+      });
+      STATE.rosterSources = [{ label: payload.rosterLabel || 'シフト', sheetsData: sheetsData }];
+    }
+    if (payload.amazonRows) STATE.amazonRows = payload.amazonRows;
+    if (STATE.rosterSources.length === 0 && !STATE.amazonRows) return;
+    recomputeAndRender();
+  }
+
   var RollingUI = {
     onShown: function () {
       ensureRendered();
@@ -675,6 +724,7 @@
         recomputeAndRender();
       }
     },
+    ingestLoadedFiles: ingestLoadedFiles,
     closeModal: closeModal,
   };
 
