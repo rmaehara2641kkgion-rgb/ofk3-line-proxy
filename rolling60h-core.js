@@ -913,7 +913,18 @@
   // Public API
   // ===========================================================================
 
+  function hourDisplay() {
+    if (typeof window !== 'undefined' && window.DutyHoursFormat) return window.DutyHoursFormat;
+    if (global && global.DutyHoursFormat) return global.DutyHoursFormat;
+    if (typeof require === 'function') {
+      try { return require('./duty-hours-format.js'); } catch (e) { return null; }
+    }
+    return null;
+  }
+
   function formatHourText(hours) {
+    var api = hourDisplay();
+    if (api && typeof hours === 'number' && isFinite(hours)) return api.durationText(hours);
     var rounded = Math.round(hours * 100) / 100;
     return rounded.toFixed(2).replace(/\.?0+$/, '') + 'h';
   }

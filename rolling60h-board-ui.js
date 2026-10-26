@@ -44,6 +44,7 @@
   }
   function hours(v) {
     if (typeof v !== 'number' || !isFinite(v)) return '算出不可';
+    if (global.DutyHoursFormat && global.DutyHoursFormat.durationText) return global.DutyHoursFormat.durationText(v);
     return (Math.round(v * 100) / 100).toFixed(2).replace(/\.?0+$/, '') + 'h';
   }
   function root() { return document.getElementById('wh60-local-root'); }

@@ -245,6 +245,7 @@ assert.equal((ui.match(/noHistoryNotice\(\)/g) || []).length >= 3, true, '注意
 assert.ok(/input\[type="file"\]\s*\{\s*display:\s*none/.test(html), '全体CSSが file input を隠す（原因）');
 assert.ok(ui.includes('data-pick=') && ui.includes('📂 ファイルを選択') && ui.includes('選択したファイル'), 'ラベルのボタンと選択ファイル名の表示');
 assert.equal(/fetch\(|XMLHttpRequest|harvest:handoff/.test(ui), false, '外部通信・handoff送信をしない');
+assert.ok(ui.includes('DutyHoursFormat'), '残り時間一覧は時分表示を使う');
 assert.ok(ui.includes('基準日（7日窓の終端）') && ui.includes('最終集計日時（この集計を実行した時刻）'), '基準日と集計日時を分けて表示する');
 assert.ok(ui.includes('と異なります'), '基準日と集計日が違うときの警告');
 assert.ok(/function getFridaySummary\(\) \{\s*return ensureStore\(\)/.test(ui), '要約の取得は画面を開かなくても使える');
