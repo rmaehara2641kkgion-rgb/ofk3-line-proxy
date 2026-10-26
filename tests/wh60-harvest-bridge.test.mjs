@@ -52,4 +52,40 @@ assert.equal(store.indexOf('127.0.0.1:3100') < 0, true);
 assert.equal(ui.indexOf('rolling60h-summary-bridge') < 0, true);
 assert.equal(readFileSync(join(root, 'index.html'), 'utf8').includes('/rolling60h-summary-bridge.js'), true);
 
+assert.equal(bridge.localPage({ location: { hostname: '127.0.0.1' } }), true);
+assert.equal(bridge.localPage({ location: { hostname: 'localhost' } }), true);
+assert.equal(bridge.localPage({ location: { hostname: 'ofk3.onrender.com' } }), false);
+
+function page(hostname) {
+  const events = {};
+  let fetches = 0;
+  return {
+    events: events,
+    fetches: function () { return fetches; },
+    location: { hostname: hostname },
+    document: {
+      readyState: 'complete',
+      body: { appendChild: function () {} },
+      getElementById: function () { return null; },
+      createElement: function () { return { style: {}, setAttribute: function () {} }; },
+      addEventListener: function () {}
+    },
+    addEventListener: function (type, fn) { events[type] = fn; },
+    fetch: function () { fetches += 1; return Promise.reject(new Error('down')); },
+    Rolling60hBoardUI: { getFridaySummary: function () { return Promise.resolve(summary); } }
+  };
+}
+
+const remote = page('ofk3.onrender.com');
+bridge.install(remote);
+await new Promise(function (resolve) { setTimeout(resolve, 20); });
+assert.equal(remote.fetches(), 0);
+assert.equal(remote.events['ofk3:rolling60h-summary'], undefined);
+
+const local = page('127.0.0.1');
+bridge.install(local);
+await new Promise(function (resolve) { setTimeout(resolve, 30); });
+assert.equal(typeof local.events['ofk3:rolling60h-summary'], 'function');
+assert.equal(local.fetches(), 1);
+
 console.log('wh60 harvest bridge tests passed');

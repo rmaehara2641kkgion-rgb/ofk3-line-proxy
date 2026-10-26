@@ -13,6 +13,12 @@
   var ENDPOINT = 'http://127.0.0.1:3100/rolling60h-summary';
   var KIND = 'ofk3.rolling60h.friday-summary';
 
+  function localPage(global) {
+    var loc = global && global.location;
+    var host = loc && loc.hostname ? String(loc.hostname).toLowerCase() : '';
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  }
+
   function note(global, text) {
     var doc = global && global.document;
     if (!doc || !doc.body) return;
@@ -63,6 +69,8 @@
   function install(global) {
     if (!global || global.__WH60_HARVEST_BRIDGE) return;
     global.__WH60_HARVEST_BRIDGE = true;
+    // Renderなど公開ページは、初期状態では手元のHARVESTへ送らない。
+    if (!localPage(global)) return;
     function send(summary) {
       var fetchImpl = global.fetch ? global.fetch.bind(global) : null;
       return deliver(summary, fetchImpl).then(function (result) {
@@ -87,5 +95,5 @@
     }
   }
 
-  return { ENDPOINT: ENDPOINT, deliver: deliver, message: message, install: install };
+  return { ENDPOINT: ENDPOINT, localPage: localPage, deliver: deliver, message: message, install: install };
 });

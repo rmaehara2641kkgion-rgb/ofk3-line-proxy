@@ -105,7 +105,7 @@ HARVESTへ載せる場合は、要約をそのまま `harvest:handoff` の paylo
 ### 推奨する受け渡し方式（実装はCursor側）
 **OFK3のページがローカルのHARVESTへ、要約をループバックで送る（プッシュ）。HARVESTはそれを受けて保持する。**
 
-1. OFK3側（Cursor追加）: `ofk3:rolling60h-summary` イベントを聞き、`http://127.0.0.1:<HARVEST_PORT>/rolling60h-summary` へ POST する。集計と保存に成功した直後と、ページを開いたとき（保存済み要約の再送）に送る。送信失敗はOFK3の一覧に影響させない（握りつぶさず、画面に小さく表示する程度）。
+1. OFK3側（Cursor追加）: `ofk3:rolling60h-summary` イベントを聞き、`http://127.0.0.1:<HARVEST_PORT>/rolling60h-summary` へ POST する。集計と保存に成功した直後と、ページを開いたとき（保存済み要約の再送）に送る。送信失敗はOFK3の一覧に影響させない（握りつぶさず、画面に小さく表示する程度）。公開中のRenderページ（ホストが `127.0.0.1` / `localhost` / `::1` でない）は、初期状態ではこの通信をしない。集計、IndexedDB、3タブはHARVESTが無くても完結する。
 2. HARVEST側（Cursor追加）の受け口の条件:
    - ループバック（127.0.0.1 / ::1）からだけ受ける。
    - `Origin` を許可リスト（OFK3の本番オリジンとローカル開発のオリジン）に限定し、CORSもそのオリジンだけ許可する。ブラウザの Private Network Access の事前確認（preflight）に応答する。

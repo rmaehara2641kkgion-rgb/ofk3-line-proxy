@@ -3163,6 +3163,20 @@ function dutyRiskPublishStatus() {
 
 require('./harvest-rolling60h-route.js').mount(app, {
   publishStatus: dutyRiskPublishStatus,
+  readDispatch: function () {
+    try {
+      return require('./rolling60h-dispatch-feed.js').read({
+        fs: fs,
+        path: path,
+        xlsx: require('xlsx'),
+        rolling: require('./rolling60h-core.js'),
+        root: path.join(__dirname, 'local', 'harvest-daily-archive'),
+        shiftDir: require('./harvest-rolling60h-run.js').SHIFT_DIR,
+      });
+    } catch (dispatchReadErr) {
+      return null;
+    }
+  },
   run: function () {
     var captured = require('./harvest-rolling60h-run.js').capture({
       fs: fs,
