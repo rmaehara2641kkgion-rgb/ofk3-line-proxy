@@ -241,6 +241,9 @@ assert.ok(serverSrc.includes('/inoichi-rolling-dryrun.js'), 'INOICHI dry-run は
 const ui = fs.readFileSync(new URL('../rolling60h-board-ui.js', import.meta.url), 'utf8');
 ['データ取込', '残り時間・リスク一覧', 'シフト格子（既存）', 'このブラウザ', '履歴補完なし', 'この画面はアップロードされたExcelを基準に集計しています。HARVESTの過去履歴補完を含まないため、結果が異なる場合があります。'].forEach((t) => assert.ok(ui.includes(t), 'UI文言 ' + t));
 assert.equal((ui.match(/noHistoryNotice\(\)/g) || []).length >= 3, true, '注意書きは取込・一覧の2か所以上に出す（定義+呼び出し）');
+// 全体CSSが input[type="file"] を display:none にするため、ラベルのボタンから選択させる
+assert.ok(/input\[type="file"\]\s*\{\s*display:\s*none/.test(html), '全体CSSが file input を隠す（原因）');
+assert.ok(ui.includes('data-pick=') && ui.includes('📂 ファイルを選択') && ui.includes('選択したファイル'), 'ラベルのボタンと選択ファイル名の表示');
 assert.equal(/fetch\(|XMLHttpRequest|harvest:handoff/.test(ui), false, '外部通信・handoff送信をしない');
 assert.ok(ui.includes('基準日（7日窓の終端）') && ui.includes('最終集計日時（この集計を実行した時刻）'), '基準日と集計日時を分けて表示する');
 assert.ok(ui.includes('と異なります'), '基準日と集計日が違うときの警告');

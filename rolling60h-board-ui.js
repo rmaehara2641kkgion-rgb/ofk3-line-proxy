@@ -105,6 +105,8 @@
 
   function importFile(kind, file) {
     if (!file) return Promise.resolve();
+    STATE.picked = STATE.picked || {};
+    STATE.picked[kind] = file.name;
     if (!/\.xlsx?$/i.test(file.name)) {
       STATE.message = file.name + ': xlsx / xls ファイルを選択してください。';
       return render();
@@ -232,7 +234,13 @@
     var entry = STATE[kind];
     var failed = STATE.lastFailed && STATE.lastFailed[kind];
     var h = '<div class="card p-4"><h3 class="text-sm font-bold mb-2">' + title + '</h3><p class="text-xs text-ink-lighter mb-2">' + hint + '</p>';
-    h += '<input type="file" accept=".xlsx,.xls" data-file="' + kind + '" style="max-width:100%;">';
+    // index.html の全体CSS（input[type="file"] { display: none; }）で入力欄そのものは隠れるため、
+    // ラベルをボタンにして選択できるようにする（他画面のCSSには手を入れない）。
+    h += '<label class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold" data-pick="' + kind + '" style="display:inline-block;cursor:pointer;">📂 ファイルを選択' +
+      '<input type="file" accept=".xlsx,.xls" data-file="' + kind + '"></label>';
+    if (STATE.picked && STATE.picked[kind]) {
+      h += '<div class="text-xs mt-2" data-picked="' + kind + '">選択したファイル: <b>' + esc(STATE.picked[kind]) + '</b></div>';
+    }
     if (entry) {
       h += '<div class="text-xs mt-2">✅ 読込成功: <b>' + esc(entry.name) + '</b><br>取込日時 ' + esc(jst(entry.importedAt)) +
         '<br>対象期間 ' + (entry.range ? esc(entry.range.min + ' 〜 ' + entry.range.max) : '不明') + '</div>';
