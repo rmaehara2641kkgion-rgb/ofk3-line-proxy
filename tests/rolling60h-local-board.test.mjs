@@ -231,17 +231,21 @@ await assert.rejects(() => noIdb.save(board, summary), /indexeddb-unavailable/);
 
 // ---- 画面の配線 ----
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-['wh60-local-root', 'rolling60h-board-ui.js', 'rolling60h-local-board.js', 'rolling60h-local-store.js', 'harvest-rolling60h-run.js', 'inoichi-rolling-dryrun.js', 'Rolling60hBoardUI.onShown'].forEach((token) => {
+['wh60-local-root', 'rolling60h-board-ui.js', 'rolling60h-local-board.js', 'rolling60h-local-store.js', 'harvest-rolling60h-run.js', 'Rolling60hBoardUI.onShown'].forEach((token) => {
   assert.ok(html.includes(token), 'index.html に ' + token);
 });
 assert.ok(html.includes('duty-risk-dashboard.js'), '既存のGAS/Render経路のスクリプトは残す');
+assert.equal(html.toLowerCase().includes('inoichi'), false, 'index.html に INOICHI を直書きしない（サーバーが差し込む既存方式を守る）');
+const serverSrc = fs.readFileSync(new URL('../render-webhook-server.js', import.meta.url), 'utf8');
+assert.ok(serverSrc.includes('/inoichi-rolling-dryrun.js'), 'INOICHI dry-run はサーバーが差し込む');
 const ui = fs.readFileSync(new URL('../rolling60h-board-ui.js', import.meta.url), 'utf8');
-['データ取込', '残り時間・リスク一覧', 'シフト格子（既存）', 'このブラウザ'].forEach((t) => assert.ok(ui.includes(t), 'UI文言 ' + t));
+['データ取込', '残り時間・リスク一覧', 'シフト格子（既存）', 'このブラウザ', '履歴補完なし', 'この画面はアップロードされたExcelを基準に集計しています。HARVESTの過去履歴補完を含まないため、結果が異なる場合があります。'].forEach((t) => assert.ok(ui.includes(t), 'UI文言 ' + t));
+assert.equal((ui.match(/noHistoryNotice\(\)/g) || []).length >= 3, true, '注意書きは取込・一覧の2か所以上に出す（定義+呼び出し）');
 assert.equal(/fetch\(|XMLHttpRequest|harvest:handoff/.test(ui), false, '外部通信・handoff送信をしない');
 assert.ok(ui.includes('基準日（7日窓の終端）') && ui.includes('最終集計日時（この集計を実行した時刻）'), '基準日と集計日時を分けて表示する');
 assert.ok(ui.includes('と異なります'), '基準日と集計日が違うときの警告');
 assert.ok(/function getFridaySummary\(\) \{\s*return ensureStore\(\)/.test(ui), '要約の取得は画面を開かなくても使える');
 const spec = fs.readFileSync(new URL('../docs/ROLLING60H_LOCAL_BOARD.md', import.meta.url), 'utf8');
-['別プロセスの HARVEST から使うときの制約', 'ループバック', '再計算', '基準日と集計日時', 'ready', 'hasGap', 'OFK3サーバー仲介', '不明な人数は0'].forEach((t) => assert.ok(spec.includes(t), '仕様書に ' + t));
+['履歴補完なし', '固定値ではない', '別プロセスの HARVEST から使うときの制約', 'ループバック', '再計算', '基準日と集計日時', 'ready', 'hasGap', 'OFK3サーバー仲介', '不明な人数は0'].forEach((t) => assert.ok(spec.includes(t), '仕様書に ' + t));
 
 console.log('rolling60h-local-board.test.mjs: ALL PASSED');
