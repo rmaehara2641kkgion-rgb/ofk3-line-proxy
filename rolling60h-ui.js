@@ -113,7 +113,6 @@
       '<div id="rolling-undefined-detail" class="text-xs text-ink-lighter mb-3"></div>' +
       '<div id="rolling-duplicate-detail" class="text-xs text-orange-500 mb-3"></div>' +
       '<div id="rolling-period-detail" class="text-xs text-ink-lighter mb-3"></div>' +
-      '<div id="rolling-dispatch-host"></div>' +
       '<style id="rolling-name-sticky-style">' +
       '#wh60-rolling-subpanel .rolling-grid-scroll{overflow-x:auto;max-width:100%;min-width:0;}' +
       '#wh60-rolling-subpanel .rolling-grid-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;}' +
@@ -401,19 +400,34 @@
 
     STATE.drivers = driverResults;
     STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates };
-    if (global.RollingDispatchUI && document.getElementById('rolling-dispatch-host')) {
-      global.RollingDispatchUI.mount(document.getElementById('rolling-dispatch-host'), {
-        today: STATE.referenceDate,
-        limitHours: STATE.limitHours,
-        drivers: dispatchInputs,
-        overrides: STATE.dispatchOverrides,
-      });
-    }
     STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
       ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
       : null;
     if (STATE.dryRun) {
       STATE.dryRunKeys = (STATE.dryRun.alerts || []).map(function (alert) { return alert.alertKey; });
+    }
+    if (global.RollingDispatchUI && document.getElementById('rolling-dispatch-host')) {
+      var exceedN = 0;
+      var approachN = 0;
+      var ongoingN = 0;
+      ((STATE.dryRun && STATE.dryRun.alerts) || []).forEach(function (alert) {
+        if (alert.status === 'ONGOING') ongoingN++;
+        if (alert.level === 'exceed') exceedN++;
+        else if (alert.level === 'approach') approachN++;
+      });
+      global.RollingDispatchUI.mount(document.getElementById('rolling-dispatch-host'), {
+        today: STATE.referenceDate,
+        limitHours: STATE.limitHours,
+        drivers: dispatchInputs,
+        overrides: STATE.dispatchOverrides,
+        summary: {
+          unit: '7日窓の判定件数',
+          exceed: exceedN,
+          approach: approachN,
+          ongoing: ongoingN,
+          undetermined: STATE.dryRun && STATE.dryRun.undetermined ? STATE.dryRun.undetermined.length : null
+        }
+      });
     }
 
     renderSummary();
@@ -494,7 +508,7 @@
         if (alert.level === 'exceed') exceedN++;
         else if (alert.level === 'approach') approachN++;
       });
-      periodLines.push('INO-1 dry-run（未送信） 超過 ' + exceedN + ' / 接近 ' + approachN + ' / 継続 ' + ongoingN + ' / 判定不能 ' + (STATE.dryRun.undetermined || []).length);
+      periodLines.push('INO-1 dry-run（未送信・7日窓の判定件数。人数ではない。継続は超過・接近と重複し得る） 超過 ' + exceedN + ' / 接近 ' + approachN + ' / 継続 ' + ongoingN + ' / 判定不能 ' + (STATE.dryRun.undetermined || []).length);
     }
     periodEl.innerHTML = periodLines.join('<br>');
   }
