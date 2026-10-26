@@ -216,9 +216,14 @@
   function buildFridaySummary(board, nowIso) {
     var fresh = freshness(board, nowIso);
     var c = (board && board.counts) || {};
+    var hasBoard = !!board;
+    // hasGap: 判定できない・欠けている人や入力がある。データなしのときは null（「欠損なし」とは言えない）。
+    var hasGap = hasBoard ? (board.completeness !== 'complete') : null;
     return {
       kind: SUMMARY_KIND,
       schemaVersion: SCHEMA_VERSION,
+      // ready: 要約を利用できる（保存済みの集計がある）という意味だけ。全員の勤務時間が確定した意味ではない。
+      ready: hasBoard,
       generatedAt: board ? board.generatedAt : null,
       readAt: nowIso,
       referenceDate: board ? board.referenceDate : null,
@@ -235,6 +240,7 @@
       freshness: fresh,
       data: {
         completeness: board ? board.completeness : 'no-data',
+        hasGap: hasGap,
         inputs: board ? board.inputs : { shift: false, daily: false },
         safeToAnnounceAsComplete: !!(board && board.completeness === 'complete' && fresh.status === 'fresh'),
       },

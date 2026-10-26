@@ -124,7 +124,16 @@ const incompleteBoard = Board.buildBoard({
   files: { shift: { name: 's', ok: true }, daily: { name: '', ok: false } },
 }, deps);
 assert.equal(incompleteBoard.completeness, 'incomplete-input');
-assert.equal(Board.buildFridaySummary(incompleteBoard, '2026-10-17T03:10:00.000Z').data.safeToAnnounceAsComplete, false);
+const incompleteSummary = Board.buildFridaySummary(incompleteBoard, '2026-10-17T03:10:00.000Z');
+assert.equal(incompleteSummary.data.safeToAnnounceAsComplete, false);
+
+// 欠損のない集計: hasGap=false かつ fresh のときだけ safeToAnnounceAsComplete
+const cleanExec = execute({ dailyRows: [header].concat(daily('T-UNDER', [8, 8, 8, 8, 8, 8])), shiftBook: shiftBook([rows[0]]) });
+const cleanBoard = Board.buildBoard({ executed: cleanExec, referenceDate: REF, generatedAt: '2026-10-17T03:00:00.000Z', files: { shift: { name: 's', ok: true }, daily: { name: 'd', ok: true } } }, deps);
+const cleanSummary = Board.buildFridaySummary(cleanBoard, '2026-10-17T04:00:00.000Z');
+assert.equal(cleanSummary.data.hasGap, false);
+assert.equal(cleanSummary.data.safeToAnnounceAsComplete, true);
+assert.equal(Board.buildFridaySummary(cleanBoard, '2026-10-18T04:00:00.000Z').data.safeToAnnounceAsComplete, false, '古ければ完全扱いにしない');
 
 // 鮮度: 12時間以内かつ基準日が今日なら fresh、それ以外は stale
 assert.equal(Board.freshness(board, '2026-10-17T05:00:00.000Z').status, 'fresh');
@@ -145,11 +154,18 @@ assert.equal(summary.counts.undetermined, c.undetermined);
 assert.equal(summary.freshness.status, 'fresh');
 assert.equal(summary.data.completeness, 'partial');
 assert.equal(summary.data.safeToAnnounceAsComplete, false, '部分欠損があれば完全扱いにしない');
+assert.equal(summary.ready, true, 'ready は要約が使えるという意味');
+assert.equal(summary.data.hasGap, true, '部分欠損・判定不能がいれば hasGap');
 const packed = JSON.stringify(summary);
 ['Fiction', 'T-UNDER', 'T-EXACT', 'T-OVER', 'T-GAP'].forEach((s) => assert.equal(packed.includes(s), false, '個人情報を含まない: ' + s));
 const empty = Board.buildFridaySummary(null, '2026-10-17T05:00:00.000Z');
 assert.equal(empty.data.completeness, 'no-data');
 assert.equal(empty.counts.exceed, null, 'データなしは0人ではなく null');
+assert.equal(empty.ready, false);
+assert.equal(empty.data.hasGap, null, 'データなしは「欠損なし」ではない');
+assert.equal(empty.data.safeToAnnounceAsComplete, false);
+assert.equal(incompleteSummary.ready, true, '入力不足でも要約は使える（ready は確定を意味しない）');
+assert.equal(incompleteSummary.data.hasGap, true);
 
 // ---- IndexedDB 保存: 前回の正常データを壊さない（最小のIndexedDB代替）----
 function fakeIdb() {
@@ -226,6 +242,6 @@ assert.ok(ui.includes('基準日（7日窓の終端）') && ui.includes('最終�
 assert.ok(ui.includes('と異なります'), '基準日と集計日が違うときの警告');
 assert.ok(/function getFridaySummary\(\) \{\s*return ensureStore\(\)/.test(ui), '要約の取得は画面を開かなくても使える');
 const spec = fs.readFileSync(new URL('../docs/ROLLING60H_LOCAL_BOARD.md', import.meta.url), 'utf8');
-['別プロセスの HARVEST から使うときの制約', 'ループバック', '再計算', '基準日と集計日時'].forEach((t) => assert.ok(spec.includes(t), '仕様書に ' + t));
+['別プロセスの HARVEST から使うときの制約', 'ループバック', '再計算', '基準日と集計日時', 'ready', 'hasGap', 'OFK3サーバー仲介', '不明な人数は0'].forEach((t) => assert.ok(spec.includes(t), '仕様書に ' + t));
 
 console.log('rolling60h-local-board.test.mjs: ALL PASSED');

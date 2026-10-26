@@ -35,6 +35,7 @@ Amazon の `estimated_working_hour` は推定で、法的な労働時間の確�
   "generatedAt": "2026-10-26T01:15:11.600Z",
   "readAt": "2026-10-26T01:15:12.878Z",
   "referenceDate": "2026-10-26",
+  "ready": true,
   "counts": {
     "exceed": 8, "approach": 0, "undetermined": 38,
     "partial": 27, "partialExceed": 5, "partialApproach": 1,
@@ -43,6 +44,7 @@ Amazon の `estimated_working_hour` は推定で、法的な労働時間の確�
   "freshness": { "status": "fresh", "reasons": [], "ageMinutes": 0, "staleAfterHours": 12 },
   "data": {
     "completeness": "partial",
+    "hasGap": true,
     "inputs": { "shift": true, "daily": true },
     "safeToAnnounceAsComplete": false
   },
@@ -55,11 +57,13 @@ Amazon の `estimated_working_hour` は推定で、法的な労働時間の確�
 | フィールド | 意味 |
 |---|---|
 | `counts.*` | 人数。`exceed + approach + partial + undetermined + clear = driverCount`（互いに排他）。`partialExceed` / `partialApproach` は `partial` の内数。データなしのときは `null`（0人とは区別する） |
+| `ready` | **要約を利用できる（保存済みの集計がある）という意味だけ。全員の勤務時間が確定した意味ではない。** 部分欠損や入力不足があっても true になる。保存済みの集計がなければ false |
+| `data.hasGap` | 判定できない人・欠けている入力がある（`completeness` が `complete` 以外）。データなしのときは `null`（「欠損なし」とは言えない） |
 | `generatedAt` | 集計した時刻（ISO, UTC）。`readAt` は要約を読んだ時刻 |
 | `referenceDate` | 7日窓の終端（JSTの日付） |
 | `freshness.status` | `fresh` / `stale` / `unknown`。`stale` の理由は `age-over-limit`（12時間超）または `reference-date-not-today`（基準日がJSTの今日ではない）。鮮度は **読んだ時点** で再計算される |
 | `data.completeness` | `complete`（全員判定済み）/ `partial`（部分欠損か判定不能がいる）/ `incomplete-input`（シフトかDailyが未取込）/ `no-data` |
-| `data.safeToAnnounceAsComplete` | `complete` かつ `fresh` のときだけ true。音声で「異常なし」と言ってよい条件 |
+| `data.safeToAnnounceAsComplete` | `hasGap === false` かつ `fresh` のときだけ true。音声で「異常なし」と言ってよい条件。`ready` が true でも、これが false なら確定扱いにしない |
 
 音声通知の推奨の扱い（接続側で決める）:
 - `freshness.status !== "fresh"` または `data.completeness !== "complete"` のときは、人数の読み上げに「未確定」「古いデータ」を添える。
@@ -122,3 +126,20 @@ HARVESTへ載せる場合は、要約をそのまま `harvest:handoff` の paylo
 - 最終集計日時: 集計を実行した時刻（`generatedAt`）。
 - 基準日: 7日窓の終端（`referenceDate`）。集計日と違う場合は警告を出す。
 12時間の鮮度（`staleAfterHours`）は暫定値で、`rolling60h-local-board.js` の `STALE_AFTER_HOURS` で変更できる。
+
+## 欠損・不明の扱い（FRIDAY連携の必須ルール）
+- `ready: true` は「読める」だけ。確定とは別。確定を言うには `safeToAnnounceAsComplete === true` を使う。
+- 欠損の有無は `data.hasGap` と `data.safeToAnnounceAsComplete` で判断する。`hasGap` が true、`null`、または鮮度が `fresh` でないときは、人数の読み上げに「暫定」「古い」「判定不能あり」を添える。
+- **不明な人数は0として扱わない。** `counts.*` が `null` はデータなし。`undetermined` と `partial` は「正常」に足さない。`counts.exceed === 0` でも `hasGap` が true なら「超過なし」と断言しない（判定不能の人の中に超過がいる可能性がある）。
+- **個人情報を FRIDAY に送らない。** 要約には氏名・Transport ID・個人ごとの時間が入らない設計で、受け側もそれ以外のフィールド（一覧用ボード `latest`）を取りに行かない。
+
+## 受け渡し方式のセキュリティ比較
+| 観点 | ブラウザ → HARVEST（ループバック直送・推奨） | OFK3サーバー（Render）仲介 |
+|---|---|---|
+| データの経路 | PCの中（127.0.0.1）だけ。インターネットに出ない | ブラウザ → インターネット → Render → HARVEST が取りに来る |
+| 要約が置かれる場所 | HARVESTのPC内のみ | Renderのメモリ／一時ディスク（再起動で消える。ログに残る恐れ） |
+| 攻撃面 | HARVESTの受け口はループバック限定。Origin許可リスト・トークン・Private Network Access対応が必要。ブラウザ上の悪意あるページが叩く恐れはOriginとトークンで防ぐ | Renderの公開エンドポイントが増える。認証（Proxy Secret等）の漏えい・誤設定が直接のリスク。HARVEST→Renderの外向き通信が要る |
+| 障害の影響 | Renderや回線が止まっても動く。OFK3の画面が開いていないと更新されない | Render停止・503・コールドスタート・認証エラーで止まる（今回の60時間アラート不具合と同じ型） |
+| 個人情報 | 要約に個人情報はなく、経路も外に出ない | 要約に個人情報はなくても、サーバー側に「業務データの存在」と更新時刻が残る。設計次第でボード全体を送る誤実装のリスクが高まる |
+| 運用 | HARVESTが起動していないと受け取れない（OFK3側は失敗を握りつぶさず小さく表示する） | サーバー常時稼働だが、HARVESTがポーリングする仕組みと認証設定が増える |
+**結論:** 個人情報を扱う集計の外部送信を増やさず、今回の障害原因（公開経路）に再依存しないため、ブラウザからHARVESTへのループバック直送を推奨する。OFK3サーバー仲介は、複数PCから同じ要約を共有したい場合だけ検討し、その際も要約（個人情報なし）以外を送らない・Proxy Secretと別の専用トークンを使う・受信時に `generatedAt` の新旧を検証する、を条件にする。
