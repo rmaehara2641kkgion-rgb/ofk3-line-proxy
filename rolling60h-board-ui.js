@@ -185,7 +185,7 @@
     STATE.sub = 'board';
     STATE.saved = null;
     render();
-    STATE.store.save(board, summary).then(function () {
+    ensureStore().save(board, summary).then(function () {
       STATE.saved = 'ok';
       publish(summary);
       render();
@@ -251,7 +251,7 @@
     var h = '';
     if (fresh.status !== 'fresh') {
       var why = fresh.reasons.map(function (r) {
-        return r === 'age-over-limit' ? '集計から' + Math.floor((fresh.ageMinutes || 0) / 60) + '時間以上経過' : r === 'reference-date-not-today' ? '基準日が今日ではありません' : '';
+        return r === 'age-over-limit' ? '集計から' + Math.floor((fresh.ageMinutes || 0) / 60) + '時間以上経過' : r === 'reference-date-not-today' ? '基準日 ' + board.referenceDate + ' は今日（' + Board.jstDate(nowIso()) + '）ではありません' : '';
       }).filter(Boolean).join('、');
       h += '<div class="card p-3 mb-3 text-sm" style="background:#fffbeb;color:#92400e;">⚠ 古いデータです（' + esc(why) + '）。最新のExcelを取り込み直してください。</div>';
     }
@@ -269,8 +269,10 @@
     if (!board) return '<div class="card p-4 text-sm">集計結果がありません。「データ取込」でExcelを取り込み、集計を実行してください。</div>';
     var c = board.counts;
     var h = banner(board);
-    h += '<p class="text-xs text-ink-lighter mb-2">最終集計日時 <b>' + esc(jst(board.generatedAt)) + '</b>　基準日 ' + esc(board.referenceDate) +
-      '　対象7日 ' + esc(board.windowStart + ' 〜 ' + board.referenceDate) +
+    var genDay = Board.jstDate(board.generatedAt);
+    h += '<p class="text-xs text-ink-lighter mb-2">最終集計日時（この集計を実行した時刻） <b>' + esc(jst(board.generatedAt)) + '</b>' +
+      '<br>基準日（7日窓の終端） <b>' + esc(board.referenceDate) + '</b>　対象7日 ' + esc(board.windowStart + ' 〜 ' + board.referenceDate) +
+      (genDay && genDay !== board.referenceDate ? '<br><span style="color:#92400e;">⚠ 基準日（' + esc(board.referenceDate) + '）は集計日（' + esc(genDay) + '）と異なります。表示は基準日時点の7日窓です。</span>' : '') +
       '<br>シフト: ' + esc(board.files.shift.name || '未取込') + '　Daily: ' + esc(board.files.daily.name || '未取込') + '</p>';
     h += '<div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">';
     [['超過', c.exceed, 'exceed'], ['接近', c.approach, 'approach'], ['部分欠損', c.partial, 'partial'], ['判定不能', c.undetermined, 'undetermined'], ['正常', c.clear, 'clear'], ['対象', c.driverCount, '']].forEach(function (x) {
@@ -352,14 +354,22 @@
     });
   }
 
+  // 保存先への接続は画面を開かなくても使えるよう、遅延作成にする（FRIDAY向け要約の取得用）。
+  function ensureStore() {
+    if (!STATE.store) {
+      STATE.store = global.Rolling60hLocalStore.create({
+        indexedDB: global.indexedDB,
+        localStorage: (function () { try { return global.localStorage; } catch (e) { return null; } })(),
+        validate: Board.validateBoard,
+      });
+    }
+    return STATE.store;
+  }
+
   function init() {
     if (STATE.ready || !root()) return;
     STATE.ready = true;
-    STATE.store = global.Rolling60hLocalStore.create({
-      indexedDB: global.indexedDB,
-      localStorage: (function () { try { return global.localStorage; } catch (e) { return null; } })(),
-      validate: Board.validateBoard,
-    });
+    ensureStore();
     render();
     STATE.store.loadBoard().then(function (saved) {
       if (saved && Board.validateBoard(saved) && !STATE.board) {
@@ -371,7 +381,7 @@
   }
 
   function getFridaySummary() {
-    return STATE.store.loadBoard().then(function (board) {
+    return ensureStore().loadBoard().then(function (board) {
       return Board.buildFridaySummary(board && Board.validateBoard(board) ? board : null, nowIso());
     });
   }

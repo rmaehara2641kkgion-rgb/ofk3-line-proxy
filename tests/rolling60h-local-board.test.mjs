@@ -222,5 +222,10 @@ assert.ok(html.includes('duty-risk-dashboard.js'), '既存のGAS/Render経路の
 const ui = fs.readFileSync(new URL('../rolling60h-board-ui.js', import.meta.url), 'utf8');
 ['データ取込', '残り時間・リスク一覧', 'シフト格子（既存）', 'このブラウザ'].forEach((t) => assert.ok(ui.includes(t), 'UI文言 ' + t));
 assert.equal(/fetch\(|XMLHttpRequest|harvest:handoff/.test(ui), false, '外部通信・handoff送信をしない');
+assert.ok(ui.includes('基準日（7日窓の終端）') && ui.includes('最終集計日時（この集計を実行した時刻）'), '基準日と集計日時を分けて表示する');
+assert.ok(ui.includes('と異なります'), '基準日と集計日が違うときの警告');
+assert.ok(/function getFridaySummary\(\) \{\s*return ensureStore\(\)/.test(ui), '要約の取得は画面を開かなくても使える');
+const spec = fs.readFileSync(new URL('../docs/ROLLING60H_LOCAL_BOARD.md', import.meta.url), 'utf8');
+['別プロセスの HARVEST から使うときの制約', 'ループバック', '再計算', '基準日と集計日時'].forEach((t) => assert.ok(spec.includes(t), '仕様書に ' + t));
 
 console.log('rolling60h-local-board.test.mjs: ALL PASSED');
