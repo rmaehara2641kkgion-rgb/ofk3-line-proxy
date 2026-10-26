@@ -28,6 +28,15 @@
     return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function nowIso() { return new Date().toISOString(); }
+
+  // 履歴補完（HARVESTが過去日の実績を再利用する仕組み）はこの画面にはない。
+  var NO_HISTORY_NOTICE = 'この画面はアップロードされたExcelを基準に集計しています。HARVESTの過去履歴補完を含まないため、結果が異なる場合があります。';
+  function noHistoryBadge() {
+    return '<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:9999px;padding:2px 8px;font-size:12px;">履歴補完なし</span>';
+  }
+  function noHistoryNotice() {
+    return '<div class="text-xs" style="margin:8px 0;padding:8px 10px;background:#f3f4f6;border-radius:6px;">' + noHistoryBadge() + ' ' + esc(NO_HISTORY_NOTICE) + '</div>';
+  }
   function jst(iso) {
     var t = Date.parse(iso || '');
     if (!isFinite(t)) return '—';
@@ -244,7 +253,8 @@
     h += '<div class="card p-4 mb-4" style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;">' +
       '<div><label class="block text-xs text-ink-lighter mb-1">基準日（この日を終端とする7日窓を表示）</label>' +
       '<input type="date" id="local60-ref" class="border rounded px-2 py-1 text-sm" value="' + esc(STATE.referenceDate || Board.jstDate(nowIso())) + '"></div>' +
-      '<button type="button" id="local60-run" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold">集計実行</button></div>';
+      '<button type="button" id="local60-run" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold">集計実行</button>' +
+      '<div style="flex-basis:100%;">' + noHistoryNotice() + '</div></div>';
     if (STATE.message) h += '<div class="card p-3 mb-4 text-sm" role="alert" style="color:#b91c1c;">' + esc(STATE.message) + '</div>';
     h += '<p class="text-xs text-ink-lighter">集計結果は「このブラウザ」のIndexedDBにだけ保存されます（他のPC・ブラウザ・シークレットウィンドウとは共有されません）。' +
       'ファイル自体は保存しないため、ブラウザを再読込した後は保存済みの集計結果の表示になります。</p>';
@@ -275,6 +285,7 @@
     var c = board.counts;
     var h = banner(board);
     var genDay = Board.jstDate(board.generatedAt);
+    h += '<div class="mb-1">' + noHistoryBadge() + '</div>';
     h += '<p class="text-xs text-ink-lighter mb-2">最終集計日時（この集計を実行した時刻） <b>' + esc(jst(board.generatedAt)) + '</b>' +
       '<br>基準日（7日窓の終端） <b>' + esc(board.referenceDate) + '</b>　対象7日 ' + esc(board.windowStart + ' 〜 ' + board.referenceDate) +
       (genDay && genDay !== board.referenceDate ? '<br><span style="color:#92400e;">⚠ 基準日（' + esc(board.referenceDate) + '）は集計日（' + esc(genDay) + '）と異なります。表示は基準日時点の7日窓です。</span>' : '') +
@@ -312,6 +323,7 @@
     });
     h += '</tbody></table></div>';
     h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 「暫定」は予定を含む値、「算出不可」は欠損のため確定値を出していません。</p>';
+    h += noHistoryNotice();
     return h;
   }
 
