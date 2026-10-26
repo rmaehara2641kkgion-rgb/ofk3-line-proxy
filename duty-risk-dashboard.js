@@ -25,24 +25,104 @@
     return date.getUTCFullYear() + '-' + (month < 10 ? '0' : '') + month + '-' + (day < 10 ? '0' : '') + day;
   }
 
+  function formatApi() {
+    if (typeof window !== 'undefined' && window.DutyHoursFormat) return window.DutyHoursFormat;
+    return require('./duty-hours-format.js');
+  }
+
   function hourText(value) {
     if (!isNum(value)) return '未取得';
-    var rounded = Math.round(value * 100) / 100;
-    return rounded.toFixed(2).replace(/\.?0+$/, '') + 'h';
+    return formatApi().durationText(value);
   }
 
   function marginText(value) {
     if (!isNum(value)) return '—';
-    if (value < 0) return '予測超過';
-    var text = hourText(value);
-    if (value < 1) return text + '（残り約' + Math.round(value * 60) + '分）';
-    return text;
+    if (value < 0) return formatApi().overText(value, 'forecast');
+    return formatApi().remainingText(value);
   }
+
+  function valueState(row) {
+    if (!row || row.dataClass === '判定不能') return '判定不能';
+    if (row.dataClass === '予定込み予測') return '暫定（予定を含む）';
+    if (row.dataClass === '実績確定') return '推定（確定値ではない）';
+    return '';
+  }
+
+  function statusOf(row) {
+    if (!row || row.dataClass === '判定不能' || row.seriesComplete === false) {
+      var reasons = (row && row.gaps || []).map(function (gap) {
+        return (gap.date || '日付不明') + ' ' + gap.reason;
+      }).join('、');
+      return {
+        tone: 'unknown',
+        label: '判定不能',
+        text: '合計できない',
+        hint: (reasons || '当日窓が保存されていない') + '。欠損は0時間にしていません。',
+        bar: 0,
+      };
+    }
+    var past = row.pastActual;
+    if (row.pastKind === '実績' && isNum(past) && past > 60) {
+      return {
+        tone: 'actual',
+        label: '実績超過',
+        text: formatApi().overText(past - 60, 'actual'),
+        hint: '過去6日の実績がすでに60時間を超えています。今日の予定を足す前の状態です。',
+        bar: 100,
+      };
+    }
+    if (row.forecastOver) {
+      var overBy = isNum(row.forecast) ? row.forecast - 60 : null;
+      var hint = '今日の予定を含めた予測です。実績超過ではありません。';
+      if (isNum(past) && past <= 60) hint = '過去6日の実績は60時間以下です。' + hint;
+      else if (row.pastKind === '予定込み') hint = '過去6日に予定が含まれます。確定した実績超過ではありません。' + hint;
+      return {
+        tone: 'forecast',
+        label: '超過見込み',
+        text: overBy == null ? '超過見込み' : formatApi().overText(overBy, 'forecast'),
+        hint: hint,
+        bar: 100,
+      };
+    }
+    if (row.dataClass === '実績確定' && isNum(row.forecast) && row.forecast > 60) {
+      return {
+        tone: 'actual',
+        label: '実績超過',
+        text: formatApi().overText(row.forecast - 60, 'actual'),
+        hint: '7日間が推定実績で、合計が60時間を超えています。今日の予定を足した予測ではありません。',
+        bar: 100,
+      };
+    }
+    var margin = row.marginAfterPlan != null ? row.marginAfterPlan : row.remaining;
+    if (!isNum(margin)) {
+      return { tone: 'unknown', label: '判定不能', text: '未取得', hint: '合計できないため残量を出していません。', bar: 0 };
+    }
+    var bar = Math.max(0, Math.min(100, (margin / 60) * 100));
+    if (row.adminLabel === '本日要注意') {
+      return { tone: 'urgent', label: '本日要注意', text: formatApi().remainingText(margin), hint: '勤務予定があり、終了後の余裕が1時間未満です。', bar: bar };
+    }
+    if (row.adminLabel === '本日監視') {
+      return { tone: 'watch', label: '本日監視', text: formatApi().remainingText(margin), hint: '終了後の余裕が1時間以上、5時間未満です。', bar: bar };
+    }
+    var calm = '既存の要注意・監視（1時間未満、5時間未満）には入りません。';
+    if (margin === 0) calm = '残りは0時間です。既存判定では、60時間ちょうどは超過ではありません。';
+    return { tone: 'ok', label: '余裕あり', text: formatApi().remainingText(margin), hint: calm, bar: bar };
+  }
+
+  var TONE_COLOR = {
+    actual: '#9f1239',
+    forecast: '#c2410c',
+    urgent: '#b91c1c',
+    watch: '#b45309',
+    ok: '#15803d',
+    unknown: '#64748b',
+  };
 
   function forecastText(row) {
     if (!row || !isNum(row.forecast)) return '未取得';
     var text = hourText(row.forecast) + (row.forecastKind ? ' ' + row.forecastKind : '');
-    if (row.dataClass === '予定込み予測' && row.forecast >= LIMIT) text += ' 予測超過';
+    if (row.pastKind === '実績' && isNum(row.pastActual) && row.pastActual > 60) text += ' 実績超過';
+    else if (row.dataClass === '予定込み予測' && row.forecast >= LIMIT) text += ' 超過見込み';
     return text;
   }
 
@@ -288,11 +368,16 @@
     return (row.days || []).map(function (day) {
       var actual = day && actualOrigin(day.origin) && isNum(day.hours);
       var plan = day && day.origin === 'roster-plan' && isNum(day.hours);
+      var valueKind = '未取得';
+      if (actual && day.origin === 'archived-daily') valueKind = '保存済みの推定（暫定）';
+      else if (actual) valueKind = '推定（暫定）';
+      else if (plan) valueKind = '予定（暫定）';
       return {
         date: day && day.date ? day.date : '',
         actual: actual ? hourText(day.hours) : '未取得',
         plan: plan ? hourText(day.hours) : '—',
         adopted: actual ? '実績' : (plan ? '予定' : '未取得'),
+        valueKind: valueKind,
       };
     });
   }
@@ -305,22 +390,47 @@
     return jst.getUTCFullYear() + '-' + two(jst.getUTCMonth() + 1) + '-' + two(jst.getUTCDate()) + ' ' + two(jst.getUTCHours()) + ':' + two(jst.getUTCMinutes()) + ':' + two(jst.getUTCSeconds());
   }
 
-  function render(rootEl, view, query) {
-    if (!rootEl) return;
+  function orderedRows(rows, mode) {
+    var copy = (rows || []).slice();
+    if (mode !== 'name') return copy;
+    copy.sort(function (a, b) {
+      var byName = String(a.name || '').localeCompare(String(b.name || ''), 'ja');
+      if (byName !== 0) return byName;
+      return String(a.transportId).localeCompare(String(b.transportId));
+    });
+    return copy;
+  }
+
+  function gaugeCard(row) {
+    var status = statusOf(row);
+    var color = TONE_COLOR[status.tone] || TONE_COLOR.unknown;
+    var width = Math.max(0, Math.min(100, status.bar));
+    return '<article class="card p-3" data-duty-tone="' + status.tone + '" style="border-left:4px solid ' + color + '">' +
+      '<div class="text-sm font-bold">' + escapeHtml(row.name || '氏名なし') + '</div>' +
+      '<div class="text-xs text-ink-lighter mb-1">' + escapeHtml(row.transportId || '') + '</div>' +
+      '<div class="text-lg font-bold" style="color:' + color + '">' + escapeHtml(status.text) + '</div>' +
+      '<div style="height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden;margin:6px 0">' +
+      '<div style="width:' + width + '%;height:8px;background:' + color + '"></div></div>' +
+      '<div class="text-sm font-bold">' + escapeHtml(status.label) + '</div>' +
+      '<div class="text-xs text-ink-lighter">' + escapeHtml(valueState(row)) + '。' + escapeHtml(status.hint) + '</div>' +
+      '</article>';
+  }
+
+  function renderHtml(view, query) {
     if (!view || !view.ok) {
-      rootEl.innerHTML = '<div class="card p-4 text-sm">保存データを表示できません。' + escapeHtml(view && view.reason ? view.reason : '') + '</div>';
-      return;
+      return '<div class="card p-4 text-sm">保存データを表示できません。' + escapeHtml(view && view.reason ? view.reason : '') + '</div>';
     }
     var q = String(query || '').trim().toLowerCase();
-    var attention = (view.attention || []).filter(function (row) { return matches(row, q); });
-    var ranking = view.ranking.filter(function (row) { return matches(row, q); });
+    var mode = view.sortMode === 'name' ? 'name' : 'remaining';
+    var attention = orderedRows((view.attention || []).filter(function (row) { return matches(row, q); }), mode);
+    var ranking = orderedRows(view.ranking.filter(function (row) { return matches(row, q); }), mode);
     var future = view.future.filter(function (row) { return matches(row, q); });
     var gaps = view.gaps.filter(function (row) { return matches(row, q); });
     var selected = view.selectedId ? view.ranking.concat(view.gaps).filter(function (row) { return row.transportId === view.selectedId; })[0] : null;
     var html = '';
     html += '<div class="mb-4"><h2 class="text-lg font-bold">勤務時間リスク</h2>';
     html += '<p class="text-sm text-ink-lighter">対象 ' + escapeHtml(view.windowStart || '') + ' 〜 ' + escapeHtml(view.referenceDate) + '。取得日時 ' + escapeHtml(checkedAtText(view.checkedAt)) + '。この取得日時は保存データの時刻です。</p>';
-    html += '<p class="text-sm text-ink-lighter">本日要注意・本日監視は管理者用の追加指標です。正式な超過確定とは別です。予定込みで60時間以上は予測超過と表示します。</p></div>';
+    html += '<p class="text-sm text-ink-lighter">過去6日の実績が60時間を超えたときだけ実績超過です。今日の予定を足してはじめて60時間以上になるときは超過見込みで、実績超過ではありません。1時間未満は本日要注意、1時間以上5時間未満は本日監視です。推定時間は確定値ではありません。ゲージは60時間に対する残量です。</p></div>';
     html += '<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 mb-4">';
     html += card('超過確定', view.confirmed == null ? '未取得' : String(view.confirmed), '保存済みの実績確定');
     html += card('本日要注意', String(view.watchNow), '勤務予定あり・余裕1時間未満');
@@ -331,6 +441,15 @@
     html += card('判定不能', String(view.gaps.length), '合計を出せない');
     html += '</div>';
     html += '<input id="duty-risk-search" class="w-full md:w-80 mb-4 px-3 py-2 border rounded-lg text-sm" placeholder="氏名・Transport ID" value="' + escapeHtml(query || '') + '">';
+    html += '<div class="flex flex-wrap gap-2 mb-3">';
+    html += '<button type="button" class="px-3 py-1 rounded text-sm ' + (mode === 'remaining' ? 'bg-slate-800 text-white' : 'bg-slate-100') + '" data-duty-sort="remaining">残りが少ない順</button>';
+    html += '<button type="button" class="px-3 py-1 rounded text-sm ' + (mode === 'name' ? 'bg-slate-800 text-white' : 'bg-slate-100') + '" data-duty-sort="name">氏名順</button>';
+    html += '</div>';
+    html += '<h3 class="font-bold mb-2">勤務時間残量</h3>';
+    html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-4">';
+    if (!ranking.length) html += '<p class="text-sm text-ink-lighter">該当なし</p>';
+    ranking.forEach(function (row) { html += gaugeCard(row); });
+    html += '</div>';
     html += '<h3 class="font-bold mb-2">本日の危険DA</h3>';
     html += '<p class="text-xs text-ink-lighter mb-2">本日要注意と本日監視だけを、通常ランキングの上に出しています。</p>';
     html += table(attention.map(attentionCells), ['氏名', 'Transport ID', '危険度', '過去6日の時間', '今日の予定時間', '7日予測合計', '今日の勤務可能上限', '今日の予定終了後の余裕', '区分'], {
@@ -341,7 +460,7 @@
       }
     });
     html += '<h3 class="font-bold mt-6 mb-2">本日リスクランキング</h3>';
-    html += '<p class="text-xs text-ink-lighter mb-2">予定終了後の余裕が少ない順。予定込み予測も表示します。本日監視は余裕1時間以上5時間未満です。</p>';
+    html += '<p class="text-xs text-ink-lighter mb-2">初期順は予定終了後の余裕が少ない順です。予定込み予測も表示します。本日監視は余裕1時間以上5時間未満です。</p>';
     html += table(ranking.map(riskCells), ['氏名', 'Transport ID', '過去6日の時間', '今日の予定時間', '7日予測合計', '今日の勤務可能上限', '今日の予定終了後の余裕', '区分']);
     html += '<h3 class="font-bold mt-6 mb-2">未来予測超過</h3>';
     if (view.pastPlanCount != null) {
@@ -359,6 +478,7 @@
       ];
     }), ['氏名', 'Transport ID', '対象期間', '予測合計', '超過予測', '内訳']);
     html += '<h3 class="font-bold mt-6 mb-2">判定不能</h3>';
+    html += '<p class="text-xs text-ink-lighter mb-2">欠損を0時間にはしていません。理由は行ごとに表示します。</p>';
     html += table(gaps.map(function (row) {
       var dates = row.gaps.map(function (gap) { return (gap.date || '日付不明') + ' ' + gap.reason; }).join('、');
       return [
@@ -373,15 +493,24 @@
     if (!selected) {
       html += '<p class="text-sm text-ink-lighter">ランキングまたは判定不能の行を選ぶと、7日間の内訳を表示します。</p>';
     } else {
+      var selectedStatus = statusOf(selected);
       html += '<p class="text-sm mb-2">' + escapeHtml(selected.name || '氏名なし') + ' ' + escapeHtml(selected.transportId) + '</p>';
       html += table(dayRows(selected).map(function (day) {
-        return ['', escapeHtml(day.date), day.actual, day.plan, day.adopted];
-      }), ['日付', 'Amazon実績', 'シフト予定', '採用']);
-      html += '<p class="text-sm mt-2">区分: ' + escapeHtml(selected.dataClass) + '</p>';
+        return ['', escapeHtml(day.date), day.actual, day.plan, day.adopted, escapeHtml(day.valueKind)];
+      }), ['日付', 'Amazon実績', 'シフト予定', '採用', '値の性質']);
+      html += '<p class="text-sm mt-2">区分: ' + escapeHtml(selected.dataClass) + ' / ' + escapeHtml(selectedStatus.label) + '</p>';
+      html += '<p class="text-sm">値の性質: ' + escapeHtml(valueState(selected)) + '</p>';
+      html += '<p class="text-sm">' + escapeHtml(selectedStatus.hint) + '</p>';
       html += '<p class="text-sm">7日間の合計: ' + (selected.seriesComplete ? forecastText(selected) : '判定不能') + '</p>';
-      html += '<p class="text-sm">今日の勤務可能上限: ' + hourText(selected.workable) + '。今日の予定終了後の余裕: ' + marginText(selected.marginAfterPlan) + '</p>';
+      html += '<p class="text-sm">今日の勤務可能上限: ' + hourText(selected.workable) + '。今日の予定終了後の余裕: ' + marginCell(selected) + '</p>';
     }
-    rootEl.innerHTML = html;
+    return html;
+  }
+
+  function render(rootEl, view, query) {
+    if (!rootEl) return;
+    rootEl.innerHTML = renderHtml(view, query);
+    if (typeof document === 'undefined' || !rootEl.querySelectorAll) return;
     var search = document.getElementById('duty-risk-search');
     if (search) {
       search.addEventListener('input', function () {
@@ -390,6 +519,13 @@
         if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
       });
     }
+    rootEl.querySelectorAll('[data-duty-sort]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        view.sortMode = button.getAttribute('data-duty-sort') || 'remaining';
+        var current = document.getElementById('duty-risk-search');
+        render(rootEl, view, current ? current.value : query);
+      });
+    });
     rootEl.querySelectorAll('[data-duty-id]').forEach(function (button) {
       button.addEventListener('click', function () {
         view.selectedId = button.getAttribute('data-duty-id');
@@ -403,8 +539,19 @@
     return '<div class="card p-3"><div class="text-xs text-ink-lighter">' + escapeHtml(title) + '</div><div class="text-2xl font-bold">' + escapeHtml(value) + '</div><div class="text-xs text-ink-lighter">' + escapeHtml(note) + '</div></div>';
   }
 
+  function marginCell(row) {
+    var status = statusOf(row);
+    var margin = marginText(row.marginAfterPlan);
+    if (status.tone === 'actual') return '実績超過。予定を含めると ' + margin;
+    return margin;
+  }
+
+  function classLabel(row) {
+    var status = statusOf(row);
+    return row.dataClass + '・' + status.label + (row.adminLabel ? '・' + row.adminLabel : '') + '・' + valueState(row);
+  }
+
   function riskCells(row) {
-    var label = row.dataClass + (row.forecastOver ? '・予測超過' : '') + (row.adminLabel ? '・' + row.adminLabel : '');
     return [
       row.transportId,
       escapeHtml(row.name || '氏名なし'),
@@ -413,8 +560,8 @@
       row.todayPlan == null ? '予定なし' : hourText(row.todayPlan),
       forecastText(row),
       hourText(row.workable),
-      marginText(row.marginAfterPlan),
-      escapeHtml(label),
+      escapeHtml(marginCell(row)),
+      escapeHtml(classLabel(row)),
     ];
   }
 
@@ -428,8 +575,8 @@
       row.todayPlan == null ? '予定なし' : hourText(row.todayPlan),
       forecastText(row),
       hourText(row.workable),
-      marginText(row.marginAfterPlan),
-      escapeHtml(row.dataClass + (row.forecastOver ? '・予測超過' : '')),
+      escapeHtml(marginCell(row)),
+      escapeHtml(classLabel(row)),
     ];
   }
 
@@ -473,5 +620,5 @@
     });
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, dayBreakdown: dayRows, mount: mount };
+  return { buildView: buildView, hourText: hourText, marginText: marginText, statusOf: statusOf, renderHtml: renderHtml, dayBreakdown: dayRows, mount: mount };
 });

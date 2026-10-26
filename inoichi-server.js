@@ -28,6 +28,7 @@ var ALLOWED_FILES = {
   '/inoichi-dashboard.html': true,
   '/inoichi-dashboard.css': true,
   '/inoichi-dashboard.js': true,
+  '/duty-hours-format.js': true,
   '/inoichi-detection-core.js': true,
   '/inoichi-detection-rules.js': true,
   '/inoichi-fleet-adapter.js': true,

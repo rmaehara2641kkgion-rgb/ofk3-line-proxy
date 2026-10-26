@@ -61,7 +61,7 @@ assert.equal(view.watchSoon, 2);
 assert.equal(view.attention.length, 4);
 assert.equal(view.attention[0].transportId, 'TID-OVER');
 assert.equal(view.attention[0].forecastOver, true);
-assert.equal(dash.marginText(view.attention[0].marginAfterPlan), '予測超過');
+assert.equal(dash.marginText(view.attention[0].marginAfterPlan), '超過見込み 11時間00分');
 assert.equal(view.confirmed, 0);
 const closeRow = view.ranking.find((row) => row.transportId === 'TID-CLOSE');
 assert.equal(view.ranking[0].transportId, 'TID-OVER');
@@ -69,8 +69,8 @@ assert.equal(closeRow.adminLabel, '本日要注意');
 assert.equal(closeRow.dataClass, '予定込み予測');
 assert.equal(closeRow.forecastKind, '予測');
 assert.equal(closeRow.name, '架空 接近');
-assert.equal(dash.hourText(closeRow.remaining), '0.8h');
-assert.equal(dash.marginText(closeRow.marginAfterPlan).includes('残り約48分'), true);
+assert.equal(dash.hourText(closeRow.remaining), '0時間48分');
+assert.equal(dash.marginText(closeRow.marginAfterPlan), '残り48分');
 assert.equal(view.ranking.find((row) => row.transportId === 'TID-WATCH').adminLabel, '本日監視');
 assert.equal(view.ranking.find((row) => row.transportId === 'TID-ROOM').adminLabel, '');
 assert.equal(view.ranking.find((row) => row.transportId === 'TID-OFF').adminLabel, '');
@@ -99,10 +99,10 @@ assert.equal(sameName.length, 2);
 assert.notEqual(sameName[0].transportId, sameName[1].transportId);
 const mixDays = dash.dayBreakdown(mix);
 assert.equal(mixDays[3].actual, '未取得');
-assert.equal(mixDays[3].plan, '0h');
+assert.equal(mixDays[3].plan, '0時間00分');
 assert.equal(mixDays[3].adopted, '予定');
 const zeroDays = dash.dayBreakdown(view.ranking.find((row) => row.transportId === 'TID-ZERO-ACT'));
-assert.equal(zeroDays[0].actual, '0h');
+assert.equal(zeroDays[0].actual, '0時間00分');
 assert.equal(zeroDays[0].plan, '—');
 assert.equal(zeroDays[0].adopted, '実績');
 assert.equal(view.future.length, 1);
@@ -135,7 +135,7 @@ if (fs.existsSync(snapPath) && fs.existsSync(histPath)) {
   assert.equal(yama.todayPlan, 11);
   assert.ok(Math.abs(yama.forecast - 59.731666666666676) < 0.02);
   assert.ok(Math.abs(yama.marginAfterPlan - 0.268333333333324) < 0.02);
-  assert.equal(dash.marginText(yama.marginAfterPlan).includes('残り約16分'), true);
+  assert.equal(dash.marginText(yama.marginAfterPlan), '残り16分');
   assert.equal(yama.forecastOver, false);
   assert.equal(saved.attention[0].transportId, yama.transportId);
   assert.equal(fuka.pastKind, '実績');
@@ -145,7 +145,7 @@ if (fs.existsSync(snapPath) && fs.existsSync(histPath)) {
   assert.equal(fuka.todayPlan, 11);
   assert.ok(Math.abs(fuka.forecast - 56.71) < 0.02);
   assert.ok(Math.abs(fuka.marginAfterPlan - 3.29) < 0.02);
-  assert.equal(dash.marginText(fuka.marginAfterPlan).includes('分'), false);
+  assert.equal(dash.marginText(fuka.marginAfterPlan), '残り3時間17分');
   const matsuDay = saved.gaps[0].days.find((day) => day.date === '2026-10-15');
   assert.equal(matsuDay.hours, null);
   assert.equal(saved.gaps[0].gaps.some((gap) => gap.date === '2026-10-15'), true);
@@ -164,6 +164,62 @@ if (fs.existsSync(snapPath) && fs.existsSync(histPath)) {
   });
   saved.future.forEach((row) => assert.equal(row.endDate > saved.referenceDate, true));
 }
+
+const Format = require('../duty-hours-format.js');
+assert.equal(Format.remainingText(13), '残り13時間00分');
+assert.equal(Format.remainingText(7.03), '残り7時間02分');
+assert.equal(Format.remainingText(0.49), '残り29分');
+assert.equal(Format.durationText(51.51), '51時間31分');
+assert.equal(Format.durationText(15.09), '15時間05分');
+
+const under = dash.statusOf({
+  pastActual: 47, pastKind: '実績', todayPlan: 11, forecast: 58, dataClass: '予定込み予測',
+  forecastOver: false, marginAfterPlan: 2, remaining: 2, adminLabel: '本日監視', hasDuty: true,
+  seriesComplete: true, gaps: [],
+});
+assert.equal(under.label, '本日監視');
+assert.equal(under.text, '残り2時間00分');
+assert.equal(under.tone === 'actual', false);
+
+const predicted = dash.statusOf({
+  pastActual: 51.51, pastKind: '実績', todayPlan: 11, forecast: 62.51, dataClass: '予定込み予測',
+  forecastOver: true, marginAfterPlan: -2.51, adminLabel: '本日要注意', seriesComplete: true, gaps: [],
+});
+assert.equal(predicted.label, '超過見込み');
+assert.equal(predicted.text, '超過見込み 2時間31分');
+assert.match(predicted.hint, /過去6日の実績は60時間以下/);
+
+const already = dash.statusOf({
+  pastActual: 61, pastKind: '実績', todayPlan: 11, forecast: 72, dataClass: '予定込み予測',
+  forecastOver: true, marginAfterPlan: -12, adminLabel: '', seriesComplete: true, gaps: [],
+});
+assert.equal(already.label, '実績超過');
+assert.equal(already.text, '実績超過 1時間00分');
+
+const gapRow = dash.statusOf({
+  dataClass: '判定不能', seriesComplete: false, pastActual: null, forecast: null,
+  gaps: [{ date: '2026-10-15', reason: '実績未取得' }],
+});
+assert.equal(gapRow.label, '判定不能');
+assert.match(gapRow.hint, /実績未取得/);
+assert.match(gapRow.hint, /欠損は0時間にしていません/);
+
+const shown = dash.renderHtml({
+  ok: true, windowStart: '2026-10-15', referenceDate: '2026-10-21', checkedAt: '2026-10-21T02:00:00.000Z',
+  confirmed: 0, watchNow: 0, watchSoon: 1, actualComplete: 0, planForecast: 1, attention: [],
+  ranking: [{
+    transportId: 'TID-47', name: '架空 四七', pastActual: 47, pastKind: '実績', todayPlan: 11,
+    forecast: 58, forecastKind: '予測', dataClass: '予定込み予測', remaining: 2, workable: 13,
+    marginAfterPlan: 2, hasDuty: true, adminLabel: '本日監視', forecastOver: false, gaps: [],
+    seriesComplete: true, days: [],
+  }],
+  future: [], gaps: [],
+}, '');
+assert.match(shown, /架空 四七/);
+assert.match(shown, /残り2時間00分/);
+assert.match(shown, /本日監視/);
+assert.equal(shown.includes('data-duty-sort="name"'), true);
+assert.doesNotMatch(shown.slice(shown.indexOf('架空 四七'), shown.indexOf('架空 四七') + 500), /実績超過/);
 
 const source = fs.readFileSync(new URL('../duty-risk-dashboard.js', import.meta.url), 'utf8');
 assert.equal(source.includes('prefix6'), false);

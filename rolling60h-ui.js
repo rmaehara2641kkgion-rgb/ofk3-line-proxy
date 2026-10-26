@@ -55,6 +55,7 @@
 
   function fmtHours(h) {
     if (h === null || h === undefined || isNaN(h)) return '-';
+    if (typeof window !== 'undefined' && window.DutyHoursFormat) return window.DutyHoursFormat.durationText(h);
     return h.toFixed(1) + 'h';
   }
 
@@ -607,12 +608,12 @@
       var comment;
       if (w.riskType === 'roster_only') {
         comment =
-          '登録済みシフトの予定だけで、' + w.endDate + '時点で' + w.overBy.toFixed(1) + '時間超過する見込みです。' +
+          '登録済みシフトの予定だけで、' + w.endDate + '時点で' + fmtHours(w.overBy) + '超過する見込みです。' +
           '勤務記号の変更や休暇への変更を検討してください。';
       } else if (w.riskType === 'actual_progress') {
         comment =
           '当初のシフト予定では60時間以内でしたが、Amazon実績が予定より長くなったため、' +
-          '実績＋今後の予定では' + w.endDate + '時点で' + w.overBy.toFixed(1) + '時間超過する見込みです。' +
+          '実績＋今後の予定では' + w.endDate + '時点で' + fmtHours(w.overBy) + '超過する見込みです。' +
           '残りの勤務時間短縮や勤務記号変更を検討してください。';
       } else {
         comment = '正式な超過（>' + w.limitHours + 'h）ではありませんが、警戒ライン(' + w.warningHours + 'h)に達しています。';
@@ -621,7 +622,7 @@
         '<div class="border rounded-lg p-3 mb-3" style="border-color:' + (w.riskType === 'roster_only' ? '#ef4444' : w.riskType === 'actual_progress' ? '#f97316' : '#eab308') + '">' +
         '<div class="text-sm font-bold mb-1">対象期間：' + w.startDate + ' 〜 ' + w.endDate + '</div>' +
         '<div class="text-xs mb-2">' + riskLabel + '</div>' +
-        '<div class="text-sm mb-1">Rolling合計：<b>' + fmtHours(w.totalHours) + '</b>　上限：' + fmtHours(w.limitHours) + (w.over ? '　超過：<b class="text-red-500">+' + w.overBy.toFixed(1) + 'h</b>' : '') + '</div>' +
+        '<div class="text-sm mb-1">Rolling合計：<b>' + fmtHours(w.totalHours) + '</b>　上限：' + fmtHours(w.limitHours) + (w.over ? '　超過：<b class="text-red-500">+' + fmtHours(w.overBy) + '</b>' : '') + '</div>' +
         '<div class="text-xs text-ink-lighter mb-1">実績：' + fmtHours(w.actualHours) + '　／　予定：' + fmtHours(w.rosterHours) + '</div>' +
         (w.rosterOnlyTotalHours !== null ? '<div class="text-xs text-ink-lighter mb-2">（参考）予定のみの場合の合計：' + fmtHours(w.rosterOnlyTotalHours) + '</div>' : '') +
         (w.undefinedDates.length > 0 ? '<div class="text-xs text-gray-500 mb-2">⚠ この期間には時間未定義の勤務記号が含まれています（' + w.undefinedDates.join(', ') + '）。実際の合計はこれより多い可能性があります。</div>' : '') +
