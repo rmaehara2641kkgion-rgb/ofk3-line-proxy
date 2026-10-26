@@ -231,10 +231,13 @@ await assert.rejects(() => noIdb.save(board, summary), /indexeddb-unavailable/);
 
 // ---- 画面の配線 ----
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-['wh60-local-root', 'rolling60h-board-ui.js', 'rolling60h-local-board.js', 'rolling60h-local-store.js', 'harvest-rolling60h-run.js', 'inoichi-rolling-dryrun.js', 'Rolling60hBoardUI.onShown'].forEach((token) => {
+['wh60-local-root', 'rolling60h-board-ui.js', 'rolling60h-local-board.js', 'rolling60h-local-store.js', 'harvest-rolling60h-run.js', 'Rolling60hBoardUI.onShown'].forEach((token) => {
   assert.ok(html.includes(token), 'index.html に ' + token);
 });
 assert.ok(html.includes('duty-risk-dashboard.js'), '既存のGAS/Render経路のスクリプトは残す');
+assert.equal(html.toLowerCase().includes('inoichi'), false, 'index.html に INOICHI を直書きしない（サーバーが差し込む既存方式を守る）');
+const serverSrc = fs.readFileSync(new URL('../render-webhook-server.js', import.meta.url), 'utf8');
+assert.ok(serverSrc.includes('/inoichi-rolling-dryrun.js'), 'INOICHI dry-run はサーバーが差し込む');
 const ui = fs.readFileSync(new URL('../rolling60h-board-ui.js', import.meta.url), 'utf8');
 ['データ取込', '残り時間・リスク一覧', 'シフト格子（既存）', 'このブラウザ'].forEach((t) => assert.ok(ui.includes(t), 'UI文言 ' + t));
 assert.equal(/fetch\(|XMLHttpRequest|harvest:handoff/.test(ui), false, '外部通信・handoff送信をしない');

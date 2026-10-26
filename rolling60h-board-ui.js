@@ -140,6 +140,11 @@
 
   function aggregate() {
     var ref = STATE.referenceDate || Board.jstDate(nowIso());
+    // InoichiRollingDryRun はサーバーが index.html に差し込む（既存のRolling画面と共通）。無いときは集計しない。
+    if (!global.InoichiRollingDryRun || !global.HarvestRolling60hRun || !global.DutyRiskDashboard || !global.DutyRiskSnapshot || !global.RollingCore || !global.HarvestDailyManifest || !global.XLSX) {
+      STATE.message = '集計に必要なモジュールを読み込めていません。ページを再読込してください。前回の保存済み集計は変更していません。';
+      return render();
+    }
     if (!STATE.shift && !STATE.daily) { STATE.message = 'シフト表とDaily実績のExcelを取り込んでください。'; return render(); }
     var executed;
     try {
