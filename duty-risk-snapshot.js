@@ -72,6 +72,7 @@
       drivers: drivers,
       predictions: captured && captured.predictions ? captured.predictions : [],
       priorPredictions: priorPredictions(history, summary),
+      referenceDate: captured && captured.referenceDate ? captured.referenceDate : undefined,
     });
     if (view) view.checkedAt = summary.checkedAt;
     return view;

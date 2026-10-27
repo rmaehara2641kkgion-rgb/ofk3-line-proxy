@@ -280,11 +280,41 @@
     });
   }
 
+  // 将来超過の警告。従来の行（exceed + forecast）と、INO-1 の期間分離後の行（future-exceed、および現在行に付く futureExceed）の両方を読む。
+  // 同じ人・同じ期間は1件だけにする。
+  function futureCandidates(alerts, referenceDate) {
+    var out = [];
+    var seen = {};
+    function add(alert, source) {
+      var key = (alert.transportId || alert.name || '') + '|' + alert.startDate + '|' + alert.endDate + '|' + alert.totalHours;
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(source);
+    }
+    (alerts || []).forEach(function (alert) {
+      if (!alert) return;
+      var legacy = alert.disposition === 'exceed' && alert.basis === 'forecast' && alert.endDate > referenceDate;
+      if (legacy || (alert.disposition === 'future-exceed' && alert.endDate > referenceDate)) add(alert, alert);
+      var nested = alert.futureExceed;
+      if (nested && alert.disposition !== 'future-exceed' && nested.endDate > referenceDate) {
+        add({ transportId: alert.transportId, name: alert.name, startDate: nested.startDate, endDate: nested.endDate, totalHours: nested.totalHours }, {
+          transportId: alert.transportId,
+          name: alert.name,
+          startDate: nested.startDate,
+          endDate: nested.endDate,
+          totalHours: nested.totalHours,
+          overBy: nested.overBy,
+          actualHours: nested.actualHours,
+          rosterHours: nested.rosterHours,
+        });
+      }
+    });
+    return out;
+  }
+
   function futureRows(snapshot, referenceDate, predictions) {
     var index = indexByWindow(predictions);
-    return (snapshot && Array.isArray(snapshot.alerts) ? snapshot.alerts : []).filter(function (alert) {
-      return alert && alert.disposition === 'exceed' && alert.basis === 'forecast' && alert.endDate > referenceDate;
-    }).map(function (alert) {
+    return futureCandidates(snapshot && Array.isArray(snapshot.alerts) ? snapshot.alerts : [], referenceDate).map(function (alert) {
       var ids = index[predictionKey(alert.startDate, alert.endDate, alert.totalHours)] || [];
       var joined = ids.length === 1 ? ids[0] : '';
       var transportId = alert.transportId || joined;
