@@ -210,10 +210,14 @@
   }
 
   function referenceOf(options, summary) {
+    // checkedAt（実行日時）は基準日の代わりにしない。再計算や日付またぎで食い違うため。
     var given = options.referenceDate || summary.referenceDate || '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(given)) return { date: given, source: 'run' };
-    var fromCheck = Horizon && summary.checkedAt ? Horizon.jstDate(summary.checkedAt) : '';
-    return fromCheck ? { date: fromCheck, source: 'checkedAt-jst' } : { date: '', source: '' };
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof given === 'string' ? given : '');
+    if (m) {
+      var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+      if (d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]) return { date: given, source: 'run' };
+    }
+    return { date: '', source: 'missing' };
   }
 
   function build(options) {
@@ -370,7 +374,21 @@
         if (row) rows.push(row);
       });
     }
-    if (usable && !horizonOn) {
+    if (usable && !horizonOn && Horizon) {
+      // 基準日が不明なときは現在・過去・将来を区別できない。超過とも正常とも言わず、要確認にする。
+      drivers.forEach(function (driver) {
+        var disposition = driver && driver.disposition ? driver.disposition : 'undetermined';
+        if (disposition === 'clear') return;
+        var row = makeRow(driver, 'undetermined', null, duplicate ? 'データ更新なし' : '変化なし', summary.checkedAt, null);
+        row.statusLabel = '基準日不明（要確認）';
+        row.period = 'unknown';
+        row.periodLabel = '基準日不明';
+        row.basis = 'unknown';
+        row.basisLabel = '根拠なし';
+        rows.push(row);
+      });
+    }
+    if (usable && !horizonOn && !Horizon) {
       drivers.forEach(function (driver) {
         var disposition = driver && driver.disposition ? driver.disposition : 'undetermined';
         if (disposition === 'clear') return;
@@ -479,7 +497,14 @@
         updatedAt: summary.checkedAt || null,
         rowCounts: horizonCounts,
         pastExceeds: pastExceeds,
-      } : null,
+      } : (Horizon ? {
+        version: Horizon.VERSION,
+        referenceDate: null,
+        referenceDateSource: 'missing',
+        unavailable: true,
+        reason: '基準日が不明のため、現在・過去・将来の判定は表示しません',
+        updatedAt: summary.checkedAt || null,
+      } : null),
       referenceDate: horizonOn ? ref.date : null,
       approachRule: '',
       approachNote: APPROACH_NOTE,

@@ -83,9 +83,7 @@ const board = Board.buildBoard({
   files: { shift: { name: 's', ok: true }, daily: { name: 'd', ok: true } }, names,
   actualDays: daily.map((e) => ({ transportId: e.id, date: e.date, hours: e.hours })),
 }, deps);
-// capture() does not expose the run's reference date, so the snapshot is built both ways
-const snap = Snap.buildSnapshot(Object.assign({}, executed, { stats: { referenceDate: REF } }), null);
-const snapFallback = Snap.buildSnapshot(executed, null);
+const snap = Snap.buildSnapshot(executed, null);
 const ofk = Object.fromEntries(board.rows.map((r) => [r.transportId, r]));
 const ino = Object.fromEntries(snap.alerts.map((a) => [a.transportId, a]));
 const windowEnding = (id, end) => executed.drivers.find((d) => d.transportId === id).windows.find((w) => w.endDate === end);
@@ -176,18 +174,19 @@ assert.equal(snap.horizon.windowStart, '2026-10-21');
 assert.equal(snap.horizon.windowEnd, REF);
 assert.equal(snap.horizon.updatedAt, executed.summary.checkedAt);
 assert.equal(snap.horizon.referenceDateSource, 'run');
-assert.equal(snapFallback.horizon.referenceDateSource, 'checkedAt-jst');
-assert.equal(snapFallback.horizon.referenceDate, Date.parse(executed.summary.checkedAt) !== NaN ? new Date(Date.parse(executed.summary.checkedAt) + 9 * 3600000).toISOString().slice(0, 10) : '');
-// reference date falls back to the JST date of checkedAt, never to nothing
-const fb = View.build({ summary: Object.assign({}, executed.summary, { checkedAt: '2026-10-26T16:30:00.000Z' }), drivers: [], predictions: [] });
-assert.equal(fb.horizon.referenceDate, '2026-10-27');
-assert.equal(fb.horizon.referenceDateSource, 'checkedAt-jst');
+assert.equal(executed.referenceDate, REF, 'capture hands the run reference date over');
+assert.equal(snap.horizon.referenceDate, executed.referenceDate);
+// checkedAt is never used as the reference date
+const noRef = View.build({ summary: Object.assign({}, executed.summary, { checkedAt: '2026-10-26T16:30:00.000Z' }), drivers: [], predictions: [] });
+assert.equal(noRef.horizon.referenceDate, null);
+assert.equal(noRef.horizon.unavailable, true);
 // the engine is untouched: same windows with or without the display layer
 assert.equal(windowEnding('P-TODAY', REF).judgment, 'exceed');
 
-// without any reference date the view keeps its previous behaviour (no horizon block, no silent guess)
+// without a reference date the view shows no current/past/future judgment (no silent guess)
 const legacy = View.build({ summary: Object.assign({}, executed.summary, { checkedAt: null }), drivers: executed.drivers.map((d) => Object.assign({}, d, { disposition: Snap.dispositionOf(d) })), predictions: executed.predictions });
-assert.equal(legacy.horizon, null);
+assert.equal(legacy.horizon.unavailable, true);
+assert.equal(legacy.horizon.referenceDate, null);
 assert.equal(legacy.referenceDate, null);
 // FRIDAY counts: identical with and without the display layer
 ['driverCount', 'clearCount', 'exceedCount', 'approachCount', 'partialCount', 'undeterminedCount'].forEach((k) => assert.equal(legacy.counts[k], snap.counts[k], k));

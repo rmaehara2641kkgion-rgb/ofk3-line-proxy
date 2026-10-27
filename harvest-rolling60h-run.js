@@ -630,6 +630,7 @@
       historyFile: historyFile,
       stats: {
         referenceDate: referenceDate,
+        referenceDateSource: options.referenceDate ? 'option' : 'today-jst',
         overlapPersonDays: overlapPersonDays,
         overlapKeptDaily: overlapKeptDaily,
         overlapSummed: overlapSummed,
@@ -658,6 +659,17 @@
     return execute(options).summary;
   }
 
+  // 計算に実際に使った基準日（checkedAt とは別）。不正な値や、日付取得に失敗した代用値は null（不明）にする。
+  function usedReferenceDate(stats) {
+    var value = stats && stats.referenceDate;
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof value === 'string' ? value : '');
+    if (!m) return null;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return null;
+    if (stats.referenceDateSource === 'today-jst' && value === '1970-01-01') return null;
+    return value;
+  }
+
   function capture(options) {
     var executed = execute(options);
     return {
@@ -665,6 +677,7 @@
       drivers: executed.drivers || [],
       predictions: executed.predictions || [],
       historyFile: executed.historyFile,
+      referenceDate: usedReferenceDate(executed.stats),
     };
   }
 
