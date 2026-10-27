@@ -46,7 +46,7 @@ const snapshot = {
   checkedAt: '2026-10-21T02:00:00.000Z',
   basisCounts: { actualExceed: 0, forecastExceed: 1, planExceed: 2 },
   alerts: [
-    { name: '架空 接近', disposition: 'exceed', basis: 'forecast', startDate: '2026-10-24', endDate: '2026-10-30', windowLabel: '2026-10-24 〜 2026-10-30', totalHours: 66, overBy: 6, actualHours: 55, rosterHours: 11, preTodayHours: 48.2, todayWindowHours: 59.2 },
+    { name: '架空 接近', company: '架空運送', disposition: 'exceed', basis: 'forecast', startDate: '2026-10-24', endDate: '2026-10-30', windowLabel: '2026-10-24 〜 2026-10-30', totalHours: 66, overBy: 6, actualHours: 55, rosterHours: 11, preTodayHours: 48.2, todayWindowHours: 59.2 },
     { name: '架空 範囲', disposition: 'clear', basis: 'actual', startDate: '2026-10-15', endDate: '2026-10-21', totalHours: 41, preTodayHours: 30, todayWindowHours: 41 },
     { name: '架空 同姓', disposition: 'clear', basis: 'actual', startDate: '2026-10-15', endDate: '2026-10-21', totalHours: 7, preTodayHours: 6, todayWindowHours: 7 },
     { name: '架空 同姓', disposition: 'clear', basis: 'actual', startDate: '2026-10-15', endDate: '2026-10-21', totalHours: 14, preTodayHours: 12, todayWindowHours: 14 },
@@ -71,6 +71,7 @@ assert.equal(closeRow.adminLabel, '本日要注意');
 assert.equal(closeRow.dataClass, '予定込み予測');
 assert.equal(closeRow.forecastKind, '予測');
 assert.equal(closeRow.name, '架空 接近');
+assert.equal(closeRow.company, '架空運送');
 assert.equal(dash.hourText(closeRow.remaining), '0時間48分');
 assert.equal(dash.marginText(closeRow.marginAfterPlan), '残り48分');
 assert.equal(dash.statusOf(closeRow).label, '本日要注意');
@@ -169,7 +170,43 @@ if (fs.existsSync(snapPath) && fs.existsSync(histPath)) {
   saved.future.forEach((row) => assert.equal(row.endDate > saved.referenceDate, true));
 }
 
+function rowSlice(html, token) {
+  const at = html.indexOf(token);
+  assert.ok(at >= 0, token);
+  const start = html.lastIndexOf('<tr>', at);
+  return html.slice(start < 0 ? at : start, html.indexOf('</tr>', at));
+}
+
+const printed = dash.printHtml(view, '', '2026-10-28T00:00:00.000Z');
+assert.match(printed, /<meta charset="utf-8">/);
+assert.match(printed, /@page\{size:A4 landscape;margin:6mm;\}/);
+assert.match(printed, /thead\{display:table-header-group;\}/);
+assert.match(printed, /page-break-inside:avoid/);
+assert.match(printed, /window\.print\(\)/);
+const closeSlice = rowSlice(printed, 'TID-CLOSE');
+assert.match(closeSlice, /架空運送/);
+assert.match(closeSlice, /59時間12分 予測/);
+assert.equal(closeSlice.includes(dash.statusOf(closeRow).text), true);
+assert.equal(closeSlice.includes('59.2'), false);
+assert.equal(closeSlice.includes('0時間00分'), false);
+const gapSlice = rowSlice(printed, 'TID-GAP');
+assert.match(gapSlice, /算出不可/);
+assert.match(gapSlice, /判定不能/);
+assert.equal(gapSlice.includes('0時間00分'), false);
+const filtered = dash.printHtml(view, '架空 接近', '2026-10-28T00:00:00.000Z');
+assert.equal(filtered.includes('TID-CLOSE'), true);
+assert.equal(filtered.includes('TID-ROOM'), false);
+const mastered = dash.buildView(snapshot, history, function (id) {
+  if (id !== 'TID-ROOM') return null;
+  return { japaneseName: 'マスタ 範囲', company: 'マスタ運送' };
+});
+const masteredRoom = mastered.ranking.find((row) => row.transportId === 'TID-ROOM');
+assert.equal(masteredRoom.name, 'マスタ 範囲');
+assert.equal(masteredRoom.company, 'マスタ運送');
+assert.equal(masteredRoom.forecast, view.ranking.find((row) => row.transportId === 'TID-ROOM').forecast);
+
 const source = fs.readFileSync(new URL('../duty-risk-dashboard.js', import.meta.url), 'utf8');
+assert.equal(source.includes('data-duty-print="1"'), true);
 assert.equal(source.includes('prefix6'), false);
 assert.equal(source.includes('computeRolling'), false);
 assert.equal(source.includes('rolling60h-core'), false);
