@@ -329,11 +329,13 @@
           endDate: h.future.top.endDate,
           totalHours: h.future.top.totalHours,
           overBy: h.future.top.overBy,
+          actualHours: h.future.top.actualHours,
+          rosterHours: h.future.top.rosterHours,
           totalHoursText: Horizon.clockText(h.future.top.totalHours),
           overByText: Horizon.clockText(h.future.top.overBy),
           count: h.future.count,
         };
-        if (disposition === 'future-exceed') shownWin = { startDate: futureWin.startDate, endDate: futureWin.endDate, totalHours: futureWin.totalHours, overBy: futureWin.overBy, judgment: 'exceed' };
+        if (disposition === 'future-exceed') shownWin = { startDate: futureWin.startDate, endDate: futureWin.endDate, totalHours: futureWin.totalHours, overBy: futureWin.overBy, actualHours: futureWin.actualHours, rosterHours: futureWin.rosterHours, judgment: 'exceed' };
       }
       var pred = shownWin ? predictionByKey[driver.transportId + '\t' + shownWin.startDate + '\t' + shownWin.endDate] : null;
       var judged = h.current ? h.current.judged : null;

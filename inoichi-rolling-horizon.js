@@ -84,7 +84,11 @@
   }
 
   function summaryOf(window, judged) {
-    return { startDate: window.startDate, endDate: window.endDate, totalHours: judged.total, overBy: judged.overBy, known: judged.known };
+    return {
+      startDate: window.startDate, endDate: window.endDate, totalHours: judged.total, overBy: judged.overBy, known: judged.known,
+      actualHours: isNum(window.actualHours) ? window.actualHours : null,
+      rosterHours: isNum(window.rosterHours) ? window.rosterHours : null,
+    };
   }
 
   /**
