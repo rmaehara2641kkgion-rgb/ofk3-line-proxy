@@ -9,6 +9,7 @@
  * 実績がある日は実績を優先する。ローリング計算とエンジンの人数区分は変えない。
  * 時間不明の日があっても、既存エンジンが確定分だけで上限超過（knownOver）と出しているときは、
  * その合計を超過予測として残す。時間不明の日は0時間にしない。
+ * 一覧の超過予測は、基準日を終端とする7日間だけを見る。別期間の超過は根拠として残し、将来分は補助表示にする。
  * Amazon の estimated_working_hour は推定であり、法的な労働時間の確定値ではない。
  */
 (function (root, factory) {
@@ -152,41 +153,154 @@
     return true;
   }
 
-  // 空白セルだけが理由の「判定不能」は一覧では欠損にしない。時間不明・データなしの窓はエンジン判定のまま。
-  function listStatus(driver, engineCode) {
-    var windows = driver && driver.windows ? driver.windows : [];
-    if (!windows.length) return engineCode;
-    var open = windows.some(function (window) {
-      if (isRestWindow(window)) return false;
-      return !window || window.judgment === 'undetermined' || window.judgment == null || window.complete === false || window.hasUndefinedHours;
-    });
-    if (open) return engineCode;
-    if (engineCode === 'exceed' || engineCode === 'partial-exceed' || engineCode === 'approach' || engineCode === 'partial-approach') return engineCode;
-    return 'clear';
+  function clockText(hours) {
+    if (!isNum(hours)) return '要確認';
+    var sign = hours < 0 ? -1 : 1;
+    var total = Math.round(Math.abs(hours) * 60);
+    var hour = Math.floor(total / 60);
+    var minute = total % 60;
+    var hourText = hour < 10 ? '0' + hour : String(hour);
+    var minuteText = minute < 10 ? '0' + minute : String(minute);
+    return (sign < 0 ? '-' : '') + hourText + ':' + minuteText;
   }
 
-  function judge(row, status) {
-    status = status || row.status;
+  function displayName(row) {
+    var name = row && row.name ? String(row.name).trim() : '';
+    if (name) return name;
+    var id = row && row.transportId ? String(row.transportId) : '';
+    return id ? '未照合DA（' + id + '）' : '未照合DA';
+  }
+
+  function judgmentText(row) {
+    var label = ((row && row.judgmentLabel) || '要確認') + (row && row.judgmentProvisional ? '・暫定' : '');
+    var future = row && row.futureExceed;
+    if (future && isNum(future.overBy) && future.overBy > 0) {
+      label += ' / 将来超過あり +' + clockText(future.overBy);
+    }
+    return label;
+  }
+
+  function evidenceGaps(window) {
+    if (isRestWindow(window)) return [];
+    var gaps = [];
+    (window.undefinedDates || []).forEach(function (date) {
+      gaps.push({ date: date, reason: '勤務記号があるが時間不明' });
+    });
+    (window.noDataDates || []).forEach(function (date) {
+      gaps.push({ date: date, reason: 'シフトデータがない' });
+    });
+    (window.unconfirmedDates || []).forEach(function (date) {
+      gaps.push({ date: date, reason: 'シフト未入力' });
+    });
+    return gaps;
+  }
+
+  function collectEvidence(driver, preds, ref) {
+    var byKey = {};
+    (preds || []).forEach(function (pred) {
+      if (pred && pred.start && pred.end) byKey[pred.start + '|' + pred.end] = pred;
+    });
+    var list = [];
+    ((driver && driver.windows) || []).forEach(function (window) {
+      if (!window || !window.startDate || !window.endDate) return;
+      var period = window.endDate < ref ? 'past' : window.endDate > ref ? 'future' : 'current';
+      var exceeds = window.judgment === 'exceed' || !!window.knownOver;
+      if (period !== 'current' && !exceeds) return;
+      var shown = withConfirmedRest(byKey[window.startDate + '|' + window.endDate] || null);
+      var days = shown && shown.days ? shown.days.map(function (day) {
+        return {
+          date: day.date || '',
+          hours: isNum(day.hours) ? day.hours : null,
+          adopted: adoptedLabel(day),
+          origin: day && day.origin ? day.origin : '',
+        };
+      }) : [];
+      var confirmedActual = days.length === 7 && days.every(function (day) {
+        return day.origin === 'daily-estimate' || day.origin === 'archived-daily';
+      });
+      var overBy = 0;
+      if (window.judgment === 'exceed' && isNum(window.totalHours)) overBy = window.totalHours - LIMIT;
+      else if (window.knownOver && isNum(window.knownOverBy)) overBy = window.knownOverBy;
+      list.push({
+        period: period,
+        periodLabel: period === 'past' ? '過去' : period === 'future' ? '未来' : '現在',
+        start: window.startDate,
+        end: window.endDate,
+        totalHours: isNum(window.totalHours) ? window.totalHours : null,
+        overBy: overBy,
+        exceeds: exceeds,
+        knownOver: !!window.knownOver,
+        confirmedActual: confirmedActual,
+        provisional: !confirmedActual,
+        days: days,
+        gaps: evidenceGaps(window),
+      });
+    });
+    var order = { current: 0, future: 1, past: 2 };
+    list.sort(function (a, b) {
+      if (order[a.period] !== order[b.period]) return order[a.period] - order[b.period];
+      return a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+    });
+    return list;
+  }
+
+  function pickFuture(evidence) {
+    var futures = (evidence || []).filter(function (item) {
+      return item.period === 'future' && item.exceeds && isNum(item.overBy) && item.overBy > 0;
+    });
+    if (!futures.length) return null;
+    futures.sort(function (a, b) {
+      if (b.overBy !== a.overBy) return b.overBy - a.overBy;
+      return a.end < b.end ? -1 : a.end > b.end ? 1 : 0;
+    });
+    var top = futures[0];
+    return {
+      start: top.start,
+      end: top.end,
+      totalHours: top.totalHours,
+      overBy: top.overBy,
+      count: futures.length,
+    };
+  }
+
+  function indexActualDays(list) {
+    var byTid = {};
+    (list || []).forEach(function (day) {
+      if (!day || !day.transportId || !day.date || !isNum(day.hours)) return;
+      if (!byTid[day.transportId]) byTid[day.transportId] = {};
+      byTid[day.transportId][day.date] = (byTid[day.transportId][day.date] || 0) + day.hours;
+    });
+    var out = {};
+    Object.keys(byTid).forEach(function (tid) {
+      out[tid] = Object.keys(byTid[tid]).sort().map(function (date) {
+        return { date: date, hours: byTid[tid][date] };
+      });
+    });
+    return out;
+  }
+
+  // 今日の7日間だけを判定する。別期間の exceed はバッジを超過予測にしない。
+  function judge(row) {
     var pastHours = row.past6.hours;
     var forecastHours = row.forecast.hours;
     var pastOver = isNum(pastHours) && pastHours > LIMIT && row.past6.kind === '実績';
     var forecastOver = isNum(forecastHours) && forecastHours > LIMIT;
-    var windowOver = status === 'exceed' || status === 'partial-exceed' || row.knownOver === true;
+    var todayKnownOver = row.knownOver === true;
     if (pastOver) {
       return { code: 'actual-exceed', label: '実績超過', provisional: row.past6.provisional === true, rank: 0 };
     }
-    if (forecastOver || windowOver) {
+    if (forecastOver || todayKnownOver) {
       return {
         code: 'forecast-exceed',
         label: '超過予測',
-        provisional: row.forecast.provisional === true || row.knownOver === true && row.dataClass === '判定不能',
+        provisional: row.forecast.provisional === true || todayKnownOver && row.dataClass === '判定不能',
         rank: 1,
       };
     }
-    if (status === 'approach' || status === 'partial-approach' || (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours === LIMIT)) {
-      return { code: 'caution', label: '注意', provisional: row.dataClass === '予定込み予測' || status === 'partial-approach', rank: 2 };
+    if (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours === LIMIT) {
+      return { code: 'caution', label: '注意', provisional: row.dataClass === '予定込み予測', rank: 2 };
     }
-    if (status === 'clear' && row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours < LIMIT) {
+    if (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours < LIMIT) {
       return { code: 'ok', label: '正常', provisional: row.dataClass !== '実績確定', rank: 4 };
     }
     return { code: 'review', label: '要確認', provisional: true, rank: 3 };
@@ -216,9 +330,14 @@
     var start = addDays(ref, -6);
     var names = input.names || {};
     var predByTid = {};
+    var allPreds = {};
     (executed.predictions || []).forEach(function (p) {
-      if (p && p.end === ref && p.start === start) predByTid[p.subjectId] = p;
+      if (!p || !p.subjectId) return;
+      if (p.end === ref && p.start === start) predByTid[p.subjectId] = p;
+      if (!allPreds[p.subjectId]) allPreds[p.subjectId] = [];
+      allPreds[p.subjectId].push(p);
     });
+    var actualByTid = indexActualDays(input.actualDays);
     var rows = (executed.drivers || []).map(function (driver) {
       var tid = driver.transportId;
       var status = statusOf(dispositionOf(driver));
@@ -261,11 +380,15 @@
         knownOver: !!(pred && pred.knownOver),
       };
       revealKnown(row, pred);
-      var judgment = judge(row, listStatus(driver, row.status));
+      row.evidence = collectEvidence(driver, allPreds[tid] || [], ref);
+      row.futureExceed = pickFuture(row.evidence);
+      row.recordedActuals = actualByTid[tid] || [];
+      row.unmatchedReason = names[tid] ? '' : 'シフト表とDAマスタにこの Transport ID の氏名がありません';
+      var judgment = judge(row);
       row.judgment = judgment.code;
       row.judgmentLabel = judgment.label;
       row.judgmentProvisional = judgment.provisional;
-      row.judgmentRank = judgment.rank;
+      row.judgmentRank = row.futureExceed && judgment.rank > 1 ? 1.5 : judgment.rank;
       return row;
     });
     var counts = {
@@ -354,7 +477,7 @@
     var q = String(query || '').trim().toLowerCase();
     if (!q) return rows || [];
     return (rows || []).filter(function (r) {
-      return ((r.name || '') + ' ' + (r.transportId || '')).toLowerCase().indexOf(q) >= 0;
+      return ((r.name || '') + ' ' + displayName(r) + ' ' + (r.transportId || '')).toLowerCase().indexOf(q) >= 0;
     });
   }
 
@@ -407,6 +530,9 @@
     SCHEMA_VERSION: SCHEMA_VERSION,
     STALE_AFTER_HOURS: STALE_AFTER_HOURS,
     buildBoard: buildBoard,
+    displayName: displayName,
+    judgmentText: judgmentText,
+    clockText: clockText,
     validateBoard: validateBoard,
     freshness: freshness,
     sortRows: sortRows,

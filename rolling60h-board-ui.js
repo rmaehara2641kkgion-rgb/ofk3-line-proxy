@@ -172,6 +172,17 @@
     } catch (e) {}
   }
 
+  function actualDays() {
+    var rows = STATE.daily && STATE.daily.rows;
+    if (!rows || !global.RollingCore || typeof global.RollingCore.parseAmazonDailyRows !== 'function') return [];
+    var parsed = global.RollingCore.parseAmazonDailyRows(rows, { stationFilter: 'OFK3', allowHeaderlessFallback: false });
+    return (parsed.records || []).filter(function (rec) {
+      return rec && rec.transportId && rec.hoursOk !== false && typeof rec.hours === 'number';
+    }).map(function (rec) {
+      return { transportId: rec.transportId, date: rec.date, hours: rec.hours };
+    });
+  }
+
   function aggregate() {
     var ref = STATE.referenceDate || Board.jstDate(nowIso());
     // InoichiRollingDryRun はサーバーが index.html に差し込む（既存のRolling画面と共通）。無いときは集計しない。
@@ -211,6 +222,7 @@
         daily: { name: STATE.daily ? STATE.daily.name : '', ok: !!STATE.daily, range: STATE.daily ? STATE.daily.range : null, importedAt: STATE.daily ? STATE.daily.importedAt : null },
       },
       names: names(),
+      actualDays: actualDays(),
     }, { analyze: global.DutyRiskDashboard.analyzePrediction, dispositionOf: global.DutyRiskSnapshot.dispositionOf });
     withMasterNames(board);
     STATE.board = board;
@@ -306,6 +318,57 @@
     return h;
   }
 
+  function overClock(hours) {
+    if (typeof hours !== 'number' || !isFinite(hours) || hours <= 60) return '00:00';
+    return clock(hours - 60);
+  }
+
+  function renderEvidence(r, period, title) {
+    var items = (r.evidence || []).filter(function (item) { return item.period === period && item.exceeds; });
+    var h = '<div style="margin:8px 0 4px;font-weight:700;">' + title + (items.length ? '' : '：なし') + '</div>';
+    items.forEach(function (item) {
+      h += '<div style="margin-top:6px;">' + esc(item.periodLabel) + ' ' + esc(item.start + ' 〜 ' + item.end) +
+        '　合計 ' + esc(clock(item.totalHours)) +
+        '　超過 ' + esc(clock(item.overBy)) +
+        '　' + esc(item.confirmedActual ? '実績確定' : '予定込みの暫定') +
+        ((item.gaps && item.gaps.length) ? '　欠損あり' : '　欠損なし') +
+        '</div>';
+      h += '<div style="white-space:nowrap;overflow-x:auto;">' + (item.days || []).map(function (d) {
+        return esc(d.date) + ' ' + esc(d.adopted) + ' ' + (d.hours == null ? '要確認' : esc(clock(d.hours)));
+      }).join(' ／ ') + '</div>';
+      if (item.gaps && item.gaps.length) {
+        h += '<div>欠損: ' + esc(item.gaps.map(function (g) { return (g.date || '日付不明') + ' ' + g.reason; }).join('、')) + '</div>';
+      }
+    });
+    return h;
+  }
+
+  function renderDetail(r) {
+    var gapText = (r.gaps || []).map(function (g) { return (g.date || '日付不明') + ' ' + g.reason; }).join('、');
+    var h = '<tr data-detail="' + esc(r.transportId) + '"><td colspan="5" style="background:#f8fafc;padding:10px 12px;font-size:13px;">';
+    h += '<div style="margin-bottom:6px;">DA ID ' + esc(r.transportId || 'なし') + '</div>';
+    if (!String(r.name || '').trim()) {
+      h += '<div style="font-weight:700;">照合不能</div>';
+      h += '<div>' + esc(r.unmatchedReason || 'シフト表とDAマスタにこの Transport ID の氏名がありません') + '</div>';
+      h += '<div style="margin-top:4px;">取得済み実績: ' + ((r.recordedActuals || []).length ? (r.recordedActuals || []).map(function (d) {
+        return esc(d.date) + ' ' + esc(clock(d.hours));
+      }).join('、') : 'なし') + '</div>';
+    }
+    h += '<div style="margin:8px 0 4px;font-weight:700;">今日の7日間 ' + esc((r.windowStart || '') + ' 〜 ' + (r.windowEnd || '')) + '</div>';
+    h += '<div>合計 ' + esc(clock(r.forecast && r.forecast.hours)) + '　超過 ' + esc(overClock(r.forecast && r.forecast.hours)) + '　' + esc(r.dataClass || '') +
+      (r.todayPlan == null ? '' : '　今日の予定 ' + esc(clock(r.todayPlan))) + '</div>';
+    h += '<div style="white-space:nowrap;overflow-x:auto;margin-top:4px;">' + (r.days || []).map(function (d) {
+      return esc(d.date) + ' ' + esc(d.adopted) + ' ' + (d.hours == null ? '要確認' : esc(clock(d.hours)));
+    }).join(' ／ ') + '</div>';
+    if (gapText) h += '<div style="margin-top:6px;">欠損: ' + esc(gapText) + '</div>';
+    h += renderEvidence(r, 'future', '将来の超過');
+    h += renderEvidence(r, 'past', '過去の超過');
+    if (r.forecast && r.forecast.note) h += '<div style="margin-top:4px;">' + esc(r.forecast.note) + '</div>';
+    if (r.workable && r.workable.note) h += '<div>' + esc(r.workable.note) + '</div>';
+    h += '</td></tr>';
+    return h;
+  }
+
   function renderBoard() {
     var board = STATE.board;
     if (!board) return '<div class="card p-4 text-sm">集計結果がありません。「データ取込」でExcelを取り込み、集計を実行してください。</div>';
@@ -345,32 +408,22 @@
     if (!rows.length) h += '<tr><td class="p-2" colspan="5">該当なし</td></tr>';
     rows.forEach(function (r) {
       var code = r.judgment || 'review';
-      var label = (r.judgmentLabel || '要確認') + (r.judgmentProvisional ? '・暫定' : '');
+      var label = Board.judgmentText ? Board.judgmentText(r) : ((r.judgmentLabel || '要確認') + (r.judgmentProvisional ? '・暫定' : ''));
       var color = JUDGMENT_COLOR[code] || JUDGMENT_COLOR.review;
-      var tint = code === 'actual-exceed' ? '#fff1f2' : code === 'forecast-exceed' ? '#fff7ed' : code === 'caution' ? '#fffbeb' : code === 'review' ? '#fffbeb' : '';
+      var tint = code === 'actual-exceed' ? '#fff1f2' : code === 'forecast-exceed' ? '#fff7ed' : code === 'caution' ? '#fffbeb' : code === 'review' ? '#fffbeb' : (r.futureExceed ? '#fffbeb' : '');
+      var futureLine = r.futureExceed ? (r.futureExceed.start + '〜' + r.futureExceed.end + (r.futureExceed.count > 1 ? ' ほか' + (r.futureExceed.count - 1) + '件' : '')) : '';
       h += '<tr class="border-t" data-tid="' + esc(r.transportId) + '" style="cursor:pointer;' + (tint ? 'background:' + tint + ';' : '') + '">' +
-        '<td style="padding:10px 12px;white-space:nowrap;font-weight:700;font-size:16px;">' + esc(r.name || '氏名なし') + '</td>' +
+        '<td style="padding:10px 12px;white-space:nowrap;font-weight:700;font-size:16px;">' + esc(Board.displayName ? Board.displayName(r) : (r.name || '未照合DA')) + '</td>' +
         '<td style="' + TIME_STYLE + '" title="' + esc(r.past6.note || '') + '">' + clock(r.past6.hours) + '</td>' +
         '<td style="' + TIME_STYLE + '" title="' + esc(r.forecast.note || '') + '">' + clock(r.forecast.hours) + '</td>' +
         '<td style="' + TIME_STYLE + '" title="' + esc(r.workable.note || '') + '">' + clock(r.workable.hours) + '</td>' +
-        '<td style="padding:10px 12px;white-space:nowrap;"><span style="background:' + color + ';color:#fff;border-radius:9999px;padding:2px 8px;font-size:13px;white-space:nowrap;">' + esc(label) + '</span></td></tr>';
-      if (STATE.selected === r.transportId) {
-        var gapText = (r.gaps || []).map(function (g) { return (g.date || '日付不明') + ' ' + g.reason; }).join('、');
-        h += '<tr data-detail="' + esc(r.transportId) + '"><td colspan="5" style="background:#f8fafc;padding:10px 12px;font-size:13px;">' +
-          '<div style="margin-bottom:6px;">DA ID ' + esc(r.transportId || 'なし') +
-          (r.todayPlan == null ? '' : '　今日の予定 ' + esc(clock(r.todayPlan))) +
-          '　対象 ' + esc((r.windowStart || '') + ' 〜 ' + (r.windowEnd || '')) + '</div>' +
-          '<div style="white-space:nowrap;overflow-x:auto;">' + (r.days || []).map(function (d) {
-            return esc(d.date) + ' ' + esc(d.adopted) + ' ' + (d.hours == null ? '要確認' : esc(clock(d.hours)));
-          }).join(' ／ ') + '</div>' +
-          (gapText ? '<div style="margin-top:6px;">欠損: ' + esc(gapText) + '</div>' : '') +
-          (r.forecast.note ? '<div style="margin-top:4px;">' + esc(r.forecast.note) + '</div>' : '') +
-          (r.workable.note ? '<div>' + esc(r.workable.note) + '</div>' : '') +
-          '</td></tr>';
-      }
+        '<td style="padding:10px 12px;white-space:nowrap;"><span style="background:' + color + ';color:#fff;border-radius:9999px;padding:2px 8px;font-size:13px;white-space:nowrap;">' + esc(label) + '</span>' +
+        (futureLine ? '<div style="margin-top:4px;color:#c2410c;font-size:12px;font-weight:700;">' + esc(futureLine) + '</div>' : '') +
+        '</td></tr>';
+      if (STATE.selected === r.transportId) h += renderDetail(r);
     });
     h += '</tbody></table></div>';
-    h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 時間は HH:MM です。超過予測は今日の予定を含めた合計が60時間を超える人です。実績超過は予定を足す前から超えている人です。「・暫定」は未確定の日を0時間にせず、確定している時間だけを使った値です。要確認は、その情報だけでは安全と判断できない人です。</p>';
+    h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 時間は HH:MM です。超過予測は、基準日を終端とする7日間の予定込み予測が60時間を超える人です。別の期間の超過は、この判定を上書きしません。将来の超過は一覧に「将来超過あり」と期間を出します。過去の超過は判定欄を開くと履歴で確認できます。実績超過は予定を足す前から超えている人です。「・暫定」は予定を含む値です。要確認は、今日の7日間を判断する情報が足りない人です。</p>';
     h += noHistoryNotice();
     return h;
   }
