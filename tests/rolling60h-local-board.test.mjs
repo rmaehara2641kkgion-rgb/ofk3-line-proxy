@@ -42,7 +42,7 @@ const dailyRows = [header]
   .concat(daily('T-UNDER', [8, 8, 8, 8, 8, 8]))   // 48 + 11 = 59
   .concat(daily('T-EXACT', [8, 8, 8, 8, 8, 9]))   // 49 + 11 = 60
   .concat(daily('T-OVER', [8, 8, 8, 8, 8, 10]))   // 50 + 11 = 61
-  .concat(daily('T-GAP', [8, 8, null, 8, 8, 8])); // 13日が実績もシフトもない
+  .concat(daily('T-GAP', [8, 8, null, 8, 8, 8])); // 13日は空白セル。確定した休みであり、シフトデータ欠落ではない
 
 function execute(extra) {
   return Run.capture(Object.assign({
@@ -92,11 +92,13 @@ assert.equal(byId['T-UNDER'].days.length, 7);
 assert.equal(byId['T-UNDER'].days[0].adopted, '実績（Amazon推定）');
 assert.equal(byId['T-UNDER'].days[6].adopted, '予定');
 
-// 欠損は確定値にしない（0にもしない）。正常扱いにもしない
+// 空白セルは確定した休み。一覧は欠損にしない。エンジンの人数区分は変えない
 const gap = byId['T-GAP'];
-assert.ok(['partial', 'undetermined'].includes(gap.status), '欠損者は部分欠損/判定不能');
-assert.equal(gap.workable.hours == null || gap.workable.confirmed === false, true);
-assert.ok(gap.gaps.length > 0);
+assert.ok(['partial', 'undetermined'].includes(gap.status), 'エンジン区分は部分欠損/判定不能のまま');
+assert.equal(gap.judgment, 'ok');
+assert.equal(gap.forecast.hours, 51);
+assert.equal(gap.past6.hours, 40);
+assert.equal(gap.gaps.length, 0);
 
 // 件数は既存集計と一致し、排他
 const c = board.counts;

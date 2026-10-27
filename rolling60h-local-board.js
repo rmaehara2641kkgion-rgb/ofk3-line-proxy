@@ -4,9 +4,11 @@
  * 残り時間は duty-risk-dashboard の analyzePrediction（今日を終端とする7日窓）に合わせる。
  *   勤務可能上限       = 60 - 過去6日の合計        （過去6日が実績だけのときだけ確定値）
  *   予定終了後の余裕   = 60 - 対象7日の予測合計     （実績確定のときだけ確定値、予定込みは暫定）
- * 欠損は0にしない。数値を出せない項目は null。
- * 未確定日があっても、既存エンジンが確定分だけで上限超過（knownOver）と出しているときは、
- * その合計を超過予測として残す。未確定日の時間は足さない。安全側の正常にはしない。
+ * 空白セルと「休」は確定した休み（0時間）であり、一覧の欠損ではない。
+ * 勤務記号があるのに時間が取れない日、シフトデータがない日、期間外、DAを特定できない場合は従来どおり欠損。
+ * 実績がある日は実績を優先する。ローリング計算とエンジンの人数区分は変えない。
+ * 時間不明の日があっても、既存エンジンが確定分だけで上限超過（knownOver）と出しているときは、
+ * その合計を超過予測として残す。時間不明の日は0時間にしない。
  * Amazon の estimated_working_hour は推定であり、法的な労働時間の確定値ではない。
  */
 (function (root, factory) {
@@ -48,6 +50,7 @@
   }
 
   function adoptedLabel(day) {
+    if (day && day.rest === 'blank') return '休み';
     if (day && day.origin === 'roster-unconfirmed') return 'シフト未入力';
     if (!day || !isNum(day.hours)) return '未取得';
     if (day.origin === 'daily-estimate' || day.origin === 'archived-daily') return '実績（Amazon推定）';
@@ -122,12 +125,53 @@
     }
   }
 
-  function judge(row) {
+  // 一覧表示だけ。空白セル（roster-unconfirmed）を確定した休み0時間として読む。エンジンの予測は書き換えない。
+  function withConfirmedRest(pred) {
+    if (!pred || !Array.isArray(pred.days)) return pred;
+    var days = pred.days.map(function (day) {
+      if (!day || day.origin !== 'roster-unconfirmed') return day;
+      return { date: day.date, hours: 0, origin: 'roster-plan', future: !!day.future, rest: 'blank' };
+    });
+    return {
+      subjectId: pred.subjectId,
+      start: pred.start,
+      end: pred.end,
+      predictedTotal: pred.predictedTotal,
+      level: pred.level,
+      knownOver: pred.knownOver,
+      knownOverBy: pred.knownOverBy,
+      days: days,
+    };
+  }
+
+  function isRestWindow(window) {
+    if (!window || !window.hasUnconfirmed || window.hasUndefinedHours) return false;
+    if (window.complete === false) return false;
+    if (window.noDataDates && window.noDataDates.length) return false;
+    if (window.undefinedDates && window.undefinedDates.length) return false;
+    return true;
+  }
+
+  // 空白セルだけが理由の「判定不能」は一覧では欠損にしない。時間不明・データなしの窓はエンジン判定のまま。
+  function listStatus(driver, engineCode) {
+    var windows = driver && driver.windows ? driver.windows : [];
+    if (!windows.length) return engineCode;
+    var open = windows.some(function (window) {
+      if (isRestWindow(window)) return false;
+      return !window || window.judgment === 'undetermined' || window.judgment == null || window.complete === false || window.hasUndefinedHours;
+    });
+    if (open) return engineCode;
+    if (engineCode === 'exceed' || engineCode === 'partial-exceed' || engineCode === 'approach' || engineCode === 'partial-approach') return engineCode;
+    return 'clear';
+  }
+
+  function judge(row, status) {
+    status = status || row.status;
     var pastHours = row.past6.hours;
     var forecastHours = row.forecast.hours;
     var pastOver = isNum(pastHours) && pastHours > LIMIT && row.past6.kind === '実績';
     var forecastOver = isNum(forecastHours) && forecastHours > LIMIT;
-    var windowOver = row.status === 'exceed' || row.status === 'partial-exceed' || row.knownOver === true;
+    var windowOver = status === 'exceed' || status === 'partial-exceed' || row.knownOver === true;
     if (pastOver) {
       return { code: 'actual-exceed', label: '実績超過', provisional: row.past6.provisional === true, rank: 0 };
     }
@@ -139,10 +183,10 @@
         rank: 1,
       };
     }
-    if (row.status === 'approach' || row.status === 'partial-approach' || (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours === LIMIT)) {
-      return { code: 'caution', label: '注意', provisional: row.dataClass === '予定込み予測' || row.status === 'partial-approach', rank: 2 };
+    if (status === 'approach' || status === 'partial-approach' || (row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours === LIMIT)) {
+      return { code: 'caution', label: '注意', provisional: row.dataClass === '予定込み予測' || status === 'partial-approach', rank: 2 };
     }
-    if (row.status === 'clear' && row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours < LIMIT) {
+    if (status === 'clear' && row.dataClass !== '判定不能' && isNum(forecastHours) && forecastHours < LIMIT) {
       return { code: 'ok', label: '正常', provisional: row.dataClass !== '実績確定', rank: 4 };
     }
     return { code: 'review', label: '要確認', provisional: true, rank: 3 };
@@ -179,7 +223,8 @@
       var tid = driver.transportId;
       var status = statusOf(dispositionOf(driver));
       var pred = predByTid[tid] || null;
-      var a = pred ? analyze(pred) : null;
+      var listPred = withConfirmedRest(pred);
+      var a = listPred ? analyze(listPred) : null;
       var pastOk = !!(a && isNum(a.pastActual));
       var pastActualOnly = pastOk && a.pastKind === '実績';
       var row = {
@@ -210,13 +255,13 @@
         },
         dataClass: a ? a.dataClass : '判定不能',
         gaps: a ? a.gaps : [{ date: '', reason: '今日を終端とする7日窓がない' }],
-        days: pred ? (pred.days || []).map(function (d) {
+        days: listPred ? (listPred.days || []).map(function (d) {
           return { date: d.date || '', hours: isNum(d.hours) ? d.hours : null, adopted: adoptedLabel(d), origin: d && d.origin ? d.origin : '' };
         }) : [],
         knownOver: !!(pred && pred.knownOver),
       };
       revealKnown(row, pred);
-      var judgment = judge(row);
+      var judgment = judge(row, listStatus(driver, row.status));
       row.judgment = judgment.code;
       row.judgmentLabel = judgment.label;
       row.judgmentProvisional = judgment.provisional;
