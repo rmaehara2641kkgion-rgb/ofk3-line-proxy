@@ -82,9 +82,11 @@ assert.equal(bound.workable.hours, 8);
 assert.equal(bound.knownOver, true);
 assert.equal(bound.judgment, 'forecast-exceed');
 assert.equal(bound.judgmentLabel, '超過予測');
-assert.equal(bound.judgmentProvisional, true);
+assert.equal(bound.judgmentProvisional, false);
 assert.equal(bound.judgment === 'ok', false);
-assert.ok(bound.gaps.some((gap) => gap.date === '2026-10-20' && gap.reason.indexOf('0時間にはしていません') >= 0));
+assert.equal(bound.days[5].hours, 0);
+assert.equal(bound.days[5].adopted, '休み');
+assert.equal(bound.gaps.some((gap) => gap.date === '2026-10-20'), false);
 assert.equal(Format.clockText(bound.past6.hours), '52:00');
 assert.equal(Format.clockText(bound.forecast.hours), '63:00');
 assert.equal(Format.clockText(bound.workable.hours), '08:00');
@@ -108,12 +110,12 @@ assert.equal(oncePred.days[0].hours, 8);
 assert.equal(oncePred.days[0].origin, 'daily-estimate');
 
 const open = byId['T-OPEN'];
-assert.equal(open.judgment, 'review');
-assert.equal(open.judgmentLabel, '要確認');
-assert.equal(open.judgment === 'ok', false);
-assert.equal(open.status === 'clear', false);
-assert.equal(open.forecast.hours, null, '超えていない欠損は、欠けた日を0にして予測にしない');
-assert.equal(open.past6.hours, null);
+assert.equal(open.judgment, 'ok');
+assert.equal(open.judgmentLabel, '正常');
+assert.equal(open.status === 'clear', false, 'エンジンの人数区分は変えない');
+assert.equal(open.forecast.hours, 51);
+assert.equal(open.past6.hours, 40);
+assert.equal(open.gaps.length, 0, '空白セルは欠損にしない');
 
 function blocksFor(hoursList, blankAt) {
   const byDate = {};
