@@ -228,17 +228,41 @@
     return map;
   }
 
+  function companyValue(alert) {
+    if (!alert || alert.company == null) return '';
+    var text = String(alert.company).trim();
+    return text;
+  }
+
+  function assignCompany(row, company) {
+    if (!row || !company) return;
+    if (row.company == null) row.company = company;
+    else if (row.company !== company) row.company = '';
+  }
+
   function namesBySubject(predictions, alerts) {
     var index = indexByWindow(predictions);
     var names = {};
+    var companies = {};
     (alerts || []).forEach(function (alert) {
       if (!alert || !alert.name) return;
       var ids = index[predictionKey(alert.startDate, alert.endDate, alert.totalHours)] || [];
       if (ids.length !== 1) return;
-      if (!names[ids[0]]) names[ids[0]] = alert.name;
-      else if (names[ids[0]] !== alert.name) names[ids[0]] = '';
+      var id = ids[0];
+      var company = companyValue(alert);
+      if (!names[id]) {
+        names[id] = alert.name;
+        if (company) companies[id] = company;
+      } else if (names[id] !== alert.name) {
+        names[id] = '';
+        companies[id] = '';
+      } else if (company && companies[id] && companies[id] !== company) {
+        companies[id] = '';
+      } else if (company && !companies[id]) {
+        companies[id] = company;
+      }
     });
-    return names;
+    return { names: names, companies: companies };
   }
 
   function attachNames(rows, alerts) {
@@ -254,8 +278,16 @@
       var key = alert.preTodayHours.toFixed(4) + '|' + alert.todayWindowHours.toFixed(4);
       var hits = groups[key] || [];
       if (hits.length !== 1) return;
-      if (!hits[0].name) hits[0].name = alert.name;
-      else if (hits[0].name !== alert.name) hits[0].name = '';
+      var company = companyValue(alert);
+      if (!hits[0].name) {
+        hits[0].name = alert.name;
+        if (company) assignCompany(hits[0], company);
+      } else if (hits[0].name !== alert.name) {
+        hits[0].name = '';
+        hits[0].company = '';
+      } else if (company) {
+        assignCompany(hits[0], company);
+      }
     });
   }
 
@@ -271,12 +303,19 @@
       var hits = groups[key];
       if (hits.length !== 1 || hits[0].name) return;
       var names = [];
+      var companies = [];
       (alerts || []).forEach(function (alert) {
         if (!alert || !alert.name || !isNum(alert.todayWindowHours)) return;
         if (alert.todayWindowHours.toFixed(4) !== key) return;
         if (names.indexOf(alert.name) < 0) names.push(alert.name);
+        var company = companyValue(alert);
+        if (company && companies.indexOf(company) < 0) companies.push(company);
       });
-      if (names.length === 1) hits[0].name = names[0];
+      if (names.length === 1) {
+        hits[0].name = names[0];
+        if (companies.length === 1) assignCompany(hits[0], companies[0]);
+        else if (companies.length > 1) hits[0].company = '';
+      }
     });
   }
 
@@ -297,6 +336,7 @@
         overBy: isNum(alert.overBy) ? alert.overBy : null,
         actualHours: isNum(alert.actualHours) ? alert.actualHours : null,
         rosterHours: isNum(alert.rosterHours) ? alert.rosterHours : null,
+        company: companyValue(alert) || undefined,
       };
     });
   }
@@ -316,7 +356,10 @@
     var rows = Object.keys(byId).map(function (id) { return analyzePrediction(byId[id]); });
     var named = namesBySubject(run.predictions, snapshot && snapshot.alerts);
     rows.forEach(function (row) {
-      if (named[row.transportId]) row.name = named[row.transportId];
+      if (!named.names[row.transportId]) return;
+      row.name = named.names[row.transportId];
+      if (named.companies[row.transportId] === '') row.company = '';
+      else assignCompany(row, named.companies[row.transportId]);
     });
     attachNames(rows, snapshot && snapshot.alerts);
     attachSavedTotalNames(rows, snapshot && snapshot.alerts);
@@ -444,6 +487,7 @@
     html += '<div class="flex flex-wrap gap-2 mb-3">';
     html += '<button type="button" class="px-3 py-1 rounded text-sm ' + (mode === 'remaining' ? 'bg-slate-800 text-white' : 'bg-slate-100') + '" data-duty-sort="remaining">残りが少ない順</button>';
     html += '<button type="button" class="px-3 py-1 rounded text-sm ' + (mode === 'name' ? 'bg-slate-800 text-white' : 'bg-slate-100') + '" data-duty-sort="name">氏名順</button>';
+    html += '<button type="button" id="duty-risk-print" class="no-print px-3 py-1 rounded text-sm border border-slate-800" data-duty-print="1">印刷／PDF保存</button>';
     html += '</div>';
     html += '<h3 class="font-bold mb-2">勤務時間残量</h3>';
     html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-4">';
@@ -526,6 +570,13 @@
         render(rootEl, view, current ? current.value : query);
       });
     });
+    var printButton = rootEl.querySelector('[data-duty-print]');
+    if (printButton) {
+      printButton.addEventListener('click', function () {
+        var current = document.getElementById('duty-risk-search');
+        openPrint(view, current ? current.value : query);
+      });
+    }
     rootEl.querySelectorAll('[data-duty-id]').forEach(function (button) {
       button.addEventListener('click', function () {
         view.selectedId = button.getAttribute('data-duty-id');
@@ -600,6 +651,181 @@
     return html;
   }
 
+  function undetermined(row) {
+    return !row || row.dataClass === '判定不能' || row.seriesComplete === false;
+  }
+
+  function companyText(row) {
+    if (!row || !row.name) return '不明';
+    if (row.company) return String(row.company);
+    if (row.company === '') return '不明';
+    return '未取得';
+  }
+
+  function riskMark(tone) {
+    if (tone === 'actual') return '■';
+    if (tone === 'forecast') return '▲';
+    if (tone === 'urgent') return '●';
+    if (tone === 'watch') return '◆';
+    if (tone === 'ok') return '○';
+    return '？';
+  }
+
+  function totalPrint(row) {
+    if (undetermined(row)) return '算出不可';
+    return forecastText(row);
+  }
+
+  function remainPrint(row) {
+    if (undetermined(row)) return '算出不可';
+    return statusOf(row).text;
+  }
+
+  function statePrint(row) {
+    if (undetermined(row)) {
+      var reasons = (row && row.gaps || []).map(function (gap) {
+        return (gap.date || '日付不明') + ' ' + gap.reason;
+      }).join('、');
+      return '算出不可。' + (reasons || '当日窓が保存されていない') + '。欠損は0時間にしていません。';
+    }
+    var state = valueState(row);
+    return (row.dataClass || '') + (state ? '・' + state : '');
+  }
+
+  function outputAtText(printedAt) {
+    var iso;
+    if (printedAt instanceof Date) iso = printedAt.toISOString();
+    else if (typeof printedAt === 'string' && printedAt) iso = printedAt;
+    else iso = new Date().toISOString();
+    return checkedAtText(iso);
+  }
+
+  function sortLabel(mode) {
+    return mode === 'name' ? '氏名順' : '残りが少ない順';
+  }
+
+  function printCell(text, className) {
+    return '<td' + (className ? ' class="' + className + '"' : '') + '>' + escapeHtml(text) + '</td>';
+  }
+
+  function riskCellsPrint(row) {
+    var status = statusOf(row);
+    var tone = TONE_COLOR[status.tone] ? status.tone : 'unknown';
+    var risk = riskMark(tone) + ' ' + status.label;
+    return '<tr>' +
+      printCell(row.name || '氏名なし', 'col-name') +
+      printCell(companyText(row), 'col-company') +
+      printCell(row.transportId || '不明', 'col-id') +
+      printCell(totalPrint(row), 'col-total') +
+      printCell(remainPrint(row), 'col-remain risk risk-' + tone) +
+      printCell(risk, 'col-risk risk risk-' + tone) +
+      printCell(statePrint(row), 'col-state') +
+      '</tr>';
+  }
+
+  function printTable(title, rowsHtml, emptyText) {
+    var html = '<h2>' + escapeHtml(title) + '</h2>';
+    html += '<table>';
+    html += '<colgroup><col class="col-name"><col class="col-company"><col class="col-id"><col class="col-total"><col class="col-remain"><col class="col-risk"><col class="col-state"></colgroup>';
+    html += '<thead><tr>';
+    ['氏名', '所属会社', 'Transport ID', '直近7日の累計', '60時間までの残り', 'リスク判定', '状態'].forEach(function (header) {
+      html += '<th>' + escapeHtml(header) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    if (!rowsHtml.length) html += '<tr><td colspan="7">' + escapeHtml(emptyText || '該当なし') + '</td></tr>';
+    rowsHtml.forEach(function (rowHtml) { html += rowHtml; });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function futurePrintRow(row) {
+    var total = hourText(row.totalHours);
+    var over = hourText(row.overBy);
+    var detail = '実績 ' + hourText(row.actualHours) + ' / 予定 ' + hourText(row.rosterHours);
+    return '<tr>' +
+      printCell(row.name || '氏名なし', 'col-name') +
+      printCell(companyText(row), 'col-company') +
+      printCell(row.transportId || row.transportNote || '未結合', 'col-id') +
+      printCell(row.windowLabel || '', 'col-total') +
+      printCell(total, 'col-remain') +
+      printCell(over, 'col-risk') +
+      printCell(detail, 'col-state') +
+      '</tr>';
+  }
+
+  function futureTable(rowsHtml) {
+    var html = '<h2>未来予測超過</h2>';
+    html += '<table>';
+    html += '<colgroup><col class="col-name"><col class="col-company"><col class="col-id"><col class="col-total"><col class="col-remain"><col class="col-risk"><col class="col-state"></colgroup>';
+    html += '<thead><tr>';
+    ['氏名', '所属会社', 'Transport ID', '対象期間', '予測合計', '超過予測', '内訳'].forEach(function (header) {
+      html += '<th>' + escapeHtml(header) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    if (!rowsHtml.length) html += '<tr><td colspan="7">該当なし</td></tr>';
+    rowsHtml.forEach(function (rowHtml) { html += rowHtml; });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function printHtml(view, query, printedAt) {
+    var printed = outputAtText(printedAt);
+    var head = '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>勤務時間リスク／ローリング60時間</title><style>';
+    head += '@page{size:A4 landscape;margin:6mm;}';
+    head += 'html,body{margin:0;padding:0;color:#111;background:#fff;}';
+    head += 'body{font-family:"Yu Gothic UI","Yu Gothic","Meiryo","Hiragino Kaku Gothic ProN","Noto Sans CJK JP","Noto Sans JP",sans-serif;font-size:11px;line-height:1.35;}';
+    head += 'h1{font-size:16px;margin:0 0 4px;}h2{font-size:13px;margin:12px 0 4px;}p{margin:0 0 4px;}';
+    head += 'table{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 8px;}';
+    head += 'thead{display:table-header-group;}tfoot{display:table-footer-group;}';
+    head += 'tr,th,td{break-inside:avoid;page-break-inside:avoid;}';
+    head += 'th,td{border:1px solid #222;padding:3px 4px;vertical-align:top;word-break:break-word;}';
+    head += 'th{font-weight:700;text-align:left;}';
+    head += '.col-name{width:16%;}.col-company{width:10%;}.col-id{width:14%;}.col-total{width:18%;}.col-remain{width:14%;}.col-risk{width:12%;}.col-state{width:16%;}';
+    head += '.risk{font-weight:700;}';
+    head += '.risk-actual{color:#9f1239;}.risk-forecast{color:#c2410c;}.risk-urgent{color:#b91c1c;}.risk-watch{color:#b45309;}.risk-ok{color:#15803d;}.risk-unknown{color:#334155;}';
+    head += '.no-print{margin:0 0 8px;}@media print{.no-print{display:none !important;}}';
+    head += '</style></head><body>';
+    head += '<div class="no-print"><button type="button" onclick="window.print()">印刷／PDF保存</button>';
+    head += '<p>印刷画面の送信先で「PDFに保存」または Microsoft Print to PDF を選ぶと、この用紙をPDFにできます。用紙はA4横です。</p></div>';
+    if (!view || !view.ok) {
+      return head + '<h1>勤務時間リスク／ローリング60時間</h1><p>出力日時 ' + escapeHtml(printed) + '</p><p>保存データを表示できません。' + escapeHtml(view && view.reason ? view.reason : '') + '</p></body></html>';
+    }
+    var q = String(query || '').trim().toLowerCase();
+    var mode = view.sortMode === 'name' ? 'name' : 'remaining';
+    var ranking = orderedRows((view.ranking || []).filter(function (row) { return matches(row, q); }), mode);
+    var gaps = (view.gaps || []).filter(function (row) { return matches(row, q); });
+    var future = (view.future || []).filter(function (row) { return matches(row, q); });
+    var html = head;
+    html += '<h1>勤務時間リスク／ローリング60時間</h1>';
+    html += '<p>出力日時 ' + escapeHtml(printed) + '</p>';
+    html += '<p>対象日 ' + escapeHtml(view.windowStart || '') + ' 〜 ' + escapeHtml(view.referenceDate || '') + '</p>';
+    html += '<p>判定基準日時 ' + escapeHtml(checkedAtText(view.checkedAt)) + '（保存データの時刻）</p>';
+    html += '<p>絞り込み ' + escapeHtml(q ? query : 'なし') + '。並び順 ' + escapeHtml(sortLabel(mode)) + '。</p>';
+    html += '<p>保存結果 本日要注意 ' + escapeHtml(view.watchNow == null ? '未取得' : String(view.watchNow)) + '、本日監視 ' + escapeHtml(view.watchSoon == null ? '未取得' : String(view.watchSoon)) + '、判定不能 ' + escapeHtml(view.gaps ? String(view.gaps.length) : '未取得') + '。この用紙の残り稼働 ' + ranking.length + '名、算出不可 ' + gaps.length + '名。</p>';
+    html += '<p>記号 ■実績超過 ▲超過見込み ●本日要注意 ◆本日監視 ○余裕あり ？判定不能。未取得は保存データに値が無い状態、不明は氏名または所属を一意に結び付けられない状態、算出不可は欠損があり合計していない状態です。算出不可を0時間にはしていません。</p>';
+    html += printTable('残り稼働時間', ranking.map(riskCellsPrint), '該当なし');
+    html += printTable('算出不可', gaps.map(riskCellsPrint), '該当なし');
+    html += futureTable(future.map(futurePrintRow));
+    html += '<script>window.addEventListener("load",function(){window.print();});<\/script>';
+    html += '</body></html>';
+    return html;
+  }
+
+  function openPrint(view, query) {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+    var html = printHtml(view, query);
+    var opened = window.open('', '_blank');
+    if (!opened) {
+      window.alert('印刷用の画面を開けませんでした。ブラウザのポップアップを許可して、もう一度押してください。');
+      return false;
+    }
+    opened.document.open();
+    opened.document.write(html);
+    opened.document.close();
+    opened.focus();
+    return true;
+  }
+
   var state = { view: null, loading: false };
 
   function mount(rootEl) {
@@ -620,5 +846,5 @@
     });
   }
 
-  return { buildView: buildView, hourText: hourText, marginText: marginText, statusOf: statusOf, renderHtml: renderHtml, dayBreakdown: dayRows, mount: mount };
+  return { buildView: buildView, hourText: hourText, marginText: marginText, statusOf: statusOf, renderHtml: renderHtml, printHtml: printHtml, dayBreakdown: dayRows, mount: mount };
 });
