@@ -58,6 +58,8 @@ const people = [
   { id: 'P-BLANK', name: '架空 空白', cells: cellsOf(fill('2026-10-01', '2026-10-30', '')) },
   { id: 'P-ACTUALOVER', name: '架空 実績超過', cells: cellsOf({}) },
   { id: 'P-49', name: '架空 四十九', cells: cellsOf({ '2026-10-27': '❽' }) },
+  { id: 'P-GAP', name: '架空 時間不明', cells: cellsOf({ '2026-10-26': 'C2', '2026-10-27': MARU }) },
+  { id: 'P-KNOWN', name: '架空 既知超過', cells: cellsOf({ '2026-10-26': '', '2026-10-27': MARU }) },
 ];
 const daily = [].concat(
   actualRun('P-TODAY', '2026-10-21', [8, 8, 8, 8, 8, 10]),
@@ -65,6 +67,8 @@ const daily = [].concat(
   actualRun('P-SAMEDAY', '2026-10-25', [8]),
   actualRun('P-ACTUALOVER', '2026-10-21', [11, 11, 11, 11, 11, 11]),
   actualRun('P-49', '2026-10-21', [8, 8, 8, 8, 8, 9]),
+  actualRun('P-GAP', '2026-10-21', [11, 11, 11, 11, 11]),
+  actualRun('P-KNOWN', '2026-10-21', [11, 11, 11, 11, 11]),
   actualRun('P-NOSHIFT', '2026-10-24', [5, 5, 5]),
 );
 
@@ -79,7 +83,9 @@ const board = Board.buildBoard({
   files: { shift: { name: 's', ok: true }, daily: { name: 'd', ok: true } }, names,
   actualDays: daily.map((e) => ({ transportId: e.id, date: e.date, hours: e.hours })),
 }, deps);
-const snap = Snap.buildSnapshot(executed, null);
+// capture() does not expose the run's reference date, so the snapshot is built both ways
+const snap = Snap.buildSnapshot(Object.assign({}, executed, { stats: { referenceDate: REF } }), null);
+const snapFallback = Snap.buildSnapshot(executed, null);
 const ofk = Object.fromEntries(board.rows.map((r) => [r.transportId, r]));
 const ino = Object.fromEntries(snap.alerts.map((a) => [a.transportId, a]));
 const windowEnding = (id, end) => executed.drivers.find((d) => d.transportId === id).windows.find((w) => w.endDate === end);
@@ -110,7 +116,7 @@ assert.notEqual(ofk['P-NOSHIFT'].judgment, 'ok');
 assert.equal(windowEnding('P-49', REF).totalHours, 57);
 assert.equal(ino['P-49'], undefined, '49:00+ with duty today produces no INO-1 approach');
 assert.equal(snap.approachRule, '', 'approachRule is never populated');
-assert.ok(/49時間以上/.test(snap.approachNote), 'but the published note still describes a 49h rule');
+assert.equal(/49/.test(snap.approachNote), false, 'no 49h text is published');
 // 13 FRIDAY-bound counts are the engine counts
 ['exceedCount', 'approachCount', 'partialCount', 'undeterminedCount', 'clearCount', 'driverCount'].forEach((k) => {
   assert.equal(snap.counts[k], executed.summary[k], k);
@@ -124,25 +130,67 @@ const stale = View.build({ summary: Object.assign({}, executed.summary, { expire
 assert.equal(stale.usable, false);
 assert.equal(stale.counts.clearCount, null);
 
-// ---- divergences (reported) ----------------------------------------------------------------
-const diverge = [];
-function expectSame(label, ofkText, inoText, same) {
-  if (!same) diverge.push({ label, OFK3: ofkText, 'INO-1': inoText });
-}
-// 4 past-only exceed must not be a current exceed
-expectSame('past-only exceed', ofk['P-PAST'].judgment, ino['P-PAST'] && ino['P-PAST'].statusLabel + ' ' + ino['P-PAST'].windowLabel,
-  ofk['P-PAST'].judgment !== 'ok' || !ino['P-PAST'] || ino['P-PAST'].disposition !== 'exceed');
-// 5 future-only exceed must be a separate warning, today stays normal
-expectSame('future-only exceed', ofk['P-FUTURE'].judgment + ' + future warning', ino['P-FUTURE'] && ino['P-FUTURE'].statusLabel + ' ' + ino['P-FUTURE'].windowLabel,
-  !ino['P-FUTURE'] || ino['P-FUTURE'].disposition !== 'exceed');
-// 8 blank inside the valid shift range is a confirmed rest
-expectSame('blank in valid shift range', ofk['P-BLANK'].judgment, ino['P-BLANK'] && ino['P-BLANK'].statusLabel, !ino['P-BLANK']);
-// label for already-over-by-actual
-expectSame('actual-driven exceed label', ofk['P-ACTUALOVER'].judgmentLabel, ino['P-ACTUALOVER'].basisLabel, ino['P-ACTUALOVER'].basisLabel.includes('実績'));
-// time display HH:MM
-expectSame('time display', Board.clockText(61), ino['P-TODAY'].totalHoursText, ino['P-TODAY'].totalHoursText === '61:00');
+// ---- INO-1 now agrees with OFK3 on the current judgment, and separates past / future ---------
+const MAP = { 'actual-exceed': 'exceed', 'forecast-exceed': 'exceed', caution: 'approach', review: 'undetermined' };
+people.concat([{ id: 'P-NOSHIFT' }]).forEach(({ id }) => {
+  const o = ofk[id].judgment;
+  const row = ino[id];
+  if (o === 'ok') {
+    assert.ok(!row || row.period === 'future', id + ': normal today never shows a current row');
+  } else {
+    assert.ok(row && row.period === 'current', id + ': current row exists');
+    assert.equal(row.disposition, MAP[o], id);
+    assert.equal(row.judgmentCode, o, id + ' judgment code equals OFK3');
+    assert.equal(row.provisional, ofk[id].judgmentProvisional, id + ' provisional flag');
+  }
+});
+// 4 past-only exceed is history only
+assert.equal(ino['P-PAST'], undefined);
+assert.ok(snap.horizon.pastExceeds.some((x) => x.transportId === 'P-PAST' && x.endDate < REF && x.overByText === '17:00'));
+// 5 future-only exceed is an independent warning while today stays normal
+assert.equal(ofk['P-FUTURE'].judgment, 'ok');
+assert.equal(ino['P-FUTURE'].disposition, 'future-exceed');
+assert.equal(ino['P-FUTURE'].period, 'future');
+assert.equal(ino['P-FUTURE'].statusLabel, '将来超過あり');
+assert.equal(ino['P-FUTURE'].futureExceed.overByText, Board.clockText(ofk['P-FUTURE'].futureExceed.overBy));
+assert.equal(ino['P-FUTURE'].futureExceed.endDate, ofk['P-FUTURE'].futureExceed.end);
+// 8 blank in a valid shift range is a confirmed rest
+assert.equal(ino['P-BLANK'], undefined);
+// known over despite a gap is never normal
+assert.equal(ino['P-KNOWN'].disposition, 'exceed');
+assert.equal(ino['P-KNOWN'].provisional, false, 'blank is a confirmed rest, as in the OFK3 list');
+// unknown-hours symbol stays 要確認 and is never shown as normal
+assert.equal(ino['P-GAP'].disposition, 'undetermined');
+assert.equal(ofk['P-GAP'].judgment, 'review');
+// actual vs forecast labels, HH:MM
+assert.equal(ino['P-ACTUALOVER'].statusLabel, '実績超過');
+assert.equal(ino['P-ACTUALOVER'].basisLabel, '実績超過');
+assert.ok(ino['P-TODAY'].statusLabel.startsWith('超過予測'));
+assert.equal(ino['P-TODAY'].totalHoursText, '61:00');
+assert.equal(ino['P-TODAY'].overByText, '01:00');
+assert.equal(ino['P-TODAY'].totalHoursText, Board.clockText(ofk['P-TODAY'].forecast.hours));
+// snapshot metadata
+assert.equal(snap.horizon.referenceDate, REF);
+assert.equal(snap.referenceDate, REF);
+assert.equal(snap.horizon.windowStart, '2026-10-21');
+assert.equal(snap.horizon.windowEnd, REF);
+assert.equal(snap.horizon.updatedAt, executed.summary.checkedAt);
+assert.equal(snap.horizon.referenceDateSource, 'run');
+assert.equal(snapFallback.horizon.referenceDateSource, 'checkedAt-jst');
+assert.equal(snapFallback.horizon.referenceDate, Date.parse(executed.summary.checkedAt) !== NaN ? new Date(Date.parse(executed.summary.checkedAt) + 9 * 3600000).toISOString().slice(0, 10) : '');
+// reference date falls back to the JST date of checkedAt, never to nothing
+const fb = View.build({ summary: Object.assign({}, executed.summary, { checkedAt: '2026-10-26T16:30:00.000Z' }), drivers: [], predictions: [] });
+assert.equal(fb.horizon.referenceDate, '2026-10-27');
+assert.equal(fb.horizon.referenceDateSource, 'checkedAt-jst');
+// the engine is untouched: same windows with or without the display layer
+assert.equal(windowEnding('P-TODAY', REF).judgment, 'exceed');
 
-console.log('INO-1 vs OFK3 parity: ' + (diverge.length ? diverge.length + ' divergence(s) (reported, not failed)' : 'no divergence'));
-diverge.forEach((d) => console.log('  DIVERGE ' + d.label + ' | OFK3: ' + d.OFK3 + ' | INO-1: ' + d['INO-1']));
-if (process.env.INO1_PARITY_STRICT === '1') assert.equal(diverge.length, 0, 'INO-1 contradicts OFK3');
+// without any reference date the view keeps its previous behaviour (no horizon block, no silent guess)
+const legacy = View.build({ summary: Object.assign({}, executed.summary, { checkedAt: null }), drivers: executed.drivers.map((d) => Object.assign({}, d, { disposition: Snap.dispositionOf(d) })), predictions: executed.predictions });
+assert.equal(legacy.horizon, null);
+assert.equal(legacy.referenceDate, null);
+// FRIDAY counts: identical with and without the display layer
+['driverCount', 'clearCount', 'exceedCount', 'approachCount', 'partialCount', 'undeterminedCount'].forEach((k) => assert.equal(legacy.counts[k], snap.counts[k], k));
+
+console.log('INO-1 vs OFK3 parity: no divergence (strict)');
 console.log('ino1-rolling-parity.test.mjs: ALL PASSED');
