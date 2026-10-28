@@ -28,13 +28,14 @@
     "test:driver-cumulative": "node tests/driver-cumulative-core.test.mjs",
     "test:harvest": "node tests/harvest-core.test.mjs && node tests/harvest-wiring.test.mjs",
     "test:inoichi": "node tests/inoichi-core.test.mjs && node tests/inoichi-detection.test.mjs && node tests/inoichi-time-window-adapter.test.mjs && node tests/inoichi-quality-dryrun.test.mjs && node tests/inoichi-wiring.test.mjs",
+    "test:inoichi-app": "node tests/inoichi-dashboard.test.mjs && node tests/inoichi-server.test.mjs && node tests/inoichi-alert-store.test.mjs && node tests/inoichi-fleet-adapter.test.mjs && node tests/inoichi-notification-adapter.test.mjs && node tests/inoichi-live-monitor.test.mjs && node tests/inoichi-taskbar-icon.test.mjs",
     "harvest:local": "node harvest-local-server.js",
     "test:harvest-local": "node tests/harvest-local-server.test.mjs",
     "test:line-unlinked": "node tests/line-unlinked-and-qr-order.test.mjs",
     "test:billing": "node tests/billing-reconcile.test.mjs",
     "test:dnr": "node tests/dnr-datetime.test.mjs && node tests/dnr-detail-reason.test.mjs",
     "test:contact-compliance": "node tests/contact-compliance-core.test.mjs && node tests/cc-export-ui.test.mjs && node tests/cc-affiliation.test.mjs",
-    "test:all": "npm run test:area-experience && npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:duty-risk && npm run test:tenko-sync && npm run test:rolling60h-local && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13 && npm run test:time-window-board && npm run test:dashboard-map && npm run test:gds-fleet-audit && npm run test:driver-ability && npm run test:driver-cumulative && npm run test:harvest && npm run test:harvest-local && npm run test:inoichi && npm run test:line-unlinked && npm run test:billing && npm run test:contact-compliance && npm run test:dnr"
+    "test:all": "npm run test:area-experience && npm run test:assign-support && npm run test:lat && npm run test:transport-audit && npm run test:manual-assign-board && npm run test:rolling60h && npm run test:duty-risk && npm run test:tenko-sync && npm run test:rolling60h-local && npm run test:twc && npm run test:lat-core && npm run test:lat-export-api && npm run test:cortex-13 && npm run test:time-window-board && npm run test:dashboard-map && npm run test:gds-fleet-audit && npm run test:driver-ability && npm run test:driver-cumulative && npm run test:harvest && npm run test:harvest-local && npm run test:inoichi && npm run test:inoichi-app && npm run test:line-unlinked && npm run test:billing && npm run test:contact-compliance && npm run test:dnr"
   },
   "engines": {
     "node": ">=18.0.0"
