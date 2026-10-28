@@ -79,7 +79,8 @@ eq('512 height', png512.height, 512);
 var sizes = icoSizes(path.join(REPO_ROOT, 'assets', 'inoichi-taskbar.ico'));
 eq('ico sizes', sizes.join(','), '16x16,24x24,32x32,48x48,64x64,128x128,256x256');
 
-ok('main logo files were not replaced', !fs.existsSync(path.join(REPO_ROOT, 'assets', 'inoichi-logo.png')) && !fs.existsSync(path.join(REPO_ROOT, 'assets', 'inoichi.ico')));
+// The dashboard icon (assets/inoichi.ico) and the taskbar icon must be the same file content.
+ok('inoichi.ico is identical to inoichi-taskbar.ico', fs.readFileSync(path.join(REPO_ROOT, 'assets', 'inoichi.ico')).equals(fs.readFileSync(path.join(REPO_ROOT, 'assets', 'inoichi-taskbar.ico'))));
 ok('harvest icon unchanged path still exists', fs.existsSync(path.join(REPO_ROOT, 'assets', 'harvest.ico')));
 
 var script = fs.readFileSync(path.join(REPO_ROOT, 'inoichi-taskbar-shortcut.ps1'), 'utf8').toLowerCase();

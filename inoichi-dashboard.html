@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d0b14">
+  <meta name="application-name" content="INO-1">
+  <meta name="description" content="INO-1 勤務監視・異常検知・リスク予測（ローカル専用）">
+  <title>INO-1</title>
+  <link rel="icon" href="./assets/inoichi.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="256x256" href="./assets/inoichi-icon-256.png">
+  <link rel="apple-touch-icon" href="./assets/inoichi-taskbar-192.png">
+  <link rel="manifest" href="./inoichi.webmanifest">
+  <link rel="stylesheet" href="./inoichi-dashboard.css">
+</head>
+<body class="inoichi-dashboard-page">
+  <div id="inoichi-dashboard"></div>
+
+  <script src="./inoichi-dashboard.js"></script>
+  <script>
+    (function () {
+      'use strict';
+      if (typeof window.InoichiDashboard === 'undefined') {
+        document.getElementById('inoichi-dashboard').textContent = 'INO-1 を読み込めませんでした。';
+        return;
+      }
+      window.InoichiDashboard.initLiveDashboard({
+        container: document.getElementById('inoichi-dashboard')
+      });
+    })();
+  </script>
+</body>
+</html>

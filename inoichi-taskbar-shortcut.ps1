@@ -6,10 +6,9 @@
 # HARVEST / OFK3. It only creates or updates INO-1 desktop shortcuts when a
 # local launcher script is available.
 #
-# On current main, INO-1 has no independent app and no inoichi-launch.ps1.
-# In that case the script exits without creating a shortcut.
-# Pass -LaunchScript to point at an existing launcher, for example the
-# Prototype 1 script in another checkout.
+# When this checkout has inoichi-launch.ps1 it is used automatically.
+# Otherwise the script exits without creating a shortcut.
+# Pass -LaunchScript to point at a launcher in another checkout.
 
 param(
   [string]$IconPath = '',
