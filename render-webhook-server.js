@@ -10,6 +10,7 @@ const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/d
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
 const LineUnlinked = require('./line-unlinked-core.js');
+const MentorStartup = require('./mentor-startup-route.js');
 const app = express();
 
 app.use(express.json({ limit: '10mb' }));
@@ -3247,6 +3248,12 @@ require('./duty-risk-republish-route.js').mount(app, {
       log: log,
     });
   },
+});
+
+MentorStartup.mount(app, {
+  dir: path.join(__dirname, 'local'),
+  staleMs: require('./cortex-capture-extension/id-diag-core.js').STALE_MS,
+  log: function (line) { log(line); }
 });
 
 app.listen(PORT, () => {
