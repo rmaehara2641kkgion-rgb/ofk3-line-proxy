@@ -369,6 +369,138 @@
     return h;
   }
 
+  function sortLabel(mode) {
+    if (mode === 'name') return '氏名順';
+    if (mode === 'margin') return '余裕が少ない順';
+    return 'リスク順';
+  }
+
+  function shownHours(block) {
+    var hours = block && block.hours;
+    if (typeof hours !== 'number' || !isFinite(hours)) return clock(null);
+    return clock(hours);
+  }
+
+  function judgmentMark(row) {
+    var code = (row && row.judgment) || 'review';
+    var marks = {
+      'actual-exceed': '■',
+      exceed: '■',
+      'forecast-exceed': '▲',
+      caution: '●',
+      approach: '●',
+      review: '？',
+      partial: '？',
+      undetermined: '？',
+      ok: '○',
+      clear: '○',
+    };
+    return marks[code] || '？';
+  }
+
+  function judgmentClass(row) {
+    var code = (row && row.judgment) || 'review';
+    if (code === 'actual-exceed' || code === 'exceed') return 'risk-actual';
+    if (code === 'forecast-exceed') return 'risk-forecast';
+    if (code === 'caution' || code === 'approach') return 'risk-caution';
+    if (code === 'ok' || code === 'clear') return 'risk-ok';
+    return 'risk-review';
+  }
+
+  function judgmentLabel(row) {
+    var text = Board && Board.judgmentText
+      ? Board.judgmentText(row)
+      : (((row && row.judgmentLabel) || '要確認') + (row && row.judgmentProvisional ? '・暫定' : ''));
+    return judgmentMark(row) + text;
+  }
+
+  function futureLine(row) {
+    var future = row && row.futureExceed;
+    if (!future) return '';
+    return future.start + '〜' + future.end + (future.count > 1 ? ' ほか' + (future.count - 1) + '件' : '');
+  }
+
+  function visibleRows(board, query, sort) {
+    var rows = (board && board.rows) || [];
+    if (!Board || !Board.filterRows || !Board.sortRows) return rows.slice();
+    return Board.sortRows(Board.filterRows(rows, query), sort);
+  }
+
+  function periodText(board) {
+    var start = board && board.windowStart ? String(board.windowStart) : '';
+    var end = board && board.referenceDate ? String(board.referenceDate) : '';
+    if (!start && !end) return '不明';
+    return start + ' 〜 ' + end;
+  }
+
+  function printHtml(board, query, sort, printedAt) {
+    var printed = jst(printedAt || nowIso());
+    var mode = sort === 'name' || sort === 'margin' ? sort : 'risk';
+    var q = String(query || '').trim();
+    var head = '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>残り時間・リスク一覧</title><style>';
+    head += '@page{size:A4 landscape;margin:6mm;}';
+    head += 'html,body{margin:0;padding:0;color:#111;background:#fff;}';
+    head += 'body{font-family:"Yu Gothic UI","Yu Gothic","Meiryo","Hiragino Kaku Gothic ProN","Noto Sans CJK JP","Noto Sans JP",sans-serif;font-size:11px;line-height:1.35;}';
+    head += 'h1{font-size:16px;margin:0 0 4px;}p{margin:0 0 4px;}';
+    head += 'table{width:100%;border-collapse:collapse;table-layout:fixed;}';
+    head += 'thead{display:table-header-group;}tr,th,td{break-inside:avoid;page-break-inside:avoid;}';
+    head += 'th,td{border:1px solid #222;padding:3px 4px;vertical-align:top;word-break:break-word;}th{font-weight:700;text-align:left;}';
+    head += '.col-name{width:16%;}.col-actual{width:12%;}.col-forecast{width:14%;}.col-remain{width:14%;}.col-risk{width:24%;}.col-period{width:20%;}';
+    head += 'td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;white-space:nowrap;}';
+    head += '.risk{font-weight:700;}.risk-actual{color:#9f1239;}.risk-forecast{color:#c2410c;}.risk-caution{color:#b45309;}.risk-review{color:#92400e;}.risk-ok{color:#15803d;}';
+    head += '.no-print{margin:0 0 8px;}@media print{.no-print{display:none !important;}}';
+    head += '</style></head><body>';
+    head += '<div class="no-print"><button type="button" onclick="window.print()">印刷／PDF保存</button>';
+    head += '<p>印刷画面の送信先で「PDFに保存」または Microsoft Print to PDF を選ぶと、この用紙をPDFにできます。用紙はA4横です。</p></div>';
+    if (!board) {
+      return head + '<h1>残り時間・リスク一覧</h1><p>出力日時 ' + esc(printed) + '</p><p>集計結果がありません。</p></body></html>';
+    }
+    var rows = visibleRows(board, q, mode);
+    var html = head + '<h1>残り時間・リスク一覧</h1>';
+    html += '<p>対象日 ' + esc(board.referenceDate || '不明') + '</p>';
+    html += '<p>判定対象期間 ' + esc(periodText(board)) + '</p>';
+    html += '<p>出力日時 ' + esc(printed) + '</p>';
+    html += '<p>最終集計日時 ' + esc(jst(board.generatedAt)) + '</p>';
+    html += '<p>検索条件 ' + esc(q || 'なし') + '。並び順 ' + esc(sortLabel(mode)) + '。</p>';
+    html += '<p>記号 ■実績超過 ▲超過予測 ●注意 ○正常 ？要確認。要確認は時間を決められない状態で、0時間にはしていません。時間は HH:MM です。</p>';
+    html += '<table><colgroup><col class="col-name"><col class="col-actual"><col class="col-forecast"><col class="col-remain"><col class="col-risk"><col class="col-period"></colgroup>';
+    html += '<thead><tr>';
+    ['DA名', '実績累計', '予定込み予測', '残り許容時間', 'リスク判定', '判定対象期間'].forEach(function (header) {
+      html += '<th>' + esc(header) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    if (!rows.length) html += '<tr><td colspan="6">該当なし</td></tr>';
+    rows.forEach(function (row) {
+      var extra = futureLine(row);
+      html += '<tr>';
+      html += '<td>' + esc(Board && Board.displayName ? Board.displayName(row) : ((row && row.name) || '未照合DA')) + '</td>';
+      html += '<td class="num">' + esc(shownHours(row && row.past6)) + '</td>';
+      html += '<td class="num">' + esc(shownHours(row && row.forecast)) + '</td>';
+      html += '<td class="num">' + esc(shownHours(row && row.workable)) + '</td>';
+      html += '<td class="risk ' + judgmentClass(row) + '">' + esc(judgmentLabel(row)) + '</td>';
+      html += '<td>' + esc(periodText(board)) + (extra ? '<br>' + esc(extra) : '') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<script>window.addEventListener("load",function(){window.print();});<\/script></body></html>';
+    return html;
+  }
+
+  function openPrint() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+    var html = printHtml(STATE.board, STATE.query, STATE.sort, nowIso());
+    var opened = window.open('', '_blank');
+    if (!opened) {
+      window.alert('印刷用の画面を開けませんでした。ブラウザのポップアップを許可して、もう一度押してください。');
+      return false;
+    }
+    opened.document.open();
+    opened.document.write(html);
+    opened.document.close();
+    opened.focus();
+    return true;
+  }
+
   function renderBoard() {
     var board = STATE.board;
     if (!board) return '<div class="card p-4 text-sm">集計結果がありません。「データ取込」でExcelを取り込み、集計を実行してください。</div>';
@@ -398,7 +530,8 @@
       '<input id="local60-q" class="border rounded px-3 py-2 text-sm" style="min-width:220px;" placeholder="氏名・DA番号" value="' + esc(STATE.query) + '">' +
       '<select id="local60-sort" class="border rounded px-2 py-2 text-sm">' +
       [['risk', 'リスク順'], ['margin', '余裕が少ない順'], ['name', '氏名順']].map(function (o) { return '<option value="' + o[0] + '"' + (STATE.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
-      '</select></div>';
+      '</select>' +
+      '<button type="button" id="local60-print" data-local60-print="1" class="no-print px-3 py-1 rounded text-sm border border-slate-800">印刷／PDF保存</button></div>';
     var rows = Board.sortRows(Board.filterRows(board.rows, STATE.query), STATE.sort);
     h += '<div class="overflow-x-auto card"><table class="w-full" style="border-collapse:collapse;min-width:720px;"><thead><tr>' +
       [['DA名', 'left'], ['実績累計', 'right'], ['予定込み予測', 'right'], ['残り許容', 'right'], ['判定', 'left']].map(function (col) {
@@ -463,6 +596,8 @@
     });
     var sort = el.querySelector('#local60-sort');
     if (sort) sort.addEventListener('change', function () { STATE.sort = sort.value; render(); });
+    var printButton = el.querySelector('[data-local60-print]');
+    if (printButton) printButton.addEventListener('click', function () { openPrint(); });
     Array.prototype.forEach.call(el.querySelectorAll('tr[data-tid]'), function (tr) {
       tr.addEventListener('click', function () {
         var id = tr.getAttribute('data-tid');
@@ -507,6 +642,7 @@
   global.Rolling60hBoardUI = {
     onShown: function () { init(); render(); },
     getFridaySummary: getFridaySummary,
+    printHtml: printHtml,
     _state: STATE,
   };
 })(typeof window !== 'undefined' ? window : this);
