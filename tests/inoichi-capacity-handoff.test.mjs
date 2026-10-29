@@ -15,6 +15,40 @@ test('a failed ENOU connection is not zero vehicles', () => {
   assert.equal(html.includes('>0<'), false);
 });
 
+test('authentication failure is not an unfetched count', () => {
+  const view = handoff.present({ httpStatus: 401, serviceDate: '2026-10-30' });
+  assert.equal(view.label, '認証が必要');
+  assert.equal(view.lines.length, 0);
+  const html = handoff.render(view);
+  assert.equal(html.includes('認証が必要'), true);
+  assert.equal(html.includes('>0<'), false);
+});
+
+test('a 29-day row keeps a missing plan as unfetched', () => {
+  const view = handoff.present({
+    data: {
+      serviceDate: '2026-10-30',
+      overall: { judgment: 'missing', label: '未取得' },
+      lines: [],
+      sources: {}
+    },
+    window: {
+      dates: [{
+        serviceDate: '2026-10-30',
+        daDeadlineOpen: false,
+        capacityChangeFocus: false,
+        overall: { label: '未取得' },
+        counts: { plan: null, reservation: null, assignments: null, inputFile: null }
+      }],
+      priority: ['2026-10-31']
+    }
+  });
+  const html = handoff.render(view);
+  assert.equal(html.includes('未取得'), true);
+  assert.equal(html.includes('data-ino-capacity-day="2026-10-30"'), true);
+  assert.equal(html.includes('>0<'), false);
+});
+
 test('missing Amazon counts stay unfetched on the card', () => {
   const view = handoff.present({
     data: {
@@ -44,4 +78,7 @@ test('missing Amazon counts stay unfetched on the card', () => {
   assert.equal(html.includes('未取得'), true);
   assert.equal(html.includes('excel_readonly'), true);
   assert.equal(html.includes('>0<'), false);
+  const again = handoff.render(null);
+  assert.equal(again.includes('data-ino-capacity-state="loaded"'), true);
+  assert.equal(again.includes('CYCLE_2'), true);
 });
