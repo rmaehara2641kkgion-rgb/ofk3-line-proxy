@@ -1029,6 +1029,7 @@
     h += '<h2 class="ino-card-title">台数照合</h2>';
     h += '<p class="ino-rolling-note">Amazon車両台数入力サイト、Amazonスケジュール画面、社内Excel InputFileが揃った行だけを比較します。欠けている値は0台にしません。</p>';
     h += renderFleetTable(command);
+    if (typeof InoichiCapacityHandoff !== 'undefined') h += InoichiCapacityHandoff.render(command.capacityHandoff || null);
     var notes = command.fleetNotes || [];
     for (var n = 0; n < notes.length; n++) h += '<p class="ino-rolling-note">' + escapeHtml(notes[n]) + '</p>';
     if (state.threeWay) h += card('F. 車両台数3点照合', renderThreeWay(state.threeWay), { full: true });
