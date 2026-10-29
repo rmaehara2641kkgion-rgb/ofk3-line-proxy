@@ -82,3 +82,43 @@ test('missing Amazon counts stay unfetched on the card', () => {
   assert.equal(again.includes('data-ino-capacity-state="loaded"'), true);
   assert.equal(again.includes('CYCLE_2'), true);
 });
+
+test('a missing plan does not become a zero delta and deadline days sort first', () => {
+  const view = handoff.present({
+    data: {
+      serviceDate: '2026-10-30',
+      overall: { judgment: 'missing', label: '未取得' },
+      sources: {},
+      lines: [{
+        serviceDate: '2026-10-30',
+        cycleId: 'CYCLE_2',
+        serviceTypeName: 'Standard Parcel',
+        serviceTime: '8',
+        routeTarget: null,
+        inputQuantity: 15,
+        label: '未取得'
+      }, {
+        serviceDate: '2026-10-30',
+        cycleId: 'CYCLE_1',
+        serviceTypeName: 'Standard Parcel',
+        serviceTime: '8',
+        routeTarget: 4,
+        inputQuantity: 4,
+        label: '一致'
+      }]
+    },
+    window: {
+      dates: [
+        { serviceDate: '2026-10-23', daDeadlineOpen: false, attentionRank: 5, attentionTie: 2, overall: { label: '一致' }, counts: { plan: 4, reservation: 4, assignments: 4, inputFile: 4 } },
+        { serviceDate: '2026-10-31', daDeadlineOpen: true, attentionRank: 1, attentionTie: 2, overall: { label: '未取得' }, counts: { plan: null, reservation: null, assignments: null, inputFile: null } }
+      ],
+      priority: ['2026-10-31']
+    }
+  });
+  assert.equal(view.lines[0].delta, null);
+  assert.equal(view.lines[1].delta, 0);
+  const html = handoff.render(view);
+  assert.equal(html.indexOf('2026-10-31') < html.indexOf('2026-10-23'), true);
+  assert.equal(html.includes('>0<'), true);
+  assert.equal(html.includes('未取得'), true);
+});

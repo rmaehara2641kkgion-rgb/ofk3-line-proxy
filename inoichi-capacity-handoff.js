@@ -21,6 +21,20 @@
     return String(value);
   }
 
+  function lineDelta(plan, inputFile) {
+    if (plan == null || inputFile == null) return null;
+    return inputFile - plan;
+  }
+
+  function rankLabel(rank) {
+    if (rank === 1) return '期限';
+    if (rank === 2) return '不一致';
+    if (rank === 3) return '未取得';
+    if (rank === 4) return '判定不能';
+    if (rank === 5) return '一致';
+    return '未取得';
+  }
+
   function present(input) {
     if (input == null) {
       return {
@@ -98,7 +112,8 @@
           reservation: line.effectiveReservationQuantity == null ? null : line.effectiveReservationQuantity,
           assignments: line.assignedCount == null ? null : line.assignedCount,
           inputFile: line.inputQuantity == null ? null : line.inputQuantity,
-          judgment: line.label || line.judgment || '未確認'
+          judgment: line.label || line.judgment || '未確認',
+          delta: lineDelta(line.routeTarget, line.inputQuantity)
         };
       })
     };
@@ -152,7 +167,7 @@
   }
 
   function lineTable(lines) {
-    var html = '<table><thead><tr><th>対象日</th><th>サイクル</th><th>種別</th><th>時間</th><th>Amazon計画</th><th>予約</th><th>DA割当</th><th>InputFile</th><th>判定</th></tr></thead><tbody>';
+    var html = '<table><thead><tr><th>対象日</th><th>サイクル</th><th>種別</th><th>時間</th><th>Amazon計画</th><th>予約</th><th>DA割当</th><th>InputFile</th><th>差分</th><th>判定</th></tr></thead><tbody>';
     (lines || []).forEach(function (line) {
       html += '<tr><td>' + escapeHtml(line.serviceDate || '未確認') + '</td>';
       html += '<td>' + escapeHtml(line.cycleId || '未確認') + '</td>';
@@ -162,6 +177,7 @@
       html += '<td>' + escapeHtml(countText(line.reservation)) + '</td>';
       html += '<td>' + escapeHtml(countText(line.assignments)) + '</td>';
       html += '<td>' + escapeHtml(countText(line.inputFile)) + '</td>';
+      html += '<td>' + escapeHtml(countText(line.delta)) + '</td>';
       html += '<td>' + escapeHtml(line.judgment) + '</td></tr>';
     });
     return html + '</tbody></table>';
@@ -189,11 +205,17 @@
   }
 
   function windowTable(model) {
-    var days = model.windowDays || [];
+    var days = (model.windowDays || []).slice().sort(function (left, right) {
+      var rank = (left.attentionRank || 9) - (right.attentionRank || 9);
+      if (rank) return rank;
+      var tie = (left.attentionTie || 9) - (right.attentionTie || 9);
+      if (tie) return tie;
+      return String(left.serviceDate || '').localeCompare(String(right.serviceDate || ''));
+    });
     if (!days.length) return '';
     var priority = {};
     (model.priority || []).forEach(function (date) { priority[date] = true; });
-    var html = '<table><thead><tr><th>日付</th><th>計画</th><th>予約</th><th>DA割当</th><th>InputFile</th><th>判定</th><th>期限</th></tr></thead><tbody>';
+    var html = '<table><thead><tr><th>日付</th><th>計画</th><th>予約</th><th>DA割当</th><th>InputFile</th><th>差分</th><th>判定</th><th>優先</th><th>期限</th></tr></thead><tbody>';
     days.forEach(function (day) {
       var counts = day.counts || {};
       var deadline = day.daDeadlineOpen ? '締切前' : '締切後';
@@ -205,7 +227,9 @@
       html += '<td>' + escapeHtml(countText(counts.reservation)) + '</td>';
       html += '<td>' + escapeHtml(countText(counts.assignments)) + '</td>';
       html += '<td>' + escapeHtml(countText(counts.inputFile)) + '</td>';
+      html += '<td>' + escapeHtml(countText(lineDelta(counts.plan, counts.inputFile))) + '</td>';
       html += '<td>' + escapeHtml(day.overall && day.overall.label ? day.overall.label : '未取得') + '</td>';
+      html += '<td>' + escapeHtml(rankLabel(day.attentionRank)) + '</td>';
       html += '<td>' + escapeHtml(deadline) + '</td></tr>';
     });
     return html + '</tbody></table>';
