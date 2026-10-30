@@ -153,4 +153,62 @@ test('an unconfirmed Amazon screen stays unfetched', () => {
   assert.equal(html.includes('SCREEN_UNCONFIRMED'), true);
   assert.equal(html.includes('OBSERVED_NOT_CAPACITY'), true);
   assert.equal(html.includes('>0<'), false);
+  assert.equal(html.includes('予約JSON 未取得'), true);
+});
+
+test('a reservation summary keeps quantity apart from assigned quantity', () => {
+  const view = handoff.present({
+    data: {
+      serviceDate: '2026-10-30',
+      overall: { judgment: 'missing', label: '未取得' },
+      lines: [],
+      sources: {},
+      reservationSummary: {
+        present: true,
+        realData: true,
+        readable: true,
+        groups: [{
+          serviceDate: '2026-10-30',
+          waveGroupId: 'CYCLE_2',
+          durationMinutes: 480,
+          serviceTypeId: 'st-480-a',
+          serviceTypeName: null,
+          frame: 'regular',
+          quantity: { value: 13, state: 'numeric' },
+          assignedQuantity: { value: 13, state: 'numeric' },
+          reservationCount: 1
+        }, {
+          serviceDate: '2026-10-30',
+          waveGroupId: 'ADHOC_1',
+          durationMinutes: 120,
+          serviceTypeId: 'st-ad',
+          frame: 'special',
+          quantity: { value: 1, state: 'numeric' },
+          assignedQuantity: { value: 0, state: 'numeric' },
+          reservationCount: 1
+        }, {
+          serviceDate: '2026-10-30',
+          waveGroupId: 'CYCLE_2',
+          durationMinutes: 120,
+          serviceTypeId: 'st-gap',
+          frame: 'regular',
+          quantity: { value: null, state: 'missing' },
+          assignedQuantity: { value: 3, state: 'numeric' },
+          reservationCount: 1
+        }],
+        historical: [{ quantity: { value: 99, state: 'numeric' } }],
+        issues: [{ code: 'duplicate_id' }]
+      }
+    }
+  });
+  const html = handoff.render(view);
+  assert.equal(html.includes('st-480-a'), true);
+  assert.equal(html.includes('>13<'), true);
+  assert.equal(html.includes('>0<'), true);
+  assert.equal(html.includes('未取得'), true);
+  assert.equal(html.includes('特別'), true);
+  assert.equal(html.includes('取消は有効台数に含めていません'), true);
+  assert.equal(html.includes('診断 duplicate_id'), true);
+  assert.equal(html.includes('Standard'), false);
+  assert.equal(html.includes('Biker'), false);
 });

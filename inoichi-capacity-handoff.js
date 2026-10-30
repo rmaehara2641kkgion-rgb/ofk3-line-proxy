@@ -125,6 +125,7 @@
       windowDays: input.window && Array.isArray(input.window.dates) ? input.window.dates : [],
       priority: input.window && Array.isArray(input.window.priority) ? input.window.priority : [],
       changes: input.changes || null,
+      reservationSummary: data.reservationSummary || { present: false, realData: false, groups: null },
       lines: data.lines.filter(function (line) { return !line.rollup; }).map(function (line) {
         return {
           serviceDate: line.serviceDate || data.serviceDate || null,
@@ -181,6 +182,7 @@
     html += '<p>対象日 ' + escapeHtml(model.serviceDate || '未確認') + ' / 判定 ' + escapeHtml(model.label) + '</p>';
     html += '<p>最終取得 ' + escapeHtml(model.acquiredAt || '未取得') + '</p>';
     html += lineTable(model.lines);
+    html += reservationText(model.reservationSummary);
     (model.origins || []).forEach(function (source) {
       html += '<p>取得元 ' + escapeHtml(source.source) + ' / ' + escapeHtml(source.origin || source.state) + ' / ' + escapeHtml(source.acquiredAt || '未取得') + '</p>';
     });
@@ -198,6 +200,41 @@
     });
     (screen && screen.observed || []).forEach(function (item) {
       html += '<p>' + escapeHtml(item.status) + ' ' + escapeHtml(item.path) + '</p>';
+    });
+    return html;
+  }
+
+  function metricText(metric) {
+    if (!metric || metric.state !== 'numeric' || metric.value == null) return '未取得';
+    return String(metric.value);
+  }
+
+  function reservationText(summary) {
+    if (!summary || summary.present !== true || summary.realData !== true) {
+      return '<p data-ino-capacity-reservation="未取得">予約JSON 未取得。台数は0にしていません。</p>';
+    }
+    if (summary.readable === false) {
+      return '<p data-ino-capacity-reservation="読めない">予約JSONを読めません。台数は0にしていません。</p>';
+    }
+    var html = '<p data-ino-capacity-reservation="取得済">予約JSON。quantity と assignedQuantity は別の値です。</p>';
+    if (!summary.groups || !summary.groups.length) {
+      html += '<p>この配送日の有効予約行はありません。</p>';
+    }
+    html += '<table><thead><tr><th>配送日</th><th>サイクル</th><th>分数</th><th>serviceTypeId</th><th>区分</th><th>quantity</th><th>assignedQuantity</th><th>件数</th></tr></thead><tbody>';
+    (summary.groups || []).forEach(function (group) {
+      html += '<tr><td>' + escapeHtml(group.serviceDate || '未取得') + '</td>';
+      html += '<td>' + escapeHtml(group.waveGroupId || '未取得') + '</td>';
+      html += '<td>' + escapeHtml(group.durationMinutes == null ? '未取得' : String(group.durationMinutes)) + '</td>';
+      html += '<td>' + escapeHtml(group.serviceTypeId || '未取得') + '</td>';
+      html += '<td>' + escapeHtml(group.frame === 'special' ? '特別' : '通常') + '</td>';
+      html += '<td>' + escapeHtml(metricText(group.quantity)) + '</td>';
+      html += '<td>' + escapeHtml(metricText(group.assignedQuantity)) + '</td>';
+      html += '<td>' + escapeHtml(String(group.reservationCount || 0)) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    if (summary.historical && summary.historical.length) html += '<p>取消は有効台数に含めていません。</p>';
+    (summary.issues || []).forEach(function (issue) {
+      html += '<p>診断 ' + escapeHtml(issue.code) + '</p>';
     });
     return html;
   }
