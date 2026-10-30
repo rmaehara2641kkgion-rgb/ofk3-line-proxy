@@ -188,7 +188,11 @@
     var hasUnconfirmed = false;
 
     blocks.forEach(function (b) {
-      if (b.blank) {
+      if (b.conflict) {
+        // 複数シート間で勤務記号が衝突し、時間が一意に決まらない日。時間は加算せず未確定扱い
+        // （確定分だけで60hを超える場合は既存の knownOver で危険情報を残す）。
+        hasUnconfirmed = true;
+      } else if (b.blank) {
         // 勤務記号が混在する日付列の空白セル。休(0h)とは断定せず、時間は加算しない。
         hasUnconfirmed = true;
       } else if (b.defined && typeof b.hours === 'number' && !isNaN(b.hours)) {
@@ -269,6 +273,113 @@
     if (!parsed) return false;
     var y = parseInt(parsed.slice(0, 4), 10);
     return y >= 2000 && y <= 2100;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 月またぎ安全化ヘルパー（parseMonthlyRosterSheetRows の opt-in オプション用）
+  // ---------------------------------------------------------------------------
+
+  /** 0始まり列番号 → Excel列記号（0→A, 40→AO） */
+  function columnLetter(col) {
+    var n = col + 1;
+    var s = '';
+    while (n > 0) {
+      var m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
+
+  var JP_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+
+  function weekdayOfYMD(ymd) {
+    var p = ymd.split('-').map(Number);
+    return JP_WEEKDAYS[new Date(p[0], p[1] - 1, p[2]).getDay()];
+  }
+
+  /**
+   * 見出しセルが「日番号だけの定数」（31 / "31" / "31日" / cellDates で 1900-01-xx になった値）なら
+   * その日番号(1〜31)を返す。それ以外は null。
+   */
+  function dayNumberFromHeaderCell(v) {
+    if (v === null || v === undefined || v === '') return null;
+    var n = null;
+    if (v instanceof Date && !isNaN(v.getTime())) {
+      var y = v.getFullYear();
+      if (y !== 1899 && y !== 1900) return null;
+      // シリアル値に戻す（SheetJS の 1900年系: 1899-12-30 起点）
+      var serial = Math.round((Date.UTC(y, v.getMonth(), v.getDate()) - Date.UTC(1899, 11, 30)) / 86400000);
+      n = serial;
+    } else if (typeof v === 'number') {
+      n = v;
+    } else {
+      var m = String(v).trim().match(/^(\d{1,2})日?$/);
+      if (m) n = parseInt(m[1], 10);
+    }
+    if (n === null || !isFinite(n) || Math.floor(n) !== n || n < 1 || n > 31) return null;
+    return n;
+  }
+
+  /**
+   * 定数日番号の見出しを日付として復元できるか判定する。すべて一致した時だけ復元する:
+   *   ① 前列が有効な日付 prevDate
+   *   ② prevDate+1日 の「日」が見出しの日番号と一致
+   *   ③ prevDate と同じ年月（月の連続性。11/30 の次の「31」等は不一致で復元しない）
+   *   ④ 見出し直下の曜日行で、前列が prevDate の曜日・当列が復元日付の曜日と一致
+   */
+  function restoreDayNumberHeader(headerCell, prevDate, weekdayRow, col) {
+    var dayNumber = dayNumberFromHeaderCell(headerCell);
+    if (dayNumber === null || !prevDate) return null;
+    var next = addDays(prevDate, 1);
+    if (parseInt(next.slice(8, 10), 10) !== dayNumber) return null;
+    if (next.slice(0, 7) !== prevDate.slice(0, 7)) return null;
+    if (!weekdayRow) return null;
+    var wdPrev = String(weekdayRow[col - 1] == null ? '' : weekdayRow[col - 1]).trim();
+    var wdCur = String(weekdayRow[col] == null ? '' : weekdayRow[col]).trim();
+    if (wdPrev !== weekdayOfYMD(prevDate) || wdCur !== weekdayOfYMD(next)) return null;
+    return { date: next, dayNumber: dayNumber, weekday: wdCur };
+  }
+
+  /**
+   * シートの対象月（日付列が最も多い YYYY-MM。同数首位が複数なら判定しない）以外の日付列のうち、
+   * ドライバー行が全員空白の列を返す。
+   */
+  function findLeadInBlankDateKeys(rows, dataStartRow, nameCol, codeColByDate, isNonDriverRow) {
+    var monthCount = {};
+    Object.keys(codeColByDate).forEach(function (k) {
+      var ym = k.slice(0, 7);
+      monthCount[ym] = (monthCount[ym] || 0) + 1;
+    });
+    var targetMonth = null;
+    var best = 0;
+    var tie = false;
+    Object.keys(monthCount).forEach(function (ym) {
+      if (monthCount[ym] > best) { best = monthCount[ym]; targetMonth = ym; tie = false; }
+      else if (monthCount[ym] === best) tie = true;
+    });
+    if (!targetMonth || tie) return { targetMonth: null, excluded: [] };
+
+    var driverRows = [];
+    for (var r = dataStartRow; r < rows.length; r++) {
+      var row = rows[r];
+      if (!row) continue;
+      var name = String(row[nameCol] || '').trim();
+      if (!name) continue;
+      if (typeof isNonDriverRow === 'function' && isNonDriverRow(name)) continue;
+      driverRows.push(row);
+    }
+    if (driverRows.length === 0) return { targetMonth: targetMonth, excluded: [] };
+
+    var excluded = Object.keys(codeColByDate).filter(function (k) {
+      if (k.slice(0, 7) === targetMonth) return false;
+      var col = codeColByDate[k];
+      return driverRows.every(function (row) {
+        var v = row[col];
+        return v === undefined || v === null || String(v).trim() === '';
+      });
+    }).sort();
+    return { targetMonth: targetMonth, excluded: excluded };
   }
 
   // ===========================================================================
@@ -465,6 +576,192 @@
     });
 
     return { merged: merged, duplicates: duplicates };
+  }
+
+  function blocksSignature(blocks) {
+    return (blocks || []).map(function (b) { return b.code; }).join('+');
+  }
+
+  function blocksDefinedHours(blocks) {
+    var total = 0;
+    for (var i = 0; i < (blocks || []).length; i++) {
+      var b = blocks[i];
+      if (!b || b.blank || b.conflict || b.defined === false || typeof b.hours !== 'number' || isNaN(b.hours)) return null;
+      total += b.hours;
+    }
+    return total;
+  }
+
+  /**
+   * mergeRosterBlocksByDateAcrossSources() の「読込順に依存しない」版（月またぎ安全化。既存関数は変更しない）。
+   * 同一ドライバー・同一日付が複数ソースにある場合:
+   *   - 空白 vs 勤務記号（休を含む）… 記号を採用（blankOverrides に記録）
+   *   - 同じ記号同士 / 空白同士      … 重複件数のみ記録（duplicates）
+   *   - 休 vs 勤務記号・異なる記号同士 … conflicts に記録。全候補の時間が確定かつ同一ならその時間を採用、
+   *                                      そうでなければ conflict ブロック（時間未確定＝判定不能。knownOver は維持）
+   * ソースは label 順に並べ替えてから処理するため、読込順で結果は変わらない。
+   *
+   * @param {Array<{label:string, blocksByDate:Object, cellsByDate?:Object}>} sources
+   * @return {{merged:Object, duplicates:Array, blankOverrides:Array, conflicts:Array}}
+   */
+  function mergeRosterBlocksByDateAcrossSourcesStrict(sources) {
+    var byDate = {};
+    (sources || []).slice().sort(function (a, b) {
+      return String(a.label) < String(b.label) ? -1 : String(a.label) > String(b.label) ? 1 : 0;
+    }).forEach(function (src) {
+      var blocksByDate = src.blocksByDate || {};
+      var cellsByDate = src.cellsByDate || {};
+      Object.keys(blocksByDate).forEach(function (date) {
+        (byDate[date] = byDate[date] || []).push({
+          label: src.label,
+          cell: cellsByDate[date] || '',
+          blocks: blocksByDate[date] || [],
+          sig: blocksSignature(blocksByDate[date]),
+        });
+      });
+    });
+
+    var merged = {};
+    var duplicates = [];
+    var blankOverrides = [];
+    var conflicts = [];
+    function describe(e) {
+      return {
+        label: e.label,
+        cell: e.cell,
+        rawCode: e.blocks.map(function (b) { return b.rawCode; }).join('+') || '(空)',
+        hours: blocksDefinedHours(e.blocks),
+      };
+    }
+
+    Object.keys(byDate).sort().forEach(function (date) {
+      var entries = byDate[date];
+      if (entries.length === 1) {
+        merged[date] = entries[0].blocks;
+        return;
+      }
+      var nonBlank = entries.filter(function (e) { return e.sig !== ''; });
+      var blank = entries.filter(function (e) { return e.sig === ''; });
+      if (nonBlank.length === 0) {
+        merged[date] = [];
+        duplicates.push({ date: date, kind: 'same', count: entries.length, sources: entries.map(describe) });
+        return;
+      }
+      if (blank.length > 0) {
+        blankOverrides.push({ date: date, kept: nonBlank.map(describe), ignoredBlank: blank.map(describe) });
+      }
+      var bySig = {};
+      nonBlank.forEach(function (e) { (bySig[e.sig] = bySig[e.sig] || []).push(e); });
+      var sigs = Object.keys(bySig).sort();
+      if (sigs.length === 1) {
+        merged[date] = bySig[sigs[0]][0].blocks;
+        if (nonBlank.length > 1) duplicates.push({ date: date, kind: 'same', count: nonBlank.length, sources: nonBlank.map(describe) });
+        return;
+      }
+      var candidates = sigs.map(function (sg) { return bySig[sg][0]; });
+      var hoursList = candidates.map(function (e) { return blocksDefinedHours(e.blocks); });
+      var uniqueHours = hoursList.every(function (h) { return h !== null && h === hoursList[0]; });
+      var conflictRec = {
+        date: date,
+        sources: nonBlank.map(describe),
+        resolution: uniqueHours ? 'same_hours' : 'undetermined',
+        resolvedHours: uniqueHours ? hoursList[0] : null,
+      };
+      conflicts.push(conflictRec);
+      if (uniqueHours) {
+        merged[date] = candidates[0].blocks; // 時間は全候補で同一（記号表記のみ異なる）
+      } else {
+        merged[date] = [{
+          code: 'CONFLICT',
+          rawCode: candidates.map(function (e) { return e.blocks.map(function (b) { return b.rawCode; }).join('+'); }).join(' / '),
+          source: 'roster',
+          hours: null,
+          defined: false,
+          conflict: true,
+          candidates: conflictRec.sources,
+        }];
+      }
+    });
+    return { merged: merged, duplicates: duplicates, blankOverrides: blankOverrides, conflicts: conflicts };
+  }
+
+  /**
+   * 月間シフト表（最大2ファイル×複数シート）→ ドライバー別 {date: blocks[]} の構築
+   * （rolling60h-ui.js の読込経路を共通化したもの。月またぎ安全化オプションを有効にして解析し、
+   *  読込順非依存の Strict マージを行う）。
+   *
+   * @param {Array<{label:string, sheetsData:Object}>} rosterSources  sheetsData: { sheetName: rows }
+   * @param {Object} [options] { isNonDriverRow }
+   * @return {{driverMeta:Object, rosterBlocksByDriver:Object, warnings:Array, sourceRanges:Object,
+   *           duplicates:Array, blankOverrides:Array, conflicts:Array}}
+   */
+  function buildRosterTimelineFromSources(rosterSources, options) {
+    options = options || {};
+    var driverMeta = {};
+    var metaLabel = {}; // key -> 採用した meta のソースlabel（label順で決めるため読込順に依存しない）
+    var contributions = {};
+    var warnings = [];
+    var sourceRanges = {};
+    (rosterSources || []).forEach(function (source) {
+      var sourceRange = null;
+      Object.keys(source.sheetsData || {}).forEach(function (sheetName) {
+        var parsed = parseMonthlyRosterSheetRows(source.sheetsData[sheetName], {
+          isNonDriverRow: options.isNonDriverRow || null,
+          excludeLeadInBlankColumns: true,
+          restoreDayNumberHeaders: true,
+          trackCells: true,
+        });
+        warnings = warnings.concat(parsed.warnings.map(function (w) {
+          return Object.assign({ file: source.label, sheet: sheetName }, w);
+        }));
+        if (parsed.meta && parsed.meta.dateRange) {
+          if (!sourceRange) sourceRange = { min: parsed.meta.dateRange.min, max: parsed.meta.dateRange.max };
+          else {
+            if (parsed.meta.dateRange.min < sourceRange.min) sourceRange.min = parsed.meta.dateRange.min;
+            if (parsed.meta.dateRange.max > sourceRange.max) sourceRange.max = parsed.meta.dateRange.max;
+          }
+        }
+        var grouped = groupRosterRecordsByDriver(parsed.records);
+        Object.keys(grouped).forEach(function (key) {
+          var lbl = source.label + '::' + sheetName;
+          if (!driverMeta[key] || lbl > metaLabel[key]) {
+            driverMeta[key] = grouped[key].meta;
+            metaLabel[key] = lbl;
+          }
+          (contributions[key] = contributions[key] || []).push({
+            label: source.label + '::' + sheetName,
+            blocksByDate: grouped[key].blocksByDate,
+            cellsByDate: grouped[key].cellsByDate || {},
+          });
+        });
+      });
+      if (sourceRange) sourceRanges[source.label] = sourceRange;
+    });
+
+    var rosterBlocksByDriver = {};
+    var duplicates = [];
+    var blankOverrides = [];
+    var conflicts = [];
+    var sortedMeta = {};
+    Object.keys(driverMeta).sort().forEach(function (key) { sortedMeta[key] = driverMeta[key]; });
+    driverMeta = sortedMeta;
+    Object.keys(contributions).sort().forEach(function (key) {
+      var m = mergeRosterBlocksByDateAcrossSourcesStrict(contributions[key]);
+      rosterBlocksByDriver[key] = m.merged;
+      var tag = { driverKey: key, driverName: (driverMeta[key] || {}).name || key };
+      m.duplicates.forEach(function (d) { duplicates.push(Object.assign({}, tag, d)); });
+      m.blankOverrides.forEach(function (d) { blankOverrides.push(Object.assign({}, tag, d)); });
+      m.conflicts.forEach(function (d) { conflicts.push(Object.assign({}, tag, d)); });
+    });
+    return {
+      driverMeta: driverMeta,
+      rosterBlocksByDriver: rosterBlocksByDriver,
+      warnings: warnings,
+      sourceRanges: sourceRanges,
+      duplicates: duplicates,
+      blankOverrides: blankOverrides,
+      conflicts: conflicts,
+    };
   }
 
   // ===========================================================================
@@ -771,11 +1068,32 @@
     // 3) 日付列のグルーピング（同一日付が複数列に存在し得る）
     var dataStartRow = headerRowIdx + 1;
     var dateGroups = {}; // 'YYYY-MM-DD' -> [colIndex,...]
+    var colDateKey = {}; // colIndex -> 'YYYY-MM-DD'（見出し復元の「前列」判定用）
     for (var c2 = 0; c2 < headerRow.length; c2++) {
       if (isValidDateCell(headerRow[c2])) {
         var key = parseExcelDateFlexible(headerRow[c2]);
         if (!key) continue;
         (dateGroups[key] = dateGroups[key] || []).push(c2);
+        colDateKey[c2] = key;
+      } else if (options.restoreDayNumberHeaders && colDateKey[c2 - 1]) {
+        // 月末列の見出しが数式ではなく定数の日番号（例: 10月シートAO3=31）になっている場合の復元。
+        // 前列の有効日付+1日の「日」と一致し、同じ月に収まり、曜日行も前列・当列とも一致する時だけ採用する。
+        var restored = restoreDayNumberHeader(headerRow[c2], colDateKey[c2 - 1], rows[headerRowIdx + 1], c2);
+        if (restored) {
+          (dateGroups[restored.date] = dateGroups[restored.date] || []).push(c2);
+          colDateKey[c2] = restored.date;
+          warnings.push({
+            type: 'header_date_restored',
+            date: restored.date,
+            col: c2,
+            colLetter: columnLetter(c2),
+            cell: columnLetter(c2) + (headerRowIdx + 1),
+            rawHeader: restored.dayNumber,
+            prevDate: colDateKey[c2 - 1],
+            weekday: restored.weekday,
+            reason: '前列' + colDateKey[c2 - 1] + 'の翌日・同月・曜日「' + restored.weekday + '」が一致したため、定数見出し' + restored.dayNumber + 'を' + restored.date + 'として復元',
+          });
+        }
       }
     }
 
@@ -817,6 +1135,27 @@
     // （月端の日付を推測で0h扱いにしないための土台。§複数月マージで利用）。
     var records = [];
     var allDateKeys = Object.keys(codeColByDate);
+    if (options.excludeLeadInBlankColumns) {
+      // シートの対象月（日付列が最も多い月）以外で、ドライバー行が全員空白の日付列は
+      // 「前月/翌月の助走列」＝このシートの対象期間外として結合に参加させない
+      // （例: 11月シートの10/25〜10/31。個人単位の空白＝通常休みとは区別する）。
+      var leadIn = findLeadInBlankDateKeys(rows, dataStartRow, nameCol, codeColByDate, options.isNonDriverRow);
+      if (leadIn.excluded.length > 0) {
+        var excludedSet = {};
+        leadIn.excluded.forEach(function (k) {
+          excludedSet[k] = true;
+          warnings.push({
+            type: 'lead_in_blank_date_column_excluded',
+            date: k,
+            col: codeColByDate[k],
+            colLetter: columnLetter(codeColByDate[k]),
+            targetMonth: leadIn.targetMonth,
+            reason: '対象月' + leadIn.targetMonth + '以外の日付列で、ドライバー行が全員空白のため対象期間外として除外',
+          });
+        });
+        allDateKeys = allDateKeys.filter(function (k) { return !excludedSet[k]; });
+      }
+    }
     for (var r3 = dataStartRow; r3 < rows.length; r3++) {
       var drow = rows[r3];
       if (!drow) continue;
@@ -831,13 +1170,15 @@
         var col = codeColByDate[dateKey];
         var cellVal = drow[col];
         var isBlank = cellVal === undefined || cellVal === null || cellVal === '';
-        records.push({
+        var rec = {
           name: name,
           company: company,
           transportId: transportId,
           date: dateKey,
           rawCode: isBlank ? '' : cellVal,
-        });
+        };
+        if (options.trackCells) rec.cell = columnLetter(col) + (r3 + 1);
+        records.push(rec);
       });
     }
 
@@ -879,6 +1220,11 @@
       var parsed = parseShiftCellToBlocks(rec.rawCode, 'roster');
       var d = byDriver[key].blocksByDate;
       d[rec.date] = (d[rec.date] || []).concat(parsed.blocks);
+      if (rec.cell) {
+        // trackCells 指定時のみ（由来セルの追跡用。既存呼び出しの戻り値は変えない）
+        var cells = byDriver[key].cellsByDate = byDriver[key].cellsByDate || {};
+        cells[rec.date] = cells[rec.date] ? cells[rec.date] + ',' + rec.cell : rec.cell;
+      }
     });
     return byDriver;
   }
@@ -931,6 +1277,7 @@
 
   function formatRollingBlockLabel(block) {
     if (!block) return '未取得';
+    if (block.conflict) return '衝突';
     if (block.blank) return '未取得';
     var actual = block.source === 'actual' || block.code === 'AMAZON_ESTIMATE' || block.code === 'AMAZON_ACTUAL';
     if (actual) {
@@ -967,6 +1314,9 @@
     mergeActualAndRoster: mergeActualAndRoster,
     resolveRosterBlanks: resolveRosterBlanks,
     mergeRosterBlocksByDateAcrossSources: mergeRosterBlocksByDateAcrossSources,
+    mergeRosterBlocksByDateAcrossSourcesStrict: mergeRosterBlocksByDateAcrossSourcesStrict,
+    buildRosterTimelineFromSources: buildRosterTimelineFromSources,
+    restoreDayNumberHeader: restoreDayNumberHeader,
 
     // Rolling計算コア
     computeRolling60h: computeRolling60h,

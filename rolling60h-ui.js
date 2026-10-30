@@ -274,57 +274,23 @@
     // 1) ロースター（最大2ファイル×複数DSPシート）を解析し、driverごとに
     //    「ソース単位のblocksByDate」を集める（マージ・重複検知は後段でまとめて行う。
     //    ここでは絶対に単純concatで二重加算しない）。
-    var driverMeta = {}; // key -> {name, company, transportId}
-    var driverSourceContributions = {}; // key -> [{label, blocksByDate}, ...]（読込順）
-    var rosterSourceRanges = {}; // sourceLabel -> {min,max}（読込済みシフト月の表示用）
-
-    STATE.rosterSources.forEach(function (source) {
-      var sourceRange = null;
-      Object.keys(source.sheetsData).forEach(function (sheetName) {
-        var rows = source.sheetsData[sheetName];
-        var parsed = RollingCore.parseMonthlyRosterSheetRows(rows, {
-          isNonDriverRow: typeof AssignSupportCore !== 'undefined' && AssignSupportCore.isShiftNonDriverRow ? AssignSupportCore.isShiftNonDriverRow : null,
-        });
-        warnings = warnings.concat(
-          parsed.warnings.map(function (w) {
-            return Object.assign({ file: source.label, sheet: sheetName }, w);
-          })
-        );
-        if (parsed.meta && parsed.meta.dateRange) {
-          if (!sourceRange) {
-            sourceRange = { min: parsed.meta.dateRange.min, max: parsed.meta.dateRange.max };
-          } else {
-            if (parsed.meta.dateRange.min < sourceRange.min) sourceRange.min = parsed.meta.dateRange.min;
-            if (parsed.meta.dateRange.max > sourceRange.max) sourceRange.max = parsed.meta.dateRange.max;
-          }
-        }
-
-        var grouped = RollingCore.groupRosterRecordsByDriver(parsed.records);
-        Object.keys(grouped).forEach(function (key) {
-          driverMeta[key] = grouped[key].meta;
-          driverSourceContributions[key] = driverSourceContributions[key] || [];
-          driverSourceContributions[key].push({
-            label: source.label + '::' + sheetName,
-            blocksByDate: grouped[key].blocksByDate,
-          });
-        });
-      });
-      if (sourceRange) rosterSourceRanges[source.label] = sourceRange;
+    // 1) ロースター（最大2ファイル×複数DSPシート）の解析・マージは RollingCore 側で一括実行する
+    //    （月またぎ安全化: 助走列の除外・定数日番号見出しの復元・読込順非依存の衝突検出）。
+    var rosterBuilt = RollingCore.buildRosterTimelineFromSources(STATE.rosterSources, {
+      isNonDriverRow: typeof AssignSupportCore !== 'undefined' && AssignSupportCore.isShiftNonDriverRow ? AssignSupportCore.isShiftNonDriverRow : null,
     });
-    STATE.rosterSourceRanges = rosterSourceRanges;
-
-    // 1-b) driverごとに複数ソースを日付単位でマージ（重複日付は「後読込優先」＋警告）
-    var rosterBlocksByDriver = {}; // key -> {date: blocks[]}
-    var rosterDuplicates = [];
-    Object.keys(driverSourceContributions).forEach(function (key) {
-      var mergeResult = RollingCore.mergeRosterBlocksByDateAcrossSources(driverSourceContributions[key]);
-      rosterBlocksByDriver[key] = mergeResult.merged;
-      mergeResult.duplicates.forEach(function (dup) {
-        rosterDuplicates.push(Object.assign({ driverKey: key, driverName: (driverMeta[key] || {}).name || key }, dup));
-      });
-      Object.keys(mergeResult.merged).forEach(function (date) {
-        mergeResult.merged[date].forEach(function (b) {
-          if (!b.defined) {
+    var driverMeta = rosterBuilt.driverMeta; // key -> {name, company, transportId}
+    var rosterBlocksByDriver = rosterBuilt.rosterBlocksByDriver; // key -> {date: blocks[]}
+    var rosterDuplicates = rosterBuilt.duplicates;
+    var rosterConflicts = rosterBuilt.conflicts;
+    var rosterBlankOverrides = rosterBuilt.blankOverrides;
+    warnings = warnings.concat(rosterBuilt.warnings);
+    STATE.rosterSourceRanges = rosterBuilt.sourceRanges;
+    Object.keys(rosterBlocksByDriver).forEach(function (key) {
+      var merged = rosterBlocksByDriver[key];
+      Object.keys(merged).forEach(function (date) {
+        merged[date].forEach(function (b) {
+          if (!b.defined && !b.conflict) {
             var label = b.rawCode || b.code;
             undefinedCodeCounts[label] = (undefinedCodeCounts[label] || 0) + 1;
           }
@@ -400,7 +366,7 @@
     });
 
     STATE.drivers = driverResults;
-    STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates };
+    STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates, rosterConflicts: rosterConflicts, rosterBlankOverrides: rosterBlankOverrides };
     STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
       ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
       : null;
@@ -475,11 +441,39 @@
     // 重複日付の警告（同一Transport ID・同一日付が複数のシフトファイルに存在した場合）
     var dupEl = document.getElementById('rolling-duplicate-detail');
     var dups = STATE.diagnostics.rosterDuplicates || [];
-    if (dups.length > 0) {
-      var dupParts = dups.slice(0, 20).map(function (d) {
-        return d.driverName + ' ' + d.date + '（採用: ' + d.keptLabel + '=' + d.keptRawCode + ' ／ 破棄: ' + d.discardedLabel + '=' + d.discardedRawCode + '）';
-      });
-      dupEl.innerHTML = '⚠ 同一日付が複数のシフトファイルに重複していました（' + dups.length + '件、二重加算はしていません。後から読み込んだファイルを採用）: <br>' + dupParts.join('<br>');
+    var conflicts = STATE.diagnostics.rosterConflicts || [];
+    var blankOverrides = STATE.diagnostics.rosterBlankOverrides || [];
+    var monthWarnings = (STATE.diagnostics.warnings || []).filter(function (w) {
+      return w.type === 'header_date_restored' || w.type === 'lead_in_blank_date_column_excluded';
+    });
+    var dupHtml = [];
+    function srcText(s) {
+      return s.label + (s.cell ? '!' + s.cell : '') + '=' + s.rawCode;
+    }
+    if (conflicts.length > 0) {
+      var undeterminedConflicts = conflicts.filter(function (c) { return c.resolution !== 'same_hours'; }).length;
+      dupHtml.push('⚠ シフトの衝突 ' + conflicts.length + '件（うち時間が確定できず判定不能 ' + undeterminedConflicts + '件。後読込優先では採用していません）: <br>' +
+        conflicts.slice(0, 20).map(function (c) {
+          return c.driverName + ' ' + c.date + '（' + c.sources.map(srcText).join(' ／ ') + '）' + (c.resolution === 'same_hours' ? ' → 時間同一のため採用' : ' → 判定不能');
+        }).join('<br>'));
+    }
+    if (dups.length > 0 || blankOverrides.length > 0) {
+      dupHtml.push('同一日付の重複: 同じ記号 ' + dups.length + '件 ／ 空白より勤務記号を採用 ' + blankOverrides.length + '件（二重加算はしていません）');
+    }
+    if (monthWarnings.length > 0) {
+      var restored = monthWarnings.filter(function (w) { return w.type === 'header_date_restored'; });
+      var leadIn = monthWarnings.filter(function (w) { return w.type === 'lead_in_blank_date_column_excluded'; });
+      if (restored.length > 0) {
+        dupHtml.push('日付見出しを復元: ' + restored.slice(0, 20).map(function (w) {
+          return w.file + '::' + w.sheet + '!' + w.cell + '（' + w.rawHeader + '→' + w.date + '）';
+        }).join(' / '));
+      }
+      if (leadIn.length > 0) {
+        dupHtml.push('全員空白の助走列を対象期間外として除外: ' + leadIn.length + '列');
+      }
+    }
+    if (dupHtml.length > 0) {
+      dupEl.innerHTML = dupHtml.join('<br>');
     } else {
       dupEl.textContent = '';
     }
