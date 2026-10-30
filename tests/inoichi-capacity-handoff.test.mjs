@@ -122,3 +122,35 @@ test('a missing plan does not become a zero delta and deadline days sort first',
   assert.equal(html.includes('>0<'), true);
   assert.equal(html.includes('未取得'), true);
 });
+
+test('an unconfirmed Amazon screen stays unfetched', () => {
+  const view = handoff.present({
+    data: {
+      serviceDate: '2026-10-30',
+      overall: { judgment: 'missing', label: '未取得' },
+      lines: [],
+      sources: {},
+      screenBinding: {
+        confirmation: 'SCREEN_UNCONFIRMED',
+        liveAcquireEnabled: false,
+        observed: [{ path: '/scheduling/calendar-view', status: 'PARTIAL' }]
+      }
+    },
+    acquire: {
+      confirmation: 'SCREEN_UNCONFIRMED',
+      liveAcquireEnabled: false,
+      targets: [
+        { id: 'capacity_input', label: '台数入力', confirmation: 'SCREEN_UNCONFIRMED', counts: null },
+        { id: 'schedule_plan', label: '計画', confirmation: 'SCREEN_UNCONFIRMED', counts: null }
+      ],
+      observations: [{ path: '/operations/execution/dv/routes', status: 'OBSERVED_NOT_CAPACITY' }]
+    }
+  });
+  assert.equal(view.screen.confirmation, 'SCREEN_UNCONFIRMED');
+  assert.equal(view.screen.liveAcquireEnabled, false);
+  assert.equal(view.screen.targets[0].counts, null);
+  const html = handoff.render(view);
+  assert.equal(html.includes('SCREEN_UNCONFIRMED'), true);
+  assert.equal(html.includes('OBSERVED_NOT_CAPACITY'), true);
+  assert.equal(html.includes('>0<'), false);
+});

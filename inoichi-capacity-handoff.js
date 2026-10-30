@@ -26,6 +26,28 @@
     return inputFile - plan;
   }
 
+  function screenStatus(acquire) {
+    var data = acquire && acquire.data ? acquire.data : acquire;
+    var targets = data && Array.isArray(data.targets) ? data.targets : [];
+    var observed = data && Array.isArray(data.observed) ? data.observed : (data && Array.isArray(data.observations) ? data.observations : []);
+    var confirmed = targets.length > 0 && targets.every(function (target) { return target.confirmation === 'CONFIRMED'; });
+    return {
+      confirmation: confirmed && data.liveAcquireEnabled === true ? 'CONFIRMED' : 'SCREEN_UNCONFIRMED',
+      liveAcquireEnabled: Boolean(data && data.liveAcquireEnabled) && confirmed,
+      targets: targets.map(function (target) {
+        return {
+          id: target.id,
+          label: target.label || target.id,
+          confirmation: target.confirmation || 'SCREEN_UNCONFIRMED',
+          counts: null
+        };
+      }),
+      observed: observed.map(function (item) {
+        return { path: item.path || '', status: item.status || 'SCREEN_UNCONFIRMED' };
+      })
+    };
+  }
+
   function rankLabel(rank) {
     if (rank === 1) return '期限';
     if (rank === 2) return '不一致';
@@ -98,6 +120,7 @@
       label: data.overall && data.overall.label ? data.overall.label : '未確認',
       serviceDate: data.serviceDate || null,
       acquiredAt: data.dataUpdatedAt || data.reconciledAt || null,
+      screen: screenStatus(input.acquire || data.screenBinding),
       origins: origins,
       windowDays: input.window && Array.isArray(input.window.dates) ? input.window.dates : [],
       priority: input.window && Array.isArray(input.window.priority) ? input.window.priority : [],
@@ -154,6 +177,7 @@
       html += '<p data-ino-capacity-label="未接続">ENOUの照合結果はまだ読み込んでいません。</p></div>';
       return html;
     }
+    html += screenText(model.screen);
     html += '<p>対象日 ' + escapeHtml(model.serviceDate || '未確認') + ' / 判定 ' + escapeHtml(model.label) + '</p>';
     html += '<p>最終取得 ' + escapeHtml(model.acquiredAt || '未取得') + '</p>';
     html += lineTable(model.lines);
@@ -163,6 +187,18 @@
     html += changeText(model.changes);
     html += windowTable(model);
     html += '</div>';
+    return html;
+  }
+
+  function screenText(screen) {
+    var status = screen && screen.confirmation ? screen.confirmation : 'SCREEN_UNCONFIRMED';
+    var html = '<p data-ino-capacity-screen="' + escapeHtml(status) + '">Amazon画面対応 ' + escapeHtml(status) + '。実画面からの取得は無効です。</p>';
+    (screen && screen.targets || []).forEach(function (target) {
+      html += '<p>' + escapeHtml(target.label) + ' / ' + escapeHtml(target.confirmation) + ' / 件数 未取得</p>';
+    });
+    (screen && screen.observed || []).forEach(function (item) {
+      html += '<p>' + escapeHtml(item.status) + ' ' + escapeHtml(item.path) + '</p>';
+    });
     return html;
   }
 
@@ -259,7 +295,8 @@
     return Promise.all([
       fetch(base + '/api/v1/capacity/handoff' + query, { credentials: 'include' }),
       fetch(base + '/api/v1/capacity/window' + '?station=' + encodeURIComponent(station) + '&anchor=' + encodeURIComponent(serviceDate), { credentials: 'include' }),
-      fetch(base + '/api/v1/capacity/changes' + query, { credentials: 'include' })
+      fetch(base + '/api/v1/capacity/changes' + query, { credentials: 'include' }),
+      fetch(base + '/api/v1/capacity/acquire', { credentials: 'include' })
     ]).then(function (responses) {
       return Promise.all(responses.map(function (response) {
         return response.json().then(function (body) {
@@ -275,11 +312,13 @@
       }
       var windowBody = parts[1] && parts[1].httpStatus === 200 ? parts[1].body : null;
       var changeBody = parts[2] && parts[2].httpStatus === 200 ? parts[2].body : null;
+      var acquireBody = parts[3] && parts[3].httpStatus === 200 ? parts[3].body : null;
       return paint(present({
         httpStatus: 200,
         data: handoff.body.data || handoff.body,
         window: windowBody && (windowBody.data || windowBody),
         changes: changeBody && (changeBody.data || changeBody),
+        acquire: acquireBody && (acquireBody.data || acquireBody),
         serviceDate: serviceDate
       }));
     }).catch(function () {
