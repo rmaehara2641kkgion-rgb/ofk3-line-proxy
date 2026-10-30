@@ -866,6 +866,82 @@
     return results;
   }
 
+  var APPROACH_MARGIN_HOURS = 11;
+  var APPROACH_RULE = 'prefix6-margin11';
+
+  function addDaysIso(iso, days) {
+    var parts = String(iso || '').split('-');
+    if (parts.length < 3) return '';
+    var date = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+    if (isNaN(date.getTime())) return '';
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.getUTCFullYear() + '-' + pad2(date.getUTCMonth() + 1) + '-' + pad2(date.getUTCDate());
+  }
+
+  function todayDutyFromBlocks(blocks) {
+    if (!blocks || !blocks.length) return 'unknown';
+    var work = false;
+    var off = false;
+    var unknown = false;
+    blocks.forEach(function (block) {
+      if (!block || block.defined === false || typeof block.hours !== 'number') {
+        unknown = true;
+        return;
+      }
+      if (block.code === 'KYU' || block.hours === 0) off = true;
+      else if (block.hours > 0) work = true;
+    });
+    if (work) return 'work';
+    if (unknown) return 'unknown';
+    if (off) return 'off';
+    return 'unknown';
+  }
+
+  function priorWindowTotal(windows, referenceDate) {
+    var yesterday = addDaysIso(referenceDate, -1);
+    var found = null;
+    (windows || []).forEach(function (window) {
+      if (!window || window.endDate !== yesterday) return;
+      if (window.judgment === 'undetermined' || window.complete === false) return;
+      found = window;
+    });
+    return found && typeof found.totalHours === 'number' ? found.totalHours : null;
+  }
+
+  // 当日で終わる7日窓（開始=基準日-6日）の、当日を除いた6日分。
+  // 前日で終わる7日窓（基準日-7日を含む）は使わない。
+  function prefixHoursBeforeToday(series, referenceDate) {
+    var start = addDaysIso(referenceDate, -6);
+    var end = addDaysIso(referenceDate, -1);
+    if (!start || !end) return null;
+    var byDate = {};
+    (series || []).forEach(function (day) {
+      if (day && day.date) byDate[day.date] = day;
+    });
+    var total = 0;
+    var cursor = start;
+    for (var i = 0; i < 6; i++) {
+      var day = byDate[cursor];
+      if (!day || day.noData || day.hasUndefinedHours || day.hasUnconfirmed || typeof day.dailyTotalHours !== 'number') return null;
+      total += day.dailyTotalHours;
+      if (cursor === end) return total;
+      cursor = addDaysIso(cursor, 1);
+    }
+    return null;
+  }
+
+  function approachByMargin(preTodayHours, duty) {
+    if (typeof preTodayHours !== 'number' || !isFinite(preTodayHours)) {
+      return { notice: 'none', reason: '当日を含まない6日累計が取得不可' };
+    }
+    if (preTodayHours > 60 || preTodayHours < 60 - APPROACH_MARGIN_HOURS) {
+      return { notice: 'none', reason: '警戒幅の外' };
+    }
+    if (duty === 'work') return { notice: 'approach', reason: '当日勤務あり' };
+    if (duty === 'off') return { notice: 'excluded', reason: '当日休み' };
+    return { notice: 'unconfirmed', reason: '勤務予定未確認' };
+  }
+
   /**
    * roster_only / actual_progress の2種のリスクを判別するため、
    * 「全期間を予定値のみで計算した仮想Rolling」と
@@ -1320,6 +1396,13 @@
 
     // Rolling計算コア
     computeRolling60h: computeRolling60h,
+    APPROACH_MARGIN_HOURS: APPROACH_MARGIN_HOURS,
+    APPROACH_RULE: APPROACH_RULE,
+    addDaysIso: addDaysIso,
+    todayDutyFromBlocks: todayDutyFromBlocks,
+    priorWindowTotal: priorWindowTotal,
+    prefixHoursBeforeToday: prefixHoursBeforeToday,
+    approachByMargin: approachByMargin,
     computeRollingRisk: computeRollingRisk,
 
     // 行レベルパーサ
