@@ -41,7 +41,7 @@
         return {
           serviceDate: row.serviceDate || null,
           cycle: row.cycle || null,
-          serviceType: row.serviceType || null,
+          serviceType: row.serviceType === 'Biker' || row.serviceType === 'Standard Parcel' || row.serviceType === 'Nursery Route' ? row.serviceType : null,
           block: row.block || null,
           reservationQuantity: reservation.quantity == null ? null : reservation.quantity,
           assignedQuantity: reservation.assignedQuantity == null ? null : reservation.assignedQuantity,

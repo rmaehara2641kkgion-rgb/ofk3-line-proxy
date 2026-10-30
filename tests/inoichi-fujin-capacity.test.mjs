@@ -54,6 +54,27 @@ test('shows a three-source match without treating assigned quantity as the reser
   assert.equal(view.notificationsSent, false);
 });
 
+test('an unnamed service stays unconfirmed on screen', () => {
+  const html = fujin.render(fujin.present({
+    contract: fujin.CONTRACT,
+    executedAt: '2026-10-31T00:00:00.000Z',
+    rows: [{
+      serviceDate: '2026-10-31',
+      cycle: 'CYCLE_1',
+      serviceType: 'unconfirmed-service-1',
+      reservation: { quantity: 8, assignedQuantity: 8 },
+      scheduling: { reservationQuantity: null },
+      inputFile: { quantity: null },
+      delta: null,
+      judgment: 'UNCONFIRMED',
+      label: '未確認',
+    }],
+  }));
+  assert.equal(html.includes('未確認'), true);
+  assert.equal(html.includes('unconfirmed-service-1'), false);
+  assert.equal(html.includes('CYCLE_1'), true);
+});
+
 test('a wrong contract stays unfetched', () => {
   const view = fujin.present({ contract: 'other', rows: [{ quantity: 3 }] });
   assert.equal(view.state, 'missing');
