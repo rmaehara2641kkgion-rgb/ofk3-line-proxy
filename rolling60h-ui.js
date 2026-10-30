@@ -35,6 +35,7 @@
     rosterSources: [], // [{ label, sheetsData: {sheetName: rows2D} }]（読込順、最大2件）
     amazonRows: null,
     referenceDate: null, // 'YYYY-MM-DD'
+    prefixSummary: null,
     limitHours: 60.0,
     warningHours: 60.0,
     stationFilter: 'OFK3',
@@ -114,6 +115,7 @@
       '<div id="rolling-undefined-detail" class="text-xs text-ink-lighter mb-3"></div>' +
       '<div id="rolling-duplicate-detail" class="text-xs text-orange-500 mb-3"></div>' +
       '<div id="rolling-period-detail" class="text-xs text-ink-lighter mb-3"></div>' +
+      '<div id="rolling-prefix-detail" class="mb-3"></div>' +
       '<style id="rolling-name-sticky-style">' +
       '#wh60-rolling-subpanel .rolling-grid-scroll{overflow-x:auto;max-width:100%;min-width:0;}' +
       '#wh60-rolling-subpanel .rolling-grid-table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;}' +
@@ -350,6 +352,16 @@
         limitHours: STATE.limitHours,
         warningHours: STATE.warningHours,
       });
+      var prefixApproach = global.RollingPrefixView && STATE.referenceDate
+        ? global.RollingPrefixView.assessDriver(RollingCore, {
+          name: meta.name || '',
+          transportId: tid || '',
+          series: blendedSeries,
+          windows: windows,
+          referenceDate: STATE.referenceDate,
+          amazonLoaded: !!STATE.amazonRows,
+        })
+        : null;
 
       driverResults.push({
         key: key,
@@ -358,6 +370,7 @@
         maxDate: maxDate,
         series: blendedSeries,
         windows: windows,
+        prefixApproach: prefixApproach,
       });
     });
 
@@ -366,6 +379,12 @@
     });
 
     STATE.drivers = driverResults;
+    STATE.prefixSummary = global.RollingPrefixView
+      ? global.RollingPrefixView.summarize(driverResults.map(function (driver) { return driver.prefixApproach; }).filter(Boolean), {
+        referenceDate: STATE.referenceDate,
+        amazonLoaded: !!STATE.amazonRows,
+      })
+      : null;
     STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates, rosterConflicts: rosterConflicts, rosterBlankOverrides: rosterBlankOverrides };
     STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
       ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
@@ -401,7 +420,18 @@
     renderGrid();
   }
 
+  function paintPrefix() {
+    var html = global.RollingPrefixView
+      ? global.RollingPrefixView.renderHtml(STATE.prefixSummary)
+      : '';
+    ['rolling-prefix-detail', 'rolling-prefix-approach'].forEach(function (id) {
+      var host = document.getElementById(id);
+      if (host) host.innerHTML = html;
+    });
+  }
+
   function renderSummary() {
+    paintPrefix();
     if (!document.getElementById('rolling-total-drivers')) return;
     var totalDrivers = STATE.drivers.length;
     var rosterOnlyCount = 0,
@@ -564,13 +594,18 @@
         return !w.complete;
       }).length;
 
+      var prefix = driver.prefixApproach;
       var nameTitle = driver.meta.name;
       if (overWindowCount > 0) nameTitle += ' (超過期間' + overWindowCount + '件)';
       if (incompleteWindowCount > 0) nameTitle += ' (判定対象外' + incompleteWindowCount + '件)';
+      if (prefix && prefix.margin === 'approach') nameTitle += ' (11時間接近)';
+      if (prefix && prefix.windowJudgment === 'undetermined') nameTitle += ' (判定不能)';
       html += '<tr class="border-b border-gray-800">';
       html += '<td class="p-2 rolling-name-col font-medium" title="' + escapeAttr(nameTitle) + '">' + driver.meta.name +
         (overWindowCount > 0 ? ' <span class="text-red-400 text-[10px]">(超過期間' + overWindowCount + '件)</span>' : '') +
         (incompleteWindowCount > 0 ? ' <span class="text-gray-400 text-[10px]" title="隣接月データ不足のため判定対象外">(判定対象外' + incompleteWindowCount + '件)</span>' : '') +
+        (prefix && prefix.margin === 'approach' ? ' <span class="text-amber-700 text-[10px]">(11時間接近)</span>' : '') +
+        (prefix && prefix.windowJudgment === 'undetermined' ? ' <span class="text-gray-400 text-[10px]">(判定不能)</span>' : '') +
         '</td>';
 
       dateList.forEach(function (date) {
@@ -721,6 +756,12 @@
     },
     ingestLoadedFiles: ingestLoadedFiles,
     closeModal: closeModal,
+    prefixApproachHtml: function () {
+      return global.RollingPrefixView ? global.RollingPrefixView.renderHtml(STATE.prefixSummary) : '';
+    },
+    prefixApproachPrintHtml: function () {
+      return global.RollingPrefixView ? global.RollingPrefixView.renderPrintHtml(STATE.prefixSummary) : '';
+    },
   };
 
   global.RollingUI = RollingUI;

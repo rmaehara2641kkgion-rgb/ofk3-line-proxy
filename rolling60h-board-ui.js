@@ -482,6 +482,9 @@
       html += '</tr>';
     });
     html += '</tbody></table>';
+    if (global.RollingUI && typeof global.RollingUI.prefixApproachPrintHtml === 'function') {
+      html += global.RollingUI.prefixApproachPrintHtml();
+    }
     html += '<script>window.addEventListener("load",function(){window.print();});<\/script></body></html>';
     return html;
   }
@@ -556,6 +559,9 @@
       if (STATE.selected === r.transportId) h += renderDetail(r);
     });
     h += '</tbody></table></div>';
+    if (global.RollingUI && typeof global.RollingUI.prefixApproachHtml === 'function') {
+      h += global.RollingUI.prefixApproachHtml();
+    }
     h += '<p class="text-xs text-ink-lighter mt-2">' + esc(board.notice) + ' 時間は HH:MM です。超過予測は、基準日を終端とする7日間の予定込み予測が60時間を超える人です。別の期間の超過は、この判定を上書きしません。将来の超過は一覧に「将来超過あり」と期間を出します。過去の超過は判定欄を開くと履歴で確認できます。実績超過は予定を足す前から超えている人です。「・暫定」は予定を含む値です。要確認は、今日の7日間を判断する情報が足りない人です。</p>';
     h += noHistoryNotice();
     return h;
