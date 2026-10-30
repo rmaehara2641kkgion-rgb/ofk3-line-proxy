@@ -28,6 +28,73 @@
     return found;
   }
 
+  function monthDayLabel(iso) {
+    var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    if (!match) return '';
+    return String(Number(match[2])) + '月' + String(Number(match[3])) + '日';
+  }
+
+  function joinDates(dates) {
+    return dates.map(monthDayLabel).filter(Boolean).join('・');
+  }
+
+  function dayProblemKinds(day) {
+    if (!day || day.noData) return ['unread'];
+    var kinds = [];
+    var blocks = day.blocks || [];
+    if (day.hasUnconfirmed) {
+      if (blocks.some(function (block) { return block && block.conflict; })) kinds.push('conflict');
+      if (blocks.some(function (block) { return block && block.blank; })) kinds.push('unconfirmed');
+      if (!kinds.length) kinds.push('unconfirmed');
+    }
+    if (day.hasUndefinedHours) kinds.push('undefined');
+    if (!kinds.length && (typeof day.dailyTotalHours !== 'number' || !isFinite(day.dailyTotalHours))) kinds.push('other');
+    return kinds;
+  }
+
+  function explainPrefixGap(core, series, referenceDate) {
+    var prefix = core.prefixHoursBeforeToday(series, referenceDate);
+    if (typeof prefix === 'number' && isFinite(prefix)) return '';
+    var start = core.addDaysIso(referenceDate, -6);
+    var end = core.addDaysIso(referenceDate, -1);
+    if (!start || !end) return '';
+    var byDate = {};
+    (series || []).forEach(function (day) {
+      if (day && day.date) byDate[day.date] = day;
+    });
+    var groups = { unread: [], unconfirmed: [], undefined: [], conflict: [], other: [] };
+    var cursor = start;
+    for (var i = 0; i < 6; i++) {
+      var day = byDate[cursor];
+      var hoursKnown = day && typeof day.dailyTotalHours === 'number' && isFinite(day.dailyTotalHours);
+      var fails = !day || day.noData || day.hasUndefinedHours || day.hasUnconfirmed || !hoursKnown;
+      if (fails) {
+        dayProblemKinds(day).forEach(function (kind) {
+          if (groups[kind] && groups[kind].indexOf(cursor) === -1) groups[kind].push(cursor);
+        });
+      }
+      if (cursor === end) break;
+      cursor = core.addDaysIso(cursor, 1);
+      if (!cursor) return '';
+    }
+    var unread = joinDates(groups.unread);
+    var unconfirmed = joinDates(groups.unconfirmed);
+    var undefinedDays = joinDates(groups.undefined);
+    var conflict = joinDates(groups.conflict);
+    var other = joinDates(groups.other);
+    var sentences = [];
+    if (unread) sentences.push(unread + 'の勤務データが未読込のため、過去6日累計を計算できません。');
+    if (unconfirmed) sentences.push(unconfirmed + 'のシフトが未確定のため、過去6日累計を計算できません。');
+    if (undefinedDays) sentences.push(undefinedDays + 'に未定義の勤務記号があるため、過去6日累計を計算できません。');
+    if (conflict) sentences.push(conflict + 'の勤務データが衝突しているため、過去6日累計を計算できません。');
+    if (other) sentences.push(other + 'は取得不可のため、過去6日累計を計算できません。');
+    if (!sentences.length) return '';
+    if (sentences.length === 1 && unread) {
+      sentences[0] += 'その日のシフト表かAmazon実績を読み込んでください。';
+    }
+    return sentences.join('');
+  }
+
   function basisText(amazonLoaded, series, prefixStart, referenceDate) {
     if (!amazonLoaded) {
       return 'シフト予定に基づく判定です。Amazon実績は読み込んでいません。';
@@ -71,6 +138,7 @@
       duty: duty,
       margin: margin.notice,
       marginReason: margin.reason,
+      gapReason: explainPrefixGap(core, series, ref),
       windowJudgment: found ? found.judgment : 'undetermined',
       windowHours: found && typeof found.totalHours === 'number' ? found.totalHours : null,
       windowStart: windowStart,
@@ -127,13 +195,19 @@
     return esc(personLabel(row)) + ' ' + hoursText(hours) + (extra ? ' ' + esc(extra) : '');
   }
 
+  function rowReason(row) {
+    if (row && row.gapReason) return row.gapReason;
+    if (row && row.windowJudgment === 'undetermined') return row.marginReason || '';
+    return '';
+  }
+
   function listBlock(title, note, rows, hoursOf) {
     var html = '<h4 class="font-bold mt-3 mb-1">' + esc(title) + ' ' + rows.length + '人</h4>';
     html += '<p class="text-xs text-ink-lighter mb-1">' + esc(note) + '</p>';
     if (!rows.length) return html + '<p class="text-sm">該当なし</p>';
     html += '<ul class="text-sm" style="margin:0;padding-left:1.2em;">';
     rows.forEach(function (row) {
-      html += '<li>' + line(row, hoursOf(row), row.windowJudgment === 'undetermined' ? row.marginReason : '') + '</li>';
+      html += '<li>' + line(row, hoursOf(row), rowReason(row)) + '</li>';
     });
     html += '</ul>';
     return html;
@@ -160,7 +234,10 @@
     if (!summary || !summary.referenceDate) return '';
     function names(rows, hoursOf) {
       if (!rows.length) return '該当なし';
-      return rows.map(function (row) { return personLabel(row) + ' ' + hoursText(hoursOf(row)); }).join('、');
+      return rows.map(function (row) {
+        var extra = rowReason(row);
+        return personLabel(row) + ' ' + hoursText(hoursOf(row)) + (extra ? ' ' + extra : '');
+      }).join('、');
     }
     var html = '<h2>11時間接近（7日窓の接近とは別）</h2>';
     html += '<p>基準日 ' + esc(summary.referenceDate) + '。11時間接近の対象期間 ' + esc(summary.prefixStart) + '〜' + esc(summary.prefixEnd) + '。7日窓 ' + esc(summary.windowStart) + '〜' + esc(summary.windowEnd) + '。</p>';
