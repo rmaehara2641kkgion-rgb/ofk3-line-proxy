@@ -216,6 +216,24 @@
     if (summary.readable === false) {
       return '<p data-ino-capacity-reservation="読めない">予約JSONを読めません。台数は0にしていません。</p>';
     }
+    if (summary.shape === 'assignment_records') {
+      var assignedHtml = '<p data-ino-capacity-reservation="予約台数未取得">予約JSONは読めました。quantity と assignedQuantity は含まれていません。行数は台数にしていません。</p>';
+      assignedHtml += '<table><thead><tr><th>配送日</th><th>サイクル</th><th>分数</th><th>区分</th><th>行数</th><th>quantity</th><th>assignedQuantity</th></tr></thead><tbody>';
+      (summary.observedRecords || []).forEach(function (group) {
+        assignedHtml += '<tr><td>' + escapeHtml(group.serviceDate || '未取得') + '</td>';
+        assignedHtml += '<td>' + escapeHtml(group.waveGroupId || '未取得') + '</td>';
+        assignedHtml += '<td>' + escapeHtml(group.durationMinutes == null ? '未取得' : String(group.durationMinutes)) + '</td>';
+        assignedHtml += '<td>' + escapeHtml(group.serviceTypeLabel || '未確認') + '</td>';
+        assignedHtml += '<td>' + escapeHtml(group.recordCount == null ? '未取得' : String(group.recordCount)) + '</td>';
+        assignedHtml += '<td>' + escapeHtml(metricText(group.quantity)) + '</td>';
+        assignedHtml += '<td>' + escapeHtml(metricText(group.assignedQuantity)) + '</td></tr>';
+      });
+      assignedHtml += '</tbody></table>';
+      (summary.issues || []).forEach(function (issue) {
+        assignedHtml += '<p>診断 ' + escapeHtml(issue.code) + '</p>';
+      });
+      return assignedHtml;
+    }
     var html = '<p data-ino-capacity-reservation="取得済">予約JSON。quantity と assignedQuantity は別の値です。</p>';
     if (!summary.groups || !summary.groups.length) {
       html += '<p>この配送日の有効予約行はありません。</p>';

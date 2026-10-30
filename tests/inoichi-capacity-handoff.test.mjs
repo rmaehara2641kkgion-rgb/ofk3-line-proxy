@@ -212,3 +212,38 @@ test('a reservation summary keeps quantity apart from assigned quantity', () => 
   assert.equal(html.includes('Standard'), false);
   assert.equal(html.includes('Biker'), false);
 });
+
+test('assignment rows stay out of the reservation quantity cells', () => {
+  const view = handoff.present({
+    data: {
+      serviceDate: '2026-10-30',
+      overall: { judgment: 'missing', label: '未取得' },
+      lines: [],
+      sources: {},
+      reservationSummary: {
+        present: true,
+        realData: true,
+        readable: true,
+        shape: 'assignment_records',
+        groups: null,
+        observedRecords: [{
+          serviceDate: '2026-10-30',
+          waveGroupId: null,
+          durationMinutes: 390,
+          serviceTypeLabel: '区分1',
+          serviceTypeName: null,
+          recordCount: 20,
+          quantity: { value: null, state: 'missing' },
+          assignedQuantity: { value: null, state: 'missing' }
+        }],
+        issues: [{ code: 'quantity_field_absent' }]
+      }
+    }
+  });
+  const html = handoff.render(view);
+  assert.equal(html.includes('行数は台数にしていません'), true);
+  assert.equal(html.includes('>20<'), true);
+  assert.equal(html.includes('未取得'), true);
+  assert.equal(html.includes('診断 quantity_field_absent'), true);
+  assert.equal(html.includes('Standard'), false);
+});
