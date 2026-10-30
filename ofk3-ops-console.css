@@ -1,0 +1,291 @@
+/* OFK3 MODERN OPERATIONS CONSOLE — Phase 3
+   Tokens live here. A panel opts in with class ofk3-ops.
+   All 20 panels opt in. The header and page background follow
+   whichever panel is visible.
+   Header, page background, and the selected-tab underline apply only while
+   one of those panels is visible (body:has(.ofk3-ops:not(.hidden))).
+   The other fifteen tabs keep the previous theme. Do not retarget .card,
+   .btn-primary, header, or .tab-active without this guard. Leave switchTab alone.
+
+   Business colors stay on their own classes and inline styles:
+   route status dots, driver 配管率/誤配率, quality summary hues,
+   WH60 judgment badges and shift-grid rings, duty-risk row tints, LINE greens.
+   Zebra striping is not applied to WH60 or duty-risk, because those rows
+   carry risk backgrounds. The shift grid keeps border-collapse:separate. */
+
+:root {
+  --ofk3-ops-bg: #F4F6F9;
+  --ofk3-ops-card: #FFFFFF;
+  --ofk3-ops-header: #18283D;
+  --ofk3-ops-text: #172B45;
+  --ofk3-ops-muted: #64748B;
+  --ofk3-ops-border: #DCE4EE;
+  --ofk3-ops-accent: #2563EB;
+  --ofk3-ops-success: #15803D;
+  --ofk3-ops-warning: #D97706;
+  --ofk3-ops-error: #DC2626;
+  --ofk3-ops-radius: 8px;
+  --ofk3-ops-shadow: 0 1px 2px rgba(23, 43, 69, 0.05);
+  --ofk3-ops-control-h: 32px;
+}
+
+body:has(.ofk3-ops:not(.hidden)) {
+  background: var(--ofk3-ops-bg);
+}
+
+body:has(.ofk3-ops:not(.hidden)) header#app-header {
+  background: var(--ofk3-ops-header);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body:has(.ofk3-ops:not(.hidden)) header#app-header .btn-secondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #F4F6F9;
+  min-height: var(--ofk3-ops-control-h);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+body:has(.ofk3-ops:not(.hidden)) header#app-header .btn-secondary:hover {
+  border-color: #93C5FD;
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.06);
+  transform: none;
+  box-shadow: none;
+}
+
+body:has(.ofk3-ops:not(.hidden)) nav.flex.gap-6 {
+  border-color: var(--ofk3-ops-border) !important;
+}
+
+body:has(.ofk3-ops:not(.hidden)) nav.flex.gap-6 > button {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+body:has(.ofk3-ops:not(.hidden)) .tab-active {
+  border-bottom-color: var(--ofk3-ops-accent);
+  color: var(--ofk3-ops-text);
+  font-weight: 600;
+}
+
+body:has(.ofk3-ops:not(.hidden)) .tab-inactive {
+  color: var(--ofk3-ops-muted);
+}
+
+body:has(.ofk3-ops:not(.hidden)) .tab-inactive:hover {
+  color: var(--ofk3-ops-text);
+}
+
+.ofk3-ops {
+  color: var(--ofk3-ops-text);
+}
+
+.ofk3-ops .card {
+  border-radius: var(--ofk3-ops-radius);
+  box-shadow: var(--ofk3-ops-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ofk3-ops .card:not([class*="from-"]):not([class*="bg-red"]):not([class*="bg-emerald"]):not([class*="bg-yellow"]):not([class*="bg-amber"]):not([class*="bg-orange"]):not([class*="bg-green"]):not([class*="bg-blue"]) {
+  background: var(--ofk3-ops-card);
+}
+
+.ofk3-ops .card:not([class*="border-l-"]):not([class*="border-emerald"]):not([class*="border-red"]):not([class*="border-yellow"]):not([class*="border-orange"]):not([class*="border-green"]):not([class*="border-blue"]):not([class*="border-amber"]):not([class*="border-purple"]) {
+  border: 1px solid var(--ofk3-ops-border);
+}
+
+.ofk3-ops .card:hover,
+.ofk3-ops .card:not([class*="border-l-"]):hover {
+  box-shadow: var(--ofk3-ops-shadow);
+}
+
+.ofk3-ops .card:not([class*="border-l-"]):not([class*="border-emerald"]):not([class*="border-red"]):not([class*="border-yellow"]):not([class*="border-orange"]):not([class*="border-green"]):not([class*="border-blue"]):not([class*="border-amber"]):not([class*="border-purple"]):hover {
+  border-color: var(--ofk3-ops-border);
+}
+
+.ofk3-ops .upload-zone {
+  background: var(--ofk3-ops-card);
+  border: 1px dashed var(--ofk3-ops-border);
+  border-radius: var(--ofk3-ops-radius);
+  box-shadow: var(--ofk3-ops-shadow);
+}
+
+.ofk3-ops .upload-zone:hover,
+.ofk3-ops .upload-zone.dragover {
+  border-color: var(--ofk3-ops-accent);
+  background: var(--ofk3-ops-card);
+}
+
+.ofk3-ops h2:not([class*="text-emerald"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-orange"]):not([class*="text-green"]):not([class*="text-blue"]):not([class*="text-amber"]):not([class*="text-purple"]),
+.ofk3-ops h3:not([class*="text-emerald"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-orange"]):not([class*="text-green"]):not([class*="text-blue"]):not([class*="text-amber"]):not([class*="text-purple"]) {
+  color: var(--ofk3-ops-text);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.ofk3-ops .text-ink-lighter {
+  color: var(--ofk3-ops-muted);
+}
+
+.ofk3-ops .text-2xl,
+.ofk3-ops .font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.ofk3-ops .btn-primary {
+  background: var(--ofk3-ops-accent);
+  color: #FFFFFF;
+  border: none;
+  min-height: var(--ofk3-ops-control-h);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.ofk3-ops .btn-primary:hover {
+  background: #1D4ED8;
+  color: #FFFFFF;
+  transform: none;
+  box-shadow: none;
+}
+
+.ofk3-ops .btn-secondary {
+  background: var(--ofk3-ops-card);
+  border: 1px solid var(--ofk3-ops-border);
+  color: var(--ofk3-ops-text);
+  min-height: var(--ofk3-ops-control-h);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.ofk3-ops .btn-secondary:hover {
+  border-color: var(--ofk3-ops-accent);
+  color: var(--ofk3-ops-accent);
+  background: var(--ofk3-ops-card);
+  transform: none;
+  box-shadow: none;
+}
+
+.ofk3-ops .card > .flex,
+.ofk3-ops .flex.justify-between {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.ofk3-ops table:not(.rolling-grid-table) {
+  border-collapse: collapse;
+}
+
+.ofk3-ops thead tr {
+  background: #EEF2F6 !important;
+}
+
+.ofk3-ops th:not([class*="text-emerald"]):not([class*="text-red"]):not([class*="text-yellow"]):not([class*="text-orange"]):not([class*="text-green"]):not([class*="text-blue"]):not([class*="text-amber"]):not([class*="text-purple"]) {
+  color: var(--ofk3-ops-muted) !important;
+  font-weight: 600;
+}
+
+.ofk3-ops tbody tr {
+  border-bottom: 1px solid var(--ofk3-ops-border);
+}
+
+#panel-dashboard.ofk3-ops tbody tr:nth-child(even),
+#panel-drivers.ofk3-ops tbody tr:nth-child(even),
+#panel-quality.ofk3-ops tbody tr:nth-child(even) {
+  background: #F8FAFC !important;
+}
+
+#panel-dashboard.ofk3-ops tbody tr:hover,
+#panel-drivers.ofk3-ops tbody tr:hover,
+#panel-quality.ofk3-ops tbody tr:hover {
+  background: rgba(37, 99, 235, 0.05) !important;
+}
+
+#panel-dashboard.ofk3-ops td input[type="text"] {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 1px dashed var(--ofk3-ops-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  min-height: 28px;
+  color: var(--ofk3-ops-text) !important;
+}
+
+#panel-dashboard.ofk3-ops td input[type="text"]:focus {
+  border-bottom-color: var(--ofk3-ops-accent) !important;
+  box-shadow: none !important;
+}
+
+.ofk3-ops :not(td) > input:not([type="file"]):not([type="checkbox"]):focus,
+.ofk3-ops select:focus,
+.ofk3-ops textarea:focus {
+  border-color: var(--ofk3-ops-accent) !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
+}
+
+#panel-wh60.ofk3-ops .rolling-grid-scroll,
+#panel-wh60.ofk3-ops .overflow-x-auto,
+#panel-duty-risk.ofk3-ops .overflow-x-auto {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+#panel-duty-risk.ofk3-ops .overflow-x-auto table {
+  width: max-content;
+  min-width: 100%;
+}
+
+#panel-duty-risk.ofk3-ops .overflow-x-auto th,
+#panel-duty-risk.ofk3-ops .overflow-x-auto td {
+  white-space: nowrap;
+}
+
+.ofk3-ops:not(#panel-dashboard) .overflow-x-auto table {
+  width: max-content;
+  min-width: 100%;
+}
+
+.ofk3-ops:not(#panel-dashboard) .overflow-x-auto th,
+.ofk3-ops:not(#panel-dashboard) .overflow-x-auto td {
+  white-space: nowrap;
+}
+
+#panel-wh60.ofk3-ops .rolling-grid-table th,
+#panel-wh60.ofk3-ops .rolling-grid-table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .ofk3-ops .grid.grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .ofk3-ops .grid.grid-cols-2,
+  .ofk3-ops .grid.grid-cols-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media print {
+  body:has(.ofk3-ops:not(.hidden)) {
+    background: white;
+  }
+  .ofk3-ops .card,
+  .ofk3-ops .upload-zone {
+    background: white !important;
+    box-shadow: none !important;
+  }
+  #panel-dashboard.ofk3-ops .card,
+  #panel-dashboard.ofk3-ops .upload-zone {
+    border: 1px solid #ddd !important;
+  }
+  .ofk3-ops thead tr {
+    background: #f3f4f6 !important;
+  }
+}

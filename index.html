@@ -291,6 +291,7 @@
       100% { opacity: 0; pointer-events: none; }
     }
   </style>
+  <link rel="stylesheet" href="ofk3-ops-console.css?v=20261031-ops2">
 </head>
 <body class="min-h-screen text-ink tab-exec">
   <!-- Splash Screen -->
@@ -357,7 +358,7 @@
       </nav>
 
       <!-- Executive Dashboard Tab -->
-      <div id="panel-exec" class="hidden">
+      <div id="panel-exec" class="hidden ofk3-ops">
         <!-- シフト表アップロード -->
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3">
@@ -541,7 +542,7 @@
       </div>
 
       <!-- Dashboard Tab -->
-      <div id="panel-dashboard">
+      <div id="panel-dashboard" class="ofk3-ops">
         <!-- Upload Section -->
         <div id="upload-section">
           <div class="grid grid-cols-2 gap-4">
@@ -651,7 +652,7 @@
       </div>
 
       <!-- Drivers Tab -->
-      <div id="panel-drivers" class="hidden">
+      <div id="panel-drivers" class="hidden ofk3-ops">
         <div class="flex gap-2 mb-4">
           <button id="driver-mode-normal-btn" class="btn-primary text-xs px-3 py-1.5 rounded">通常集計</button>
           <button id="driver-mode-cumulative-btn" class="btn-secondary text-xs px-3 py-1.5 rounded">累計データ作成</button>
@@ -767,7 +768,7 @@
       </div>
 
       <!-- Master Management Tab -->
-      <div id="panel-master" class="hidden">
+      <div id="panel-master" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">マスタ管理</h2>
@@ -855,7 +856,7 @@
       </div>
 
       <!-- Optimization / Assign Support Tab -->
-      <div id="panel-optimization" class="hidden">
+      <div id="panel-optimization" class="hidden ofk3-ops">
         <div class="mb-6 pb-4 border-b border-amber-200">
           <h2 class="text-lg font-bold text-slate-800">アサイン・最適化</h2>
           <p class="text-xs text-ink-lighter mt-1">エリア経験データに基づき、未経験エリアへの誤アサインを防ぐ判断支援（自動配車確定はしません）</p>
@@ -973,7 +974,7 @@
       </div>
 
       <!-- Manual Assign Board Tab -->
-      <div id="panel-manual-assign" class="hidden">
+      <div id="panel-manual-assign" class="hidden ofk3-ops">
         <div class="mb-6 pb-4 border-b border-amber-200">
           <h2 class="text-lg font-bold text-slate-800">📋 手動アサイン補助（MANUAL ASSIGN BOARD）</h2>
           <p class="text-xs text-ink-lighter mt-1">Amazon Cortexへの手動アサイン作業の「コピー」部分だけを高速化します。Route→担当者の決定は行いません。Cortexの自動操作も行いません。</p>
@@ -1033,7 +1034,7 @@
       </div>
 
       <!-- Tenko (Roll Call) Management Tab -->
-      <div id="panel-tenko" class="hidden">
+      <div id="panel-tenko" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">点呼管理</h2>
@@ -1165,7 +1166,7 @@
       </div>
 
       <!-- Tenko Match (点呼照合) Tab -->
-      <div id="panel-tenko-match" class="hidden">
+      <div id="panel-tenko-match" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">点呼照合</h2>
@@ -1255,7 +1256,7 @@
         </div>
       </div>
       <!-- Scan Tab -->
-      <div id="panel-scan" class="hidden">
+      <div id="panel-scan" class="hidden ofk3-ops">
         <div class="card p-6 mb-4">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-base font-bold">📦 仕分けスキャン</h3>
@@ -1329,7 +1330,7 @@
       </div>
 
       <!-- 住所検索タブ -->
-      <div id="panel-addr-search" class="hidden">
+      <div id="panel-addr-search" class="hidden ofk3-ops">
         <div class="card p-6 mb-4">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-base font-bold">🔍 住所検索</h3>
@@ -1442,7 +1443,7 @@
         </div>
       </div>
 
-      <div id="panel-billing" class="hidden">
+      <div id="panel-billing" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">請求金額照合</h2>
@@ -1543,7 +1544,7 @@
       </div>
 
       <!-- FTDS分析 Tab -->
-      <div id="panel-ftds" class="hidden">
+      <div id="panel-ftds" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">📋 FTDS / CC</h2>
@@ -1873,7 +1874,7 @@
       </div>
 
       <!-- ===== 協力会社ダッシュボード Tab ===== -->
-      <div id="panel-team-quality" class="hidden">
+      <div id="panel-team-quality" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
           <div>
             <h2 class="text-sm font-medium">&nbsp;&#127970; &#21332;&#21147;&#20250;&#31038;&#12480;&#12483;&#12471;&#12517;&#12508;&#12540;&#12489;</h2>
@@ -2029,7 +2030,7 @@
       </div>
 
       <!-- ===== 品質管理 Tab ===== -->
-      <div id="panel-quality" class="hidden">
+      <div id="panel-quality" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">✅ 品質管理（Quality）</h2>
@@ -2340,7 +2341,7 @@
       </div>
 
       <!-- 台数照合 Tab -->
-      <div id="panel-fleet" class="hidden">
+      <div id="panel-fleet" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-sm font-medium">🔔 台数照合（自社 vs Amazon）</h2>
@@ -2416,7 +2417,7 @@
       </div>
 
       <!-- 物量管理 Tab -->
-      <div id="panel-volume" class="hidden">
+      <div id="panel-volume" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">📊 物量管理</h2>
@@ -2567,7 +2568,7 @@
       <!-- 「本日アラート」サブタブは実運用確認の結果不要と判断され削除。
            Rolling 60h（旧: 月間Rolling）のみを常時表示する。
            日次ロジック(wh60*関数群)・LINE通知・自動チェックのJS本体には一切手を入れていない。 -->
-      <div id="panel-wh60" class="hidden">
+      <div id="panel-wh60" class="hidden ofk3-ops">
         <!-- Rolling 60h サブパネル。内容は rolling60h-ui.js が動的に描画する
              （index.html への直書きを避けるため、コンテナのみここに置く）。 -->
         <!-- ローカル完結の60時間ボード（データ取込 / 残り時間・リスク一覧）。rolling60h-board-ui.js が描画する。 -->
@@ -2575,14 +2576,14 @@
         <div id="wh60-rolling-subpanel" style="display:none;"></div>
       </div>
 
-      <div id="panel-duty-risk" class="hidden">
+      <div id="panel-duty-risk" class="hidden ofk3-ops">
         <div id="rolling-dispatch-host"><p id="rolling-dispatch-note">WH60で再計算すると、今日と明日の配車調整をここに表示します。未計算は安全ではありません。</p></div>
         <div id="rolling-prefix-approach"><div class="card p-4 mb-4 text-sm">基準日の11時間接近は、まだ計算されていません。WH60でシフト表を読み込むと、ここに表示します。</div></div>
         <div id="duty-risk-root"></div>
       </div>
 
       <!-- 時間指定抽出 Tab -->
-      <div id="panel-tw-extract" class="hidden">
+      <div id="panel-tw-extract" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">📦 時間指定抽出</h2>
@@ -2813,7 +2814,7 @@
       </div>
 
       <!-- MAP管理 Tab -->
-      <div id="panel-map-master" class="hidden">
+      <div id="panel-map-master" class="hidden ofk3-ops">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-bold">MAP管理 - 住所マスター</h2>
