@@ -380,7 +380,10 @@ function run() {
       plannedDepartureTime: Date.parse('2026-09-18T09:07:00+09:00')
     });
     var picked = Core.tourRoutesFromSummaries({ rmsRouteSummaries: rows });
-    assert(picked.length === n, '11:00 count is dynamic ' + n + ', got ' + picked.length);
+    assert(picked.length === n + 1, 'visit-order tour includes the non-11:00 route, got ' + picked.length);
+    assert(picked.some(function (r) { return r.routeCode === 'DCX99'; }), '09:07 route stays in the visit-order tour');
+    var elevenOnly = Core.selectElevenOClockRoutes({ rmsRouteSummaries: rows });
+    assert(elevenOnly.routes.length === n, '11:00 priority selection stays dynamic ' + n);
   });
 
   var tourStore = Core.createCaptureStore();
@@ -398,9 +401,10 @@ function run() {
     }
   });
   var tour = Core.armTour(tourStore, Core.createTourState({ timeoutMs: 50 }));
-  assert(tour.routes.length === 3, 'tour targets 11:00 routes only, got ' + tour.routes.length);
+  assert(tour.routes.length === 4, 'tour includes the 09:07 route, got ' + tour.routes.length);
+  assert(tour.routes[3].routeCode === 'DCX10' && tour.routes[3].cycle === 'C1', 'non-11 route keeps its cycle');
   var p0 = Core.tourProgress(tourStore, tour);
-  assert(p0.selectedCount === 3 && p0.detailsCount === 0 && p0.detailsTotal === 3, 'N-route progress 0/3');
+  assert(p0.selectedCount === 4 && p0.detailsCount === 0 && p0.detailsTotal === 4, 'N-route progress 0/4');
   var first = Core.nextTourRoute(tourStore, tour);
   assert(first.routeCode === 'DCX31', 'first pending is DCX31');
   Core.applyCapturedCortexResponse(tourStore, {
@@ -449,6 +453,8 @@ function run() {
       }
     })
   });
+  var fourth = Core.nextTourRoute(tourStore, tour);
+  assert(fourth && fourth.routeCode === 'DCX10', 'continues to the non-11:00 route, got ' + (fourth && fourth.routeCode));
   var last = Core.nextTourRoute(tourStore, tour);
   assert(last == null && tour.status === 'done', 'tour completes remaining routes');
   var pDone = Core.tourProgress(tourStore, tour);
@@ -666,6 +672,61 @@ function run() {
   assert(ingested.routeStops && ingested.routeStops.length === 5, 'ingest stores full routeStops');
   assert(ingested.packageSequenceIndex && ingested.packageSequenceIndex.length === 5, 'ingest stores full packageSequenceIndex');
   assert(typeof Core.extractPackageSequenceIndex === 'function', 'extractPackageSequenceIndex exported');
+
+  // Visit order is captured for every departure hour. 13:00 packages stay on 11:00 routes.
+  var Phase2 = require('../cortex-capture-extension/phase1-core.js');
+  var mixedSummaries = {
+    rmsRouteSummaries: [
+      { routeId: 'E11', routeCode: 'DCX47', plannedDepartureTime: Date.parse('2026-09-18T11:12:00+09:00') },
+      { routeId: 'E09', routeCode: 'DCX10', plannedDepartureTime: Date.parse('2026-09-18T09:07:00+09:00') },
+      { routeId: 'C2', routeCode: 'DMX3', plannedDepartureTime: Date.parse('2026-09-18T09:30:00+09:00') },
+      { routeId: 'C3', routeCode: 'DSX2', plannedDepartureTime: Date.parse('2026-09-18T14:10:00+09:00') },
+      { routeId: 'DUP', routeCode: 'DCX47', plannedDepartureTime: Date.parse('2026-09-18T16:00:00+09:00') },
+      { routeId: 'NODEP', routeCode: 'DCX8' }
+    ]
+  };
+  var visit = Core.selectVisitOrderRoutes(mixedSummaries);
+  assert(visit.ok, 'visit-order select ok');
+  assert(visit.routes.map(function (r) { return r.routeId; }).join(',') === 'E11,E09,C2,C3,DUP', 'all departures kept, missing departure skipped');
+  assert(visit.routes.map(function (r) { return r.cycle; }).join(',') === 'C1,C1,C2,C3,C1', 'cycle follows route prefix');
+  assert(visit.routes.every(function (r) { return r.departureDate === '2026-09-18'; }), 'departure date stays with the route');
+  assert(visit.warnings.length === 1 && visit.warnings[0].reason === 'DUPLICATE_ROUTE_CODE', 'duplicate routeCode is kept and warned');
+  assert(visit.skipped.length === 1 && visit.skipped[0].reason === Core.ERROR.NO_DEPARTURE, 'missing departure is not invented');
+  var elevenMixed = Core.selectElevenOClockRoutes(mixedSummaries);
+  assert(elevenMixed.routes.map(function (r) { return r.routeId; }).join(',') === 'E11', '11:00 selection unchanged');
+  var phaseVisit = Phase2.selectVisitOrderRoutes(mixedSummaries);
+  assert(phaseVisit.routes.map(function (r) { return r.routeId; }).join(',') === visit.routes.map(function (r) { return r.routeId; }).join(','), 'extension core selects the same visit-order routes');
+
+  function routeBody(routeId, routeCode, departure, seq, windowEnd, trackingId) {
+    return {
+      rmsRouteDetails: {
+        routeId: routeId,
+        routeCode: routeCode,
+        localDate: [2026, 9, 18],
+        plannedDepartureTime: departure,
+        stops: [
+          seqStop(seq, Date.parse('2026-09-18T12:00:00+09:00'), windowEnd, 'A1'),
+          { sequenceNumber: null, addressId: 'A2', plannedEndTime: Date.parse('2026-09-18T12:30:00+09:00'), tasks: [task({ addressId: 'A2', windowEndTime: win15, domainMap: { scannableId: 'NOSEQ' } })] }
+        ]
+      },
+      addresses: [
+        { addressId: 'A1', address1: '福岡1', city: '福岡市', latitude: 33.58, longitude: 130.40 },
+        { addressId: 'A2', address1: '福岡2', city: '福岡市', latitude: 33.59, longitude: 130.41 }
+      ]
+    };
+  }
+  var expanded = Core.ingestBundle({
+    details: [
+      routeBody('E11', 'DCX47', Date.parse('2026-09-18T11:12:00+09:00'), 2, win13, 'DA2'),
+      routeBody('E09', 'DCX10', Date.parse('2026-09-18T09:07:00+09:00'), 4, win13, 'DA4'),
+      { notRouteDetails: true }
+    ]
+  });
+  assert(expanded.ok && expanded.failures.length === 1, 'one details failure does not drop the captured routes');
+  assert(expanded.packageCount === 1 && expanded.packages[0].routeCode === 'DCX47', '13:00 packages stay on the 11:00 route');
+  assert(expanded.routeStops.filter(function (s) { return s.routeCode === 'DCX10'; }).map(function (s) { return s.sequenceNumber; }).join(',') === '4,', 'non-11 route keeps sequence and a missing sequence');
+  assert(expanded.packageSequenceIndex.filter(function (r) { return r.routeCode === 'DCX10'; }).length === 1, 'missing sequence is not indexed');
+  assert(expanded.packageSequenceIndex.some(function (r) { return r.routeCode === 'DCX10' && r.sequenceNumber === 4; }), 'non-11 sequenceNumber reaches the index');
 
   console.log('cortex-13-priority-core.test.mjs OK');
 }

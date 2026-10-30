@@ -2,7 +2,7 @@
  * OFK3 Cortex capture runner — page MAIN world only.
  * Wraps SPA fetch/XHR response JSON. Does not call Cortex APIs.
  * Does not read Cookie / Authorization / HMAC / session / timestamp.
- * Phase 2: one start() walks all uncaptured 11:00 routes sequentially.
+ * Phase 2: one start() walks every uncaptured route that has a planned departure.
  */
 (function (global) {
   'use strict';

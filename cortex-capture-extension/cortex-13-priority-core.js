@@ -18,6 +18,26 @@
   var CUTOFF_M = 0;
   var CUTOFF_S = 0;
   var ELEVEN_HOUR = 11;
+  var CYCLE_PREFIX_MAP = { DCX: 'C1', DMX: 'C2', DSX: 'C3' };
+
+  function cycleOfRouteCode(routeCode) {
+    var m = String(routeCode || '').toUpperCase().match(/^([A-Z]+)/);
+    if (!m) return '';
+    return CYCLE_PREFIX_MAP[m[1]] || '';
+  }
+
+  function priorityPackagesEligible(routeDetails) {
+    var depMs = epochToMs(routeDetails && routeDetails.plannedDepartureTime);
+    var parts = tokyoParts(depMs);
+    if (!parts) return true;
+    return parts.hour === ELEVEN_HOUR;
+  }
+
+  function departureDateKey(parts) {
+    if (!parts) return '';
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    return parts.year + '-' + pad(parts.month) + '-' + pad(parts.day);
+  }
 
   var ERROR = {
     SCHEMA: 'API_SCHEMA_CHANGED',
@@ -228,6 +248,80 @@
     return { ok: true, routes: routes, skipped: skipped, warnings: warnings };
   }
 
+  /**
+   * Visit-order capture set. Any planned departure hour.
+   * route-details is still the SPA response for that routeId; this does not call Amazon.
+   * 11:00 priority selection stays in selectElevenOClockRoutes.
+   * Same routeCode with another routeId is kept. The MAP already leaves an ambiguous tracking ID unnumbered.
+   */
+  function selectVisitOrderRoutes(summariesPayload) {
+    var warnings = [];
+    if (!summariesPayload || !Array.isArray(summariesPayload.rmsRouteSummaries)) {
+      return {
+        ok: false,
+        error: ERROR.SCHEMA,
+        message: 'route-summaries に rmsRouteSummaries がありません',
+        routes: [],
+        skipped: [],
+        warnings: warnings
+      };
+    }
+    var routes = [];
+    var skipped = [];
+    var missingDeparture = 0;
+    var seenCode = {};
+    summariesPayload.rmsRouteSummaries.forEach(function (row) {
+      if (!row || !row.routeId) {
+        skipped.push({ reason: ERROR.SCHEMA, routeCode: row && row.routeCode });
+        return;
+      }
+      var depMs = epochToMs(row.plannedDepartureTime);
+      if (depMs == null) {
+        missingDeparture += 1;
+        skipped.push({
+          reason: ERROR.NO_DEPARTURE,
+          routeId: row.routeId,
+          routeCode: row.routeCode
+        });
+        return;
+      }
+      var parts = tokyoParts(depMs);
+      var code = String(row.routeCode || '');
+      if (code && seenCode[code]) {
+        warnings.push({
+          reason: 'DUPLICATE_ROUTE_CODE',
+          routeCode: code,
+          routeId: row.routeId,
+          otherRouteId: seenCode[code]
+        });
+      } else if (code) {
+        seenCode[code] = row.routeId;
+      }
+      routes.push({
+        routeId: row.routeId,
+        routeCode: row.routeCode,
+        cycle: cycleOfRouteCode(code),
+        plannedDepartureTime: depMs,
+        plannedDepartureClock: formatTokyoClock(depMs),
+        departureDate: departureDateKey(parts),
+        serviceTypeName: row.serviceTypeName || '',
+        selected: true
+      });
+    });
+    if (summariesPayload.rmsRouteSummaries.length &&
+        missingDeparture === summariesPayload.rmsRouteSummaries.length) {
+      return {
+        ok: false,
+        error: ERROR.SCHEMA,
+        message: '全Routeで plannedDepartureTime が欠損しています（schema変更の可能性）',
+        routes: [],
+        skipped: skipped,
+        warnings: warnings
+      };
+    }
+    return { ok: true, routes: routes, skipped: skipped, warnings: warnings };
+  }
+
   function extractFromRouteDetails(details, options) {
     options = options || {};
     var notes = [];
@@ -326,6 +420,7 @@
       localDateKey: localDateKey(localDate),
       driverName: driverNameFromDetails(details),
       plannedDepartureClock: formatTokyoClock(epochToMs(rd.plannedDepartureTime)),
+      priorityEligible: priorityPackagesEligible(rd),
       packages: packages,
       stopNumbers: stopNumbers,
       stopCount: stopNumbers.length,
@@ -666,9 +761,11 @@
     (results || []).forEach(function (r) {
       if (!r || !r.ok) return;
       routes.push(r);
-      (r.packages || []).forEach(function (p) {
-        packages.push(Object.assign({ driverName: r.driverName }, p));
-      });
+      if (r.priorityEligible !== false) {
+        (r.packages || []).forEach(function (p) {
+          packages.push(Object.assign({ driverName: r.driverName }, p));
+        });
+      }
       (r.routeStops || []).forEach(function (s) {
         routeStops.push(Object.assign({ driverName: r.driverName }, s));
       });
@@ -2842,7 +2939,7 @@
   }
 
   function tourRoutesFromSummaries(summaries) {
-    var sel = selectElevenOClockRoutes(summaries);
+    var sel = selectVisitOrderRoutes(summaries);
     if (!sel || !sel.ok) return [];
     return (sel.routes || []).slice();
   }
@@ -3346,6 +3443,7 @@
     pickRouteClickCandidate: pickRouteClickCandidate,
     resolveClickableAncestor: resolveClickableAncestor,
     selectElevenOClockRoutes: selectElevenOClockRoutes,
+    selectVisitOrderRoutes: selectVisitOrderRoutes,
     extractFromRouteDetails: extractFromRouteDetails,
     extractRouteSequence: extractRouteSequence,
     extractPackageSequenceIndex: extractPackageSequenceIndex,
