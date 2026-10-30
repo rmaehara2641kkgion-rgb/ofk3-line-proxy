@@ -883,8 +883,30 @@
     PACKAGE_DOM_NOT_FOUND: 'package_dom_not_found',
     PACKAGE_CLICK_TARGET_NOT_FOUND: 'package_click_target_not_found',
     ROUTE_ABORTED: 'route_aborted',
-    UI_BLOCKED: 'ui_blocked'
+    UI_BLOCKED: 'ui_blocked',
+    COMPLETED_SKIPPED: 'completed_skipped'
   };
+
+  // C2/C3 bag only. Shorter than the 13:00 bag waits (3s+3s expand, 3s+3s trDetails,
+  // 5s close, 3 stop-open attempts). The 13:00 path keeps its own constants.
+  var C2C3_BAG_TIMING = {
+    scrollStepMs: 40,
+    scrollStepRatio: 0.9,
+    pollMs: 50,
+    stopExpandMs: 1200,
+    stopExpandExtraMs: 600,
+    trWaitMs: 1200,
+    trWaitExtraMs: 800,
+    stopCloseMs: 1500,
+    routeOpenMs: 8000,
+    routeRetryMs: 4000,
+    stopOpenAttempts: 2
+  };
+
+  function isC2C3RouteCode(routeCode) {
+    var code = String(routeCode || '').toUpperCase();
+    return code.indexOf('DMX') === 0 || code.indexOf('DSX') === 0;
+  }
 
   function hasTrDetails(trDetailsByTrId, referenceId) {
     return !!(trDetailsByTrId && referenceId &&
@@ -981,6 +1003,137 @@
     });
     out.targets.sort(compareBagTargets);
     return out;
+  }
+
+  // C2/C3 bag targets. Same 13:00 package rule as selectBagTargets, DMX/DSX only.
+  // Complete stops are not clicked: 2026-09-24 measured bagName null on 102/102 COMPLETE.
+  // They are returned as completedSkipped and must stay distinct from captured_null,
+  // not_attempted, and route_aborted. Already-captured trIds are not targets.
+  function selectC2C3BagTargets(detailsList, trDetailsByTrId) {
+    var out = {
+      targets: [],
+      completedSkipped: [],
+      priorityCount: 0,
+      skipped: { alreadyCaptured: 0, missingScannableId: 0, missingReferenceId: 0, duplicateReferenceId: 0, notC2C3: 0 }
+    };
+    var seen = {};
+    (detailsList || []).forEach(function (details) {
+      var rd = details && details.rmsRouteDetails;
+      if (!rd || !Array.isArray(rd.stops)) return;
+      if (!isC2C3RouteCode(rd.routeCode)) {
+        out.skipped.notC2C3 += 1;
+        return;
+      }
+      rd.stops.forEach(function (stop) {
+        if (!stop || !Array.isArray(stop.tasks)) return;
+        var stopStatus = stop.status == null ? null : String(stop.status);
+        var complete = isCompleteStopStatus(stopStatus);
+        stop.tasks.forEach(function (task) {
+          if (!isPriorityDropOff(stop, task, rd.localDate)) return;
+          out.priorityCount += 1;
+          var referenceId = String(task.referenceId || '').trim();
+          var map = task.domainMap || {};
+          var scannableId = String(map.scannableId || '').trim();
+          if (!referenceId) { out.skipped.missingReferenceId += 1; return; }
+          if (hasTrDetails(trDetailsByTrId, referenceId)) { out.skipped.alreadyCaptured += 1; return; }
+          if (!scannableId) { out.skipped.missingScannableId += 1; return; }
+          if (seen[referenceId]) { out.skipped.duplicateReferenceId += 1; return; }
+          seen[referenceId] = true;
+          var row = {
+            routeId: String(rd.routeId || ''),
+            routeCode: String(rd.routeCode || ''),
+            stop: stop.sequenceNumber,
+            stopStatus: stopStatus,
+            stopPriority: stopStatusPriority(stopStatus),
+            scannableId: scannableId,
+            referenceId: referenceId
+          };
+          if (complete) out.completedSkipped.push(row);
+          else out.targets.push(row);
+        });
+      });
+    });
+    out.targets.sort(compareBagTargets);
+    out.completedSkipped.sort(compareBagTargets);
+    return out;
+  }
+
+  // Record completed stops before the click loop. pendingBagTargets then skips them.
+  function recordCompletedSkips(run, rows) {
+    (rows || []).forEach(function (row) {
+      if (!row || !row.referenceId) return;
+      recordBagResult(run, row.referenceId, BAG_STATUS.COMPLETED_SKIPPED, 'complete stop');
+    });
+    return run;
+  }
+
+  // Local JSON for C2/C3. No server payload. Statuses stay distinct.
+  function buildC2C3BagExport(run, trDetailsByTrId) {
+    var summary = summarizeBagRun(run, trDetailsByTrId || {});
+    var byRoute = {};
+    function bucket(code) {
+      var key = String(code || '');
+      if (!byRoute[key]) {
+        byRoute[key] = {
+          routeCode: key, status: '', reasonCode: '', elapsedMs: null, stopClicks: 0, packages: []
+        };
+      }
+      return byRoute[key];
+    }
+    ((run && run.targets) || []).forEach(function (t) {
+      var b = bucket(t.routeCode);
+      var st = summary.byReferenceId[t.referenceId] || BAG_STATUS.NOT_ATTEMPTED;
+      var tr = trDetailsByTrId && t.referenceId ? trDetailsByTrId[t.referenceId] : null;
+      var parsed = tr && tr.bagName ? parseBagName(tr.bagName) : {
+        bagName: null, bagNumber: null, bagColor: null, bagDisplay: null
+      };
+      b.packages.push({
+        stop: t.stop,
+        stopStatus: t.stopStatus || null,
+        referenceId: t.referenceId,
+        scannableId: t.scannableId,
+        bagStatus: st,
+        bagName: parsed.bagName,
+        bagNumber: parsed.bagNumber,
+        bagColor: parsed.bagColor,
+        bagDisplay: parsed.bagDisplay
+      });
+    });
+    ((run && run.routeResults) || []).forEach(function (r) {
+      var b = bucket(r.routeCode);
+      b.status = r.status || '';
+      b.reasonCode = r.reasonCode || '';
+      b.elapsedMs = r.routeElapsedMs != null ? r.routeElapsedMs : (r.durationMs || 0);
+      b.stopClicks = r.stopClicks || 0;
+    });
+    var routes = Object.keys(byRoute).map(function (k) {
+      var b = byRoute[k];
+      if (!b.status) {
+        var allSkip = b.packages.length && b.packages.every(function (p) {
+          return p.bagStatus === BAG_STATUS.COMPLETED_SKIPPED;
+        });
+        b.status = allSkip ? BAG_STATUS.COMPLETED_SKIPPED : ((run && run.ended) ? 'partial' : 'in_progress');
+      }
+      return b;
+    });
+    var c = summary.counts || {};
+    return {
+      kind: 'c2c3-bag',
+      serverSend: false,
+      ended: !!(run && run.ended),
+      aborted: (run && run.aborted) || '',
+      elapsedMs: run && run.startedAt ? Math.max(0, Date.now() - run.startedAt) : null,
+      stopClicks: summary.stopClicks || 0,
+      packageClicks: summary.clicks || 0,
+      counts: {
+        captured: c.captured || 0,
+        captured_null: c.captured_null || 0,
+        not_attempted: c.not_attempted || 0,
+        route_aborted: c.route_aborted || 0,
+        completed_skipped: c.completed_skipped || 0
+      },
+      routes: routes
+    };
   }
 
   function groupBagTargetsByRoute(targets) {
@@ -1143,7 +1296,7 @@
     timing.avgRouteMs = routeList.length ? Math.round(timing.totalMs / routeList.length) : 0;
     return {
       targetCount: targetCount,
-      attempted: targetCount - (counts.not_attempted || 0),
+      attempted: targetCount - (counts.not_attempted || 0) - (counts.completed_skipped || 0),
       groups: groups,
       routeStats: routeStats,
       bagTiming: timing,
@@ -1168,7 +1321,8 @@
     timeout: ['timeout'],
     uiBlocked: ['ui_blocked'],
     otherError: ['stop_expand_failed', 'package_click_target_not_found', 'route_aborted'],
-    notAttempted: ['not_attempted']
+    notAttempted: ['not_attempted'],
+    completedSkipped: ['completed_skipped']
   };
 
   var BAG_DETAIL_LABELS = [
@@ -1187,16 +1341,20 @@
     var c = summary.counts || emptyBagCounts();
     var g = summary.groups || {};
     var total = summary.targetCount || 0;
-    var attempted = summary.attempted != null ? summary.attempted : total - (c.not_attempted || 0);
+    var skippedDone = c.completed_skipped || 0;
+    var notAttempted = c.not_attempted || 0;
+    var attempted = summary.attempted != null ? summary.attempted : total - notAttempted - skippedDone;
     var lines = [
       'Bag取得完了',
-      '対象 ' + total + ' / 試行済み ' + attempted + ' / 未試行 ' + (c.not_attempted || 0) +
-        (attempted + (c.not_attempted || 0) === total ? '' : ' / 件数不一致'),
+      '対象 ' + total + ' / 試行済み ' + attempted + ' / 未試行 ' + notAttempted +
+        (skippedDone ? ' / 完了Stop除外 ' + skippedDone : '') +
+        (attempted + notAttempted + skippedDone === total ? '' : ' / 件数不一致'),
       'captured ' + (g.captured || 0) + ' / null ' + (g.null || 0) + ' / not found ' + (g.notFound || 0) +
         ' / ambiguous ' + (g.ambiguous || 0) + ' / click失敗 ' + (g.clickFailed || 0) +
         ' / timeout ' + (g.timeout || 0) + ' / UI blocked ' + (g.uiBlocked || 0) +
         ' / その他エラー ' + (g.otherError || 0)
     ];
+    if (skippedDone) lines.push('completed_skipped ' + skippedDone + '（captured_null / not_attempted / route_aborted とは別）');
     var rs = summary.routeStats;
     if (rs && rs.total) {
       lines.push('Route完了 ' + rs.done + '/' + rs.total + ' / Route中断 ' + rs.aborted);
@@ -3362,6 +3520,11 @@
     capturedBagStatus: capturedBagStatus,
     isPriorityDropOff: isPriorityDropOff,
     selectBagTargets: selectBagTargets,
+    isC2C3RouteCode: isC2C3RouteCode,
+    C2C3_BAG_TIMING: C2C3_BAG_TIMING,
+    selectC2C3BagTargets: selectC2C3BagTargets,
+    recordCompletedSkips: recordCompletedSkips,
+    buildC2C3BagExport: buildC2C3BagExport,
     groupBagTargetsByRoute: groupBagTargetsByRoute,
     indexExactDomTextMatches: indexExactDomTextMatches,
     domMatchStatus: domMatchStatus,

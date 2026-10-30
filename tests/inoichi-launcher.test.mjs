@@ -271,6 +271,36 @@ function envBase(tmp, port) {
     var installSrc = fs.readFileSync(path.join(REPO_ROOT, 'inoichi-install-shortcut.ps1'), 'utf8');
     ok('(12) installer references OneDrive fallback', installSrc.indexOf('OneDrive') !== -1);
 
+    function readShortcut(lnkPath) {
+      var command = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('" + lnkPath.replace(/'/g, "''") + "'); Write-Output ('TARGET=' + $s.TargetPath); Write-Output ('ARGS=' + $s.Arguments); Write-Output ('ICON=' + $s.IconLocation)";
+      var result = spawnSync(POWERSHELL, ['-NoProfile', '-Command', command], { encoding: 'utf8', windowsHide: true });
+      return (result.stdout || '') + (result.stderr || '');
+    }
+    var officialIcon = path.join(REPO_ROOT, 'assets', 'inoichi-app.ico').toLowerCase();
+    var startInfo = readShortcut(path.join(oneDriveTmp, 'INO-1 起動.lnk')).toLowerCase();
+    var stopInfo = readShortcut(path.join(oneDriveTmp, 'INO-1 終了.lnk')).toLowerCase();
+    ok('(12a) start shortcut uses official ico', startInfo.indexOf(officialIcon) !== -1);
+    ok('(12a) stop shortcut uses official ico', stopInfo.indexOf(officialIcon) !== -1);
+    ok('(12a) start shortcut still launches inoichi-launch.ps1', startInfo.indexOf('inoichi-launch.ps1') !== -1);
+    ok('(12a) stop shortcut still launches inoichi-stop.ps1', stopInfo.indexOf('inoichi-stop.ps1') !== -1);
+
+    var r11b = await runPs('inoichi-install-shortcut.ps1', { INO_DESKTOP_DIR: oneDriveTmp, INO_ASSUME_YES: '1' }, 15000);
+    ok('(12b) reinstall exits 0', r11b.code === 0);
+    ok('(12b) own start shortcut is updated in place', !fs.existsSync(path.join(oneDriveTmp, 'INO-1 起動(1).lnk')));
+    ok('(12b) own stop shortcut is updated in place', !fs.existsSync(path.join(oneDriveTmp, 'INO-1 終了(1).lnk')));
+
+    var foreignDir = tmpDir();
+    var foreignPath = path.join(foreignDir, 'INO-1 起動.lnk');
+    var foreignCommand = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('" + foreignPath.replace(/'/g, "''") + "'); $s.TargetPath = '$env:SystemRoot\\System32\\notepad.exe'; $s.Save()";
+    spawnSync(POWERSHELL, ['-NoProfile', '-Command', foreignCommand], { encoding: 'utf8', windowsHide: true });
+    var beforeForeign = readShortcut(foreignPath);
+    var r11c = await runPs('inoichi-install-shortcut.ps1', { INO_DESKTOP_DIR: foreignDir, INO_ASSUME_YES: '1' }, 15000);
+    var afterForeign = readShortcut(foreignPath);
+    ok('(12c) unrelated shortcut install exits 0', r11c.code === 0);
+    ok('(12c) unrelated shortcut target unchanged', beforeForeign.indexOf('TARGET=') !== -1 && beforeForeign.split('ARGS=')[0] === afterForeign.split('ARGS=')[0]);
+    ok('(12c) new INO-1 shortcut created beside unrelated file', fs.existsSync(path.join(foreignDir, 'INO-1 起動(1).lnk')));
+    ok('(12c) new shortcut uses official ico', readShortcut(path.join(foreignDir, 'INO-1 起動(1).lnk')).toLowerCase().indexOf(officialIcon) !== -1);
+
     // (13) No real notifications / external APIs in launcher scripts
     ['inoichi-launch.ps1', 'inoichi-stop.ps1', 'inoichi-install-shortcut.ps1'].forEach(function (script) {
       var src = fs.readFileSync(path.join(REPO_ROOT, script), 'utf8').toLowerCase();

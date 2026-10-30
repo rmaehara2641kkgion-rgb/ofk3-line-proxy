@@ -170,6 +170,9 @@
       for (var j = 0; j < hourKeys.length; j++) {
         var hk = hourKeys[j];
         var hours = parseHours(hk);
+        if (actual[hk] === undefined || actual[hk] === null) {
+          continue;
+        }
         var count = parseCount(actual[hk]);
         if (!isNum(hours) || hours <= 0) {
           out.diagnostics.missingHours.push({ date: dateStr, hours: hk });

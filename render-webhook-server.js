@@ -50,7 +50,9 @@ app.use((req, res, next) => {
   } else {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    var allowHeaders = 'Content-Type, Authorization';
+    if (req.path === '/harvest/rolling60h/run') allowHeaders += ', X-Harvest-Local';
+    res.header('Access-Control-Allow-Headers', allowHeaders);
   }
   if (req.method === 'OPTIONS') {
     return res.status(200).json({ status: 'ok' });
@@ -248,6 +250,18 @@ app.get(['/', '/index.html'], function(req, res, next) {
       var hvUiBodyPos = html.lastIndexOf('</body>');
       if (hvUiBodyPos < 0) return next(new Error('index.html body closing tag not found'));
       html = html.slice(0, hvUiBodyPos) + '  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>\n' + html.slice(hvUiBodyPos);
+    }
+    if (html.indexOf('/harvest-collector-rolling60h.js') < 0) {
+      var hvRollTag = '  <script src="/harvest-collector-rolling60h.js?v=20261018-rolling"></script>\n';
+      var hvUiMarker = html.indexOf('/ofk3-harvest-ui.js');
+      if (hvUiMarker >= 0) {
+        var hvUiScript = html.lastIndexOf('<script', hvUiMarker);
+        html = html.slice(0, hvUiScript) + hvRollTag + html.slice(hvUiScript);
+      } else {
+        var hvRollBodyPos = html.lastIndexOf('</body>');
+        if (hvRollBodyPos < 0) return next(new Error('index.html body closing tag not found'));
+        html = html.slice(0, hvRollBodyPos) + hvRollTag + html.slice(hvRollBodyPos);
+      }
     }
     if (html.indexOf('/inoichi-core.js') < 0) {
       var inoCoreBodyPos = html.lastIndexOf('</body>');
@@ -3012,6 +3026,42 @@ app.post('/lat-export', function(req, res) {
       }
     });
   });
+});
+
+require('./harvest-rolling60h-route.js').mount(app, {
+  run: function () {
+    var reviewed = require('./harvest-rolling60h-run.js').review({
+      fs: fs,
+      path: path,
+      xlsx: require('xlsx'),
+      rolling: require('./rolling60h-core.js'),
+      harvest: require('./harvest-daily-manifest.js'),
+      dryRun: require('./inoichi-rolling-dryrun.js'),
+    });
+    var published = { ok: false, kept: true, replaced: false };
+    try {
+      published = require('./inoichi-rolling-handoff.js').publish({
+        fs: fs,
+        path: path,
+        file: path.join(__dirname, 'local', 'inoichi-rolling-snapshot.json'),
+        view: reviewed.view,
+      });
+    } catch (handoffErr) {
+      log('rolling60h dashboard handoff failed: ' + (handoffErr && handoffErr.message ? handoffErr.message : handoffErr));
+    }
+    reviewed.summary.snapshotKept = published.kept === true;
+    reviewed.summary.snapshotUpdated = published.replaced === true;
+    if (!published.replaced) reviewed.summary.ok = false;
+    return reviewed.summary;
+  },
+  readSnapshot: function () {
+    var file = path.join(__dirname, 'local', 'inoichi-rolling-snapshot.json');
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  },
+  readRunStatus: function () {
+    var file = path.join(__dirname, 'local', 'inoichi-rolling-snapshot-run-status.json');
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  },
 });
 
 app.listen(PORT, () => {

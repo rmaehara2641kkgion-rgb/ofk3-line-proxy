@@ -439,6 +439,8 @@
         } catch (e) { alert('13時結果JSONの保存に失敗しました。'); }
       }));
       row.appendChild(mk('Bag取得', function () { startBagPhase(); }));
+      row.appendChild(mk('C2/C3 1Route', function () { startC2C3BagPhase(); }));
+      row.appendChild(mk('C2/C3 JSON', function () { saveC2C3BagJson(); }));
       row.appendChild(mk('未完了Bagテスト', function () { startUnfinishedBagTest(); }));
       row.appendChild(mk('Bag診断保存', function () { saveBagDiagnostics(); }));
       row.appendChild(mk('停止', function () {
@@ -1208,6 +1210,42 @@
     return !!(bagRun && !bagRun.ended);
   }
 
+  // C2/C3 bag uses shorter waits. The 13:00 bag path leaves these null and keeps the v3 constants.
+  function c2c3Timing() {
+    return bagRun && bagRun.mode === 'c2c3' && Core.C2C3_BAG_TIMING ? Core.C2C3_BAG_TIMING : null;
+  }
+
+  function bagPollMs() {
+    var t = c2c3Timing();
+    return t ? t.pollMs : 150;
+  }
+
+  function bagExpandMs() {
+    var t = c2c3Timing();
+    return t ? t.stopExpandMs : BAG_STOP_EXPAND_TIMEOUT_MS;
+  }
+
+  function bagExpandExtraMs() {
+    var t = c2c3Timing();
+    return t ? t.stopExpandExtraMs : BAG_STOP_EXPAND_EXTRA_MS;
+  }
+
+  function bagCloseMs() {
+    var t = c2c3Timing();
+    return t ? t.stopCloseMs : BAG_STOP_CLOSE_TIMEOUT_MS;
+  }
+
+  function bagRouteOpenMs(retried) {
+    var t = c2c3Timing();
+    if (t) return retried ? t.routeRetryMs : t.routeOpenMs;
+    return retried ? BAG_ROUTE_RETRY_WAIT_MS : (tour.timeoutMs || 15000);
+  }
+
+  function bagStopAttempts() {
+    var t = c2c3Timing();
+    return t ? t.stopOpenAttempts : Core.STOP_OPEN_MAX_ATTEMPTS;
+  }
+
   function bagIsCurrent(runId) {
     return !!(bagRun && bagRun.id === runId && !bagRun.ended && !bagRun.stopRequested);
   }
@@ -1361,7 +1399,7 @@
       if (!bagIsCurrent(runId)) return;
       if (check()) { done(true); return; }
       if (Date.now() - started >= timeoutMs) { done(false); return; }
-      bagLater(poll, 150);
+      bagLater(poll, bagPollMs());
     }
     poll();
   }
@@ -1904,7 +1942,8 @@
       if (hit) { done(hit); return; }
       if (!scroller || steps >= maxSteps) { done(null); return; }
       var maxScroll = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
-      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * 0.6));
+      var ratio = c2c3Timing() ? c2c3Timing().scrollStepRatio : 0.6;
+      var stepPx = Math.max(100, Math.floor((scroller.clientHeight || 300) * ratio));
       steps += 1;
       if (scroller.scrollTop >= maxScroll - 1) {
         if (wrapped || maxScroll <= 0) { done(null); return; }
@@ -1913,7 +1952,7 @@
       } else {
         scrollTo(Math.min(scroller.scrollTop + stepPx, maxScroll));
       }
-      bagLater(tick, 160);
+      bagLater(tick, c2c3Timing() ? c2c3Timing().scrollStepMs : 160);
     }
     tick();
   }
@@ -2321,9 +2360,10 @@
       trMap: function () { return store.trDetailsByTrId; },
       baseline: baseline,
       startedAt: startedAt,
-      normalMs: ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,
-      // Unfinished Bag Test v1 keeps its single 3 s wait.
-      extendedMs: ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS,
+      normalMs: (c2c3Timing() && c2c3Timing().trWaitMs) || ctx.stopOpenTrWaitMs || BAG_STOP_OPEN_TR_WAIT_MS,
+      // Unfinished Bag Test v1 keeps its single 3 s wait. C2/C3 uses its own extra cap.
+      extendedMs: c2c3Timing() ? (noExtra ? 0 : c2c3Timing().trWaitExtraMs)
+        : (ctx.stopOpenTrWaitMs || noExtra ? 0 : BAG_STOP_OPEN_TR_EXTRA_MS),
       receivedAtOf: function (ref) {
         var shape = bagRun && bagRun.trRowShapes && bagRun.trRowShapes[ref];
         return shape && shape.receivedAtMs ? shape.receivedAtMs : null;
@@ -2528,7 +2568,7 @@
                     if (fresh && fresh !== beforeDetails) { basis = 'route-details response captured'; detailsSeen = true; return true; }
                     if (hrefNow() !== ctx.listHref && !anyRouteCardShown()) { basis = 'URL changed and Route list hidden'; return true; }
                     return false;
-                  }, routeRetried ? BAG_ROUTE_RETRY_WAIT_MS : (tour.timeoutMs || 15000), runId, function (ok) {
+                  }, bagRouteOpenMs(routeRetried), runId, function (ok) {
                     clickRec.after = pageBrief();
                     clickRec.domChanged = clickRec.after.elementCount !== routeClick.before.elementCount;
                     clickRec.routeDetailsObserved = detailsSeen;
@@ -2539,7 +2579,7 @@
                         routeRetried = true;
                         routeClick.retries = 1;
                         if (op) op.routeRetryCount += 1;
-                        if (bagEngine) bagEngine.extendRoute(BAG_ROUTE_RETRY_WAIT_MS + 2000);
+                        if (bagEngine) bagEngine.extendRoute(bagRouteOpenMs(true) + 2000);
                         note('route_retry');
                         sub('route_retry');
                         bagLog('[Bag] ' + route.routeCode + ' Route詳細が開かないため1回だけ再クリック');
@@ -2812,7 +2852,7 @@
             }, ad, null, n > 1 ? usedLabels : null);
           }
           function observeAttempt(n, rec, done) {
-            if (n > 1 && bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_TIMEOUT_MS);
+            if (n > 1 && bagEngine) bagEngine.extendRoute(bagExpandMs());
             function record(signal) {
               var t = liveListTarget();
               rec.ariaAfter = t ? t.button.getAttribute('aria-expanded') : null;
@@ -2824,15 +2864,15 @@
               rec.elapsedMs = Date.now() - openStarted - (rec.startedAtMs || 0);
               done(signal);
             }
-            waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_TIMEOUT_MS, runId, function (opened) {
+            waitBag(function () { return !!openSignal(); }, bagExpandMs(), runId, function (opened) {
               if (opened || !listTarget) { record(opened ? expandedBy : ''); return; }
               // v3.6: the row content grew but nothing proves the open yet -> wait a little longer once.
               var grew = rowElementsNow() != null && rec.rowElementsBefore != null && rowElementsNow() > rec.rowElementsBefore;
               if (grew && !rec.extendedWait) {
                 rec.extendedWait = true;
                 clickDiag.extendedWait = true;
-                if (bagEngine) bagEngine.extendRoute(BAG_STOP_EXPAND_EXTRA_MS);
-                waitBag(function () { return !!openSignal(); }, BAG_STOP_EXPAND_EXTRA_MS, runId, function (ok2) {
+                if (bagEngine) bagEngine.extendRoute(bagExpandExtraMs());
+                waitBag(function () { return !!openSignal(); }, bagExpandExtraMs(), runId, function (ok2) {
                   record(ok2 ? expandedBy : '');
                 });
                 return;
@@ -2857,7 +2897,7 @@
           }
           Core.runStopOpenAttempts({
             // Package-fallback reopen stays a single v3.6 click; text labels too.
-            maxAttempts: listTarget ? ((openOpts && openOpts.maxAttempts) || Core.STOP_OPEN_MAX_ATTEMPTS) : 1,
+            maxAttempts: listTarget ? ((openOpts && openOpts.maxAttempts) || bagStopAttempts()) : 1,
             resolve: resolveAttempt,
             click: clickAttempt,
             observe: observeAttempt,
@@ -3149,7 +3189,7 @@
               return;
             }
             note('stop_close_click');
-            waitBag(function () { return isClosed(); }, BAG_STOP_CLOSE_TIMEOUT_MS, runId, function (closed) {
+            waitBag(function () { return isClosed(); }, bagCloseMs(), runId, function (closed) {
               var t = currentTarget();
               diag.ariaExpandedAfterLeave = t ? t.button.getAttribute('aria-expanded') : null;
               ad.ariaExpandedAfter = diag.ariaExpandedAfterLeave;
@@ -3161,7 +3201,7 @@
         }
         function retry(prev) {
           diag.retryCount = 1;
-          if (bagEngine) bagEngine.extendRoute(BAG_STOP_CLOSE_TIMEOUT_MS + 1000);
+          if (bagEngine) bagEngine.extendRoute(bagCloseMs() + 1000);
           note('stop_close_retry');
           var skip = prev && prev.clicked ? [prev.clicked.label] : [];
           bagLater(function () { attempt(1, skip); }, 400);
@@ -3207,12 +3247,24 @@
     bagRun.ended = true;
     Core.restoreNormalCapture(store, bagSnapshot);
     bagSnapshot = null;
-    var summary = Core.summarizeBagRun(bagRun, store.trDetailsByTrId);
-    store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
+    var trForSummary = store.trDetailsByTrId;
+    if (bagRun.mode === 'c2c3') {
+      bagRun.c2c3TrMap = Object.assign({}, store.trDetailsByTrId || {});
+      trForSummary = bagRun.c2c3TrMap;
+      if (bagRun.trSnapshot) store.trDetailsByTrId = bagRun.trSnapshot;
+    }
+    var summary = Core.summarizeBagRun(bagRun, trForSummary);
     bagRun.summary = summary;
-    setBagStatus(Core.formatBagSummary(summary) + '\n(' + BAG_BUILD + ')');
+    if (bagRun.mode === 'c2c3') {
+      bagRun.c2c3Export = Core.buildC2C3BagExport(bagRun, trForSummary);
+    } else {
+      store.bagStatusByReferenceId = Object.assign({}, store.bagStatusByReferenceId || {}, summary.byReferenceId);
+    }
+    setBagStatus(Core.formatBagSummary(summary) + '\n(' + (bagRun.mode === 'c2c3' ? 'C2/C3 Bag' : BAG_BUILD) + ')');
     bagLog('[Bag] 完了: 対象 ' + summary.targetCount + ' / 試行済み ' + summary.attempted +
-      ' / 未試行 ' + (summary.counts.not_attempted || 0) + (summary.aborted ? ' / 中断: ' + summary.aborted : ''));
+      ' / 未試行 ' + (summary.counts.not_attempted || 0) +
+      ' / 完了Stop除外 ' + ((summary.counts && summary.counts.completed_skipped) || 0) +
+      (summary.aborted ? ' / 中断: ' + summary.aborted : ''));
     if (bagEngine && typeof bagEngine.dispose === 'function') bagEngine.dispose();
     bagEngine = null;
     paint();
@@ -3640,6 +3692,110 @@
     });
   }
 
+  // C2/C3 measurement: one DMX route. JSON download only. Does not post to OFK3.
+  function saveC2C3BagJson() {
+    if (!bagRun || bagRun.mode !== 'c2c3') {
+      alert('C2/C3 Bagはまだ実行されていません。');
+      return;
+    }
+    var payload = bagRun.c2c3Export || Core.buildC2C3BagExport(bagRun, bagRun.c2c3TrMap || store.trDetailsByTrId);
+    try {
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'cortex-c2c3-bag_' + currentLocalDate() + '.json';
+      a.click();
+    } catch (e) { alert('C2/C3 JSONの保存に失敗しました。'); }
+  }
+
+  function startC2C3BagPhase() {
+    show();
+    setPanelCollapsed(false);
+    if (bagActive()) return;
+    if (sessionBusy || (tour && tour.status === 'running')) {
+      alert('通常取得の完了後に「C2/C3 1Route」を押してください。');
+      return;
+    }
+    var detailsList = Object.keys(store.detailsByRouteId || {}).map(function (id) {
+      return store.detailsByRouteId[id];
+    });
+    if (!detailsList.length) {
+      alert('先に「取得開始」で通常取得を完了してください。');
+      return;
+    }
+    var selection = Core.selectC2C3BagTargets(detailsList, store.trDetailsByTrId);
+    var all = (selection.targets || []).concat(selection.completedSkipped || []);
+    var dmxRows = all.filter(function (t) { return String(t.routeCode || '').toUpperCase().indexOf('DMX') === 0; });
+    if (!dmxRows.length) {
+      alert('捕捉済みのDMX Routeがありません。');
+      return;
+    }
+    var routeCode = dmxRows[0].routeCode;
+    var rows = all.filter(function (t) { return t.routeCode === routeCode; });
+    var skips = (selection.completedSkipped || []).filter(function (t) { return t.routeCode === routeCode; });
+    bagSnapshot = Core.snapshotNormalCapture(store);
+    bagRun = Core.createBagRun(rows);
+    bagRun.mode = 'c2c3';
+    bagRun.startedAt = Date.now();
+    bagRun.trSnapshot = Object.assign({}, store.trDetailsByTrId || {});
+    bagRun.selection = selection;
+    bagRun.stopOpenedFor = {};
+    bagRun.preexisting = {};
+    Core.recordCompletedSkips(bagRun, skips);
+    var runId = bagRun.id;
+    var routes = Core.groupBagTargetsByRoute(rows);
+    var currentPage = !anyRouteCardShown();
+    if (currentPage) {
+      var only = routeFromHref(routes);
+      if (!only) {
+        bagRun = null;
+        bagSnapshot = null;
+        alert('表示中のRouteを特定できません。Route一覧で「C2/C3 1Route」を押してください。');
+        return;
+      }
+      if (String(only.routeCode || '').toUpperCase().indexOf('DMX') !== 0) {
+        bagRun = null;
+        bagSnapshot = null;
+        alert('表示中のRouteはDMXではありません。Route一覧で実行してください。');
+        return;
+      }
+      routes = [only];
+      rows = only.targets;
+      bagRun.targets = rows;
+    }
+    if (!rows.length) {
+      finishBagPhase('');
+      return;
+    }
+    var ctx = {
+      currentPage: currentPage,
+      listHref: hrefNow(),
+      routeHref: hrefNow(),
+      baseDialogs: visibleDialogs()
+    };
+    setBagStatus('C2/C3 Bag ' + routeCode + ' …');
+    bagEngine = Core.runBagEngine({
+      run: bagRun,
+      routes: routes,
+      getTrMap: function () { return store.trDetailsByTrId; },
+      driver: createBagDriver(ctx, runId),
+      routeBudgetMs: BAG_ROUTE_BUDGET_MS,
+      routeExtensionCapMs: BAG_ROUTE_EXTENSION_CAP_MS,
+      routeIdleMs: BAG_ROUTE_IDLE_MS,
+      routeHardMaxMs: BAG_ROUTE_HARD_MAX_MS,
+      pageContext: bagPageContext,
+      log: bagLog,
+      onProgress: function (p) {
+        if (!bagIsCurrent(runId)) return;
+        var tail = (bagRun.log || []).slice(-3);
+        setBagStatus(Core.formatBagProgress(p) + (tail.length ? '\n' + tail.join('\n') : '') + '\n(C2/C3 1Route)');
+      },
+      done: function (aborted) {
+        if (bagRun && bagRun.id === runId) finishBagPhase(aborted);
+      }
+    });
+  }
+
   function onReady(fn) {
     if (document.body || document.documentElement) fn();
     else document.addEventListener('DOMContentLoaded', fn);
@@ -3657,6 +3813,8 @@
     stop: stopPoc,
     save: saveBundle,
     bag: startBagPhase,
+    c2c3Bag: startC2C3BagPhase,
+    c2c3Save: saveC2C3BagJson,
     bagDiagnostics: buildBagDiagnostics,
     unfinishedBagTest: startUnfinishedBagTest,
     _store: store

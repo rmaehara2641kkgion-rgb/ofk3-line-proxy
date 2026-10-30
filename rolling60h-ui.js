@@ -12,7 +12,7 @@
  * 対応範囲（初回実装＋月またぎ対応拡張）:
  *   - 高橋さんExcel（月間シフト・複数DSPシート）読込。最大2か月分（2ファイル）まで
  *     読み込み、日付単位でマージして月またぎ・年またぎのRolling判定に対応する
- *   - Amazon Daily Working Hour Excel（Report5_Daily_Data / 貼付）読込
+ *   - Amazon Daily Working Hour Excel（Report5_Daily_Data のみ。貼付は読まない）
  *   - Transport ID を一次キーにした実績＋予定の合成
  *   - Rolling 7 Days 判定・roster_only / actual_progress の判別
  *   - 隣接月データが無く7日分揃わないウィンドウは「complete:false」として
@@ -83,7 +83,7 @@
       '  </div>' +
       '  <div class="card p-4">' +
       '    <h3 class="text-sm font-bold mb-2">② Amazon Daily Working Hour 読込</h3>' +
-      '    <p class="text-xs text-ink-lighter mb-2">Report5_Daily_Data / 貼付 シートから実績を抽出します（全期間）</p>' +
+      '    <p class="text-xs text-ink-lighter mb-2">マニフェストの Report5_Daily_Data だけを読みます。時間は estimated_working_hour（推定）です。貼付シートは使いません。</p>' +
       '    <input type="file" id="rolling-file-amazon" accept=".xlsx,.xls" class="hidden">' +
       '    <button id="rolling-btn-amazon" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">📂 ファイル選択</button>' +
       '    <div id="rolling-amazon-status" class="text-xs mt-2 text-ink-lighter"></div>' +
@@ -231,14 +231,16 @@
     reader.onload = function (e) {
       try {
         var wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
-        var sheetName = null;
-        for (var i = 0; i < wb.SheetNames.length; i++) {
-          if (wb.SheetNames[i] === 'Report5_Daily_Data' || wb.SheetNames[i] === '貼付') {
-            sheetName = wb.SheetNames[i];
-            break;
-          }
+        var sheetName = global.RollingCore && global.RollingCore.pickReport5Sheet
+          ? global.RollingCore.pickReport5Sheet(wb.SheetNames)
+          : null;
+        if (!sheetName) {
+          var legacyPaste = wb.SheetNames.indexOf('貼付') !== -1;
+          statusEl.innerHTML = legacyPaste
+            ? '<span class="text-yellow-400">貼付シートは旧方式のため読みません。マニフェストの Report5_Daily_Data を選んでください。</span>'
+            : '<span class="text-red-400">Report5_Daily_Data が見つかりません。</span>';
+          return;
         }
-        if (!sheetName) sheetName = wb.SheetNames[0];
         var rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, raw: true });
         STATE.amazonRows = rows;
         statusEl.innerHTML = '<span class="text-green-400">✓ ' + sheetName + ' シート読込（' + (rows.length - 1) + '行）</span>';
@@ -385,6 +387,12 @@
 
     STATE.drivers = driverResults;
     STATE.diagnostics = { undefinedCodeCounts: undefinedCodeCounts, warnings: warnings, rosterDuplicates: rosterDuplicates };
+    STATE.dryRun = global.InoichiRollingDryRun && global.InoichiRollingDryRun.fromDrivers
+      ? global.InoichiRollingDryRun.fromDrivers(driverResults, { previousKeys: STATE.dryRunKeys || [] })
+      : null;
+    if (STATE.dryRun) {
+      STATE.dryRunKeys = (STATE.dryRun.alerts || []).map(function (alert) { return alert.alertKey; });
+    }
 
     renderSummary();
     renderGrid();
@@ -420,7 +428,7 @@
           return c + '（' + STATE.diagnostics.undefinedCodeCounts[c] + '件）';
         });
       detailEl.innerHTML =
-        '⚠ 時間未定義の勤務記号が見つかりました。Rolling合計には含まれず(0h扱い)、判定結果には反映されていません。値の確認が必要です: ' +
+        '⚠ 時間未確定の勤務記号があります。その日を含む7日間は判定不能です。推測の時間では計算していません: ' +
         parts.join(' / ');
     } else {
       detailEl.textContent = '';
@@ -453,7 +461,18 @@
       incompleteCount += d.windows.filter(function (w) { return !w.complete; }).length;
     });
     if (incompleteCount > 0) {
-      periodLines.push('⚪ 判定対象外（月端データ不足）のウィンドウ: ' + incompleteCount + '件 — 隣接する月のシフト表も読み込むと判定可能になります');
+      periodLines.push('判定不能（7日分が揃っていない窓）: ' + incompleteCount + '件');
+    }
+    if (STATE.dryRun) {
+      var exceedN = 0;
+      var approachN = 0;
+      var ongoingN = 0;
+      (STATE.dryRun.alerts || []).forEach(function (alert) {
+        if (alert.status === 'ONGOING') ongoingN++;
+        if (alert.level === 'exceed') exceedN++;
+        else if (alert.level === 'approach') approachN++;
+      });
+      periodLines.push('INO-1 dry-run（未送信） 超過 ' + exceedN + ' / 接近 ' + approachN + ' / 継続 ' + ongoingN + ' / 判定不能 ' + (STATE.dryRun.undetermined || []).length);
     }
     periodEl.innerHTML = periodLines.join('<br>');
   }
@@ -531,7 +550,7 @@
           } else {
             cellText = dayRec.blocks
               .map(function (b) {
-                return b.code === 'AMAZON_ACTUAL' ? '(実)' + b.hours.toFixed(1) : b.rawCode;
+                return RollingCore.formatRollingBlockLabel(b);
               })
               .join('+');
             if (dayRec.blocks.some(function (b) { return b.source === 'actual'; })) cellCls += ' text-blue-500';

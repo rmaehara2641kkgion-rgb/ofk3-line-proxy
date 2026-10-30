@@ -137,6 +137,25 @@ function stopServer(server) {
     var fleetJs = await request(port, '127.0.0.1', 'GET', '/inoichi-fleet-adapter.js');
     eq('(3d) fleet adapter JS status is 200', fleetJs.status, 200);
 
+    var logoPng = await request(port, '127.0.0.1', 'GET', '/assets/inoichi-logo.png');
+    eq('(3e) logo png status is 200', logoPng.status, 200);
+    eq('(3e) logo png Content-Type', logoPng.headers['content-type'], 'image/png');
+    ok('(3e) logo png signature', logoPng.body[0] === 0x89 && logoPng.body[1] === 0x50 && logoPng.body[2] === 0x4e && logoPng.body[3] === 0x47);
+
+    var logoIco = await request(port, '127.0.0.1', 'GET', '/assets/inoichi.ico');
+    eq('(3f) logo ico status is 200', logoIco.status, 200);
+    eq('(3f) logo ico Content-Type', logoIco.headers['content-type'], 'image/x-icon');
+    ok('(3f) logo ico signature', logoIco.body[0] === 0 && logoIco.body[1] === 0 && logoIco.body[2] === 1 && logoIco.body[3] === 0);
+
+    var appIco = await request(port, '127.0.0.1', 'GET', '/assets/inoichi-app.ico');
+    eq('(3f2) app ico status is 200', appIco.status, 200);
+    ok('(3f2) app ico signature', appIco.body[0] === 0 && appIco.body[1] === 0 && appIco.body[2] === 1 && appIco.body[3] === 0);
+    ok('(3f2) favicon href uses the app icon', root.body.toString().indexOf('./assets/inoichi-app.ico') !== -1);
+    ok('(3f2) in-page logo is not the favicon', root.body.toString().indexOf('inoichi-logo.png') === -1);
+
+    var assetTrav = await request(port, '127.0.0.1', 'GET', '/assets/../package.json');
+    eq('(3g) asset traversal blocked', assetTrav.status, 404);
+
     // (4) Content-Type for JS matches extension
     var storeJs = await request(port, '127.0.0.1', 'GET', '/inoichi-alert-store.js');
     eq('(4) alert-store Content-Type', storeJs.headers['content-type'], 'application/javascript; charset=utf-8');

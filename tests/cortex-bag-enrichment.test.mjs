@@ -256,6 +256,55 @@ function suite(Core, label) {
     assert(!Object.prototype.hasOwnProperty.call(bundle, 'bagStatusByReferenceId'), label + ' 14: bundle unchanged without bag run');
   })();
 
+  // C2/C3: skip complete stops and already-captured rows. 13:00 selection itself stays.
+  (function () {
+    var dmx = fixture();
+    dmx.rmsRouteDetails.routeCode = 'DMX7';
+    dmx.rmsRouteDetails.routeId = 'R-DMX7';
+    dmx.rmsRouteDetails.stops[0].status = 'COMPLETE';
+    dmx.rmsRouteDetails.stops[3].status = 'NOT_STARTED';
+    var dcx = fixture();
+    dcx.rmsRouteDetails.stops[0].status = 'COMPLETE';
+    var legacy = Core.selectBagTargets([dcx], {});
+    assert(legacy.targets.map(function (t) { return t.referenceId; }).join(',') === 'tr-a,tr-b,tr-d',
+      label + ' 15: 13:00 targets still include a complete stop');
+    var sel = Core.selectC2C3BagTargets([dcx, dmx], { 'tr-b': { trId: 'tr-b', bagName: BAG } });
+    assert(sel.skipped.notC2C3 === 1, label + ' 15: DCX ignored');
+    assert(sel.skipped.alreadyCaptured === 1, label + ' 15: captured trId not reclicked');
+    assert(sel.targets.map(function (t) { return t.referenceId; }).join(',') === 'tr-d', label + ' 15: only unfinished click');
+    assert(sel.completedSkipped.map(function (t) { return t.referenceId; }).join(',') === 'tr-a', label + ' 15: complete recorded');
+    var oldStops = Core.groupBagTargetsByStop(Core.selectBagTargets([dmx], { 'tr-b': { trId: 'tr-b', bagName: null } }).targets);
+    var neu = Core.selectC2C3BagTargets([dmx], { 'tr-b': { trId: 'tr-b', bagName: null } });
+    var newStops = Core.groupBagTargetsByStop(neu.targets);
+    assert(oldStops.length === 2 && newStops.length === 1, label + ' 15: stop clicks 2 -> 1');
+    var run = Core.createBagRun(neu.targets.concat(neu.completedSkipped));
+    Core.recordCompletedSkips(run, neu.completedSkipped);
+    Core.recordBagResult(run, 'tr-d', Core.BAG_STATUS.ROUTE_ABORTED, '');
+    var untouched = Core.createBagRun([{ referenceId: 'tr-x', routeCode: 'DMX7', stop: 1 }]);
+    var summary = Core.summarizeBagRun(run, {});
+    assert(summary.counts.completed_skipped === 1, label + ' 15: completed_skipped count');
+    assert(summary.counts.route_aborted === 1, label + ' 15: route_aborted count');
+    assert(summary.counts.not_attempted === 0, label + ' 15: skip is not not_attempted');
+    assert(summary.counts.captured_null === 0 && summary.groups.null === 0, label + ' 15: skip is not captured_null');
+    assert(summary.groups.completedSkipped === 1, label + ' 15: own group');
+    assert(Core.pendingBagTargets(run, run.targets, {}).length === 0, label + ' 15: no pending click');
+    assert(Core.summarizeBagRun(untouched, {}).counts.not_attempted === 1, label + ' 15: untouched stays not_attempted');
+    run.startedAt = Date.now();
+    run.ended = false;
+    var exp = Core.buildC2C3BagExport(run, { 'tr-b': { trId: 'tr-b', bagName: null } });
+    assert(exp.kind === 'c2c3-bag' && exp.serverSend === false, label + ' 15: local json only');
+    assert(exp.counts.completed_skipped === 1 && exp.counts.route_aborted === 1 && exp.counts.captured_null === 0,
+      label + ' 15: export counts');
+    var dumped = JSON.stringify(exp);
+    assert(dumped.indexOf('cookie') < 0 && dumped.indexOf('hmac') < 0 && dumped.indexOf('authorization') < 0,
+      label + ' 15: export has no auth');
+    assert(/completed_skipped 1/.test(Core.formatBagSummary(summary)), label + ' 15: summary names the status');
+    var timing = Core.C2C3_BAG_TIMING;
+    assert(timing.trWaitMs < 3000 && timing.trWaitExtraMs < 3000 && timing.stopExpandMs < 3000 &&
+      timing.stopCloseMs < 5000 && timing.stopOpenAttempts === 2 && timing.scrollStepMs < 160,
+      label + ' 15: waits shorter than the 13:00 bag path');
+  })();
+
   console.log('ok: bag enrichment core (' + label + ')');
 }
 
@@ -291,6 +340,10 @@ suite(PhaseCore, 'phase1-core');
   assert(bag.indexOf('trackingIdOf') < 0, 'bag DOM match does not use trackingIdOf');
   assert((runner.match(/setInterval\(/g) || []).length === 1, 'no new setInterval');
   assert(runner.indexOf("mk('Bag取得'") >= 0, 'panel has Bag取得 button');
+  assert(runner.indexOf("mk('C2/C3 1Route'") >= 0 && runner.indexOf('function saveC2C3BagJson') >= 0, 'c2c3 measurement button');
+  var c2save = runner.slice(runner.indexOf('function saveC2C3BagJson'), runner.indexOf('function startC2C3BagPhase'));
+  assert(c2save.indexOf('extensionImport') < 0 && c2save.indexOf('fetch(') < 0 && c2save.indexOf('postMessage') < 0,
+    'c2c3 json is not sent');
   assert(runner.indexOf('startBagPhase();') >= 0 && !/function beginPoc[\s\S]{0,4000}startBagPhase/.test(runner.slice(runner.indexOf('function beginPoc'), runner.indexOf('function start()'))), 'bag not auto-started by the tour');
   const all = runner + readFileSync(join(root, 'cortex-capture-extension', 'phase1-core.js'), 'utf8');
   assert(!/fetch\s*\(\s*['"`][^'"`]*trDetails/.test(all), 'no direct trDetails fetch');

@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>配送管理 - OFK3</title>
   <script src="https://js.sentry-cdn.com/09eb763828ad35e6b3c93599b3cc6a22.min.js" crossorigin="anonymous"></script>
-  <link rel="icon" type="image/png" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
-  <link rel="apple-touch-icon" href="b10eaee0-7936-4dd7-a922-6bdf3914c296.png">
+  <link rel="icon" type="image/png" href="assets/gion-ofk3-logo.png?v=20261018-gion">
+  <link rel="apple-touch-icon" href="assets/gion-ofk3-logo.png?v=20261018-gion">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -94,6 +94,36 @@
     header#app-header .text-sm,
     header#app-header button {
       color: #f1f5f9;
+    }
+    .ofk3-main-logo {
+      display: block;
+      height: 72px;
+      width: auto;
+      max-width: min(34vw, 220px);
+      object-fit: contain;
+      background: #000;
+      border-radius: 10px;
+      padding: 2px;
+      box-sizing: border-box;
+      flex: 0 1 auto;
+    }
+    @media (max-width: 720px) {
+      .ofk3-main-logo { height: 48px; max-width: 42vw; }
+    }
+    .ofk3-hero-logo {
+      display: block;
+      width: min(92vw, 360px);
+      height: auto;
+      max-height: min(42vh, 320px);
+      object-fit: contain;
+      background: #000;
+      border-radius: 16px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .ofk3-hero-logo-sm {
+      width: min(80vw, 240px);
+      max-height: min(36vh, 220px);
     }
 
     /* === Text Colors (light theme) === */
@@ -282,7 +312,7 @@
     <!-- Header -->
     <header id="app-header" class="px-6 py-3 flex items-center justify-between sticky top-0 z-50">
       <div class="flex items-center gap-3">
-        <img src="b10eaee0-7936-4dd7-a922-6bdf3914c296.png" alt="OFK3" class="h-10 w-10 object-contain rounded">
+        <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-main-logo">
         <div class="flex items-center gap-4">
           <h1 class="text-lg font-bold tracking-tight">配送管理</h1>
           <span class="text-xs text-ink-lighter font-mono bg-surface px-2 py-0.5 rounded">OFK3</span>
@@ -543,7 +573,7 @@
 
         <!-- ヒーロー画像（データ未読込時表示） -->
         <div id="dashboard-hero" class="flex justify-center mt-6 mb-4">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-md w-full rounded-xl opacity-60" style="max-height:320px; object-fit:contain;">
+          <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo">
         </div>
 
         <!-- Dashboard Content (after upload) -->
@@ -863,7 +893,7 @@
           </div>
 
           <div id="optimization-empty" class="text-center py-16">
-            <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
+            <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo ofk3-hero-logo-sm mb-4">
             <p class="text-sm text-ink-lighter">アサインデータとドライバー実績データの両方をアップロードした後、最適化を実行できます</p>
           </div>
         </section>
@@ -892,7 +922,7 @@
         </div>
 
         <div id="mab-empty" class="text-center py-16">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-xs mx-auto mb-4 opacity-40 rounded-xl" style="max-height:240px; object-fit:contain;">
+          <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo ofk3-hero-logo-sm mb-4">
           <p class="text-sm text-ink-lighter">マニフェストをアップロードするとRoute一覧が表示されます</p>
         </div>
 
@@ -1500,7 +1530,7 @@
 
         <!-- ヒーロー画像（FTDS/CC未読込時） -->
         <div id="ftds-hero" class="flex justify-center my-6">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
+          <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo">
         </div>
 
         <!-- Driver summary -->
@@ -1853,7 +1883,7 @@
 
         <!-- ヒーロー画像（データ未読込時） -->
         <div id="quality-hero" class="flex justify-center my-6">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:280px; object-fit:contain;">
+          <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo">
         </div>
 
         <!-- ========== DNR分析セクション ========== -->
@@ -2090,7 +2120,7 @@
 
         <!-- ヒーロー画像（TWCデータ未読込時） -->
         <div id="twc-hero" class="flex justify-center my-6">
-          <img src="OFK3%20%E3%83%A1%E3%82%BF%E3%83%AA%E3%83%83%E3%82%AF.png" alt="GION OFK3" class="max-w-sm w-full rounded-xl opacity-40" style="max-height:200px; object-fit:contain;">
+          <img src="assets/gion-ofk3-logo.png?v=20261018-gion" alt="GION OFK3" class="ofk3-hero-logo ofk3-hero-logo-sm">
           <p class="sr-only">週次TWCデータ未読込</p>
         </div>
 
@@ -21689,7 +21719,9 @@ var driverDB = {
   <script src="/manual-assign-board.js?v=20260903-2"></script>
   <script src="/tenko-transport-audit.js?v=20260823-4"></script>
   <script src="/tenko-transport-audit-success.js?v=20260823-4"></script>
-  <script src="/rolling60h-core.js?v=20260904-1"></script>
+  <script src="/rolling60h-core.js?v=20261018-rolling"></script>
+  <script src="/inoichi-rolling-dryrun.js?v=20261018-rolling"></script>
+  <script src="/harvest-daily-manifest.js?v=20261018-rolling"></script>
   <script src="/duty-hours-format.js?v=20261026-duty-display"></script>
   <script src="/rolling60h-ui.js?v=20261026-duty-display"></script>
   <script src="/duty-risk-dashboard.js?v=20261028-duty-print"></script>
@@ -21711,5 +21743,14 @@ var driverDB = {
   </div>
   <script src="/cortex-route-sequence.js?v=20260921-7"></script>
   <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
+  <script src="/ofk3-time-window-board.js?v=20260923-driveraid"></script>
+  <script src="/gds-fleet-audit-core.js?v=20260921-1"></script>
+  <script src="/ofk3-gds-fleet-audit-ui.js?v=20260921-1"></script>
+  <script src="/harvest-core.js?v=20261002-1"></script>
+  <script src="/harvest-collectors-cortex.js?v=20261002-1"></script>
+  <script src="/harvest-collector-rolling60h.js?v=20261018-rolling"></script>
+  <script src="/ofk3-harvest-ui.js?v=20261002-1"></script>
+  <script src="/inoichi-core.js?v=20261003-1"></script>
+  <script src="/ofk3-inoichi-ui.js?v=20261003-1"></script>
 </body>
 </html>

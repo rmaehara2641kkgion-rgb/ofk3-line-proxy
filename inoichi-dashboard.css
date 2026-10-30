@@ -15,6 +15,12 @@
   --ino-success: #38b000;
   --ino-radius: 8px;
   --ino-gap: 16px;
+  --ino-lacquer: #0d0b14;
+  --ino-andon: #ffb259;
+  --ino-moon: #dce6ff;
+  --ino-serif: "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+  --ino-panel: rgba(13, 11, 20, 0.84);
+  --ino-panel-inner: rgba(30, 26, 44, 0.72);
 }
 
 * { box-sizing: border-box; }
@@ -22,7 +28,14 @@
 body.inoichi-dashboard-page {
   margin: 0;
   padding: 0;
-  background: var(--ino-bg);
+  background-color: var(--ino-bg);
+  background-image:
+    linear-gradient(180deg, rgba(11, 12, 16, 0) 0%, rgba(11, 12, 16, 0) 38%, rgba(11, 12, 16, 0.55) 70%, rgba(11, 12, 16, 0.8) 100%),
+    url("./assets/inoichi-castle-bg.webp");
+  background-size: cover, cover;
+  background-position: center top, center top;
+  background-repeat: no-repeat;
+  background-attachment: fixed, fixed;
   color: var(--ino-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", Meiryo, Inter, sans-serif;
   line-height: 1.5;
@@ -30,16 +43,55 @@ body.inoichi-dashboard-page {
 }
 
 .ino-header {
-  background: linear-gradient(90deg, rgba(155, 93, 229, 0.15) 0%, rgba(31, 40, 51, 0) 60%), var(--ino-surface);
-  border-bottom: 1px solid var(--ino-border);
-  padding: 24px var(--ino-gap);
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  background: transparent;
+  border-bottom: 0;
+  padding: 20px var(--ino-gap) 8px;
+}
+
+.ino-logo {
+  display: block;
+  width: clamp(180px, 22vw, 340px);
+  height: auto;
+  max-height: none;
+  margin: 0 auto 10px;
+  object-fit: contain;
+  background: transparent;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 15%, #000 85%, transparent 100%), linear-gradient(180deg, transparent 0, #000 14%, #000 94%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(90deg, transparent 0, #000 15%, #000 85%, transparent 100%), linear-gradient(180deg, transparent 0, #000 14%, #000 94%, transparent 100%);
+  mask-composite: intersect;
+  filter: drop-shadow(0 0 14px rgba(155, 93, 229, 0.55)) drop-shadow(0 0 32px rgba(155, 93, 229, 0.3));
+}
+
+.ino-banner {
+  display: inline-block;
+  max-width: min(100%, 860px);
+  padding: 10px 22px 12px;
+  background: rgba(13, 11, 20, 0.84);
+  border: 1px solid rgba(155, 93, 229, 0.55);
+  border-radius: 6px;
+  box-shadow: 0 0 18px rgba(155, 93, 229, 0.25), 0 6px 20px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.ino-header-tagline {
+  font-family: var(--ino-serif);
+  font-size: 1rem;
+  color: var(--ino-moon);
+  letter-spacing: 0.08em;
 }
 
 .ino-header-title {
-  font-size: 1.5rem;
+  margin-top: 4px;
+  font-family: var(--ino-serif);
+  font-size: 1.25rem;
   font-weight: 700;
   color: var(--ino-heading);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
 }
 
 .ino-header-subtitle {
@@ -50,30 +102,36 @@ body.inoichi-dashboard-page {
 }
 
 .ino-header-meta {
-  margin-top: 8px;
+  margin-top: 6px;
   font-size: 0.8rem;
   color: var(--ino-muted);
 }
 
 .ino-main {
+  position: relative;
+  z-index: 2;
   padding: var(--ino-gap);
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--ino-gap);
   max-width: 1400px;
   margin: 0 auto;
 }
 
 .ino-card {
-  background: var(--ino-surface);
-  border: 1px solid var(--ino-border);
-  border-radius: var(--ino-radius);
+  min-width: 0;
+  background: var(--ino-panel);
+  border: 1px solid rgba(155, 93, 229, 0.5);
+  border-radius: 6px;
   padding: 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 14px rgba(155, 93, 229, 0.2), 0 4px 16px rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
 
 .ino-card-title {
   margin: 0 0 14px 0;
+  font-family: var(--ino-serif);
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--ino-accent-purple-2);
@@ -308,40 +366,207 @@ body.inoichi-dashboard-page {
   border-top: 1px solid var(--ino-border);
 }
 
+@media (max-width: 1200px) {
+  .ino-main { padding-left: 24px; padding-right: 24px; }
+}
+
+/* Moonlit watchtower: panel interiors, footer, drifting petals */
+.ino-stat,
+.ino-history-item,
+.ino-candidate,
+.ino-diag-item {
+  background: var(--ino-panel-inner);
+  border-color: rgba(155, 93, 229, 0.3);
+}
+
+.ino-table-wrap { border-color: rgba(155, 93, 229, 0.35); }
+.ino-table th { background: rgba(42, 36, 62, 0.95); }
+.ino-preview { background: rgba(8, 7, 14, 0.85); }
+
+.ino-footer {
+  position: relative;
+  z-index: 2;
+  background: rgba(13, 11, 20, 0.84);
+  border-top-color: rgba(155, 93, 229, 0.4);
+}
+
+.ino-petals {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ino-petal {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  display: block;
+  width: 8px;
+  height: 6px;
+  border-radius: 80% 0 80% 0;
+  background: rgba(255, 214, 230, 0.85);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: ino-petal-fall 18s linear infinite;
+}
+
+@keyframes ino-petal-fall {
+  0%   { transform: translate3d(0, -20px, 0) rotate(0deg); opacity: 0; }
+  8%   { opacity: 0.85; }
+  50%  { transform: translate3d(60px, 55vh, 0) rotate(200deg); }
+  92%  { opacity: 0.6; }
+  100% { transform: translate3d(-30px, 108vh, 0) rotate(420deg); opacity: 0; }
+}
+
+.ino-petal-1  { left: 4%;  width: 7px;  height: 5px;  animation-duration: 17s; animation-delay: 0s; }
+.ino-petal-2  { left: 11%; width: 9px;  height: 7px;  animation-duration: 21s; animation-delay: -6s; }
+.ino-petal-3  { left: 18%; width: 6px;  height: 5px;  animation-duration: 15s; animation-delay: -11s; }
+.ino-petal-4  { left: 26%; width: 8px;  height: 6px;  animation-duration: 19s; animation-delay: -3s; }
+.ino-petal-5  { left: 34%; width: 10px; height: 7px;  animation-duration: 22s; animation-delay: -14s; }
+.ino-petal-6  { left: 42%; width: 7px;  height: 5px;  animation-duration: 16s; animation-delay: -8s; }
+.ino-petal-7  { left: 50%; width: 8px;  height: 6px;  animation-duration: 20s; animation-delay: -1s; }
+.ino-petal-8  { left: 58%; width: 6px;  height: 5px;  animation-duration: 14s; animation-delay: -9s; }
+.ino-petal-9  { left: 66%; width: 9px;  height: 7px;  animation-duration: 18s; animation-delay: -5s; }
+.ino-petal-10 { left: 73%; width: 7px;  height: 5px;  animation-duration: 22s; animation-delay: -16s; }
+.ino-petal-11 { left: 80%; width: 8px;  height: 6px;  animation-duration: 15s; animation-delay: -12s; }
+.ino-petal-12 { left: 87%; width: 10px; height: 7px;  animation-duration: 21s; animation-delay: -2s; }
+.ino-petal-13 { left: 93%; width: 6px;  height: 5px;  animation-duration: 17s; animation-delay: -7s; }
+.ino-petal-14 { left: 98%; width: 8px;  height: 6px;  animation-duration: 19s; animation-delay: -13s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ino-petals { display: none; }
+}
+
 @media (max-width: 640px) {
-  .ino-header-title { font-size: 1.2rem; }
+  body.inoichi-dashboard-page { background-position: center top, 62% top; }
+  .ino-logo { width: clamp(150px, 42vw, 200px); }
+  .ino-banner { padding: 8px 12px 10px; }
+  .ino-header-tagline { font-size: 0.85rem; letter-spacing: 0.02em; }
+  .ino-header-title { font-size: 1.05rem; }
+  .ino-main { padding-left: 10px; padding-right: 10px; }
+  .ino-card { padding: 14px 12px; }
   .ino-table th, .ino-table td { padding: 8px; }
   .ino-summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-.ino-logo { display: block; width: min(340px, 70vw); height: auto; margin: 0 auto 10px; }
-.ino-banner { text-align: center; }
-.ino-petals { display: none; }
 .ino-rolling-grid { margin-top: 12px; }
-.ino-rolling-note { margin: 10px 0 0; color: var(--ino-muted); font-size: 0.8rem; line-height: 1.5; }
-.ino-rolling-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
-.ino-rolling-button { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--ino-border); background: var(--ino-surface-2); color: var(--ino-heading); font-weight: 700; cursor: pointer; }
-.ino-rolling-button-strong { background: rgba(255, 77, 109, 0.18); border-color: rgba(255, 77, 109, 0.55); color: var(--ino-critical); }
-.ino-rolling-subtitle { margin: 8px 0; font-size: 0.95rem; }
-.ino-rolling-banner { margin-bottom: 10px; padding: 8px 10px; border-radius: 6px; font-weight: 700; }
-.ino-rolling-banner-failed { background: rgba(255, 77, 109, 0.16); color: var(--ino-critical); border: 1px solid rgba(255, 77, 109, 0.45); }
-.ino-rolling-banner-window { background: rgba(255, 158, 0, 0.14); color: var(--ino-heading); border: 1px solid rgba(255, 158, 0, 0.55); }
-.ino-rolling-section { margin-top: 12px; }
-.ino-rolling-previous { margin-top: 16px; padding: 12px; border: 1px dashed rgba(255, 158, 0, 0.7); border-radius: 6px; background: rgba(255, 158, 0, 0.06); }
+.ino-rolling-note {
+  margin: 10px 0 0;
+  color: var(--ino-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.ino-rolling-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+.ino-rolling-button {
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--ino-border);
+  background: var(--ino-surface-2);
+  color: var(--ino-heading);
+  font-weight: 700;
+  cursor: pointer;
+}
+.ino-rolling-button-strong {
+  background: rgba(255, 77, 109, 0.18);
+  border-color: rgba(255, 77, 109, 0.55);
+  color: var(--ino-critical);
+}
+.ino-rolling-subtitle {
+  margin: 8px 0;
+  font-size: 0.95rem;
+}
+.ino-rolling-banner {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.ino-rolling-banner-failed {
+  background: rgba(255, 77, 109, 0.16);
+  color: var(--ino-critical);
+  border: 1px solid rgba(255, 77, 109, 0.45);
+}
+.ino-rolling-banner-window {
+  background: rgba(255, 158, 0, 0.14);
+  color: var(--ino-heading);
+  border: 1px solid rgba(255, 158, 0, 0.55);
+}
+.ino-rolling-section {
+  margin-top: 12px;
+}
+.ino-rolling-previous {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px dashed rgba(255, 158, 0, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 158, 0, 0.06);
+}
 .ino-rolling-row-exceed { background: rgba(255, 77, 109, 0.14); }
 .ino-rolling-row-approach { background: rgba(255, 158, 0, 0.12); }
 .ino-rolling-row-partial { background: rgba(0, 187, 249, 0.08); }
 .ino-rolling-row-undetermined { background: rgba(141, 153, 174, 0.12); }
 .ino-rolling-row-resolved { background: rgba(56, 176, 0, 0.08); }
-.ino-rolling-extra, .ino-rolling-id { margin-top: 2px; color: var(--ino-muted); font-size: 0.75rem; }
-.ino-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.ino-tab { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--ino-border); background: var(--ino-surface); color: var(--ino-heading); font-weight: 700; cursor: pointer; }
-.ino-tab.is-active { background: rgba(155, 93, 229, 0.28); border-color: rgba(155, 93, 229, 0.7); }
+.ino-rolling-extra,
+.ino-rolling-id {
+  margin-top: 2px;
+  color: var(--ino-muted);
+  font-size: 0.75rem;
+}
+
+.ino-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.ino-tab {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--ino-border);
+  background: rgba(13, 11, 20, 0.55);
+  color: var(--ino-heading);
+  font-weight: 700;
+  cursor: pointer;
+}
+.ino-tab.is-active {
+  background: rgba(155, 93, 229, 0.28);
+  border-color: rgba(155, 93, 229, 0.7);
+}
 .ino-tab-panel[hidden] { display: none; }
-.ino-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-.ino-overview-card { padding: 12px; border: 1px solid var(--ino-border); border-radius: var(--ino-radius); background: var(--ino-surface); }
-.ino-meter { height: 8px; margin: 6px 0; border-radius: 99px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.ino-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.ino-overview-card {
+  padding: 12px;
+  border: 1px solid var(--ino-border);
+  border-radius: var(--ino-radius);
+  background: var(--ino-panel-inner);
+}
+.ino-meter {
+  height: 8px;
+  margin: 6px 0;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
 .ino-meter > span { display: block; height: 100%; }
 .ino-meter-actual > span { background: #ff4d6d; }
 .ino-meter-forecast > span { background: #ff7a45; }
 .ino-meter-approach > span { background: #ff9e00; }
+
+@media (max-width: 390px) {
+  .ino-logo { width: 150px; }
+  .ino-main { padding-left: 6px; padding-right: 6px; }
+  .ino-card { padding: 12px 10px; }
+  .ino-header-subtitle { font-size: 0.85rem; }
+  .ino-stat-value { font-size: 1.35rem; }
+}
