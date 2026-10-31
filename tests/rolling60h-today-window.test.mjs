@@ -152,7 +152,7 @@ assert.equal(actual.judgment, 'actual-exceed');
 assert.equal(actual.judgmentLabel, '実績超過');
 
 const known = byId['T-KNOWN'];
-assert.equal(known.knownOver, true);
+assert.equal(known.knownOver, false, '空白は確定した休み(0h)。未確定ではない');
 assert.equal(known.forecast.hours > 60, true);
 assert.equal(known.judgment, 'forecast-exceed');
 assert.equal(known.judgment === 'review', false, '既知時間だけで超えていれば要確認へ格下げしない');

@@ -9,10 +9,12 @@
   'use strict';
 
   var Board = global.Rolling60hLocalBoard;
+  var MAX_SHIFT_FILES = 3; // 前月・当月・翌月
   var STATE = {
     ready: false,
     sub: 'import',
-    shift: null, // { name, workbook, importedAt, range, ok, error, names }
+    shift: null, // 読み込み済みシフト表全体の要約 { name, importedAt, range, ok, names, months }。実体は shiftFiles
+    shiftFiles: [], // [{ name, workbook, importedAt, range, rangeMax, names, months }] 月ごとのファイルを同時に保持（最大 MAX_SHIFT_FILES）
     daily: null, // { name, rows, importedAt, range, ok, error }
     board: null,
     saved: null, // 'ok' | 'failed' | 'skipped' | null
@@ -81,9 +83,15 @@
     var min = '';
     var max = '';
     var withId = 0;
+    var monthCells = {};
     (wb.SheetNames || []).forEach(function (sheet) {
       if (skip[sheet] || sheet === 'Report5_Daily_Data') return;
       var parsed = Core.parseMonthlyRosterSheetRows(sheetRows(wb, sheet));
+      (parsed.records || []).forEach(function (rec) {
+        if (rec.rawCode === '' || rec.rawCode == null) return;
+        var ym = String(rec.date).slice(0, 7);
+        monthCells[ym] = (monthCells[ym] || 0) + 1;
+      });
       var grouped = Core.groupRosterRecordsByDriver(parsed.records || []);
       Object.keys(grouped).forEach(function (key) {
         var meta = grouped[key].meta || {};
@@ -97,7 +105,8 @@
       }
     });
     if (!withId) return { ok: false, error: 'Transport IDを持つシフト行が見つかりません（シフト表の形式を確認してください）' };
-    return { ok: true, names: names, range: min && max ? { min: min, max: max } : null, count: withId };
+    var months = Core.describeRosterMonths({ f: monthCells })[0].months;
+    return { ok: true, names: names, range: min && max ? { min: min, max: max } : null, count: withId, months: months };
   }
 
   function inspectDaily(wb) {
@@ -125,9 +134,26 @@
       var checked = kind === 'shift' ? inspectShift(wb) : inspectDaily(wb);
       var entry = { name: file.name, importedAt: nowIso(), ok: checked.ok, error: checked.error || '', range: checked.range || null, count: checked.count || 0 };
       if (checked.ok) {
-        if (kind === 'shift') { entry.workbook = wb; entry.names = checked.names; } else { entry.rows = checked.rows; }
-        STATE[kind] = entry; // 成功したときだけ差し替える（失敗した取込は前の正常な取込を壊さない）
         STATE.message = '';
+        if (kind === 'shift') {
+          // 月ごとのファイルを同時に保持する。同名ファイルの再読込は置き換え（重複計上しない）。
+          entry.workbook = wb;
+          entry.names = checked.names;
+          entry.months = checked.months || [];
+          entry.rangeMax = checked.range ? checked.range.max : '';
+          entry.label = file.name;
+          entry.modified = typeof file.lastModified === 'number' ? file.lastModified : undefined;
+          var up = global.RollingCore.upsertRosterSource(STATE.shiftFiles, entry, MAX_SHIFT_FILES, { neededMonths: global.RollingCore.neededMonthsForReference(refDate()) });
+          STATE.shiftFiles = up.list;
+          STATE.shift = aggregateShift();
+          if (up.keptNewer) STATE.message = file.name + ' は取込済みのファイルより更新日時が古いため、新しい方をそのまま残しました（置き換えていません）。';
+          else if (up.rejected) STATE.message = file.name + ' は取り込めませんでした: 上限' + MAX_SHIFT_FILES + 'ファイルで、すべて基準日の判定に必要な月のため外せません。不要なファイルを「クリア」してから取り込んでください。';
+          else if (up.evicted) STATE.message = '上限' + MAX_SHIFT_FILES + 'ファイルのため、判定に不要な最も古い月の「' + up.evicted.name + '」を外しました。';
+          else if (up.replaced) STATE.message = file.name + ' は取込済みのため置き換えました（二重には計上しません）。';
+        } else {
+          entry.rows = checked.rows;
+          STATE[kind] = entry; // 成功したときだけ差し替える（失敗した取込は前の正常な取込を壊さない）
+        }
       } else {
         STATE.message = (kind === 'shift' ? 'シフト表' : 'Daily実績') + 'の取込に失敗: ' + file.name + '（' + checked.error + '）。' + (STATE[kind] ? '前回取り込んだファイルはそのまま残しています。' : '');
         STATE.lastFailed = STATE.lastFailed || {};
@@ -138,6 +164,47 @@
       STATE.message = file.name + ' を読み込めませんでした（壊れている、またはExcel形式ではありません）。前回の取込と保存済みの集計は変更していません。';
       render();
     });
+  }
+
+  function refDate() {
+    return STATE.referenceDate || Board.jstDate(nowIso());
+  }
+
+  function shiftCoverage() {
+    var loaded = (STATE.shiftFiles || []).map(function (f) { return { label: f.name, months: f.months || [] }; });
+    return global.RollingCore.checkRosterCoverage(loaded, refDate());
+  }
+
+  function aggregateShift() {
+    var files = STATE.shiftFiles || [];
+    if (!files.length) return null;
+    var names = {};
+    var min = '';
+    var max = '';
+    var importedAt = '';
+    var months = {};
+    files.forEach(function (f) {
+      Object.keys(f.names || {}).forEach(function (tid) { if (!names[tid]) names[tid] = f.names[tid]; });
+      if (f.range) {
+        if (!min || f.range.min < min) min = f.range.min;
+        if (!max || f.range.max > max) max = f.range.max;
+      }
+      if (!importedAt || f.importedAt > importedAt) importedAt = f.importedAt;
+      (f.months || []).forEach(function (ym) { months[ym] = true; });
+    });
+    return {
+      name: files.map(function (f) { return f.name; }).join(' + '),
+      importedAt: importedAt,
+      range: min && max ? { min: min, max: max } : null,
+      ok: true,
+      names: names,
+      months: Object.keys(months).sort(),
+    };
+  }
+
+  function monthLabel(ym) {
+    var m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    return m ? m[1] + '年' + Number(m[2]) + '月' : ym;
   }
 
   function names() {
@@ -162,9 +229,9 @@
   function publishDispatch(ref) {
     try {
       if (!global.RollingUI || typeof global.RollingUI.ingestLoadedFiles !== 'function') return;
-      if (!STATE.shift || !STATE.shift.workbook) return;
+      if (!STATE.shiftFiles || !STATE.shiftFiles.length) return;
       global.RollingUI.ingestLoadedFiles({
-        workbook: STATE.shift.workbook,
+        workbooks: STATE.shiftFiles.map(function (f) { return { name: f.name, workbook: f.workbook }; }),
         amazonRows: STATE.daily && STATE.daily.rows ? STATE.daily.rows : null,
         referenceDate: ref,
         rosterLabel: STATE.shift.name || 'シフト'
@@ -200,8 +267,7 @@
         dryRun: global.InoichiRollingDryRun,
         dailyRows: STATE.daily ? STATE.daily.rows : null,
         dailyFileName: STATE.daily ? STATE.daily.name : '',
-        shiftBook: STATE.shift ? STATE.shift.workbook : null,
-        shiftFileName: STATE.shift ? STATE.shift.name : '',
+        shiftBooks: (STATE.shiftFiles || []).map(function (f) { return { name: f.name, workbook: f.workbook }; }),
         referenceDate: ref,
       });
     } catch (e) {
@@ -218,7 +284,7 @@
       referenceDate: ref,
       generatedAt: nowIso(),
       files: {
-        shift: { name: STATE.shift ? STATE.shift.name : '', ok: !!STATE.shift, range: STATE.shift ? STATE.shift.range : null, importedAt: STATE.shift ? STATE.shift.importedAt : null },
+        shift: { name: STATE.shift ? STATE.shift.name : '', ok: !!STATE.shift, range: STATE.shift ? STATE.shift.range : null, importedAt: STATE.shift ? STATE.shift.importedAt : null, months: STATE.shift ? STATE.shift.months : [], fileCount: (STATE.shiftFiles || []).length, missingMonths: STATE.shiftFiles && STATE.shiftFiles.length ? shiftCoverage().missing : [] },
         daily: { name: STATE.daily ? STATE.daily.name : '', ok: !!STATE.daily, range: STATE.daily ? STATE.daily.range : null, importedAt: STATE.daily ? STATE.daily.importedAt : null },
       },
       names: names(),
@@ -228,6 +294,10 @@
     STATE.board = board;
     STATE.message = '';
     var summary = Board.buildFridaySummary(board, nowIso());
+    var missing = board.files && board.files.shift && board.files.shift.missingMonths;
+    if (missing && missing.length) {
+      h += '<div class="card p-3 mb-3 text-sm" style="background:#fef2f2;color:#b91c1c;">⚠ 基準日の判定に必要な ' + esc(missing.join('・')) + ' のシフト表が未読込です。該当日は未取得のままで、判定不能が増えます。</div>';
+    }
     if (board.completeness === 'incomplete-input') {
       // 片方の入力が欠けた集計は表示だけ。保存済みの正常な集計は置き換えない。
       STATE.saved = 'skipped';
@@ -272,7 +342,19 @@
     if (STATE.picked && STATE.picked[kind]) {
       h += '<div class="text-xs mt-2" data-picked="' + kind + '">選択したファイル: <b>' + esc(STATE.picked[kind]) + '</b></div>';
     }
-    if (entry) {
+    if (kind === 'shift' && STATE.shiftFiles && STATE.shiftFiles.length) {
+      var allMonths = entry && entry.months ? entry.months : [];
+      h += '<div class="text-xs mt-2" data-shift-months="1"><b>読込済みの月: ' + (allMonths.length ? esc(allMonths.map(monthLabel).join('・')) : '不明') + '</b>' +
+        '（最大' + MAX_SHIFT_FILES + 'ファイル。別の月のファイルを追加しても前の月は消えません）</div>';
+      STATE.shiftFiles.forEach(function (f) {
+        h += '<div class="text-xs mt-1">✅ <b>' + esc(f.name) + '</b>：' + (f.months && f.months.length ? esc(f.months.map(monthLabel).join('・')) : '月不明') +
+          '／取込 ' + esc(jst(f.importedAt)) + '</div>';
+      });
+      shiftCoverage().warnings.forEach(function (w) {
+        h += '<div class="text-xs mt-1" role="alert" data-shift-coverage="1" style="color:#b91c1c;">⚠ ' + esc(w) + '</div>';
+      });
+      h += '<div class="text-xs mt-1 text-ink-lighter">同じ日付が複数ファイルにあるときは、空白より勤務記号を採用し、記号が食い違う日は判定不能にします。</div>';
+    } else if (entry) {
       h += '<div class="text-xs mt-2">✅ 読込成功: <b>' + esc(entry.name) + '</b><br>取込日時 ' + esc(jst(entry.importedAt)) +
         '<br>対象期間 ' + (entry.range ? esc(entry.range.min + ' 〜 ' + entry.range.max) : '不明') + '</div>';
     } else {
@@ -411,7 +493,7 @@
     var text = Board && Board.judgmentText
       ? Board.judgmentText(row)
       : (((row && row.judgmentLabel) || '要確認') + (row && row.judgmentProvisional ? '・暫定' : ''));
-    return judgmentMark(row) + text;
+    return judgmentMark(row) + text + (row && row.otherStation ? '・' + row.otherStation.label : '');
   }
 
   function futureLine(row) {
@@ -545,6 +627,7 @@
     rows.forEach(function (r) {
       var code = r.judgment || 'review';
       var label = Board.judgmentText ? Board.judgmentText(r) : ((r.judgmentLabel || '要確認') + (r.judgmentProvisional ? '・暫定' : ''));
+      if (r.otherStation) label += '・' + r.otherStation.label;
       var color = JUDGMENT_COLOR[code] || JUDGMENT_COLOR.review;
       var tint = code === 'actual-exceed' ? '#fff1f2' : code === 'forecast-exceed' ? '#fff7ed' : code === 'caution' ? '#fffbeb' : code === 'review' ? '#fffbeb' : (r.futureExceed ? '#fffbeb' : '');
       var futureLine = r.futureExceed ? (r.futureExceed.start + '〜' + r.futureExceed.end + (r.futureExceed.count > 1 ? ' ほか' + (r.futureExceed.count - 1) + '件' : '')) : '';

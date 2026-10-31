@@ -38,6 +38,7 @@
       shiftFile: '',
       dailyReason: '',
       shiftReason: '',
+      previousMonthShiftReason: '',
       fileSuccess: 0,
       fileFailure: 2,
       driverCount: 0,
@@ -51,6 +52,14 @@
       undeterminedCount: 0,
       unmatchedCount: 0,
       blankUnconfirmedPersonDays: 0,
+      blankRestPersonDays: 0,
+      shiftFiles: [],
+      shiftMonths: [],
+      shiftMissingMonths: [],
+      shiftCoverageWarnings: [],
+      shiftConflictDays: 0,
+      otherStationCount: 0,
+      partialOtherStationCount: 0,
       outsidePeriodDateCount: 0,
       outsidePeriodKeptByDailyDays: 0,
       knownOverWindows: 0,
@@ -75,7 +84,7 @@
       historySaved: false,
       historyDuplicate: false,
       confirmedActual: false,
-      logicVersion: 'rolling60h-predict-3',
+      logicVersion: 'rolling60h-predict-4',
       sent: false,
       channel: 'dry-run',
     };
@@ -97,6 +106,29 @@
     return { ok: true, name: tops[0].name };
   }
 
+  // 前月のシフトファイル。ファイル名に「N月」を含み、最新ファイルの月の前月（1月の前は12月）のもの。
+  // 月が名前から分からない場合は探さない（推測しない）。複数あれば更新日時が新しいもの、同時刻なら選ばない。
+  function monthOfName(name) {
+    var m = /(\d{1,2})月/.exec(baseName(name));
+    var n = m ? Number(m[1]) : 0;
+    return n >= 1 && n <= 12 ? n : 0;
+  }
+
+  function selectPreviousMonthShift(entries, latestName) {
+    var month = monthOfName(latestName);
+    if (!month) return { ok: false, reason: 'month-unknown' };
+    var prev = month === 1 ? 12 : month - 1;
+    var matched = (entries || []).filter(function (entry) {
+      var name = baseName(entry.name);
+      return SHIFT_NAME.test(name) && name.indexOf('~$') !== 0 && name !== baseName(latestName) && monthOfName(name) === prev;
+    });
+    if (!matched.length) return { ok: false, reason: 'no-previous-month-file' };
+    var max = matched.reduce(function (acc, entry) { return acc == null || entry.mtimeMs > acc ? entry.mtimeMs : acc; }, null);
+    var tops = matched.filter(function (entry) { return entry.mtimeMs === max; });
+    if (tops.length > 1) return { ok: false, reason: 'ambiguous-previous-month' };
+    return { ok: true, name: tops[0].name };
+  }
+
   function listShiftEntries(dir, fs, pathMod) {
     if (!dir || !fs.existsSync(dir)) return null;
     return fs.readdirSync(dir).map(function (name) {
@@ -107,56 +139,63 @@
     });
   }
 
-  function rosterBlocks(wb, rolling) {
-    var sources = [];
+  /**
+   * 読み込み済みのシフトブック（複数月）→ Transport ID別の {date: blocks[]}。
+   * 解析は画面のRolling60hと同じ buildRosterTimelineFromSources を使う
+   * （月またぎ: 助走列の除外・定数日番号見出しの復元・読込順に依存しないマージ）。
+   * 同じ日付が複数ファイルにある場合の優先順位は mergeRosterBlocksByDateAcrossSourcesStrict に従う。
+   *
+   * @param {Array<{name:string, workbook:Object}>} books 同名は後のものを採用（再読込で重複計上しない）
+   */
+  function rosterBlocks(books, rolling, options) {
+    options = options || {};
+    var byName = {};
+    var order = [];
+    (books || []).forEach(function (book) {
+      if (!book || !book.workbook) return;
+      var key = book.name || 'shift';
+      if (!byName[key]) order.push(key);
+      byName[key] = book;
+    });
+    var sources = order.map(function (key) {
+      var wb = byName[key].workbook;
+      var sheetsData = {};
+      (wb.SheetNames || []).forEach(function (sheetName) {
+        if (ROSTER_SKIP[sheetName] || sheetName === 'Report5_Daily_Data') return;
+        sheetsData[sheetName] = requireRows(wb, sheetName);
+      });
+      return { label: key, sheetsData: sheetsData };
+    });
+    var built = rolling.buildRosterTimelineFromSources(sources, {});
     var unmatched = {};
     var extraSymbolDates = {};
-    (wb.SheetNames || []).forEach(function (sheetName) {
-      if (ROSTER_SKIP[sheetName] || sheetName === 'Report5_Daily_Data') return;
-      var rows = requireRows(wb, sheetName);
-      var parsed = rolling.parseMonthlyRosterSheetRows(rows);
-      var grouped = rolling.groupRosterRecordsByDriver(parsed.records || []);
-      Object.keys(grouped).forEach(function (key) {
-        var meta = grouped[key].meta || {};
-        if (!meta.transportId || key.indexOf('NAME:') === 0) {
-          unmatched[key] = true;
-          // 突合できない行でも、勤務記号が入っている日付列の証拠にはする。
-          Object.keys(grouped[key].blocksByDate || {}).forEach(function (date) {
-            if ((grouped[key].blocksByDate[date] || []).length > 0) extraSymbolDates[date] = true;
-          });
-          return;
-        }
-        sources.push({ transportId: meta.transportId, label: sheetName, blocksByDate: grouped[key].blocksByDate });
-      });
-    });
-    var byTid = {};
-    sources.forEach(function (source) {
-      if (!byTid[source.transportId]) byTid[source.transportId] = [];
-      byTid[source.transportId].push({ label: source.label, blocksByDate: source.blocksByDate });
-    });
     var out = {};
-    Object.keys(byTid).forEach(function (tid) {
-      var merged = rolling.mergeRosterBlocksByDateAcrossSources(byTid[tid]);
-      var blocks = merged.merged || {};
-      (merged.duplicates || []).forEach(function (dup) {
-        if (dup.valuesDiffer) {
-          blocks[dup.date] = [{
-            code: 'UNKNOWN',
-            rawCode: 'duplicate',
-            source: 'roster',
-            hours: null,
-            defined: false,
-          }];
-        }
-      });
-      out[tid] = blocks;
+    var names = {};
+    Object.keys(built.rosterBlocksByDriver).forEach(function (key) {
+      var meta = built.driverMeta[key] || {};
+      var byDate = built.rosterBlocksByDriver[key] || {};
+      if (!meta.transportId || key.indexOf('NAME:') === 0) {
+        unmatched[key] = true;
+        // 突合できない行でも、勤務記号が入っている日付列の証拠にはする。
+        Object.keys(byDate).forEach(function (date) {
+          if ((byDate[date] || []).length > 0) extraSymbolDates[date] = true;
+        });
+        return;
+      }
+      out[meta.transportId] = byDate;
+      if (meta.name) names[meta.transportId] = meta.name;
     });
-    var resolved = rolling.resolveRosterBlanks(out, { extraSymbolDates: extraSymbolDates });
+    var resolved = rolling.resolveRosterBlanks(out, { extraSymbolDates: extraSymbolDates, blankAsRest: options.blankAsRest !== false });
     return {
       byTid: resolved.byTid,
+      names: names,
       unmatchedCount: Object.keys(unmatched).length,
       outsideDates: resolved.outsideDates,
       unconfirmedPersonDays: resolved.unconfirmedPersonDays,
+      blankRestPersonDays: resolved.blankRestPersonDays,
+      files: order,
+      months: rolling.describeRosterMonths(built.sourceMonths),
+      conflicts: built.conflicts || [],
     };
   }
 
@@ -177,6 +216,14 @@
     return min && max ? { min: min, max: max } : null;
   }
 
+  // 同じTransport IDの他局実績の日付（シリーズの期間内）。時間は合算も0扱いもしない。
+  function otherDatesFor(item, span) {
+    if (!item || !span) return null;
+    var dates = Object.keys(item.dates).filter(function (date) { return date >= span.min && date <= span.max; }).sort();
+    if (!dates.length) return null;
+    return { dates: dates, stations: Object.keys(item.stations).sort() };
+  }
+
   function windowGap(window) {
     return window.judgment === 'undetermined' || window.complete === false || window.hasUndefinedHours;
   }
@@ -194,6 +241,8 @@
     var partialApproach = 0;
     var partialKnownOver = 0;
     var undetermined = 0;
+    var otherStationCount = 0;
+    var partialOtherStation = 0;
     (drivers || []).forEach(function (driver) {
       var windows = driver.windows || [];
       var hasExceed = windows.some(function (window) { return window.judgment === 'exceed'; });
@@ -201,6 +250,8 @@
       var hasWithin = windows.some(function (window) { return window.judgment === 'within'; });
       var hasKnownOver = windows.some(function (window) { return window.knownOver; });
       var hasGap = windows.length === 0 || driver.judgment === 'undetermined' || windows.some(windowGap);
+      var hasOther = !!(driver.otherStation && driver.otherStation.dates && driver.otherStation.dates.length);
+      if (hasOther) otherStationCount++;
       // 確定済みの時間だけで60時間超の窓がある人は、完全判定不能にせず部分欠損として危険内訳を残す。
       if (hasGap && (hasExceed || hasApproach || hasWithin || hasKnownOver)) {
         partial++;
@@ -215,7 +266,11 @@
       }
       if (hasExceed) exceed++;
       else if (hasApproach) approach++;
-      else clear++;
+      else if (hasOther) {
+        // 他局の実績が同じTransport IDにある。OFK3の実績だけで「正常」とは言えないので要確認（部分扱い）。
+        partial++;
+        partialOtherStation++;
+      } else clear++;
     });
     if (clear + exceed + approach + partial + undetermined !== (drivers || []).length) {
       throw new Error('classification is not exclusive');
@@ -223,6 +278,8 @@
     return {
       driverCount: (drivers || []).length,
       partialKnownOverCount: partialKnownOver,
+      otherStationCount: otherStationCount,
+      partialOtherStationCount: partialOtherStation,
       clearCount: clear,
       exceedCount: exceed,
       approachCount: approach,
@@ -259,12 +316,15 @@
     var archived = blocks.some(function (block) { return block && block.archived; });
     var source = blocks[0] && blocks[0].source;
     var origin = archived ? 'archived-daily' : (source === 'roster' ? 'roster-plan' : 'daily-estimate');
-    return {
+    var snap = {
       date: day.date,
       hours: day.dailyTotalHours,
       origin: origin,
       future: origin === 'roster-plan' && day.date >= referenceDate,
     };
+    // シフト表の空白＝休み(0h)として確定した日（実績で置き換わった日は対象外）。
+    if (origin === 'roster-plan' && blocks.length && blocks.every(function (block) { return block && block.blankRest; })) snap.rest = 'blank';
+    return snap;
   }
 
   function snapshotDateOf(rows, rolling) {
@@ -306,7 +366,8 @@
     var harvest = options.harvest;
     var dryRun = options.dryRun;
     // OFK3画面など、読み込み済みのブックを直接渡す場合（ファイル探索・履歴保存は行わない）。
-    var injected = options.dailyRows !== undefined || options.shiftBook !== undefined;
+    var injectedBooks = options.shiftBooks && options.shiftBooks.length ? options.shiftBooks : null;
+    var injected = options.dailyRows !== undefined || options.shiftBook !== undefined || options.shiftBooks !== undefined;
     if ((!injected && (!fs || !pathMod)) || !XLSX || !rolling || !harvest || !dryRun) {
       return { summary: emptySummary({ reason: 'runner-missing' }), stats: null };
     }
@@ -318,7 +379,9 @@
     var shiftFile = '';
     var fileSuccess = 0;
     var dailyRows = null;
-    var shiftBook = null;
+    var shiftBooks = [];
+    var previousMonthReason = '';
+    var previousMonthFile = '';
 
     // 失敗理由はコードだけを残す（パス・氏名は含めない）。
     var dailyReason = '';
@@ -332,10 +395,17 @@
       } else {
         dailyReason = 'not-provided';
       }
-      if (options.shiftBook) {
+      if (injectedBooks) {
+        // 複数月のシフト表を同時に受け取る。同名は後勝ち（再読込）。
+        injectedBooks.forEach(function (book) {
+          if (book && book.workbook) shiftBooks.push({ name: baseName(book.name), workbook: book.workbook });
+        });
+      } else if (options.shiftBook) {
+        shiftBooks.push({ name: baseName(options.shiftFileName), workbook: options.shiftBook });
+      }
+      if (shiftBooks.length) {
         fileSuccess++;
-        shiftFile = baseName(options.shiftFileName);
-        shiftBook = options.shiftBook;
+        shiftFile = shiftBooks.map(function (book) { return book.name; }).join(' + ');
         shiftReason = 'ok';
       } else {
         shiftReason = 'not-provided';
@@ -360,12 +430,25 @@
       var pickedShift = shiftEntries ? selectLatestShift(shiftEntries) : { ok: false, reason: shiftReason || 'source-unavailable' };
       if (pickedShift.ok) {
         try {
-          shiftBook = XLSX.readFile(pathMod.join(shiftDir, baseName(pickedShift.name)), { cellDates: true });
+          shiftBooks.push({ name: baseName(pickedShift.name), workbook: XLSX.readFile(pathMod.join(shiftDir, baseName(pickedShift.name)), { cellDates: true }) });
           fileSuccess++;
+          // 月またぎの判定には前月のシフトが要る。見つからない・読めない場合は黙って進めず理由を残す（最新だけで続行）。
+          var prevPick = selectPreviousMonthShift(shiftEntries, pickedShift.name);
+          if (prevPick.ok) {
+            try {
+              shiftBooks.unshift({ name: baseName(prevPick.name), workbook: XLSX.readFile(pathMod.join(shiftDir, baseName(prevPick.name)), { cellDates: true }) });
+              previousMonthReason = 'ok';
+              previousMonthFile = baseName(prevPick.name);
+            } catch (prevErr) {
+              previousMonthReason = 'read-failed';
+            }
+          } else {
+            previousMonthReason = prevPick.reason;
+          }
           shiftFile = baseName(pickedShift.name);
           shiftReason = 'ok';
         } catch (e) {
-          shiftBook = null;
+          shiftBooks = [];
           shiftReason = 'read-failed';
         }
       } else {
@@ -375,13 +458,21 @@
 
     var parsed = dailyRows ? rolling.parseAmazonDailyRows(dailyRows, { stationFilter: 'OFK3', allowHeaderlessFallback: false }) : { records: [] };
     var actualByTid = harvest.recordedDailyBlocks(parsed.records || []);
-    var roster = shiftBook ? rosterBlocks(shiftBook, rolling) : { byTid: {}, unmatchedCount: 0 };
+    var roster = shiftBooks.length ? rosterBlocks(shiftBooks, rolling, { blankAsRest: options.blankAsRest }) : { byTid: {}, unmatchedCount: 0, files: [], months: [] };
+    var otherByTid = {};
+    (parsed.otherStation || []).forEach(function (rec) {
+      var item = otherByTid[rec.transportId] = otherByTid[rec.transportId] || { dates: {}, stations: {} };
+      item.dates[rec.date] = true;
+      item.stations[rec.station] = true;
+    });
     var rosterByTid = roster.byTid || {};
     var tids = {};
     Object.keys(actualByTid).forEach(function (tid) { tids[tid] = true; });
     Object.keys(rosterByTid).forEach(function (tid) { tids[tid] = true; });
 
     var referenceDate = options.referenceDate || todayJst();
+    // 基準日の7日窓に必要な月のシフト表が読み込まれているか。足りなければ警告（該当日は未取得のまま＝判定不能）。
+    var coverage = shiftBooks.length ? rolling.checkRosterCoverage(roster.months || [], referenceDate) : { missing: [], warnings: [] };
     var dayValues = (parsed.records || []).map(function (rec) { return rec.date; }).filter(Boolean).sort();
     var coverageMin = dayValues[0] || '';
     var coverageMax = dayValues.length ? dayValues[dayValues.length - 1] : '';
@@ -488,7 +579,7 @@
       Object.keys(planned).forEach(function (date) {
         (planned[date] || []).forEach(function (block) {
           if (!block || block.defined !== false || block.blank) return;
-          if (block.rawCode === 'duplicate') {
+          if (block.rawCode === 'duplicate' || block.conflict) {
             duplicateHourDays++;
             personDuplicate = true;
           } else {
@@ -548,6 +639,7 @@
         hoursKind: 'estimated_working_hour',
         judgment: series.length >= 7 ? 'evaluated' : 'undetermined',
         windows: windows,
+        otherStation: otherDatesFor(otherByTid[tid], span),
       });
     });
 
@@ -559,6 +651,7 @@
       shiftFile: shiftFile,
       dailyReason: dailyReason,
       shiftReason: shiftReason,
+      previousMonthShiftReason: previousMonthReason,
       fileSuccess: fileSuccess,
       fileFailure: 2 - fileSuccess,
       driverCount: counts.driverCount,
@@ -572,6 +665,14 @@
       partialKnownOverCount: counts.partialKnownOverCount,
       unmatchedCount: roster.unmatchedCount || 0,
       blankUnconfirmedPersonDays: roster.unconfirmedPersonDays || 0,
+      blankRestPersonDays: roster.blankRestPersonDays || 0,
+      shiftFiles: roster.files || [],
+      shiftMonths: roster.months || [],
+      shiftMissingMonths: coverage.missing,
+      shiftCoverageWarnings: coverage.warnings,
+      shiftConflictDays: (roster.conflicts || []).length,
+      otherStationCount: counts.otherStationCount,
+      partialOtherStationCount: counts.partialOtherStationCount,
       outsidePeriodDateCount: (roster.outsideDates || []).length,
       outsidePeriodKeptByDailyDays: outsideKeptByDaily,
       knownOverWindows: knownOverWindows,
@@ -596,7 +697,7 @@
       historySaved: false,
       historyDuplicate: false,
       confirmedActual: false,
-      logicVersion: 'rolling60h-predict-3',
+      logicVersion: 'rolling60h-predict-4',
       sent: false,
       channel: 'dry-run',
     };
@@ -611,7 +712,7 @@
         logicVersion: History.RULE_VERSION,
         referenceDate: referenceDate,
         dailyHash: dailyFull ? History.hashFile(fs, dailyFull) : '',
-        shiftHash: shiftFull ? History.hashFile(fs, shiftFull) : '',
+        shiftHash: (shiftFull ? History.hashFile(fs, shiftFull) : '') + (previousMonthFile ? '+' + History.hashFile(fs, pathMod.join(shiftDir, previousMonthFile)) : ''),
         dailyFile: dailyFile,
         shiftFile: shiftFile,
         snapshotDate: snapshotDateOf(dailyRows, rolling),
@@ -690,8 +791,12 @@
     if (!picked.ok) {
       return { ok: false, reason: picked.reason === 'no-shift-file' ? 'shift-missing' : picked.reason, byTid: {}, dates: [] };
     }
-    var book = XLSX.readFile(pathMod.join(shiftDir, baseName(picked.name)), { cellDates: true });
-    var roster = rosterBlocks(book, rolling);
+    var books = [{ name: baseName(picked.name), workbook: XLSX.readFile(pathMod.join(shiftDir, baseName(picked.name)), { cellDates: true }) }];
+    var prevPick = selectPreviousMonthShift(entries, picked.name);
+    if (prevPick.ok) {
+      try { books.unshift({ name: baseName(prevPick.name), workbook: XLSX.readFile(pathMod.join(shiftDir, baseName(prevPick.name)), { cellDates: true }) }); } catch (e) { /* 最新だけで続行 */ }
+    }
+    var roster = rosterBlocks(books, rolling);
     var dates = {};
     Object.keys(roster.byTid || {}).forEach(function (transportId) {
       Object.keys(roster.byTid[transportId] || {}).forEach(function (date) { dates[date] = true; });
@@ -713,6 +818,7 @@
     DAILY_DIR: DAILY_DIR,
     SHIFT_DIR: SHIFT_DIR,
     selectLatestShift: selectLatestShift,
+    selectPreviousMonthShift: selectPreviousMonthShift,
     loadRoster: loadRoster,
     ROSTER_SKIP: ROSTER_SKIP,
     run: run,

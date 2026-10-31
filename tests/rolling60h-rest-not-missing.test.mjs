@@ -90,7 +90,7 @@ assert.equal(blank.past6.hours, 0);
 assert.equal(blank.workable.hours, 60);
 assert.equal(blank.gaps.length, 0);
 assert.ok(blank.days.every((day) => day.hours === 0 && day.adopted === '休み'));
-assert.notEqual(blank.status, 'clear');
+assert.equal(blank.status, 'clear', '空白は確定した休み(0h)。エンジンも欠損にしない（旧: 未確定で非正常）');
 
 const kyu = byId['T-KYU'];
 assert.equal(kyu.judgment, 'ok');
