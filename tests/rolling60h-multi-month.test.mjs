@@ -103,9 +103,11 @@ function judge(executed, tid) {
   eq(r.list.map((s) => s.label), ['10月.xlsx', '11月.xlsx'], '同名の再読込は置き換え（増えない）');
   assert(r.replaced === true && r.list[0].v === 2, '再読込した内容に置き換わる');
   list = r.list;
-  r = Rolling.upsertRosterSource(list, { label: '12月.xlsx', rangeMax: '2026-12-31' }, 2);
-  eq(r.list.map((s) => s.label), ['11月.xlsx', '12月.xlsx'], '上限超過時だけ最も古い月を外す');
-  eq(r.evicted && r.evicted.label, '10月.xlsx', '外したファイルを返す');
+  // 上限超過時は、基準日(10/31)の判定に必要な10月は守り、不要な月だけを外す（詳細は rolling60h-shift-retention）
+  list = list.map((src, i) => Object.assign({}, src, { months: [['2026-10'], ['2026-11']][i] }));
+  r = Rolling.upsertRosterSource(list, { label: '12月.xlsx', rangeMax: '2026-12-31', months: ['2026-12'] }, 2, { neededMonths: Rolling.neededMonthsForReference('2026-10-31') });
+  eq(r.list.map((s) => s.label), ['10月.xlsx', '12月.xlsx'], '上限超過時は必要な10月を残し、不要な11月を外す');
+  eq(r.evicted && r.evicted.label, '11月.xlsx', '外したファイルを返す');
   assert(list.length === 2, '元の配列は変更しない');
 }
 

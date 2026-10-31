@@ -55,6 +55,8 @@
       blankRestPersonDays: 0,
       shiftFiles: [],
       shiftMonths: [],
+      shiftMissingMonths: [],
+      shiftCoverageWarnings: [],
       shiftConflictDays: 0,
       otherStationCount: 0,
       partialOtherStationCount: 0,
@@ -469,6 +471,8 @@
     Object.keys(rosterByTid).forEach(function (tid) { tids[tid] = true; });
 
     var referenceDate = options.referenceDate || todayJst();
+    // 基準日の7日窓に必要な月のシフト表が読み込まれているか。足りなければ警告（該当日は未取得のまま＝判定不能）。
+    var coverage = shiftBooks.length ? rolling.checkRosterCoverage(roster.months || [], referenceDate) : { missing: [], warnings: [] };
     var dayValues = (parsed.records || []).map(function (rec) { return rec.date; }).filter(Boolean).sort();
     var coverageMin = dayValues[0] || '';
     var coverageMax = dayValues.length ? dayValues[dayValues.length - 1] : '';
@@ -664,6 +668,8 @@
       blankRestPersonDays: roster.blankRestPersonDays || 0,
       shiftFiles: roster.files || [],
       shiftMonths: roster.months || [],
+      shiftMissingMonths: coverage.missing,
+      shiftCoverageWarnings: coverage.warnings,
       shiftConflictDays: (roster.conflicts || []).length,
       otherStationCount: counts.otherStationCount,
       partialOtherStationCount: counts.partialOtherStationCount,

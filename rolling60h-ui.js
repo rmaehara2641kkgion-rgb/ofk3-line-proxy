@@ -203,12 +203,21 @@
         // 「最大2か月分」＝最大2ファイルまで保持。3件目以降は最も古いファイルを
         // 追い出す（FIFO）。既存のクリアボタンで明示的にリセットも可能。
         // 最大3ファイル。同名の再読込は置き換え、超過時だけ最も古い月を外す（前月データを不用意に消さない）。
-        var upserted = global.RollingCore.upsertRosterSource(STATE.rosterSources, {
+        var incoming = {
           label: file.name || 'ファイル' + (STATE.rosterSources.length + 1),
           sheetsData: sheetsData,
-        }, MAX_ROSTER_SOURCES);
+          months: global.RollingCore.monthsOfSheets(sheetsData),
+          modified: typeof file.lastModified === 'number' ? file.lastModified : undefined,
+        };
+        // 読込前に基準日を反映（必要な月の判定に使う）
+        readOptionsFromUI();
+        var upserted = global.RollingCore.upsertRosterSource(STATE.rosterSources, incoming, MAX_ROSTER_SOURCES, {
+          neededMonths: global.RollingCore.neededMonthsForReference(STATE.referenceDate || ''),
+        });
         STATE.rosterSources = upserted.list;
         var evicted = upserted.evicted;
+        STATE.rosterNotice = upserted.keptNewer ? incoming.label + ' は読込済みより更新日時が古いため置き換えていません。'
+          : upserted.rejected ? incoming.label + ' は上限のため取り込めません（すべて基準日の判定に必要な月）。' : '';
 
         readOptionsFromUI();
         recomputeAndRender();
@@ -230,6 +239,17 @@
     var html = '<span class="text-green-400">✓ 読込済み（' + STATE.rosterSources.length + '/' + MAX_ROSTER_SOURCES + '）</span><br>' + lines.join('<br>');
     if (evicted) {
       html += '<br><span class="text-yellow-400">⚠ 最大' + MAX_ROSTER_SOURCES + 'ファイルまでのため「' + evicted.label + '」を破棄しました。必要な場合は再読込してください。</span>';
+    }
+    if (STATE.rosterNotice) html += '<br><span class="text-yellow-400">⚠ ' + STATE.rosterNotice + '</span>';
+    // 基準日の7日窓に必要な月が読み込まれているか。足りなければ警告（該当日は未取得のまま＝判定不能）。
+    if (STATE.referenceDate && STATE.rosterSources.length) {
+      var loaded = STATE.rosterSources.map(function (src) {
+        var info = (STATE.rosterSourceMonths || []).filter(function (m) { return m.label === src.label; })[0];
+        return { label: src.label, months: src.months || (info ? info.months : []) };
+      });
+      global.RollingCore.checkRosterCoverage(loaded, STATE.referenceDate).warnings.forEach(function (w) {
+        html += '<br><span class="text-red-400" data-roster-coverage="1">⚠ ' + w + '</span>';
+      });
     }
     statusEl.innerHTML = html;
   }

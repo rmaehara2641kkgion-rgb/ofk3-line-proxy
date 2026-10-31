@@ -142,10 +142,13 @@
           entry.months = checked.months || [];
           entry.rangeMax = checked.range ? checked.range.max : '';
           entry.label = file.name;
-          var up = global.RollingCore.upsertRosterSource(STATE.shiftFiles, entry, MAX_SHIFT_FILES);
+          entry.modified = typeof file.lastModified === 'number' ? file.lastModified : undefined;
+          var up = global.RollingCore.upsertRosterSource(STATE.shiftFiles, entry, MAX_SHIFT_FILES, { neededMonths: global.RollingCore.neededMonthsForReference(refDate()) });
           STATE.shiftFiles = up.list;
           STATE.shift = aggregateShift();
-          if (up.evicted) STATE.message = '上限' + MAX_SHIFT_FILES + 'ファイルのため、最も古い月の「' + up.evicted.name + '」を外しました。必要なら再度取り込んでください。';
+          if (up.keptNewer) STATE.message = file.name + ' は取込済みのファイルより更新日時が古いため、新しい方をそのまま残しました（置き換えていません）。';
+          else if (up.rejected) STATE.message = file.name + ' は取り込めませんでした: 上限' + MAX_SHIFT_FILES + 'ファイルで、すべて基準日の判定に必要な月のため外せません。不要なファイルを「クリア」してから取り込んでください。';
+          else if (up.evicted) STATE.message = '上限' + MAX_SHIFT_FILES + 'ファイルのため、判定に不要な最も古い月の「' + up.evicted.name + '」を外しました。';
           else if (up.replaced) STATE.message = file.name + ' は取込済みのため置き換えました（二重には計上しません）。';
         } else {
           entry.rows = checked.rows;
@@ -161,6 +164,15 @@
       STATE.message = file.name + ' を読み込めませんでした（壊れている、またはExcel形式ではありません）。前回の取込と保存済みの集計は変更していません。';
       render();
     });
+  }
+
+  function refDate() {
+    return STATE.referenceDate || Board.jstDate(nowIso());
+  }
+
+  function shiftCoverage() {
+    var loaded = (STATE.shiftFiles || []).map(function (f) { return { label: f.name, months: f.months || [] }; });
+    return global.RollingCore.checkRosterCoverage(loaded, refDate());
   }
 
   function aggregateShift() {
@@ -272,7 +284,7 @@
       referenceDate: ref,
       generatedAt: nowIso(),
       files: {
-        shift: { name: STATE.shift ? STATE.shift.name : '', ok: !!STATE.shift, range: STATE.shift ? STATE.shift.range : null, importedAt: STATE.shift ? STATE.shift.importedAt : null, months: STATE.shift ? STATE.shift.months : [], fileCount: (STATE.shiftFiles || []).length },
+        shift: { name: STATE.shift ? STATE.shift.name : '', ok: !!STATE.shift, range: STATE.shift ? STATE.shift.range : null, importedAt: STATE.shift ? STATE.shift.importedAt : null, months: STATE.shift ? STATE.shift.months : [], fileCount: (STATE.shiftFiles || []).length, missingMonths: STATE.shiftFiles && STATE.shiftFiles.length ? shiftCoverage().missing : [] },
         daily: { name: STATE.daily ? STATE.daily.name : '', ok: !!STATE.daily, range: STATE.daily ? STATE.daily.range : null, importedAt: STATE.daily ? STATE.daily.importedAt : null },
       },
       names: names(),
@@ -282,6 +294,10 @@
     STATE.board = board;
     STATE.message = '';
     var summary = Board.buildFridaySummary(board, nowIso());
+    var missing = board.files && board.files.shift && board.files.shift.missingMonths;
+    if (missing && missing.length) {
+      h += '<div class="card p-3 mb-3 text-sm" style="background:#fef2f2;color:#b91c1c;">⚠ 基準日の判定に必要な ' + esc(missing.join('・')) + ' のシフト表が未読込です。該当日は未取得のままで、判定不能が増えます。</div>';
+    }
     if (board.completeness === 'incomplete-input') {
       // 片方の入力が欠けた集計は表示だけ。保存済みの正常な集計は置き換えない。
       STATE.saved = 'skipped';
@@ -333,6 +349,9 @@
       STATE.shiftFiles.forEach(function (f) {
         h += '<div class="text-xs mt-1">✅ <b>' + esc(f.name) + '</b>：' + (f.months && f.months.length ? esc(f.months.map(monthLabel).join('・')) : '月不明') +
           '／取込 ' + esc(jst(f.importedAt)) + '</div>';
+      });
+      shiftCoverage().warnings.forEach(function (w) {
+        h += '<div class="text-xs mt-1" role="alert" data-shift-coverage="1" style="color:#b91c1c;">⚠ ' + esc(w) + '</div>';
       });
       h += '<div class="text-xs mt-1 text-ink-lighter">同じ日付が複数ファイルにあるときは、空白より勤務記号を採用し、記号が食い違う日は判定不能にします。</div>';
     } else if (entry) {
