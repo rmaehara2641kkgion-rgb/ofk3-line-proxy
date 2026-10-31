@@ -1,4 +1,4 @@
-# INO-1 ローリング60h 指標の定義（rolling60h-predict-3）
+# INO-1 ローリング60h 指標の定義（rolling60h-predict-4）
 
 dry-run 専用。LINE 送信はしない（`sent=false` / `channel=dry-run`）。
 `confirmedActual=false` は「Amazon の推定稼働時間（estimated_working_hour）であり、確定実績ではない」の意味。
@@ -35,11 +35,17 @@ dry-run 専用。LINE 送信はしない（`sent=false` / `channel=dry-run`）�
 ## 日付単位・人日単位
 | 指標 | 意味 |
 |---|---|
-| blankUnconfirmedPersonDays | 勤務記号が混在する日付列の空白セルの数（人日）。0h にしない |
+| blankUnconfirmedPersonDays | 勤務記号が混在する日付列の空白セルの数（人日）。`blankAsRest:false`（旧挙動）のときだけ数える。0h にしない |
+| blankRestPersonDays | 正常に読み込んだシフト表の空白セル（勤務記号が混在する日付列）を休み(0h)として確定した人日。predict-4 の既定 |
+| shiftFiles / shiftMonths | 判定に使ったシフトファイルと、勤務記号が入っている月。前月ファイルが無いときは previousMonthShiftReason に理由 |
+| otherStationCount / partialOtherStationCount | 同じ Transport ID に他局(OFK3以外)の実績がある人 / そのうち「正常」にせず要確認(部分)にした人。他局の時間は合算も0扱いもしない |
 | outsidePeriodDateCount | 全員が空白の日付列の数（有効期間外候補）。7日窓は短縮しない |
 | outsidePeriodKeptByDailyDays | 上記の日のうち、有効なデイリー時間があり残した人日 |
 
 ## 比較ルール
 - 履歴の比較は同じ `logicVersion` の直近の実行とだけ行う。旧版（predict-2）の履歴は削除せず保持し、比較には使わない。
 - 初回の predict-3 は比較対象がないため、変更系の指標（blankFilled* / normalToExceed* / resolved* / stillAlert）は 0。
-- 空白セル・数式の空文字は未確定。「休」は確定 0h。不明な記号は 0h にせず判定不能。
+- predict-4: 正常に読み込んだシフト表の空白セルは休(0h)。全員空白の日付列（対象期間外）・シフト表に無い日・読込前の月は 0h にせず未取得のまま。不明な記号は 0h にせず判定不能。
+- 旧 predict-3 は空白を未確定として扱っていた（`blankAsRest:false` で再現可能。履歴は版が違うので比較しない）。
+- 複数月のシフト: 同じ日付が複数ファイルにあるときは「空白 < 勤務記号」。記号が食い違い時間も違えば判定不能。読込順・同一ファイルの再読込・同内容の別名ファイルで結果は変わらない。
+- 集計行（必要台数・合計など）はドライバーに数えない。Transport ID が未登録の実在ドライバーは除外しない。

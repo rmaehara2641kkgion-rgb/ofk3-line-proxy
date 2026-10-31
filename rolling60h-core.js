@@ -436,6 +436,7 @@
    *
    * @param {Object} rosterByTid  { tid: { date: blocks[] } }（空白は blocks=[]）
    * @param {Object} [options]
+   * @param {boolean} [options.blankAsRest]     true: 混在列の空白を休(0h)として確定する（既定false=従来の未確定）
    * @param {Object} [options.extraSymbolDates] { date: true } 突合できない行など、記号が入っている日付の追加証拠
    * @return {{byTid:Object, outsideDates:Array, mixedDates:Array, unconfirmedPersonDays:number, outsidePersonDays:number}}
    */
@@ -460,6 +461,7 @@
     var outsideSet = {};
     outsideDates.forEach(function (d) { outsideSet[d] = true; });
     var unconfirmedPersonDays = 0;
+    var blankRestPersonDays = 0;
     var outsidePersonDays = 0;
     var out = {};
     Object.keys(rosterByTid || {}).forEach(function (tid) {
@@ -471,6 +473,11 @@
           next[date] = blocks;
         } else if (outsideSet[date]) {
           outsidePersonDays++;
+        } else if (options.blankAsRest) {
+          // 正常に読み込んだシフト表の空白は勤務0時間（休と同じ0h・defined:true）。
+          // 期間外（全員空白の日付列）と、シフト表に存在しない日はここに来ない＝0hにしない。
+          blankRestPersonDays++;
+          next[date] = [{ code: 'KYU', rawCode: '', source: 'roster', hours: 0, defined: true, blankRest: true }];
         } else {
           unconfirmedPersonDays++;
           next[date] = [{ code: 'BLANK', rawCode: '', source: 'roster', hours: null, defined: false, blank: true }];
@@ -483,6 +490,7 @@
       outsideDates: outsideDates,
       mixedDates: mixedDates,
       unconfirmedPersonDays: unconfirmedPersonDays,
+      blankRestPersonDays: blankRestPersonDays,
       outsidePersonDays: outsidePersonDays,
     };
   }
@@ -702,8 +710,10 @@
     var contributions = {};
     var warnings = [];
     var sourceRanges = {};
+    var sourceMonths = {}; // label -> { 'YYYY-MM': 勤務記号が入っているセル数 }（読み込み済みの月の表示用）
     (rosterSources || []).forEach(function (source) {
       var sourceRange = null;
+      sourceMonths[source.label] = sourceMonths[source.label] || {};
       Object.keys(source.sheetsData || {}).forEach(function (sheetName) {
         var parsed = parseMonthlyRosterSheetRows(source.sheetsData[sheetName], {
           isNonDriverRow: options.isNonDriverRow || null,
@@ -721,6 +731,11 @@
             if (parsed.meta.dateRange.max > sourceRange.max) sourceRange.max = parsed.meta.dateRange.max;
           }
         }
+        parsed.records.forEach(function (rec) {
+          if (rec.rawCode === '' || rec.rawCode == null) return;
+          var ym = String(rec.date).slice(0, 7);
+          sourceMonths[source.label][ym] = (sourceMonths[source.label][ym] || 0) + 1;
+        });
         var grouped = groupRosterRecordsByDriver(parsed.records);
         Object.keys(grouped).forEach(function (key) {
           var lbl = source.label + '::' + sheetName;
@@ -758,10 +773,66 @@
       rosterBlocksByDriver: rosterBlocksByDriver,
       warnings: warnings,
       sourceRanges: sourceRanges,
+      sourceMonths: sourceMonths,
       duplicates: duplicates,
       blankOverrides: blankOverrides,
       conflicts: conflicts,
     };
+  }
+
+  /**
+   * 読み込み済みシフト表の一覧に新しいファイルを加える（UI・盤の共通ルール）。
+   *   - 同じファイル名の再読込は「置き換え」（重複計上しない。位置も維持）。
+   *   - 別名ファイルは追加。月ごとのファイルを同時に保持する（前月の必要なデータを消さない）。
+   *   - 上限(max)を超えたときだけ、最も古い月のファイルを外す（rangeMax が最小のもの。不明なら先に読んだ順）。
+   *   - 同じ日付が複数ファイルにあるときの優先順位は mergeRosterBlocksByDateAcrossSourcesStrict に従う
+   *     （読込順に依存しない: 空白<勤務記号／同じ時間なら採用／時間が食い違えば判定不能）。
+   * 入力の配列は変更しない。
+   * @param {Array<{label:string, rangeMax?:string}>} list
+   * @param {{label:string, rangeMax?:string}} incoming
+   * @param {number} [max=3]
+   * @return {{list:Array, replaced:boolean, evicted:(Object|null)}}
+   */
+  function upsertRosterSource(list, incoming, max) {
+    var limit = max || 3;
+    var next = (list || []).slice();
+    var replaced = false;
+    for (var i = 0; i < next.length; i++) {
+      if (next[i].label === incoming.label) {
+        next[i] = incoming;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) next.push(incoming);
+    var evicted = null;
+    if (next.length > limit) {
+      var victim = 0;
+      for (var j = 1; j < next.length; j++) {
+        var a = next[j].rangeMax || '';
+        var b = next[victim].rangeMax || '';
+        if (a && b && a < b) victim = j;
+      }
+      // 今回追加したファイル自身は外さない
+      if (next[victim].label === incoming.label) victim = victim === 0 ? 1 : 0;
+      evicted = next.splice(victim, 1)[0];
+    }
+    return { list: next, replaced: replaced, evicted: evicted };
+  }
+
+  /**
+   * 読み込み済みの月の一覧（画面表示用）。勤務記号が MONTH_MIN_SYMBOL_CELLS 個以上入っている月だけを数える
+   * （実データでは古い月の見出しに記号が数個だけ残るシートがあり、それを「読込済みの月」と誤表示しないため）。
+   * @param {Object} sourceMonths buildRosterTimelineFromSources().sourceMonths
+   * @return {Array<{label:string, months:string[]}>}
+   */
+  var MONTH_MIN_SYMBOL_CELLS = 10;
+
+  function describeRosterMonths(sourceMonths) {
+    return Object.keys(sourceMonths || {}).map(function (label) {
+      var months = Object.keys(sourceMonths[label] || {}).filter(function (ym) { return sourceMonths[label][ym] >= MONTH_MIN_SYMBOL_CELLS; }).sort();
+      return { label: label, months: months };
+    });
   }
 
   // ===========================================================================
@@ -1033,6 +1104,7 @@
     }
 
     var records = [];
+    var otherStation = [];
     var warnings = [];
     var seen = {}; // 重複行の検知用（同一tid+date+hour+startの完全一致行は多重集計の疑いを警告）
 
@@ -1047,11 +1119,14 @@
         continue;
       }
       var station = col.station >= 0 ? String(row[col.station] || '').trim().toUpperCase() : '';
-      if (stationFilter && station && station !== stationFilter) continue;
-
       var rawHour = row[col.hour];
       var hours = typeof rawHour === 'number' ? rawHour : parseFloat(rawHour);
       var hoursOk = rawHour !== null && rawHour !== undefined && rawHour !== '' && !isNaN(hours);
+      if (stationFilter && station && station !== stationFilter) {
+        // 他局の実績は合算しない（拠点別集計とリスク判定を混同しない）。ただし「存在する」ことは残す。
+        otherStation.push({ transportId: tid, date: dateStr, station: station, hours: hoursOk ? hours : null });
+        continue;
+      }
 
       records.push({
         transportId: tid,
@@ -1066,7 +1141,15 @@
     }
     var actualDates = records.map(function (r) { return r.date; }).sort();
     var dateRange = actualDates.length > 0 ? { min: actualDates[0], max: actualDates[actualDates.length - 1] } : null;
-    return { records: records, warnings: warnings, dateRange: dateRange };
+    return { records: records, warnings: warnings, dateRange: dateRange, otherStation: otherStation };
+  }
+
+  // シフト表の集計・補助行の見出し（氏名列に入る）。完全一致のみ。Transport IDの有無では判定しない。
+  var NON_DRIVER_ROW_NAMES = ['必要台数', '合計', '計', '小計', '総計', '稼働台数', '出勤人数', '休み人数'];
+
+  function isNonDriverRowName(name) {
+    var n = String(name == null ? '' : name).replace(/[\s\u3000]+/g, '');
+    return NON_DRIVER_ROW_NAMES.indexOf(n) !== -1;
   }
 
   /**
@@ -1090,6 +1173,13 @@
    */
   function parseMonthlyRosterSheetRows(rows, options) {
     options = options || {};
+    // 集計行（必要台数など）はドライバーではない。氏名で判定し、Transport ID未登録の実在ドライバーは除外しない。
+    var extraNonDriver = options.isNonDriverRow;
+    options = Object.assign({}, options, {
+      isNonDriverRow: function (name) {
+        return isNonDriverRowName(name) || (typeof extraNonDriver === 'function' && !!extraNonDriver(name));
+      },
+    });
     var maxHeaderScanRows = Math.min(rows ? rows.length : 0, 6);
     var warnings = [];
 
@@ -1392,6 +1482,9 @@
     mergeRosterBlocksByDateAcrossSources: mergeRosterBlocksByDateAcrossSources,
     mergeRosterBlocksByDateAcrossSourcesStrict: mergeRosterBlocksByDateAcrossSourcesStrict,
     buildRosterTimelineFromSources: buildRosterTimelineFromSources,
+    upsertRosterSource: upsertRosterSource,
+    describeRosterMonths: describeRosterMonths,
+    isNonDriverRowName: isNonDriverRowName,
     restoreDayNumberHeader: restoreDayNumberHeader,
 
     // Rolling計算コア

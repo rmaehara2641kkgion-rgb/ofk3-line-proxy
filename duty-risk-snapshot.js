@@ -36,6 +36,8 @@
     if (hasGap || (!hasExceed && !hasApproach && !hasWithin)) return 'undetermined';
     if (hasExceed) return 'exceed';
     if (hasApproach) return 'approach';
+    // 同じTransport IDに他局の実績がある。OFK3の実績だけで正常とは言わない（要確認）。
+    if (driver && driver.otherStation && driver.otherStation.dates && driver.otherStation.dates.length) return 'partial';
     return 'clear';
   }
 

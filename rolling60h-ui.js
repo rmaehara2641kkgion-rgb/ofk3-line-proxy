@@ -28,7 +28,7 @@
 (function (global) {
   'use strict';
 
-  var MAX_ROSTER_SOURCES = 2; // 「最大2か月分」＝最大2ファイルまで保持する
+  var MAX_ROSTER_SOURCES = 3; // 前月・当月・翌月＝最大3ファイル。同名ファイルの再読込は置き換え（RollingCore.upsertRosterSource）
 
   var STATE = {
     initialized: false,
@@ -76,7 +76,7 @@
       '</div>' +
       '<div class="grid grid-cols-2 gap-4 mb-4">' +
       '  <div class="card p-4">' +
-      '    <h3 class="text-sm font-bold mb-2">① 月間シフト表（高橋さんExcel）読込　※最大2か月分</h3>' +
+      '    <h3 class="text-sm font-bold mb-2">① 月間シフト表（高橋さんExcel）読込　※最大3か月分（前月・当月・翌月を同時に保持）</h3>' +
       '    <p class="text-xs text-ink-lighter mb-2">DSP別シート（GDS等）からTransport ID・勤務記号を抽出します。前月分＋当月分など2ファイルまで読込可能（月またぎ判定用）</p>' +
       '    <input type="file" id="rolling-file-roster" accept=".xlsx,.xls" class="hidden">' +
       '    <button id="rolling-btn-roster" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700">📂 ファイルを追加読込</button>' +
@@ -202,11 +202,13 @@
 
         // 「最大2か月分」＝最大2ファイルまで保持。3件目以降は最も古いファイルを
         // 追い出す（FIFO）。既存のクリアボタンで明示的にリセットも可能。
-        STATE.rosterSources.push({ label: file.name || 'ファイル' + (STATE.rosterSources.length + 1), sheetsData: sheetsData });
-        var evicted = null;
-        if (STATE.rosterSources.length > MAX_ROSTER_SOURCES) {
-          evicted = STATE.rosterSources.shift();
-        }
+        // 最大3ファイル。同名の再読込は置き換え、超過時だけ最も古い月を外す（前月データを不用意に消さない）。
+        var upserted = global.RollingCore.upsertRosterSource(STATE.rosterSources, {
+          label: file.name || 'ファイル' + (STATE.rosterSources.length + 1),
+          sheetsData: sheetsData,
+        }, MAX_ROSTER_SOURCES);
+        STATE.rosterSources = upserted.list;
+        var evicted = upserted.evicted;
 
         readOptionsFromUI();
         recomputeAndRender();
@@ -222,7 +224,8 @@
     var statusEl = document.getElementById('rolling-roster-status');
     var lines = STATE.rosterSources.map(function (src) {
       var range = STATE.rosterSourceRanges && STATE.rosterSourceRanges[src.label];
-      return '・' + src.label + '（' + Object.keys(src.sheetsData).length + 'シート' + (range ? '／' + range.min + '〜' + range.max : '') + '）';
+      var monthInfo = (STATE.rosterSourceMonths || []).filter(function (m) { return m.label === src.label; })[0];
+      return '・' + src.label + '（' + Object.keys(src.sheetsData).length + 'シート' + (monthInfo && monthInfo.months.length ? '／読込済みの月 ' + monthInfo.months.join('・') : (range ? '／' + range.min + '〜' + range.max : '')) + '）';
     });
     var html = '<span class="text-green-400">✓ 読込済み（' + STATE.rosterSources.length + '/' + MAX_ROSTER_SOURCES + '）</span><br>' + lines.join('<br>');
     if (evicted) {
@@ -288,6 +291,7 @@
     var rosterBlankOverrides = rosterBuilt.blankOverrides;
     warnings = warnings.concat(rosterBuilt.warnings);
     STATE.rosterSourceRanges = rosterBuilt.sourceRanges;
+    STATE.rosterSourceMonths = global.RollingCore.describeRosterMonths(rosterBuilt.sourceMonths);
     Object.keys(rosterBlocksByDriver).forEach(function (key) {
       var merged = rosterBlocksByDriver[key];
       Object.keys(merged).forEach(function (date) {
@@ -734,7 +738,17 @@
   function ingestLoadedFiles(payload) {
     payload = payload || {};
     if (payload.referenceDate) STATE.referenceDate = payload.referenceDate;
-    if (payload.workbook && global.XLSX) {
+    if (payload.workbooks && payload.workbooks.length && global.XLSX) {
+      // 複数月のシフトブックを丸ごと置き換える（呼び出し側が保持している全ファイルが正）。
+      STATE.rosterSources = payload.workbooks.map(function (item) {
+        var data = {};
+        (item.workbook.SheetNames || []).forEach(function (sn) {
+          if (ROSTER_SHEET_BLACKLIST.indexOf(sn) !== -1) return;
+          data[sn] = global.XLSX.utils.sheet_to_json(item.workbook.Sheets[sn], { header: 1, raw: true });
+        });
+        return { label: item.name || 'シフト', sheetsData: data };
+      });
+    } else if (payload.workbook && global.XLSX) {
       var sheetsData = {};
       (payload.workbook.SheetNames || []).forEach(function (sn) {
         if (ROSTER_SHEET_BLACKLIST.indexOf(sn) !== -1) return;

@@ -94,7 +94,14 @@ assert.equal(byId['T-UNDER'].days[6].adopted, '予定');
 
 // 空白セルは確定した休み。一覧は欠損にしない。エンジンの人数区分は変えない
 const gap = byId['T-GAP'];
-assert.ok(['partial', 'undetermined'].includes(gap.status), 'エンジン区分は部分欠損/判定不能のまま');
+assert.equal(gap.status, 'clear', 'シフト表を読めた上での空白は休み(0h)。エンジンも欠損にしない');
+assert.ok(gap.days.some((d) => d.adopted === '休み'), '空白の日は「休み」と表示する');
+{
+  // 旧挙動（blankAsRest:false）では従来どおり未確定。オプションで残してある。
+  const legacy = Board.buildBoard({ executed: execute({ blankAsRest: false }), referenceDate: REF, generatedAt: '2026-10-17T03:00:00.000Z', files: { shift: { ok: true }, daily: { ok: true } }, names: {} }, { analyze: Dash.analyzePrediction, dispositionOf: Snap.dispositionOf });
+  const legacyGap = legacy.rows.find((r) => r.transportId === 'T-GAP');
+  assert.ok(['partial', 'undetermined'].includes(legacyGap.status), '旧挙動では部分欠損/判定不能');
+}
 assert.equal(gap.judgment, 'ok');
 assert.equal(gap.forecast.hours, 51);
 assert.equal(gap.past6.hours, 40);
@@ -108,7 +115,7 @@ assert.equal(c.partial, executed.summary.partialCount);
 assert.equal(c.undetermined, executed.summary.undeterminedCount);
 assert.equal(c.clear, executed.summary.clearCount);
 assert.equal(c.exceed + c.approach + c.partial + c.undetermined + c.clear, c.driverCount);
-assert.equal(board.completeness, 'partial');
+assert.equal(board.completeness, 'complete', '空白は休み(0h)なので欠損は残らない');
 
 // 並び順・検索
 assert.equal(Board.sortRows(board.rows, 'risk')[0].transportId, 'T-OVER');
@@ -154,10 +161,10 @@ assert.equal(summary.counts.exceed, 1);
 assert.equal(summary.counts.approach, 1);
 assert.equal(summary.counts.undetermined, c.undetermined);
 assert.equal(summary.freshness.status, 'fresh');
-assert.equal(summary.data.completeness, 'partial');
-assert.equal(summary.data.safeToAnnounceAsComplete, false, '部分欠損があれば完全扱いにしない');
+assert.equal(summary.data.completeness, 'complete');
+assert.equal(summary.data.safeToAnnounceAsComplete, true, '欠損が無ければ完全扱い');
 assert.equal(summary.ready, true, 'ready は要約が使えるという意味');
-assert.equal(summary.data.hasGap, true, '部分欠損・判定不能がいれば hasGap');
+assert.equal(summary.data.hasGap, false, '空白は休み(0h)なので欠損なし');
 const packed = JSON.stringify(summary);
 ['Fiction', 'T-UNDER', 'T-EXACT', 'T-OVER', 'T-GAP'].forEach((s) => assert.equal(packed.includes(s), false, '個人情報を含まない: ' + s));
 const empty = Board.buildFridaySummary(null, '2026-10-17T05:00:00.000Z');

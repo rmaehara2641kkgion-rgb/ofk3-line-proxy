@@ -71,7 +71,7 @@ function run(root, tag, marks, historyFile) {
   writeBook(shiftDir, '10月DAシフト.xlsx', { GDS: sheet });
   return Run.run({
     fs: fs, path: path, xlsx: XLSX, rolling: Rolling, harvest: Harvest, dryRun: DryRun,
-    dailyDir: dailyDir, shiftDir: shiftDir, historyFile: historyFile, referenceDate: '2026-10-18',
+    dailyDir: dailyDir, shiftDir: shiftDir, historyFile: historyFile, referenceDate: '2026-10-18', blankAsRest: false,
   });
 }
 
@@ -137,19 +137,19 @@ assert(exclusive(first), '5分類は排他で人数合計が対象者数と一�
 assert(first.blankUnconfirmedPersonDays === 5, '混在列の空白(人日)を未確定として数える');
 assert(first.outsidePeriodDateCount === 1 && first.outsidePeriodKeptByDailyDays === 1, '全員空白の列は期間外候補。過去デイリーのある日は除外しない');
 assert(first.knownOverWindows === 1, '危険内訳の窓数');
-assert(first.logicVersion === 'rolling60h-predict-3' && first.sent === false && first.channel === 'dry-run', '計算バージョンを更新し、dry-runのまま');
+assert(first.logicVersion === 'rolling60h-predict-4' && first.sent === false && first.channel === 'dry-run', '計算バージョンを更新し、dry-runのまま');
 assert(JSON.stringify(first).indexOf('TID-') === -1, '応答にIDを出さない');
 
 // 6. 履歴: 旧版の履歴を削除せず、新バージョンを追加して区別する
 const stored1 = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
-assert(stored1.runs.length === 1 && stored1.runs[0].logicVersion === 'rolling60h-predict-3', '新版の履歴として保存');
+assert(stored1.runs.length === 1 && stored1.runs[0].logicVersion === 'rolling60h-predict-4', '新版の履歴として保存');
 const legacy = { fingerprint: 'legacy-fp', logicId: 'legacy', logicVersion: 'rolling60h-predict-2', referenceDate: '2026-10-17', predictedAt: '2026-10-17T00:00:00.000Z', sources: {}, predictions: [] };
 const legacyFile = path.join(root, 'legacy-history.json');
 fs.writeFileSync(legacyFile, JSON.stringify({ version: 1, runs: [legacy], dailyArchive: { 'TID-FICTION-EXC\t2026-10-01': { hours: 3, dailyHash: 'h', snapshotDate: '', conflict: false } } }));
 const withLegacy = run(root, 'legacy', scenario(), legacyFile);
 const stored2 = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
 assert(stored2.runs.length === 2 && JSON.stringify(stored2.runs[0]) === JSON.stringify(legacy), '旧版の履歴は削除・改変しない');
-assert(stored2.runs[1].logicVersion === 'rolling60h-predict-3' && stored2.dailyArchive['TID-FICTION-EXC\t2026-10-01'].hours === 3, '新版を追記し、日次アーカイブも残す');
+assert(stored2.runs[1].logicVersion === 'rolling60h-predict-4' && stored2.dailyArchive['TID-FICTION-EXC\t2026-10-01'].hours === 3, '新版を追記し、日次アーカイブも残す');
 assert(withLegacy.historyRuns === 2 && withLegacy.blankFilledWindows === 0 && withLegacy.stillAlert === 0, '旧版(空白=0h)の履歴とは比較しない');
 const prior = stored1.runs[0].predictions.filter(function (p) { return p.subjectId === 'TID-FICTION-C66'; })[0];
 assert(prior.knownOver === true && prior.knownOverBy === 6 && prior.unconfirmedDates.join() === '2026-10-24', '履歴に危険内訳を保持');

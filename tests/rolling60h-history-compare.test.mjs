@@ -64,7 +64,7 @@ function runCase(root, tag, spec) {
   // 数式の空文字: 保存値は '' の数式セル
   (spec.formulaEmpty || []).forEach(function (ref) { sheet[ref] = { t: 's', v: '', f: 'IF(1=1,"","x")' }; });
   writeBook(shiftDir, '10月DAシフト.xlsx', { GDS: sheet });
-  return Run.run({
+  return Run.run({ blankAsRest: false,
     fs: fs, path: path, xlsx: XLSX, rolling: Rolling, harvest: Harvest, dryRun: DryRun,
     dailyDir: dailyDir, shiftDir: shiftDir, historyFile: spec.historyFile, referenceDate: spec.referenceDate || REF,
   });
@@ -124,7 +124,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rolling-compare-'));
 {
   const file = path.join(root, 'c.json');
   const v3a = runCase(root, 'c1', { historyFile: file, marks: { 'TID-FICTION-C': [M, M, M, M, M, N, N, N] } });
-  assert(v3a.logicVersion === 'rolling60h-predict-3' && v3a.historyRuns === 1, 'C1: 初回predict-3は履歴1件');
+  assert(v3a.logicVersion === 'rolling60h-predict-4' && v3a.historyRuns === 1, 'C1: 初回predict-3は履歴1件');
   // 旧版(predict-2)の実行を末尾に追加。同じ人・同じ窓で「超過」と「空白=0h」の旧表現を入れておく
   const store = readHistory(file);
   const key = store.runs[0].predictions[0];
@@ -144,7 +144,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rolling-compare-'));
   assert(v3b.stillAlert === 0 && v3b.resolvedBySchedule + v3b.resolvedByDaily + v3b.resolvedByBoth + v3b.resolvedCauseUnknown === 0, 'C2: 旧版の超過記録とは照合しない');
   const after = readHistory(file);
   assert(after.runs.length === 3 && JSON.stringify(after.runs[1]) === before, 'C2: 旧版の履歴は保持され、新版が追記される');
-  assert(after.runs.filter(function (r) { return r.logicVersion === 'rolling60h-predict-3'; }).length === 2, 'C2: predict-3は2件');
+  assert(after.runs.filter(function (r) { return r.logicVersion === 'rolling60h-predict-4'; }).length === 2, 'C2: predict-3は2件');
   // 旧版しか無い履歴 → 初回predict-3は比較なし
   const only = path.join(root, 'c-legacy.json');
   fs.writeFileSync(only, JSON.stringify({ version: 1, runs: [legacy], dailyArchive: {} }));
@@ -152,7 +152,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rolling-compare-'));
   assert(firstV3.historyRuns === 2 && firstV3.blankFilledWindows === 0 && firstV3.normalToExceedWindows === 0, 'C3: 旧版のみの履歴では初回predict-3は比較対象なし');
   assert(firstV3.stillAlert === 0 && firstV3.verifyUndetermined === 0, 'C3: 旧版のアラートを引き継がない');
   assert(readHistory(only).runs[0].fingerprint === 'legacy-fp', 'C3: 旧版は削除されない');
-  assert(History.RULE_VERSION === 'rolling60h-predict-3', 'C: 版定数');
+  assert(History.RULE_VERSION === 'rolling60h-predict-4', 'C: 版定数');
 }
 
 // ---------------------------------------------------------------- ケースD: 境界値と不明値

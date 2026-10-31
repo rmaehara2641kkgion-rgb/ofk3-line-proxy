@@ -11,7 +11,7 @@
   'use strict';
 
   var crypto = require('crypto');
-  var RULE_VERSION = 'rolling60h-predict-3';
+  var RULE_VERSION = 'rolling60h-predict-4';
 
   function sha256(text) {
     return crypto.createHash('sha256').update(text).digest('hex');

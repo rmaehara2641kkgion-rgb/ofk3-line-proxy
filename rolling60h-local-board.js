@@ -384,7 +384,14 @@
       row.futureExceed = pickFuture(row.evidence);
       row.recordedActuals = actualByTid[tid] || [];
       row.unmatchedReason = names[tid] ? '' : 'シフト表とDAマスタにこの Transport ID の氏名がありません';
+      var other = driver.otherStation && driver.otherStation.dates && driver.otherStation.dates.length ? driver.otherStation : null;
+      if (other) {
+        row.otherStation = { dates: other.dates.slice(), stations: (other.stations || []).slice(), label: '他局実績あり・要確認' };
+        // 他局の時間は合算も0扱いもしない。status が「正常/部分」のときの理由を明示する。
+        row.statusDetail = (row.statusDetail ? row.statusDetail + '／' : '') + row.otherStation.label;
+      }
       var judgment = judge(row);
+      if (other && judgment.code === 'ok') judgment = { code: 'review', label: '要確認', provisional: true, rank: 3 };
       row.judgment = judgment.code;
       row.judgmentLabel = judgment.label;
       row.judgmentProvisional = judgment.provisional;
