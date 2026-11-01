@@ -62,7 +62,10 @@ function validateSync(input, todayJst) {
 function createAssignmentStore(opts) {
   opts = opts || {};
   var filePath = opts.filePath || null;
+  var backend = opts.backend || null; // 任意: 再デプロイ後も残る外部ストア (GAS)
   var data = {}; // date -> { rows, links, syncedAt }
+  var restored = !backend; // 外部ストア使用時は init() 成功まで「未復元」
+  var lastAttempt = 0;
 
   function load() {
     if (!filePath) return;
@@ -83,7 +86,32 @@ function createAssignmentStore(opts) {
   }
   load();
 
+  async function restore() {
+    lastAttempt = Date.now();
+    try {
+      var remote = await backend.load();
+      // 起動後に同期済みの日付(メモリ)を優先し、無い日付だけ外部ストアから補う
+      Object.keys(remote).forEach(function (d) { if (!data[d] && remote[d] && Array.isArray(remote[d].rows)) data[d] = remote[d]; });
+      restored = true;
+    } catch (e) { restored = false; }
+    return restored;
+  }
+
   return {
+    init: function () { return backend ? restore() : Promise.resolve(true); },
+    // 未復元なら30秒間隔で再試行
+    ensureRestored: async function () {
+      if (restored || !backend) return restored;
+      if (Date.now() - lastAttempt < 30000) return false;
+      return restore();
+    },
+    isRestored: function () { return restored; },
+    // 外部ストアへ書き戻す。失敗してもメモリ/ファイルの内容は有効 (呼び出し側へ結果のみ返す)。
+    flush: async function () {
+      if (!backend) return 'none';
+      if (!restored) return 'skipped-unrestored'; // 部分データで外部ストアを上書きしない
+      try { await backend.save(data); return 'ok'; } catch (e) { return 'failed'; }
+    },
     sync: function (input, todayJst) {
       var v = validateSync(input, todayJst);
       if (!v.ok) return v;
