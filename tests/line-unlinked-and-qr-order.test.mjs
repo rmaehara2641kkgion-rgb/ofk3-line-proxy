@@ -125,7 +125,9 @@ function testQrPagesPutNewDriversLast() {
 }
 
 function testWiringLeavesQrPayloadAndWebhookLog() {
-  assert.match(serverSrc, /USER ID FOUND/);
+  // LINE userId・ヘッダー・ボディ全文のログ出力は廃止(個人情報保護)。取り込み処理自体は維持。
+  assert.doesNotMatch(serverSrc, /USER ID FOUND/);
+  assert.doesNotMatch(serverSrc, /JSON\.stringify\(req\.headers\)/);
   assert.match(serverSrc, /captureUnlinkedLineUser\(event\.source\.userId\)/);
   assert.match(serverSrc, /sendWelcomeMessage\(event\.source\.userId\)/);
   assert.match(serverSrc, /Authorization: 'Bearer ' \+ CHANNEL_ACCESS_TOKEN/);

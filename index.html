@@ -4109,6 +4109,33 @@ var driverDB = {
       }
 
       renderDashboard();
+      syncAssignmentsToLineMap();
+    }
+
+    // LINE「マップ」返信用: 当日の割当(ルート×DA安定ID)と本人のLINE IDだけをサーバーへ同期する。
+    // DA識別は transportId のみ(名前では照合しない)。transportId 未登録の行は同期しない。
+    // PROXY_SECRET は設定画面で入力済みの値を使い、ソースには埋め込まない。未設定なら何もしない。
+    async function syncAssignmentsToLineMap() {
+      try {
+        if (!lineSettings.proxySecret || !assignmentData || !assignmentData.length) return;
+        var jst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+        var rows = [], links = [], seen = {}, skipped = 0;
+        assignmentData.forEach(function(r) {
+          var name = r.driverName;
+          var tid = name && transportIDs[name];
+          if (!r.routeCode || !tid) { skipped++; return; }
+          rows.push({ routeCode: r.routeCode, driverId: String(tid) });
+          var lid = lineMapping[name];
+          if (lid && !seen[tid]) { seen[tid] = true; links.push({ driverId: String(tid), lineUserId: lid }); }
+        });
+        if (!rows.length) { console.warn('LINE MAP同期: 同期対象なし(transportId未登録 ' + skipped + '件)'); return; }
+        var res = await fetch('/line-map/assignments', { method: 'POST', headers: getProxyHeaders(), body: JSON.stringify({ date: jst, rows: rows, links: links }) });
+        var body = await res.json().catch(function() { return {}; });
+        if (res.ok) console.log('LINE MAP同期OK: ' + body.rowCount + '行 / 紐付け' + body.linkCount + '件 / 除外' + skipped + '件');
+        else console.warn('LINE MAP同期失敗: HTTP ' + res.status + ' ' + JSON.stringify(body.errors || body.message || ''));
+      } catch (e) {
+        console.warn('LINE MAP同期エラー: ' + e.message);
+      }
     }
 
     function findDriver(name) {

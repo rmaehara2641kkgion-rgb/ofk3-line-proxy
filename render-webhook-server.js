@@ -10,9 +10,15 @@ const DnrCore = require('./dnr-core.js'); // DOM非依存のDNR処理コア（/d
 const TwcCore = require('./twc-core.js'); // DOM非依存のTWC処理コア（/twc-export用。index.htmlからは未参照）
 const LatCore = require('./lat-core.js'); // DOM非依存のLAT処理コア（/lat-export用。index.htmlからは未参照）
 const LineUnlinked = require('./line-unlinked-core.js');
+const LineMapCore = require('./line-map-reply-core.js');
+const LineMapStore = require('./line-map-store.js');
+const LineMapRoutes = require('./line-map-routes.js');
 const app = express();
 
-app.use(express.json({ limit: '10mb' }));
+// LINE署名検証用に、Webhook系パスだけ生ボディを保持する（他エンドポイントの挙動は変えない）
+app.use(express.json({ limit: '10mb', verify: function (req, res, buf) {
+  if (req.url === '/webhook' || req.url === '/line-map/webhook') req.rawBody = buf;
+} }));
 
 // PDF一時保存用
 var pdfStore = {};
@@ -435,26 +441,61 @@ app.get('/ping', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// ===== LINE「マップ」返信（準備段階。本番公開は保留） =====
+const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || '';
+const LINE_MAP_DATA_DIR = process.env.LINE_MAP_DATA_DIR || os.tmpdir();
+// 返信は既定で無効。LINE_MAP_REPLY_ENABLED=1 かつ既存の非常停止スイッチが有効のときだけ実送信する。
+async function lineMapReply(replyToken, messages) {
+  if (process.env.LINE_MAP_REPLY_ENABLED !== '1' || !isLineSendEffectivelyEnabled()) {
+    log('[LINE MAP] reply skipped (disabled), messages=' + messages.length);
+    return { skipped: true };
+  }
+  return axios.post('https://api.line.me/v2/bot/message/reply', { replyToken: replyToken, messages: messages }, {
+    headers: { Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN, 'Content-Type': 'application/json' }, timeout: 5000
+  });
+}
+const lineMapRouter = LineMapRoutes.createLineMapRouter({
+  express: express,
+  env: {
+    get PROXY_SECRET() { return process.env.PROXY_SECRET || ''; },
+    get LINE_CHANNEL_SECRET() { return LINE_CHANNEL_SECRET; },
+    PUBLIC_ORIGIN: process.env.LINE_MAP_PUBLIC_ORIGIN || 'https://ofk3-line-proxy-1.onrender.com'
+  },
+  assignmentStore: LineMapStore.createAssignmentStore({ filePath: path.join(LINE_MAP_DATA_DIR, 'line-map-assignments.json') }),
+  tokenStore: LineMapCore.createMapTokenStore(),
+  tokenFile: path.join(LINE_MAP_DATA_DIR, 'line-map-tokens.json'),
+  getRouteStops: function (date) { var e = cortexPriorityStore[date]; return e && e.routeStops ? e.routeStops : []; },
+  reply: lineMapReply,
+  todayJst: function () { return getTodayJst(); }
+});
+app.use(lineMapRouter);
+
 // LINE Webhook受信
+// - LINE_CHANNEL_SECRET 設定時: 生ボディで署名検証し、不正は401。検証後に「マップ」コマンドも処理する。
+// - 未設定時: 従来どおり未紐付け候補の取り込みのみ（既存動作を無断で切り替えない）。MAPコマンドは処理しない。
+// ヘッダー・ボディ全文・返信トークンはログに出さない。
 app.post('/webhook', async (req, res) => {
   try {
-    log('=== Webhook received ===');
-    log('Headers:', JSON.stringify(req.headers));
-    log('Body:', JSON.stringify(req.body));
-
-    const events = req.body.events || [];
+    if (LINE_CHANNEL_SECRET) {
+      if (!LineMapCore.verifyLineSignature(req.rawBody, req.headers['x-line-signature'], LINE_CHANNEL_SECRET)) {
+        log('Webhook rejected: invalid signature');
+        return res.status(401).json({ status: 'error' });
+      }
+    }
+    const events = (req.body && req.body.events) || [];
+    log('Webhook received: events=' + events.length + ' signatureVerified=' + !!LINE_CHANNEL_SECRET);
     for (const event of events) {
-      log('Event type:', event.type);
-      log('Event source:', JSON.stringify(event.source));
-
       if (event.source && event.source.userId) {
-        log('=== USER ID FOUND:', event.source.userId, '===');
         await captureUnlinkedLineUser(event.source.userId);
 
         if (event.type === 'follow' && CHANNEL_ACCESS_TOKEN) {
           await sendWelcomeMessage(event.source.userId);
         }
       }
+    }
+    if (LINE_CHANNEL_SECRET) {
+      try { await LineMapCore.handleEvents(events, lineMapRouter.pipelineDeps()); }
+      catch (e) { log('line-map handler error:', e && e.message); }
     }
 
     res.status(200).json({ status: 'ok' });
