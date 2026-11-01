@@ -13,7 +13,7 @@
 
   var JST_OFFSET_MS = 9 * 3600 * 1000;
   var REPLY_TOKEN_TTL_MS = 60 * 1000; // LINE仕様: 返信トークンは受信後すぐ(目安1分)に失効
-  var MAP_TOKEN_TTL_MS = 6 * 3600 * 1000;
+  var MAP_TOKEN_TTL_MS = 30 * 60 * 1000; // 初期30分
   var CYCLE_SWITCH_MIN = 17 * 60 + 30; // 17:30
 
   // ---- 署名検証 -------------------------------------------------------
@@ -68,52 +68,65 @@
   }
 
   // ---- MAP閲覧トークン --------------------------------------------------
+  function hashToken(t) { return crypto.createHash('sha256').update(String(t)).digest('hex'); }
   function createMapTokenStore(opts) {
     opts = opts || {};
     var ttl = opts.ttlMs || MAP_TOKEN_TTL_MS;
     var clock = opts.clock || Date.now;
-    var tokens = {};
+    var tokens = {}; // sha256(token) -> binding (平文トークンは保持しない)
+    function purge() { var t = clock(); Object.keys(tokens).forEach(function (h) { if (t > tokens[h].expiresAt) delete tokens[h]; }); }
     return {
       issue: function (binding) {
+        purge();
         var token = crypto.randomBytes(24).toString('base64url'); // 192bit
-        tokens[token] = {
+        tokens[hashToken(token)] = {
           lineUserId: binding.lineUserId, date: binding.date, cycle: binding.cycle,
           routeCode: binding.routeCode, expiresAt: clock() + ttl
         };
         return token;
       },
-      // 本人 (lineUserId 一致) のみ参照可。期限切れ/不一致は null。
+      // lineUserId を渡した場合は本人一致も要求。期限切れ/不一致は null。
       resolve: function (token, lineUserId) {
-        var e = tokens[token];
+        if (typeof token !== 'string' || token.length < 20 || token.length > 100) return null;
+        var h = hashToken(token), e = tokens[h];
         if (!e) return null;
-        if (clock() > e.expiresAt) { delete tokens[token]; return null; }
+        if (clock() > e.expiresAt) { delete tokens[h]; return null; }
         if (lineUserId != null && e.lineUserId !== lineUserId) return null;
         return e;
       },
-      revoke: function (token) { delete tokens[token]; }
+      revoke: function (token) { delete tokens[hashToken(token)]; },
+      exportState: function () { purge(); return JSON.parse(JSON.stringify(tokens)); },
+      importState: function (state) {
+        tokens = {};
+        Object.keys(state || {}).forEach(function (h) {
+          var e = state[h];
+          if (/^[0-9a-f]{64}$/.test(h) && e && e.lineUserId && e.routeCode && isFinite(e.expiresAt)) tokens[h] = e;
+        });
+        purge();
+      }
     };
   }
 
   // ---- ルート解決 -------------------------------------------------------
-  // linkedMap: { lineUserId: driverName } / assignments: [{date,cycle,driverName,routeCode}]
+  // linkedMap: { lineUserId: driverId } / assignments: [{date,cycle,driverId,routeCode}]
   function resolveAssignment(input) {
-    var driverName = (input.linkedMap || {})[input.lineUserId];
-    if (!input.lineUserId || !driverName) return { ok: false, reason: 'unlinked' };
+    var driverId = (input.linkedMap || {})[input.lineUserId];
+    if (!input.lineUserId || !driverId) return { ok: false, reason: 'unlinked' };
     var rows = (input.assignments || []).filter(function (a) {
-      return a && a.driverName === driverName && a.date === input.date && a.cycle === input.cycle;
+      return a && a.driverId === driverId && a.date === input.date && a.cycle === input.cycle;
     });
-    if (rows.length === 0) return { ok: false, reason: 'unassigned', driverName: driverName };
+    if (rows.length === 0) return { ok: false, reason: 'unassigned', driverId: driverId };
     var codes = {};
     rows.forEach(function (r) { codes[r.routeCode] = true; });
     var list = Object.keys(codes).filter(Boolean);
-    if (list.length === 0) return { ok: false, reason: 'route-missing', driverName: driverName };
-    if (list.length > 1) return { ok: false, reason: 'route-duplicate', driverName: driverName };
+    if (list.length === 0) return { ok: false, reason: 'route-missing', driverId: driverId };
+    if (list.length > 1) return { ok: false, reason: 'route-duplicate', driverId: driverId };
     // 同一ルートを別ドライバーが持っていないか
     var otherOwner = (input.assignments || []).some(function (a) {
-      return a && a.routeCode === list[0] && a.date === input.date && a.cycle === input.cycle && a.driverName !== driverName;
+      return a && a.routeCode === list[0] && a.date === input.date && a.cycle === input.cycle && a.driverId !== driverId;
     });
-    if (otherOwner) return { ok: false, reason: 'route-duplicate', driverName: driverName };
-    return { ok: true, driverName: driverName, routeCode: list[0] };
+    if (otherOwner) return { ok: false, reason: 'route-duplicate', driverId: driverId };
+    return { ok: true, driverId: driverId, routeCode: list[0] };
   }
 
   // ---- MAPモデル (Amazon巡回順を保持) --------------------------------------
@@ -203,8 +216,11 @@
     var body;
     try { body = JSON.parse(Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody)); }
     catch (e) { return { status: 400, handled: 0 }; }
+    return handleEvents(Array.isArray(body.events) ? body.events : [], deps);
+  }
+
+  async function handleEvents(events, deps) {
     var results = [];
-    var events = Array.isArray(body.events) ? body.events : [];
     for (var i = 0; i < events.length; i++) {
       var ev = events[i] || {};
       if (ev.type !== 'message' || !ev.message || ev.message.type !== 'text' || !isMapCommand(ev.message.text)) continue;
@@ -217,7 +233,7 @@
       try {
         var jst = toJst(nowMs), cycle = selectCycle(nowMs);
         var asg = resolveAssignment({
-          lineUserId: ev.source.userId, linkedMap: deps.getLinkedMap(),
+          lineUserId: ev.source.userId, linkedMap: deps.getLinkedMap(jst.date),
           assignments: deps.getAssignments(jst.date), date: jst.date, cycle: cycle
         });
         if (!asg.ok) { reason = asg.reason; }
@@ -246,7 +262,7 @@
     createDedupStore: createDedupStore, isReplyTokenFresh: isReplyTokenFresh,
     createMapTokenStore: createMapTokenStore, resolveAssignment: resolveAssignment,
     buildMapModel: buildMapModel, buildMapReplyMessages: buildMapReplyMessages,
-    safeReplyText: safeReplyText, isMapCommand: isMapCommand, handleWebhook: handleWebhook,
+    safeReplyText: safeReplyText, isMapCommand: isMapCommand, handleWebhook: handleWebhook, handleEvents: handleEvents,
     REPLY_TOKEN_TTL_MS: REPLY_TOKEN_TTL_MS, MAP_TOKEN_TTL_MS: MAP_TOKEN_TTL_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

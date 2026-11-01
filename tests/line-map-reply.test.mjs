@@ -24,9 +24,9 @@ function mkDeps(over = {}) {
     channelSecret: SECRET, dedup: C.createDedupStore(), tokenStore: C.createMapTokenStore({ clock: () => T0 }),
     getLinkedMap: () => ({ [UA]: 'DA-A', [UB]: 'DA-B' }),
     getAssignments: () => [
-      { date: '2026-11-02', cycle: 'C1', driverName: 'DA-A', routeCode: 'DCX-1' },
-      { date: '2026-11-02', cycle: 'C3', driverName: 'DA-A', routeCode: 'DSX-9' },
-      { date: '2026-11-02', cycle: 'C1', driverName: 'DA-B', routeCode: 'DCX-2' }],
+      { date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-1' },
+      { date: '2026-11-02', cycle: 'C3', driverId: 'DA-A', routeCode: 'DSX-9' },
+      { date: '2026-11-02', cycle: 'C1', driverId: 'DA-B', routeCode: 'DCX-2' }],
     getRouteStops: () => [...stops('DCX-1', [3, 1, 2]), ...stops('DCX-2', [1, 2]), ...stops('DSX-9', [1])],
     reply: async (t, m) => { sent.push({ t, m }); }, mapUrlFor: (tok) => 'https://example.invalid/m/' + tok, now: () => T0, ...over
   };
@@ -66,10 +66,10 @@ ok(!C.verifyLineSignature('{}', '', SECRET) && !C.verifyLineSignature('{}', sign
 { const { deps, sent } = mkDeps(); await post([mkEvent({ user: 'Uunknown' })], deps); ok(/紐付いていません/.test(sent[0].m[0].text)); eq(sent[0].m.length, 1, '配送情報なし'); }
 { const { deps, sent } = mkDeps({ getAssignments: () => [] }); await post([mkEvent()], deps); ok(/割り当てられていません/.test(sent[0].m[0].text)); }
 { const { deps, sent } = mkDeps({ getAssignments: () => [
-  { date: '2026-11-02', cycle: 'C1', driverName: 'DA-A', routeCode: 'DCX-1' }, { date: '2026-11-02', cycle: 'C1', driverName: 'DA-A', routeCode: 'DCX-7' }] });
+  { date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-1' }, { date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-7' }] });
   await post([mkEvent()], deps); ok(/重複/.test(sent[0].m[0].text), '1人に複数ルート'); }
 { const { deps, sent } = mkDeps({ getAssignments: () => [
-  { date: '2026-11-02', cycle: 'C1', driverName: 'DA-A', routeCode: 'DCX-1' }, { date: '2026-11-02', cycle: 'C1', driverName: 'DA-B', routeCode: 'DCX-1' }] });
+  { date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-1' }, { date: '2026-11-02', cycle: 'C1', driverId: 'DA-B', routeCode: 'DCX-1' }] });
   await post([mkEvent()], deps); ok(/重複/.test(sent[0].m[0].text), '同一ルートに複数DA'); }
 { const { deps, sent } = mkDeps({ getRouteStops: () => [] }); await post([mkEvent()], deps); ok(/取得できていません/.test(sent[0].m[0].text)); }
 eq(C.buildMapModel(stops('R', [1, 1]), 'R').reason, 'sequence-duplicate');
@@ -91,4 +91,15 @@ eq(C.buildMapModel(stops('R', [1, 2], { noCoord: true }), 'R').reason, 'no-coord
 { const { deps, sent } = mkDeps(); await post([mkEvent({ srcType: 'group' }), mkEvent({ id: 'e2', text: 'こんにちは' })], deps); eq(sent.length, 0); }
 // 内部例外時も配送情報を漏らさない
 { const { deps, sent } = mkDeps({ getRouteStops: () => { throw new Error('boom'); } }); await post([mkEvent()], deps); ok(/一時的なエラー/.test(sent[0].m[0].text)); }
+// 追加: 別サイクルのMAPを返さない / 30分失効 / JST日付境界
+{ const { deps, sent } = mkDeps({ getAssignments: () => [{ date: '2026-11-02', cycle: 'C3', driverId: 'DA-A', routeCode: 'DSX-9' }] });
+  await post([mkEvent()], deps); ok(/割り当てられていません/.test(sent[0].m[0].text), '12:00にC3のみ割当ならC3を代用しない'); eq(sent[0].m.length, 1); }
+{ const { deps, sent } = mkDeps({ getAssignments: () => [{ date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-1' }], now: () => Date.parse('2026-11-02T08:30:00Z') });
+  await post([mkEvent({ ts: Date.parse('2026-11-02T08:30:00Z') })], deps); ok(/割り当てられていません/.test(sent[0].m[0].text), '17:30にC1のみ割当ならC1を代用しない'); }
+eq(C.MAP_TOKEN_TTL_MS, 30 * 60 * 1000, 'トークン初期有効期限30分');
+{ let t = T0; const ts = C.createMapTokenStore({ clock: () => t }); const k = ts.issue({ lineUserId: UA, routeCode: 'R' });
+  t = T0 + 30 * 60 * 1000; ok(ts.resolve(k, UA), '30分ちょうどは有効'); t += 1; eq(ts.resolve(k, UA), null, '30分超で失効');
+  const st = ts.exportState(); ok(!JSON.stringify(st).includes(k), '平文トークンは保持しない'); }
+eq(C.toJst(Date.parse('2026-11-02T15:00:00Z')).date, '2026-11-03', 'UTC15:00はJST翌日0:00');
+eq(C.selectCycle(Date.parse('2026-11-02T15:00:00Z')), 'C1', 'JST 0:00はC1');
 console.log('line-map-reply tests passed (' + n + ' assertions)');
