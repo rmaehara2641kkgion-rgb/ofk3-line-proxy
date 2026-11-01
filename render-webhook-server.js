@@ -454,14 +454,21 @@ async function lineMapReply(replyToken, messages) {
     headers: { Authorization: 'Bearer ' + CHANNEL_ACCESS_TOKEN, 'Content-Type': 'application/json' }, timeout: 5000
   });
 }
+const lineMapStoreInstance = LineMapStore.createAssignmentStore({
+  filePath: path.join(LINE_MAP_DATA_DIR, 'line-map-assignments.json'),
+  // 外部ストア(GAS)は LINE_MAP_GAS_URL / LINE_MAP_GAS_TOKEN を設定したときだけ有効。未設定なら接続しない。
+  backend: require('./line-map-gas-backend.js').createGasBackend({ url: process.env.LINE_MAP_GAS_URL, token: process.env.LINE_MAP_GAS_TOKEN })
+});
+lineMapStoreInstance.init().then(function (okRestore) { log('line-map assignments restored=' + okRestore); });
 const lineMapRouter = LineMapRoutes.createLineMapRouter({
   express: express,
   env: {
     get PROXY_SECRET() { return process.env.PROXY_SECRET || ''; },
     get LINE_CHANNEL_SECRET() { return LINE_CHANNEL_SECRET; },
-    PUBLIC_ORIGIN: process.env.LINE_MAP_PUBLIC_ORIGIN || 'https://ofk3-line-proxy-1.onrender.com'
+    PUBLIC_ORIGIN: process.env.LINE_MAP_PUBLIC_ORIGIN || 'https://ofk3-line-proxy-1.onrender.com',
+    SHOW_ADDRESS: process.env.LINE_MAP_SHOW_ADDRESS === '1'
   },
-  assignmentStore: LineMapStore.createAssignmentStore({ filePath: path.join(LINE_MAP_DATA_DIR, 'line-map-assignments.json') }),
+  assignmentStore: lineMapStoreInstance,
   tokenStore: LineMapCore.createMapTokenStore(),
   tokenFile: path.join(LINE_MAP_DATA_DIR, 'line-map-tokens.json'),
   getRouteStops: function (date) { var e = cortexPriorityStore[date]; return e && e.routeStops ? e.routeStops : []; },

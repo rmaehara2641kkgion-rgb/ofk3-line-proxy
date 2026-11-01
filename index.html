@@ -4131,7 +4131,7 @@ var driverDB = {
         if (!rows.length) { console.warn('LINE MAP同期: 同期対象なし(transportId未登録 ' + skipped + '件)'); return; }
         var res = await fetch('/line-map/assignments', { method: 'POST', headers: getProxyHeaders(), body: JSON.stringify({ date: jst, rows: rows, links: links }) });
         var body = await res.json().catch(function() { return {}; });
-        if (res.ok) console.log('LINE MAP同期OK: ' + body.rowCount + '行 / 紐付け' + body.linkCount + '件 / 除外' + skipped + '件');
+        if (res.ok) console.log('LINE MAP同期OK: ' + body.rowCount + '行 / 紐付け' + body.linkCount + '件 / 除外' + skipped + '件 / 外部保存:' + (body.remote || '-'));
         else console.warn('LINE MAP同期失敗: HTTP ' + res.status + ' ' + JSON.stringify(body.errors || body.message || ''));
       } catch (e) {
         console.warn('LINE MAP同期エラー: ' + e.message);

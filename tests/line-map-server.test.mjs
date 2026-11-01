@@ -56,18 +56,26 @@ try {
   eq((await post(s, '/line-map/assignments', sync, { 'x-proxy-secret': 'wrong' })).status, 403);
   eq((await post(s, '/line-map/assignments', sync, { 'x-proxy-secret': PS })).status, 200, '同期成功');
   eq((await post(s, '/line-map/assignments', { ...sync, rows: [{ routeCode: route, driverId: 'A001' }, { routeCode: route, driverId: 'A002' }] }, { 'x-proxy-secret': PS })).status, 400, '矛盾は拒否');
-  const stops = (rc, d) => [3, 1, 2].map(q => ({ routeCode: rc, sequenceNumber: q, latitude: 33.5 + q / 1000, longitude: 130.4, address: d + q, packageCount: 1 }));
+  const stops = (rc, d) => [3, 1, 2].map(q => ({ routeCode: rc, sequenceNumber: q, latitude: 33.5 + q / 1000, longitude: d === 'Y' ? 131 : 130.4, address: d + q, packageCount: 1 }));
   eq((await post(s, '/cortex-priority/import', { localDate: today, packages: [], routeStops: [...stops(route, 'X'), ...stops(prefix + '-8', 'Y')] })).status, 200);
 
   // プレビュー(モック) → トークンURL
   const pv = await (await post(s, '/line-map/test-preview', { driverId: 'A001' }, { 'x-proxy-secret': PS })).json();
-  eq([pv.mock, pv.sent], [true, false], '実送信しない'); const url = pv.messages[1].contents.footer.contents[0].action.uri; const tok = url.split('/').pop();
+  eq([pv.mock, pv.sent], [true, false], '実送信しない'); const url = pv.messages[1].contents.footer.contents[0].action.uri; ok(url.includes('/line-map/view#'), 'トークンはURLフラグメント'); const tok = url.split('#')[1];
+  const getData = (t) => post(s, '/line-map/data', { token: t });
   eq((await post(s, '/line-map/test-preview', { driverId: 'A001' })).status, 403, 'プレビューもシークレット必須');
   // 閲覧
-  const d = await (await fetch(s.url('/line-map/data/' + tok))).json(); eq(d.pins.map(p => p.pin), [1, 2, 3], 'Amazon巡回順'); ok(d.pins.every(p => /^X/.test(p.address)), '本人のルートのみ');
-  eq((await fetch(s.url('/line-map/data/' + tok.slice(0, -2) + 'zz'))).status, 410, '改ざんトークン拒否');
-  eq((await fetch(s.url('/line-map/data/' + 'a'.repeat(32)))).status, 410, '推測トークン拒否');
-  const vr = await fetch(s.url('/line-map/view/' + tok)); eq(vr.headers.get('cache-control'), 'no-store'); eq(vr.headers.get('referrer-policy'), 'no-referrer');
+  const d = await (await getData(tok)).json(); eq(d.pins.map(p => p.pin), [1, 2, 3], 'Amazon巡回順'); ok(d.pins.length === 3 && d.pins.every(p => p.lng === 130.4), '本人のルートのみ(他人=Yは経度131)');
+  eq((await getData(tok.slice(0, -2) + 'zz')).status, 410, '改ざんトークン拒否');
+  eq((await getData('a'.repeat(32))).status, 410, '推測トークン拒否');
+  ok(!(await fetch(s.url('/line-map/data/' + tok))).ok, 'トークンをパスに載せるGET経路は存在しない');
+  const vr = await fetch(s.url('/line-map/view')); eq(vr.headers.get('cache-control'), 'no-store'); eq(vr.headers.get('referrer-policy'), 'no-referrer');
+  ok(/frame-ancestors 'none'/.test(vr.headers.get('content-security-policy')), 'CSP'); eq(vr.headers.get('x-content-type-options'), 'nosniff'); ok(!vr.headers.get('access-control-allow-origin'), 'CORS(*)なし');
+  ok(!(await vr.text()).includes(tok), 'ページにトークンを含まない');
+  ok(!('address' in d.pins[0]), '住所は既定で返さない'); ok(!JSON.stringify(d).includes('X1'), '住所文字列が漏れない');
+  const dh = await getData(tok); eq(dh.headers.get('cache-control'), 'no-store'); ok(!dh.headers.get('access-control-allow-origin'));
+  eq((await (await getData(null)).json()).status, 'error', 'トークン無しはエラー');
+  const st = await (await fetch(s.url('/line-map/status'), { headers: { 'x-proxy-secret': PS } })).json(); eq([st.assignmentsRestored, st.cortexRouteStops], [true, 6]); eq((await fetch(s.url('/line-map/status'))).status, 403);
   // 既存の認証なし経路から保護データは取れない
   eq((await fetch(s.url('/route-data/' + tok))).status, 404, '/route-dataから取得不可');
   ok(!(await (await fetch(s.url('/route-data/' + tok))).text()).includes('X1'));
@@ -85,6 +93,8 @@ try {
   eq((await post(s, '/webhook', null, { 'x-line-signature': sign(b) }, b)).status, 200);
   const un = await (await fetch(s.url('/line-unlinked'), { headers: { 'x-proxy-secret': PS } })).json();
   ok(un.users.some(u => u.userId === NEW), '未紐付け候補取り込みは維持');
+  eq((await getData(tok)).status, 410, '再発行(マップ再送)で旧トークンは失効');
+  const pv2 = await (await post(s, '/line-map/test-preview', { driverId: 'A001' }, { 'x-proxy-secret': PS })).json(); const tok2 = pv2.messages[1].contents.footer.contents[0].action.uri.split('#')[1];
   // ログに秘密/返信トークン/ユーザーID全文なし
   const lg = s.log(); ok(!lg.includes('rt-secret-token') && !lg.includes(sign(b)) && !lg.includes(PS) && !lg.includes(LS), 'ログに機微情報なし');
   ok(!/x-line-signature/i.test(lg), 'ヘッダー全文ログなし');
@@ -92,9 +102,9 @@ try {
 
   // 再起動: 割当・トークンが復元
   await stopS(s); s = await start(env, 39202);
-  eq((await fetch(s.url('/line-map/data/' + tok))).status, 409, '再起動後トークンは有効だがCortex(メモリ)未復元なら表示しない');
+  const r0 = await getData(tok2); eq(r0.status, 503, '再起動後Cortex未復元なら表示しない'); eq((await r0.json()).code, 'data-not-restored', '明確なエラー');
   await post(s, '/cortex-priority/import', { localDate: today, packages: [], routeStops: stops(route, 'X') });
-  eq((await (await fetch(s.url('/line-map/data/' + tok))).json()).status, 'ok', '再起動後も割当/トークン復元');
+  eq((await (await getData(tok2)).json()).status, 'ok', '再起動後も割当/トークン復元');
   await stopS(s);
 
   // Secret未設定: 新webhookは503、既存/webhookは従来動作でMAP処理しない

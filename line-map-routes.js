@@ -1,5 +1,5 @@
 /**
- * LINE MAP: 割当同期 / 署名付きWebhook / トークンMAP閲覧 / 管理者モックプレビュー。
+ * LINE MAP: 割当同期 / 署名付きWebhook / トークンMAP閲覧 / 管理者モックプレビュー / 状態確認。
  * 実LINE送信はここでは行わない。返信は deps.reply (本番では既定で無効) 経由のみ。
  */
 'use strict';
@@ -8,6 +8,16 @@ var fs = require('fs');
 var path = require('path');
 var Core = require('./line-map-reply-core.js');
 
+var VIEW_DIR = path.join(__dirname, 'line-map-view');
+var VIEW_FILES = {
+  '/line-map/view': { file: 'index.html', type: 'text/html; charset=utf-8' },
+  '/line-map/assets/view.js': { file: 'view.js', type: 'application/javascript; charset=utf-8' },
+  '/line-map/assets/view.css': { file: 'view.css', type: 'text/css; charset=utf-8' }
+};
+var CSP = "default-src 'none'; script-src 'self' https://unpkg.com; style-src 'self' https://unpkg.com; "
+  + "img-src 'self' data: https://*.tile.openstreetmap.org https://unpkg.com; connect-src 'self'; "
+  + "frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
 function secretEquals(configured, presented) {
   if (!configured || typeof presented !== 'string' || !presented) return false;
   var a = crypto.createHash('sha256').update(configured).digest();
@@ -15,38 +25,49 @@ function secretEquals(configured, presented) {
   return crypto.timingSafeEqual(a, b);
 }
 
-var VIEW_HTML = '<!doctype html><html lang="ja"><head><meta charset="utf-8">'
-  + '<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">'
-  + '<title>担当MAP</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
-  + '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-  + '<style>html,body,#map{height:100%;margin:0}#h{position:absolute;z-index:1000;top:8px;left:8px;right:8px;background:#fffd;padding:6px 10px;border-radius:8px;font:14px sans-serif}'
-  + '.pin{background:#e94560;color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;text-align:center;font:700 12px sans-serif;border:2px solid #fff}</style></head>'
-  + '<body><div id="h">読み込み中…</div><div id="map"></div><script>'
-  + 'fetch(location.pathname.replace("/view/","/data/"),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){'
-  + 'if(d.status!=="ok"){document.getElementById("h").textContent=d.message||"表示できません";return}'
-  + 'document.getElementById("h").textContent=d.routeCode+" / "+d.pins.length+"件";'
-  + 'var m=L.map("map");L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19}).addTo(m);var b=[];'
-  + 'd.pins.forEach(function(p){b.push([p.lat,p.lng]);L.marker([p.lat,p.lng],{icon:L.divIcon({className:"",html:"<div class=pin>"+p.pin+"</div>",iconSize:[26,26],iconAnchor:[13,13]})}).addTo(m).bindPopup((function(){var e=document.createElement("div");e.textContent="#"+p.pin+" "+p.address;return e})())});'
-  + 'L.polyline(b,{color:"#e94560",weight:3,opacity:.6}).addTo(m);m.fitBounds(b,{padding:[30,30]})})'
-  + '.catch(function(){document.getElementById("h").textContent="読み込みに失敗しました"});</script></body></html>';
-var EXPIRED_HTML = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>期限切れ</title></head>'
-  + '<body style="font:16px sans-serif;padding:24px">このMAPのURLは無効か期限切れです。<br>LINEで「マップ」と送ると新しいURLが届きます。</body></html>';
+// 固定窓レート制限 (メモリ)。count(key) が上限以内なら true。
+function createRateLimiter(max, windowMs, clock) {
+  var nowFn = clock || Date.now, hits = {};
+  function prune(t) { Object.keys(hits).forEach(function (k) { if (t - hits[k].start >= windowMs) delete hits[k]; }); }
+  return {
+    hit: function (key) {
+      var t = nowFn(); prune(t);
+      var h = hits[key] || (hits[key] = { start: t, n: 0 });
+      h.n++;
+      return h.n <= max;
+    },
+    blocked: function (key) { var t = nowFn(); prune(t); return !!hits[key] && hits[key].n >= max; }
+  };
+}
 
-function noStore(res) {
+// Render は XFF の末尾に実クライアントIPを追記する。先頭は偽装可能なので末尾を使う。
+function clientKey(req) {
+  var xff = String(req.headers['x-forwarded-for'] || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  return xff.length ? xff[xff.length - 1] : String((req.socket && req.socket.remoteAddress) || 'unknown');
+}
+
+function secure(res) {
   res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
   res.set('Referrer-Policy', 'no-referrer');
-  res.set('X-Robots-Tag', 'noindex');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Cross-Origin-Resource-Policy', 'same-origin');
+  res.removeHeader('Access-Control-Allow-Origin'); // 全体CORS(*)をこの経路では外す
 }
 
 /**
- * deps: express, env{PROXY_SECRET, LINE_CHANNEL_SECRET, PUBLIC_ORIGIN}, assignmentStore, tokenStore, tokenFile?,
- *       getRouteStops(date), reply(replyToken, messages), now(), todayJst()
+ * deps: express, env{PROXY_SECRET, LINE_CHANNEL_SECRET, PUBLIC_ORIGIN, SHOW_ADDRESS}, assignmentStore, tokenStore, tokenFile?,
+ *       getRouteStops(date), reply(replyToken, messages), now(), todayJst(), clock?
  */
 function createLineMapRouter(deps) {
   var router = deps.express.Router();
   var env = deps.env || {};
   var nowFn = deps.now || Date.now;
   var dedup = deps.dedup || Core.createDedupStore();
+  var viewLimiter = deps.viewLimiter || createRateLimiter(60, 60000, deps.clock);       // 1IPあたり60回/分
+  var badTokenLimiter = deps.badTokenLimiter || createRateLimiter(10, 600000, deps.clock); // 無効トークン10回/10分で遮断
+  var badSecretLimiter = deps.badSecretLimiter || createRateLimiter(10, 600000, deps.clock);
 
   if (deps.tokenFile) {
     try { deps.tokenStore.importState(JSON.parse(fs.readFileSync(deps.tokenFile, 'utf8'))); } catch (e) { /* 初回/破損は空で開始 */ }
@@ -56,62 +77,97 @@ function createLineMapRouter(deps) {
     try {
       fs.mkdirSync(path.dirname(deps.tokenFile), { recursive: true });
       fs.writeFileSync(deps.tokenFile, JSON.stringify(deps.tokenStore.exportState()), { encoding: 'utf8', mode: 0o600 });
-    } catch (e) { /* 永続化失敗は致命にしない */ }
+    } catch (e) { /* 永続化失敗は致命にしない (トークンは短命) */ }
   }
   var origIssue = deps.tokenStore.issue;
   var tokenStore = Object.assign({}, deps.tokenStore, { issue: function (b) { var t = origIssue(b); persistTokens(); return t; } });
 
   function requireProxySecret(req, res) {
+    var key = clientKey(req);
+    if (badSecretLimiter.blocked(key)) { res.status(429).json({ status: 'error', message: 'too many requests' }); return false; }
     if (!env.PROXY_SECRET) { res.status(503).json({ status: 'error', message: 'not configured' }); return false; } // fail-closed
-    if (!secretEquals(env.PROXY_SECRET, req.headers['x-proxy-secret'])) { res.status(403).json({ status: 'error', message: 'Forbidden' }); return false; }
+    if (!secretEquals(env.PROXY_SECRET, req.headers['x-proxy-secret'])) {
+      badSecretLimiter.hit(key);
+      res.status(403).json({ status: 'error', message: 'Forbidden' }); return false;
+    }
     return true;
   }
-  function mapUrlFor(token) { return (env.PUBLIC_ORIGIN || '') + '/line-map/view/' + token; }
+  function mapUrlFor(token) { return (env.PUBLIC_ORIGIN || '') + '/line-map/view#' + token; } // トークンはフラグメント
+  function readiness() { return deps.assignmentStore.isRestored() ? null : 'not-ready'; }
 
   function pipelineDeps() {
     return {
       channelSecret: env.LINE_CHANNEL_SECRET, dedup: dedup, tokenStore: tokenStore,
+      getReadiness: function () { return readiness(); },
       getLinkedMap: function (d) { return deps.assignmentStore.linkedMapFor(d); },
       getAssignments: function (d) { return deps.assignmentStore.assignmentsFor(d); },
       getRouteStops: deps.getRouteStops, reply: deps.reply, mapUrlFor: mapUrlFor, now: nowFn
     };
   }
 
-  // 割当同期 (サーバー間/管理画面からPROXY_SECRET付きで)
-  router.post('/line-map/assignments', function (req, res) {
+  // 割当同期
+  router.post('/line-map/assignments', async function (req, res) {
     if (!requireProxySecret(req, res)) return;
+    await deps.assignmentStore.ensureRestored();
     var r = deps.assignmentStore.sync(req.body, deps.todayJst ? deps.todayJst() : null);
     if (!r.ok) return res.status(400).json({ status: 'error', errors: r.errors });
-    res.json({ status: 'ok', date: r.date, rowCount: r.rowCount, linkCount: r.linkCount, persisted: r.persisted });
+    var remote = await deps.assignmentStore.flush();
+    res.json({ status: 'ok', date: r.date, rowCount: r.rowCount, linkCount: r.linkCount, persisted: r.persisted, remote: remote });
   });
 
   // 新Webhook (常に署名必須。Secret未設定は503=fail-closed)
   router.post('/line-map/webhook', async function (req, res) {
     if (!env.LINE_CHANNEL_SECRET) return res.status(503).json({ status: 'error', message: 'not configured' });
+    await deps.assignmentStore.ensureRestored();
     var out = await Core.handleWebhook(req.rawBody, req.headers['x-line-signature'], pipelineDeps());
     if (out.status !== 200) return res.status(out.status).json({ status: 'error' });
     res.json({ status: 'ok' });
   });
 
-  // MAP閲覧 (トークン必須・本人/日付/ルートに束縛)
-  router.get('/line-map/view/:token', function (req, res) {
-    noStore(res);
-    if (!tokenStore.resolve(req.params.token)) return res.status(410).type('html').send(EXPIRED_HTML);
-    res.type('html').send(VIEW_HTML);
+  // 閲覧ページ(静的シェル。トークンは含まない)
+  Object.keys(VIEW_FILES).forEach(function (route) {
+    router.get(route, function (req, res) {
+      secure(res);
+      if (route === '/line-map/view') res.set('Content-Security-Policy', CSP);
+      if (!viewLimiter.hit('v|' + clientKey(req))) return res.status(429).type('text').send('Too Many Requests');
+      var f = VIEW_FILES[route];
+      res.type(f.type).send(fs.readFileSync(path.join(VIEW_DIR, f.file)));
+    });
   });
-  router.get('/line-map/data/:token', function (req, res) {
-    noStore(res);
-    var b = tokenStore.resolve(req.params.token);
-    if (!b) return res.status(410).json({ status: 'error', message: '期限切れです。LINEで「マップ」と送ってください。' });
+
+  // MAPデータ (トークンはPOSTボディ。本人/日付/サイクル/ルートに束縛)
+  router.post('/line-map/data', async function (req, res) {
+    secure(res);
+    var key = clientKey(req);
+    if (badTokenLimiter.blocked(key) || !viewLimiter.hit('d|' + key)) return res.status(429).json({ status: 'error', message: 'アクセスが多すぎます。しばらくしてからお試しください。' });
+    var token = req.body && req.body.token;
+    var b = tokenStore.resolve(token);
+    if (!b) {
+      badTokenLimiter.hit(key);
+      // 不正・改ざん・期限切れは区別せず同一応答 (情報を与えない)
+      return res.status(410).json({ status: 'error', message: 'このMAPのURLは無効か期限切れです。LINEで「マップ」と送ると新しいURLが届きます。' });
+    }
+    await deps.assignmentStore.ensureRestored();
+    if (readiness()) return res.status(503).json({ status: 'error', code: 'not-ready', message: Core.safeReplyText('not-ready')[0].text });
     // 発行後に割当が変わった場合は表示しない (本人・日付・サイクル・ルートの再照合)
     var cur = Core.resolveAssignment({
       lineUserId: b.lineUserId, linkedMap: deps.assignmentStore.linkedMapFor(b.date),
       assignments: deps.assignmentStore.assignmentsFor(b.date), date: b.date, cycle: b.cycle
     });
     if (!cur.ok || cur.routeCode !== b.routeCode) return res.status(409).json({ status: 'error', message: '割当が変更されたため表示できません。LINEで「マップ」と送り直してください。' });
-    var model = Core.buildMapModel(deps.getRouteStops(b.date), b.routeCode);
+    var stops = deps.getRouteStops(b.date);
+    if (!stops || !stops.length) return res.status(503).json({ status: 'error', code: 'data-not-restored', message: Core.safeReplyText('no-stops')[0].text });
+    var model = Core.buildMapModel(stops, b.routeCode);
     if (!model.ok) return res.status(409).json({ status: 'error', message: Core.safeReplyText(model.reason)[0].text });
-    res.json({ status: 'ok', routeCode: model.routeCode, cycle: b.cycle, pins: model.pins });
+    res.json({
+      status: 'ok', routeCode: model.routeCode, cycle: b.cycle, stopCount: model.stopCount, missingCoordinateCount: model.missingCoordinateCount,
+      // 個人情報の最小化: 住所は既定で返さない (LINE_MAP_SHOW_ADDRESS=1 のときだけ)
+      pins: model.pins.map(function (p) {
+        var o = { pin: p.pin, lat: p.lat, lng: p.lng, packageCount: p.packageCount };
+        if (env.SHOW_ADDRESS) o.address = p.address;
+        return o;
+      })
+    });
   });
 
   // 管理者向け モック送信: 実LINE送信は行わず、送るはずのメッセージを返すだけ
@@ -120,23 +176,37 @@ function createLineMapRouter(deps) {
     var driverId = String(req.body && req.body.driverId || '');
     var t = nowFn(), jst = Core.toJst(t), cycle = Core.selectCycle(t);
     var lineUserId = deps.assignmentStore.linkFor(jst.date, driverId);
-    var asg = lineUserId ? Core.resolveAssignment({
-      lineUserId: lineUserId, linkedMap: deps.assignmentStore.linkedMapFor(jst.date),
-      assignments: deps.assignmentStore.assignmentsFor(jst.date), date: jst.date, cycle: cycle
-    }) : { ok: false, reason: 'unlinked' };
     var messages;
-    if (!asg.ok) messages = Core.safeReplyText(asg.reason);
+    if (readiness()) messages = Core.safeReplyText('not-ready');
     else {
-      var model = Core.buildMapModel(deps.getRouteStops(jst.date), asg.routeCode);
-      messages = model.ok
-        ? Core.buildMapReplyMessages(model, { cycle: cycle, mapUrl: mapUrlFor(tokenStore.issue({ lineUserId: lineUserId, date: jst.date, cycle: cycle, routeCode: asg.routeCode })) })
-        : Core.safeReplyText(model.reason);
+      var asg = lineUserId ? Core.resolveAssignment({
+        lineUserId: lineUserId, linkedMap: deps.assignmentStore.linkedMapFor(jst.date),
+        assignments: deps.assignmentStore.assignmentsFor(jst.date), date: jst.date, cycle: cycle
+      }) : { ok: false, reason: 'unlinked' };
+      if (!asg.ok) messages = Core.safeReplyText(asg.reason);
+      else {
+        var model = Core.buildMapModel(deps.getRouteStops(jst.date), asg.routeCode);
+        messages = model.ok
+          ? Core.buildMapReplyMessages(model, { cycle: cycle, mapUrl: mapUrlFor(tokenStore.issue({ lineUserId: lineUserId, date: jst.date, cycle: cycle, routeCode: asg.routeCode })) })
+          : Core.safeReplyText(model.reason);
+      }
     }
     res.json({ status: 'ok', mock: true, sent: false, cycle: cycle, messages: messages });
+  });
+
+  // 復元状況の確認 (件数のみ。個人情報は返さない)
+  router.get('/line-map/status', function (req, res) {
+    if (!requireProxySecret(req, res)) return;
+    var date = deps.todayJst ? deps.todayJst() : Core.toJst(nowFn()).date;
+    var stops = deps.getRouteStops(date) || [];
+    res.json({
+      status: 'ok', date: date, assignmentsRestored: deps.assignmentStore.isRestored(),
+      assignmentRows: deps.assignmentStore.assignmentsFor(date).length, cortexRouteStops: stops.length
+    });
   });
 
   router.pipelineDeps = pipelineDeps;
   return router;
 }
 
-module.exports = { createLineMapRouter: createLineMapRouter, secretEquals: secretEquals };
+module.exports = { createLineMapRouter: createLineMapRouter, secretEquals: secretEquals, createRateLimiter: createRateLimiter, clientKey: clientKey, CSP: CSP };
