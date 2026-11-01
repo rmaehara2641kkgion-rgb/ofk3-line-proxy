@@ -78,6 +78,11 @@
     return {
       issue: function (binding) {
         purge();
+        // 同一の本人・日付・サイクル・ルートで再発行したら旧トークンは失効 (転送されたURLの寿命を縮める)
+        Object.keys(tokens).forEach(function (h) {
+          var o = tokens[h];
+          if (o.lineUserId === binding.lineUserId && o.date === binding.date && o.cycle === binding.cycle && o.routeCode === binding.routeCode) delete tokens[h];
+        });
         var token = crypto.randomBytes(24).toString('base64url'); // 192bit
         tokens[hashToken(token)] = {
           lineUserId: binding.lineUserId, date: binding.date, cycle: binding.cycle,
@@ -168,11 +173,12 @@
     'unassigned': '本日の担当コースがまだ割り当てられていません。',
     'route-missing': '担当コースのデータを確認できませんでした。管理者にご連絡ください。',
     'route-duplicate': 'コースの割当に重複があるためMAPを表示できません。管理者にご連絡ください。',
-    'no-stops': '担当コースの配送データがまだ取得できていません。',
+    'no-stops': '本日の配送データがまだ取得・復元できていません。しばらくしてからもう一度「マップ」と送ってください。',
     'sequence-missing': '巡回順データが不足しているためMAPを表示できません。',
     'sequence-duplicate': '巡回順データに重複があるためMAPを表示できません。',
     'no-coordinates': '位置情報が不足しているためMAPを表示できません。',
     'unverified': 'ご本人確認ができないため、配送情報は表示できません。',
+    'not-ready': '現在データを復元中のためMAPを表示できません。しばらくしてからもう一度「マップ」と送ってください。',
     'error': '一時的なエラーのためMAPを表示できません。時間をおいて再度お試しください。'
   };
   function safeReplyText(reason) {
@@ -232,7 +238,8 @@
       var messages, reason = null;
       try {
         var jst = toJst(nowMs), cycle = selectCycle(nowMs);
-        var asg = resolveAssignment({
+        var notReady = deps.getReadiness ? deps.getReadiness(jst.date) : null;
+        var asg = notReady ? { ok: false, reason: notReady } : resolveAssignment({
           lineUserId: ev.source.userId, linkedMap: deps.getLinkedMap(jst.date),
           assignments: deps.getAssignments(jst.date), date: jst.date, cycle: cycle
         });

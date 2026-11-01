@@ -71,7 +71,7 @@ ok(!C.verifyLineSignature('{}', '', SECRET) && !C.verifyLineSignature('{}', sign
 { const { deps, sent } = mkDeps({ getAssignments: () => [
   { date: '2026-11-02', cycle: 'C1', driverId: 'DA-A', routeCode: 'DCX-1' }, { date: '2026-11-02', cycle: 'C1', driverId: 'DA-B', routeCode: 'DCX-1' }] });
   await post([mkEvent()], deps); ok(/重複/.test(sent[0].m[0].text), '同一ルートに複数DA'); }
-{ const { deps, sent } = mkDeps({ getRouteStops: () => [] }); await post([mkEvent()], deps); ok(/取得できていません/.test(sent[0].m[0].text)); }
+{ const { deps, sent } = mkDeps({ getRouteStops: () => [] }); await post([mkEvent()], deps); ok(/取得・復元できていません/.test(sent[0].m[0].text)); }
 eq(C.buildMapModel(stops('R', [1, 1]), 'R').reason, 'sequence-duplicate');
 eq(C.buildMapModel([{ routeCode: 'R', latitude: 1, longitude: 1 }], 'R').reason, 'sequence-missing');
 eq(C.buildMapModel(stops('R', [1, 2], { noCoord: true }), 'R').reason, 'no-coordinates');
