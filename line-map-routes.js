@@ -82,23 +82,31 @@ function createLineMapRouter(deps) {
   var origIssue = deps.tokenStore.issue;
   var tokenStore = Object.assign({}, deps.tokenStore, { issue: function (b) { var t = origIssue(b); persistTokens(); return t; } });
 
+  // 管理系エンドポイントの認証: X-Proxy-Secret (サーバー間) または 管理者セッション (ブラウザ。OFK3 #78 の方式)。
+  // 更新系(POST)のセッション認証は同一Originのみ (CSRF対策)。どちらの資格も設定が無ければ503 (fail-closed)。
   function requireProxySecret(req, res) {
     var key = clientKey(req);
     if (badSecretLimiter.blocked(key)) { res.status(429).json({ status: 'error', message: 'too many requests' }); return false; }
-    if (!env.PROXY_SECRET) { res.status(503).json({ status: 'error', message: 'not configured' }); return false; } // fail-closed
-    if (!secretEquals(env.PROXY_SECRET, req.headers['x-proxy-secret'])) {
-      badSecretLimiter.hit(key);
-      res.status(403).json({ status: 'error', message: 'Forbidden' }); return false;
-    }
-    return true;
+    var sessionAvailable = !!(deps.isAdminSession && deps.sessionConfigured && deps.sessionConfigured());
+    if (!env.PROXY_SECRET && !sessionAvailable) { res.status(503).json({ status: 'error', message: 'not configured' }); return false; } // fail-closed
+    if (secretEquals(env.PROXY_SECRET, req.headers['x-proxy-secret'])) return true;
+    if (sessionAvailable && deps.isAdminSession(req) && (req.method === 'GET' || (deps.sameOrigin && deps.sameOrigin(req)))) return true;
+    badSecretLimiter.hit(key);
+    res.status(403).json({ status: 'error', message: 'Forbidden' }); return false;
   }
   function mapUrlFor(token) { return (env.PUBLIC_ORIGIN || '') + '/line-map/view#' + token; } // トークンはフラグメント
-  function readiness() { return deps.assignmentStore.isRestored() ? null : 'not-ready'; }
+  // 未復元(外部ストア障害) → 'not-ready'、その日の割当が一度も同期されていない(再起動で消えた/未取込) → 'not-synced'。
+  // どちらも配送情報は返さない。「未割当」とは区別する。
+  function readiness(date) {
+    if (!deps.assignmentStore.isRestored()) return 'not-ready';
+    if (date && !deps.assignmentStore.hasDate(date)) return 'not-synced';
+    return null;
+  }
 
   function pipelineDeps() {
     return {
       channelSecret: env.LINE_CHANNEL_SECRET, dedup: dedup, tokenStore: tokenStore,
-      getReadiness: function () { return readiness(); },
+      getReadiness: function (date) { return readiness(date); },
       getLinkedMap: function (d) { return deps.assignmentStore.linkedMapFor(d); },
       getAssignments: function (d) { return deps.assignmentStore.assignmentsFor(d); },
       getRouteStops: deps.getRouteStops, reply: deps.reply, mapUrlFor: mapUrlFor, now: nowFn
@@ -148,7 +156,8 @@ function createLineMapRouter(deps) {
       return res.status(410).json({ status: 'error', message: 'このMAPのURLは無効か期限切れです。LINEで「マップ」と送ると新しいURLが届きます。' });
     }
     await deps.assignmentStore.ensureRestored();
-    if (readiness()) return res.status(503).json({ status: 'error', code: 'not-ready', message: Core.safeReplyText('not-ready')[0].text });
+    var notReady = readiness(b.date);
+    if (notReady) return res.status(503).json({ status: 'error', code: notReady, message: Core.safeReplyText(notReady)[0].text });
     // 発行後に割当が変わった場合は表示しない (本人・日付・サイクル・ルートの再照合)
     var cur = Core.resolveAssignment({
       lineUserId: b.lineUserId, linkedMap: deps.assignmentStore.linkedMapFor(b.date),
@@ -177,7 +186,8 @@ function createLineMapRouter(deps) {
     var t = nowFn(), jst = Core.toJst(t), cycle = Core.selectCycle(t);
     var lineUserId = deps.assignmentStore.linkFor(jst.date, driverId);
     var messages;
-    if (readiness()) messages = Core.safeReplyText('not-ready');
+    var preReady = readiness(jst.date);
+    if (preReady) messages = Core.safeReplyText(preReady);
     else {
       var asg = lineUserId ? Core.resolveAssignment({
         lineUserId: lineUserId, linkedMap: deps.assignmentStore.linkedMapFor(jst.date),

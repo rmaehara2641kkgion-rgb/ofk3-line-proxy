@@ -502,7 +502,11 @@ const lineMapRouter = LineMapRoutes.createLineMapRouter({
   tokenFile: path.join(LINE_MAP_DATA_DIR, 'line-map-tokens.json'),
   getRouteStops: function (date) { var e = cortexPriorityStore[date]; return e && e.routeStops ? e.routeStops : []; },
   reply: lineMapReply,
-  todayJst: function () { return getTodayJst(); }
+  todayJst: function () { return getTodayJst(); },
+  // 管理系エンドポイントは管理者セッション(OFK3 #78)も受け付ける。セッション未設定ならPROXY_SECRETのみ。
+  isAdminSession: adminAuth.isAuthenticated,
+  sameOrigin: adminAuth.sameOrigin,
+  sessionConfigured: function () { return !!(adminAuth.sessions.enabled && process.env.ADMIN_PASSWORD_HASH); }
 });
 app.use(lineMapRouter);
 

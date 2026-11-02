@@ -57,12 +57,13 @@ async function boot(over = {}) {
   let t = Date.now(); const clock = () => t;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lmh-'));
   const store = over.store || Store.createAssignmentStore({ filePath: path.join(dir, 'a.json') });
-  store.sync(payload, today);
+  if (!over.noSync) store.sync(payload, today);
   const tokenStore = Core.createMapTokenStore({ clock });
   const stopsList = over.stops || [1, 2, 3].map(q => ({ routeCode: 'DCX-1', sequenceNumber: q, latitude: 33.5 + q / 100, longitude: 130.4, address: 'SECRET-ADDR-' + q, packageCount: 2 }));
   const app = express(); app.use(express.json());
-  app.use(Routes.createLineMapRouter({ express, env: { PROXY_SECRET: 'ps', LINE_CHANNEL_SECRET: 'cs', PUBLIC_ORIGIN: 'https://example.invalid', SHOW_ADDRESS: !!over.showAddress },
-    assignmentStore: store, tokenStore, getRouteStops: () => stopsList, reply: async () => {}, now: () => t, clock, todayJst: () => today }));
+  app.use(Routes.createLineMapRouter({ express, env: { PROXY_SECRET: over.noSecret ? '' : 'ps', LINE_CHANNEL_SECRET: 'cs', PUBLIC_ORIGIN: 'https://example.invalid', SHOW_ADDRESS: !!over.showAddress },
+    assignmentStore: store, tokenStore, getRouteStops: () => stopsList, reply: async () => {}, now: () => t, clock, todayJst: () => today,
+    ...(over.session ? { isAdminSession: r => r.headers.cookie === 'sess=ok', sameOrigin: r => r.headers.origin === 'http://good.example', sessionConfigured: () => over.session !== 'unconfigured' } : {}) }));
   const srv = await new Promise(r => { const x = app.listen(0, () => r(x)); }); const base = 'http://127.0.0.1:' + srv.address().port;
   const tok = tokenStore.issue({ lineUserId: UA, date: today, cycle: 'C1', routeCode: 'DCX-1' });
   const call = (p, b, h = {}) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(b) });
@@ -90,4 +91,27 @@ async function boot(over = {}) {
   const be = { load: async () => { throw new Error('down'); }, save: async () => {} };
   const st = Store.createAssignmentStore({ backend: be }); await st.init(); const e = await boot({ store: st });
   const x = await e.call('/line-map/data', { token: e.tok }); eq(x.status, 503); eq((await x.json()).code, 'not-ready'); e.close(); }
+
+// ---- 追加: 未同期(再起動で割当が消えた/未取込)は「未割当」と区別し、配送情報を返さない ----
+{ const e = await boot({ noSync: true }); const x = await e.call('/line-map/data', { token: e.tok }); eq(x.status, 503); const j = await x.json();
+  eq(j.code, 'not-synced', '未同期は専用コード'); ok(/届いていません/.test(j.message), '未同期の案内'); ok(!JSON.stringify(j).includes('SECRET-ADDR') && !j.pins, '配送情報は返さない'); e.close(); }
+{ const C = Core; const sent = []; const T0 = Date.now();
+  const deps = { channelSecret: 's', dedup: C.createDedupStore(), tokenStore: C.createMapTokenStore(), getReadiness: () => 'not-synced',
+    getLinkedMap: () => ({ [UA]: 'A001' }), getAssignments: () => [], getRouteStops: () => [], reply: async (t, m) => sent.push(m), mapUrlFor: x => x, now: () => T0 };
+  const raw = JSON.stringify({ events: [{ type: 'message', webhookEventId: 'ns', timestamp: T0, replyToken: 'r', source: { type: 'user', userId: UA }, message: { type: 'text', id: '1', text: 'マップ' } }] });
+  await C.handleWebhook(raw, require('crypto').createHmac('sha256', 's').update(raw).digest('base64'), deps);
+  ok(sent.length === 1 && sent[0].length === 1 && /届いていません/.test(sent[0][0].text) && !/割り当てられていません/.test(sent[0][0].text), 'LINE返信: 未同期は未割当と区別して案内'); }
+
+// ---- 追加: 管理系エンドポイントは管理者セッション(OFK3 #78)も受け付ける。更新系は同一Originのみ ----
+{ const e = await boot({ session: true });
+  const post = (h) => e.call('/line-map/assignments', payload, h);
+  eq((await post({ cookie: 'sess=ok', origin: 'http://good.example' })).status, 200, 'セッション+同一Originで同期可');
+  eq((await post({ cookie: 'sess=ok', origin: 'http://evil.example' })).status, 403, 'セッション+他Originは拒否(CSRF)');
+  eq((await post({ cookie: 'sess=ok' })).status, 403, 'セッション+Origin無しは拒否');
+  eq((await post({ cookie: 'sess=bad', origin: 'http://good.example' })).status, 403, '無効なセッションは拒否');
+  eq((await post({})).status, 403, '資格なしは拒否');
+  eq((await post({ 'x-proxy-secret': 'ps' })).status, 200, '従来のX-Proxy-Secretも引き続き有効');
+  eq((await fetch(e.base + '/line-map/status', { headers: { cookie: 'sess=ok' } })).status, 200, 'GETの状態確認はセッションで可'); e.close(); }
+{ const e = await boot({ session: 'unconfigured', noSecret: true }); eq((await e.call('/line-map/assignments', payload, { cookie: 'sess=ok', origin: 'http://good.example' })).status, 503, '資格が一つも設定されていなければ503(fail-closed)'); e.close(); }
+{ const e = await boot({ session: true, noSecret: true }); eq((await e.call('/line-map/assignments', payload, { cookie: 'sess=ok', origin: 'http://good.example' })).status, 200, 'PROXY_SECRET未設定でもセッションのみで運用可'); eq((await e.call('/line-map/assignments', payload, {})).status, 403); e.close(); }
 console.log('line-map-hardening tests passed (' + n + ' assertions)');

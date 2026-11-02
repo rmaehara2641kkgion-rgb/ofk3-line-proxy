@@ -119,4 +119,41 @@ try {
   eq((await post(s, '/line-map/assignments', sync, { 'x-proxy-secret': '' })).status, 503, 'PROXY_SECRET未設定は拒否');
   await stopS(s);
 } finally { try { s.p.kill(); } catch {} }
+
+// ---- 追加: OFK3 #78(管理者セッション / api-guard)との併用 + 再起動で割当だけ消えた場合 ----
+{
+  const AdminSession = require('../admin-session.js');
+  const PW = 'integration-test-password-123', dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'lm-srv2-'));
+  const envB = { PROXY_SECRET: PS, LINE_CHANNEL_SECRET: LS, ADMIN_PASSWORD_HASH: AdminSession.hashPassword(PW, { N: 1024 }), ADMIN_SESSION_SECRET: 'z'.repeat(40), API_GUARD_MODE: 'report', LINE_MAP_DATA_DIR: dir2 };
+  const mk = (e, port) => { const p = spawn('node', ['render-webhook-server.js'], { env: { PATH: process.env.PATH, PORT: String(port), ...e }, stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; p.stdout.on('data', d => out += d); p.stderr.on('data', d => out += d);
+    return (async () => { for (let i = 0; i < 60; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/ping`)).ok) break; } catch {} await new Promise(r => setTimeout(r, 200)); } return { p, port, base: `http://127.0.0.1:${port}`, url: (x) => `http://127.0.0.1:${port}${x}`, log: () => out, stop: () => new Promise(r => { p.once('exit', r); p.kill(); }) }; })(); };
+  const stops = (rc, d) => [3, 1, 2].map(q => ({ routeCode: rc, sequenceNumber: q, latitude: 33.5 + q / 1000, longitude: 130.4, address: d + q, packageCount: 1 }));
+  const route = prefix + '-7', bodyB = { date: today, rows: [{ routeCode: route, driverId: 'A001' }], links: [{ driverId: 'A001', lineUserId: UA }] };
+  let sb = await mk(envB, 39205);
+  try {
+    const li = await fetch(sb.base + '/admin/login', { method: 'POST', headers: { 'content-type': 'application/json', origin: sb.base }, body: JSON.stringify({ password: PW }) }); eq(li.status, 200, '管理者ログイン');
+    const cookie = li.headers.get('set-cookie').split(';')[0];
+    const sync = (h) => fetch(sb.base + '/line-map/assignments', { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(bodyB) });
+    eq((await sync({ cookie, origin: sb.base })).status, 200, '管理者セッション(Cookie)で割当同期できる=localStorageのsecretに依存しない');
+    eq((await sync({ cookie, origin: 'https://evil.example' })).status, 403, '他Originからの同期は拒否');
+    eq((await sync({})).status, 403, '資格なしは拒否');
+    await fetch(sb.base + '/cortex-priority/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ localDate: today, packages: [], routeStops: stops(route, 'X') }) });
+    const pvB = await (await fetch(sb.base + '/line-map/test-preview', { method: 'POST', headers: { 'content-type': 'application/json', cookie, origin: sb.base }, body: JSON.stringify({ driverId: 'A001' }) })).json();
+    eq(pvB.sent, false, 'プレビューもセッションで可・実送信なし'); const tokB = pvB.messages[1].contents.footer.contents[0].action.uri.split('#')[1];
+    eq((await post(sb, '/line-map/data', { token: tokB })).status, 200, 'MAP取得');
+    // api-guard(report)と併用しても、LINE MAP経路は集計対象外で応答も変わらない
+    const rep = await (await fetch(sb.base + '/admin/api-guard-report', { headers: { cookie } })).json(); eq(Object.keys(rep.groups).filter(g => /line-map/.test(g)), [], 'LINE MAPの経路はガード対象グループに含まれない');
+    const lgB = sb.log(); for (const v of [PW, PS, LS, tokB]) ok(!lgB.includes(v), 'ログに秘密値・トークンなし');
+    await sb.stop();
+    // 再起動で「割当ファイルだけ」消えた状態を再現 (トークンは残る)。Cortexも再取込済み。
+    fs.rmSync(path.join(dir2, 'line-map-assignments.json'), { force: true }); ok(fs.existsSync(path.join(dir2, 'line-map-tokens.json')), 'トークンファイルは残存');
+    sb = await mk(envB, 39206);
+    await fetch(sb.base + '/cortex-priority/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ localDate: today, packages: [], routeStops: stops(route, 'X') }) });
+    const lost = await post(sb, '/line-map/data', { token: tokB }); eq(lost.status, 503, '割当が消えた状態では配送情報を返さない'); eq((await lost.json()).code, 'not-synced', '「未同期」と明示(未割当と区別)');
+    // 管理者が再同期すれば、発行済みの(期限内)トークンで再び表示できる
+    const li2 = await fetch(sb.base + '/admin/login', { method: 'POST', headers: { 'content-type': 'application/json', origin: sb.base }, body: JSON.stringify({ password: PW }) }); const ck2 = li2.headers.get('set-cookie').split(';')[0];
+    eq((await fetch(sb.base + '/line-map/assignments', { method: 'POST', headers: { 'content-type': 'application/json', cookie: ck2, origin: sb.base }, body: JSON.stringify(bodyB) })).status, 200, '再同期');
+    eq((await (await post(sb, '/line-map/data', { token: tokB })).json()).status, 'ok', '再同期後は復旧');
+  } finally { await sb.stop(); }
+}
 console.log('line-map-server tests passed (' + n + ' assertions)');
