@@ -64,6 +64,35 @@ app.use((req, res, next) => {
   next();
 });
 
+// 共有用ID (route-data / map-image / pdf)。推測困難にするため暗号論的乱数を使う（形式変更は新規発行分のみ）。
+function newOpaqueId() { return crypto.randomBytes(18).toString('base64url'); }
+
+// ===== 既存APIの段階的保護（既定は無効＝挙動変更なし。docs/API_PROTECTION.md 参照） =====
+const AdminSession = require('./admin-session.js');
+const ApiGuard = require('./api-guard.js');
+const adminAuth = AdminSession.createAdminAuth({
+  express: express,
+  env: {
+    get ADMIN_PASSWORD_HASH() { return process.env.ADMIN_PASSWORD_HASH || ''; },
+    get ADMIN_SESSION_SECRET() { return process.env.ADMIN_SESSION_SECRET || ''; },
+    get NODE_ENV() { return process.env.NODE_ENV || ''; }
+  }
+});
+const apiGuard = ApiGuard.createApiGuard({
+  adminAuth: adminAuth,
+  env: {
+    get API_GUARD_MODE() { return process.env.API_GUARD_MODE || ''; },
+    get API_GUARD_ENFORCE() { return process.env.API_GUARD_ENFORCE || ''; },
+    get PROXY_SECRET() { return process.env.PROXY_SECRET || ''; },
+    get INGEST_TOKEN() { return process.env.INGEST_TOKEN || ''; },
+    get CORTEX_READ_TOKEN() { return process.env.CORTEX_READ_TOKEN || ''; }
+  },
+  log: function () { console.log.apply(console, arguments); }
+});
+app.use(adminAuth.router);
+app.get('/admin/api-guard-report', apiGuard.reportRoute);
+app.use(apiGuard.middleware);
+
 const PORT = process.env.PORT || 3000;
 const CHANNEL_ACCESS_TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 const ADMIN_LINE_ID = process.env.ADMIN_LINE_ID;
@@ -906,7 +935,7 @@ app.get('/geocode', async (req, res) => {
 // ルートデータ一時保存（LINE URL短縮用）
 var routeDataStore = {};
 app.post('/route-data', function(req, res) {
-  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  var id = newOpaqueId();
   routeDataStore[id] = { data: req.body, created: Date.now() };
   // 6時間後に自動削除
   setTimeout(function() { delete routeDataStore[id]; }, 21600000);
@@ -1076,7 +1105,7 @@ app.post('/pdf-upload', function(req, res) {
   if (!base64) {
     return res.status(400).json({ status: 'error', message: 'data (base64) required' });
   }
-  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  var id = newOpaqueId();
   pdfStore[id] = { data: Buffer.from(base64, 'base64'), filename: filename, created: Date.now() };
   // 24時間後に自動削除
   setTimeout(function() { delete pdfStore[id]; }, 86400000);
@@ -1125,7 +1154,7 @@ app.post('/map-image', function(req, res) {
   if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4E || buf[3] !== 0x47) {
     return res.status(400).json({ status: 'error', message: 'png required' });
   }
-  var id = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+  var id = newOpaqueId();
   mapImageStore[id] = { data: buf, created: Date.now() };
   setTimeout(function() { delete mapImageStore[id]; }, MAP_IMAGE_TTL_MS);
   var url = mapImagePublicOrigin(req) + '/map-image/' + id;
@@ -1233,7 +1262,7 @@ app.post('/mentor-alert', async (req, res) => {
         await sendLinePushMessage(MENTOR_ADMIN_IDS[i], [{ type: 'text', text: alertText }]);
         sent++;
       } catch (e) {
-        console.log('[mentor-alert] LINE error for ' + MENTOR_ADMIN_IDS[i] + ':', e.response ? e.response.status : e.message);
+        console.log('[mentor-alert] LINE error (admin #' + i + '):', e.response ? e.response.status : e.message);
       }
     }
 
@@ -1321,20 +1350,15 @@ app.post('/proxy', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Target not found' });
     }
 
-    // デバッグ: LINE送信ペイロードをログ
-    console.log('===== LINE PUSH PAYLOAD =====');
-    console.log('to:', target);
-    console.log('messages count:', messages.length);
-    for (var mi = 0; mi < messages.length; mi++) {
-      console.log('messages[' + mi + ']:', JSON.stringify(messages[mi]).substring(0, 500));
-    }
+    // 個人情報保護: 宛先LINE IDとメッセージ本文はログに出さない（件数のみ）
+    log('LINE push request: messages=' + messages.length);
 
     const result = await sendLinePushMessage(target, messages);
     if (result && result.skipped) {
       return res.json({ status: 'ok', lineSkipped: true });
     }
 
-    log('LINE push success:', target, result.status);
+    log('LINE push success: status=' + result.status);
     res.json({ status: 'ok', lineStatus: result.status });
   } catch (err) {
     console.error('===== LINE PUSH ERROR =====');
@@ -1347,7 +1371,7 @@ async function sendWelcomeMessage(userId) {
   try {
     const result = await sendLinePushMessage(userId, [{ type: 'text', text: '友だち追加ありがとうございます。\n配送通知の設定は管理者画面から行ってください。' }]);
     if (!(result && result.skipped)) {
-      log('Welcome message sent to', userId);
+      log('Welcome message sent');
     }
   } catch (err) {
     log('Welcome message error:', err.response?.data || err.message);

@@ -375,8 +375,8 @@ eq(L.parseUpstream('http://127.0.0.1:3000/'), { ok: true, origin: 'http://127.0.
   assert(!/express\.static/.test(code), 'no express.static');
   assert(!/CHANNEL_ACCESS_TOKEN|ADMIN_LINE_ID|GAS_URL|GOOGLE_MAPS|TENKO|PROXY_SECRET|api\.line\.me|script\.google/.test(code), 'no LINE / GAS / Google / TENKO references');
   const envReads = Array.from(code.matchAll(/process\.env\.([A-Z_]+)|env\.([A-Z_]+)/g)).map(function (m) { return m[1] || m[2]; });
-  const allowedEnv = new Set(['NODE_ENV', 'HARVEST_PORT', 'HARVEST_UPSTREAM_BASE_URL']);
-  assert(envReads.every(function (n) { return allowedEnv.has(n); }), 'only NODE_ENV / HARVEST_PORT / HARVEST_UPSTREAM_BASE_URL are read: ' + envReads.join(','));
+  const allowedEnv = new Set(['NODE_ENV', 'HARVEST_PORT', 'HARVEST_UPSTREAM_BASE_URL', 'HARVEST_UPSTREAM_READ_TOKEN']);
+  assert(envReads.every(function (n) { return allowedEnv.has(n); }), 'only NODE_ENV / HARVEST_PORT / HARVEST_UPSTREAM_BASE_URL / HARVEST_UPSTREAM_READ_TOKEN are read: ' + envReads.join(','));
   assert(/listen\(port\.port, BIND_HOST/.test(code) && L.BIND_HOST === '127.0.0.1', 'binds to BIND_HOST 127.0.0.1');
   assert(!/0\.0\.0\.0|'::'/.test(code), 'never binds all interfaces');
   assert(!/method:\s*'(POST|PUT|DELETE|PATCH)'/.test(code), 'upstream method is GET only');

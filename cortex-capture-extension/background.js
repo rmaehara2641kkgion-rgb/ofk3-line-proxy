@@ -15,6 +15,18 @@ function resolveOfk3BaseUrl() {
   });
 }
 
+function resolveOfk3IngestToken() {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get(['ofk3IngestToken'], function (data) {
+        resolve((data && data.ofk3IngestToken) || '');
+      });
+    } catch (e) {
+      resolve('');
+    }
+  });
+}
+
 chrome.action.onClicked.addListener(function (tab) {
   if (!tab || !tab.id) return;
   var url = tab.url || '';
@@ -124,10 +136,13 @@ function dispatchLeftClick(target, x, y, done) {
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (!msg) return;
   if (msg.type === 'ofk3-priority-import') {
-    resolveOfk3BaseUrl().then(function (baseUrl) {
-      return fetch(baseUrl + '/cortex-priority/import', {
+    Promise.all([resolveOfk3BaseUrl(), resolveOfk3IngestToken()]).then(function (cfg) {
+      var headers = { 'Content-Type': 'application/json' };
+      // 取込専用トークン（任意）。サーバーが API_GUARD で取込を保護した後に必要。未設定なら従来どおり。
+      if (cfg[1]) headers['X-Ofk3-Ingest-Token'] = cfg[1];
+      return fetch(cfg[0] + '/cortex-priority/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(msg.payload || {})
       });
     }).then(function (res) {
