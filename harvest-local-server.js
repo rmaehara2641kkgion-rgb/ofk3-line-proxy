@@ -16,12 +16,15 @@
  *  - The only outbound call is an OPT-IN, GET-only relay of /cortex-priority to
  *    HARVEST_UPSTREAM_BASE_URL (unset => no outbound communication at all). Only the query keys
  *    localDate / latest are accepted; 5 s timeout; no cookies / credentials / headers forwarded;
- *    redirects are refused; nothing is stored.
+ *    redirects are refused; nothing is stored. No automatic retry. When (and only when)
+ *    HARVEST_UPSTREAM_READ_TOKEN is set, ONE extra header X-Ofk3-Read-Token is sent; the token is
+ *    read-only (GET /cortex-priority) and is never logged, echoed, put in a URL or sent to the browser.
  *  - The page never loads ofk3-cortex-priority-ui.js (which fetches on load) until the user
  *    presses "データ読込を開始".
  *  - Page CSP: connect-src 'self' (the browser cannot call anything else).
  *
- * Env: HARVEST_PORT (default 3100), HARVEST_UPSTREAM_BASE_URL (default unset). No other
+ * Env: HARVEST_PORT (default 3100), HARVEST_UPSTREAM_BASE_URL (default unset),
+ * HARVEST_UPSTREAM_READ_TOKEN (default unset = behaviour unchanged). No other
  * environment variable (LINE / GAS / Google / TENKO ...) is read.
  */
 'use strict';
@@ -36,6 +39,7 @@ var DEFAULT_PORT = 3100;
 var UPSTREAM_TIMEOUT_MS = 5000;
 var UPSTREAM_MAX_BYTES = 20 * 1024 * 1024;
 var APP_ID = 'harvest-local';
+var READ_TOKEN_HEADER = 'X-Ofk3-Read-Token';
 
 // Existing scripts are served as-is from the repository by a fixed table (no directory serving).
 var FILES = {
@@ -137,6 +141,11 @@ var SHELL_JS = [
   '      return { text: "取得元に該当データがありません (拡張からの送信が未実施の可能性)", cls: "warn" };',
   '    }',
   '    if (status === 504) return { text: "取得元が5秒以内に応答しませんでした (スリープ復帰中の可能性)。時間をおいて再読込してください", cls: "ng" };',
+  '    if (status === 502 && body.reason === "upstream-auth-required") return { text: "取得元が認証を要求しています。読取トークン(HARVEST_UPSTREAM_READ_TOKEN)を設定して再起動してください", cls: "ng" };',
+  '    if (status === 502 && body.reason === "upstream-token-rejected") return { text: "取得元が読取トークンを拒否しました。トークンの値と有効期限をOFK3管理者に確認してください (自動再試行はしません)", cls: "ng" };',
+  '    if (status === 502 && body.reason === "upstream-forbidden") return { text: "取得元がこのリクエストを許可していません (HTTP 403)。OFK3管理者に確認してください", cls: "ng" };',
+  '    if (status === 502 && body.reason === "upstream-auth-not-configured") return { text: "取得元(OFK3)側の認証設定が未完了です (HTTP 503)。OFK3管理者に連絡してください", cls: "ng" };',
+  '    if (status === 502 && body.reason === "read-token-invalid") return { text: "読取トークンの形式が不正です。HARVEST_UPSTREAM_READ_TOKEN を確認してください", cls: "ng" };',
   '    if (status === 502) return { text: "取得元エラー: " + (body.message || "不明"), cls: "ng" };',
   '    if (status === 400 || status === 403 || status === 405) return { text: "リクエストが拒否されました: " + (body.message || status), cls: "ng" };',
   '    return { text: "想定外の応答 (HTTP " + status + ")", cls: "ng" };',
@@ -166,7 +175,7 @@ var SHELL_JS = [
   '  function showUpstream() {',
   '    origFetch("/harvest-status.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) {',
   '      if (s.upstreamError) setText("hv-upstream", "設定エラー: " + s.upstreamError + " (中継は無効)", "ng");',
-  '      else if (s.upstreamOrigin) setText("hv-upstream", s.upstreamOrigin + " (GET中継・ボタン押下時のみ)", "ok");',
+  '      else if (s.upstreamOrigin) setText("hv-upstream", s.upstreamOrigin + " (GET中継・ボタン押下時のみ) / 読取トークン: " + (s.readTokenError ? "形式不正" : s.readTokenConfigured ? "設定済み" : "未設定"), s.readTokenError ? "ng" : "ok");',
   '      else setText("hv-upstream", "未設定 (外部通信なし・データなし表示)", "warn");',
   '    }, function () { setText("hv-upstream", "ローカルサーバー状態を取得できません", "ng"); });',
   '  }',
@@ -223,6 +232,28 @@ function parseUpstream(value) {
   return { ok: true, origin: u.origin };
 }
 
+// Read-only upstream token. Unset/empty => no header (behaviour unchanged). The value is only validated
+// for shape (visible token characters, 16-512 chars) so it can never inject header/line breaks; it is never
+// included in any error message.
+function parseReadToken(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return { ok: true, token: null };
+  var t = String(value).trim();
+  if (!/^[A-Za-z0-9._~+\/=-]{16,512}$/.test(t)) return { ok: false, error: 'HARVEST_UPSTREAM_READ_TOKEN has an invalid format' };
+  return { ok: true, token: t };
+}
+
+// Why did upstream refuse? (no retry in any case)
+function classifyUpstreamRefusal(status, hasToken, body) {
+  if (status === 401) return { reason: hasToken ? 'upstream-token-rejected' : 'upstream-auth-required', message: hasToken ? 'upstream rejected the read token (HTTP 401)' : 'upstream requires authentication (HTTP 401); set HARVEST_UPSTREAM_READ_TOKEN' };
+  if (status === 403) return { reason: 'upstream-forbidden', message: 'upstream forbids this request (HTTP 403)' };
+  if (status === 503) {
+    var notCfg = body && typeof body === 'object' && body.message === 'not configured';
+    return notCfg ? { reason: 'upstream-auth-not-configured', message: 'upstream has no credential configured (HTTP 503); contact the OFK3 administrator' }
+                  : { reason: 'upstream-unavailable', message: 'upstream unavailable (HTTP 503)' };
+  }
+  return null;
+}
+
 var SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
@@ -266,6 +297,7 @@ function createServer(opts) {
   var env = opts.env || {};
   var fetchImpl = opts.fetchImpl || (typeof fetch === 'function' ? fetch : null);
   var upstream = parseUpstream(env.HARVEST_UPSTREAM_BASE_URL);
+  var readToken = parseReadToken(env.HARVEST_UPSTREAM_READ_TOKEN);
   var server = http.createServer();
 
   function allowedHost(hostHeader) {
@@ -284,14 +316,29 @@ function createServer(opts) {
     var q = validQuery(searchParams);
     if (!q.ok) return sendJson(res, 400, { status: 'error', message: q.message });
     if (!fetchImpl) return sendJson(res, 502, { status: 'error', message: 'fetch is not available in this Node.js version' });
+    if (!readToken.ok) {
+      // Misconfigured token: do not contact upstream at all.
+      return sendJson(res, 502, { status: 'error', reason: 'read-token-invalid', tokenConfigured: false, message: readToken.error });
+    }
     var url = new URL('/cortex-priority', upstream.origin);
     q.pairs.forEach(function (p) { url.searchParams.set(p[0], p[1]); });
     var signal = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) : undefined;
     // GET only; no cookies, no Authorization, no forwarded client headers; redirects are refused.
-    fetchImpl(url.toString(), { method: 'GET', redirect: 'manual', headers: { Accept: 'application/json', 'User-Agent': APP_ID }, signal: signal })
+    var upstreamHeaders = { Accept: 'application/json', 'User-Agent': APP_ID };
+    if (readToken.token) upstreamHeaders[READ_TOKEN_HEADER] = readToken.token;
+    fetchImpl(url.toString(), { method: 'GET', redirect: 'manual', headers: upstreamHeaders, signal: signal })
       .then(function (r) {
         if (r.status >= 300 && r.status < 400) {
           return sendJson(res, 502, { status: 'error', upstreamStatus: r.status, message: 'upstream redirect refused' });
+        }
+        var refusal = (r.status === 401 || r.status === 403 || r.status === 503) ? r : null;
+        if (refusal) {
+          return r.text().then(function (txt) {
+            var b = null;
+            try { b = JSON.parse(txt); } catch (e) { b = null; }
+            var c = classifyUpstreamRefusal(r.status, !!readToken.token, b);
+            return sendJson(res, 502, { status: 'error', upstreamStatus: r.status, reason: c.reason, tokenConfigured: !!readToken.token, message: c.message });
+          });
         }
         var declared = Number(r.headers.get('content-length'));
         if (declared && declared > UPSTREAM_MAX_BYTES) {
@@ -347,7 +394,9 @@ function createServer(opts) {
         return sendJson(res, 200, {
           app: APP_ID,
           upstreamOrigin: upstream.ok ? upstream.origin : null,
-          upstreamError: upstream.ok ? null : upstream.error
+          upstreamError: upstream.ok ? null : upstream.error,
+          readTokenConfigured: !!readToken.token,
+          readTokenError: !readToken.ok
         });
       }
       if (p === '/cortex-priority') {
@@ -367,6 +416,7 @@ function createServer(opts) {
     }
   });
   server.harvestUpstream = upstream;
+  server.harvestReadToken = { ok: readToken.ok, configured: !!readToken.token };
   return server;
 }
 
@@ -392,6 +442,8 @@ function main() {
     var up = server.harvestUpstream;
     if (!up.ok) console.log('upstream: INVALID (' + up.error + ') - relay disabled');
     else console.log('upstream: ' + (up.origin ? up.origin + ' (GET relay, on user action only)' : 'not configured (no outbound communication)'));
+    var rt = server.harvestReadToken;
+    console.log('read token: ' + (!rt.ok ? 'INVALID format - relay disabled' : rt.configured ? 'configured' : 'not configured'));
   });
 }
 
@@ -402,6 +454,8 @@ module.exports = {
   refusalReason: refusalReason,
   parsePort: parsePort,
   parseUpstream: parseUpstream,
+  parseReadToken: parseReadToken,
+  READ_TOKEN_HEADER: READ_TOKEN_HEADER,
   FILES: FILES,
   MANIFEST: MANIFEST,
   SHELL_HTML: SHELL_HTML,

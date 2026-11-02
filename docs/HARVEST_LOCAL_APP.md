@@ -27,12 +27,15 @@ OFK3 本体 (`render-webhook-server.js`) は起動しません。Render 本番�
 ```bat
 set HARVEST_PORT=3100
 set HARVEST_UPSTREAM_BASE_URL=https://<取得元のOFK3>
+rem OFK3が /cortex-priority の認証を強制した後に必要 (値は管理者から受け取る。画面やログには出ません)
+set HARVEST_UPSTREAM_READ_TOKEN=<OFK3管理者から受け取った読取専用トークン>
 ```
 
 | 変数 | 既定値 | 意味 |
 |---|---|---|
 | `HARVEST_PORT` | 3100 | 待ち受けポート (1024-65535)。待ち受けは常に 127.0.0.1 のみ |
 | `HARVEST_UPSTREAM_BASE_URL` | 未設定 | 取得元の OFK3 (origin のみ。https 必須、ループバックのみ http 可) |
+| `HARVEST_UPSTREAM_READ_TOKEN` | 未設定 | 取得元の `GET /cortex-priority` 専用の読取トークン。設定時だけ `X-Ofk3-Read-Token` ヘッダーで送信。**未設定なら従来どおり (ヘッダーなし)**。16〜512文字の英数字と `._~+/=-` のみ。ソース・URL・ログ・画面・状態JSONには出ません |
 
 これ以外の環境変数 (LINE / GAS / Google / 点呼のトークン等) は読みません。
 
@@ -107,4 +110,16 @@ Edge で `http://127.0.0.1:3100/harvest` を開き、`…` →「アプリ」→
 | 起動に失敗 | `%LOCALAPPDATA%\OFK3-HARVEST\server.err.log` / `server.log` を確認 |
 | 「refuses to start」 | `NODE_ENV=production` や `RENDER*` が設定されていないか確認 (ローカル専用です) |
 | 「取得元(上流)が未設定」 | `HARVEST_UPSTREAM_BASE_URL` を設定して再起動 |
+| 「取得元が認証を要求しています」(HTTP 401) | `HARVEST_UPSTREAM_READ_TOKEN` を設定して再起動 |
+| 「取得元が読取トークンを拒否しました」 | トークンの値・有効期限を OFK3 管理者に確認 (自動再試行はしません) |
+| 「取得元(OFK3)側の認証設定が未完了です」(HTTP 503) | OFK3 管理者に連絡 (HARVEST側では解消できません) |
+| 「取得元がこのリクエストを許可していません」(HTTP 403) | OFK3 管理者に連絡 |
+| 「読取トークンの形式が不正です」 | `HARVEST_UPSTREAM_READ_TOKEN` の値を確認 (空白・改行・記号を含めない)。この間は取得元へ通信しません |
 | 「取得元が5秒以内に応答しませんでした」 | 取得元がスリープ復帰中の可能性。時間をおいて再度「データ読込を開始」 (ページ再読込後) |
+
+## 8. 読取トークン (認証強制への備え)
+
+- 取得元 OFK3 が `GET /cortex-priority` に認証を強制した場合に備えた、読み取り専用トークンの送信機能です。
+- **切替の順序に依存しません**: 認証強制の前でも後でも、トークンを設定していれば取得できます。未設定のままでも、強制前は従来どおり動きます。
+- 401 / 403 / 503 は原因別に表示され、**自動再試行は一切しません** (ボタン押下のたびに1回だけ取得)。
+- ロールバック: `harvest-local.config.cmd` から `HARVEST_UPSTREAM_READ_TOKEN` の行を削除して HARVEST を再起動すると、完全に従来動作に戻ります。
