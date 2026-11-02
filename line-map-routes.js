@@ -120,7 +120,9 @@ function createLineMapRouter(deps) {
     var r = deps.assignmentStore.sync(req.body, deps.todayJst ? deps.todayJst() : null);
     if (!r.ok) return res.status(400).json({ status: 'error', errors: r.errors });
     var remote = await deps.assignmentStore.flush();
-    res.json({ status: 'ok', date: r.date, rowCount: r.rowCount, linkCount: r.linkCount, persisted: r.persisted, remote: remote });
+    var out = { status: 'ok', date: r.date, rowCount: r.rowCount, linkCount: r.linkCount, persisted: r.persisted, remote: remote };
+    if (remote === 'failed' || remote === 'skipped-unrestored') out.remoteError = deps.assignmentStore.status().lastError; // 固定コードのみ
+    res.json(out);
   });
 
   // 新Webhook (常に署名必須。Secret未設定は503=fail-closed)
@@ -166,14 +168,14 @@ function createLineMapRouter(deps) {
     if (!cur.ok || cur.routeCode !== b.routeCode) return res.status(409).json({ status: 'error', message: '割当が変更されたため表示できません。LINEで「マップ」と送り直してください。' });
     var stops = deps.getRouteStops(b.date);
     if (!stops || !stops.length) return res.status(503).json({ status: 'error', code: 'data-not-restored', message: Core.safeReplyText('no-stops')[0].text });
-    var model = Core.buildMapModel(stops, b.routeCode);
+    var model = Core.buildMapModel(stops, b.routeCode, { includeAddress: env.SHOW_ADDRESS === true });
     if (!model.ok) return res.status(409).json({ status: 'error', message: Core.safeReplyText(model.reason)[0].text });
     res.json({
       status: 'ok', routeCode: model.routeCode, cycle: b.cycle, stopCount: model.stopCount, missingCoordinateCount: model.missingCoordinateCount,
       // 個人情報の最小化: 住所は既定で返さない (LINE_MAP_SHOW_ADDRESS=1 のときだけ)
       pins: model.pins.map(function (p) {
         var o = { pin: p.pin, lat: p.lat, lng: p.lng, packageCount: p.packageCount };
-        if (env.SHOW_ADDRESS) o.address = p.address;
+        if (env.SHOW_ADDRESS === true) o.address = p.address;
         return o;
       })
     });
@@ -210,7 +212,7 @@ function createLineMapRouter(deps) {
     var date = deps.todayJst ? deps.todayJst() : Core.toJst(nowFn()).date;
     var stops = deps.getRouteStops(date) || [];
     res.json({
-      status: 'ok', date: date, assignmentsRestored: deps.assignmentStore.isRestored(),
+      status: 'ok', date: date, assignmentsRestored: deps.assignmentStore.isRestored(), remote: deps.assignmentStore.status(),
       assignmentRows: deps.assignmentStore.assignmentsFor(date).length, cortexRouteStops: stops.length
     });
   });

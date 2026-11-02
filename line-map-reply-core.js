@@ -140,7 +140,8 @@
     var a = Number(lat), b = Number(lng);
     return isFinite(a) && isFinite(b) && !(a === 0 && b === 0);
   }
-  function buildMapModel(routeStops, routeCode) {
+  function buildMapModel(routeStops, routeCode, opts) {
+    var includeAddress = !!(opts && opts.includeAddress); // 既定では住所をモデルに載せない (多層防御)
     var stops = (Array.isArray(routeStops) ? routeStops : []).filter(function (s) {
       return s && String(s.routeCode) === String(routeCode);
     });
@@ -159,7 +160,7 @@
       // PIN番号 = Amazonの巡回番号そのもの (再採番しない)
       pins.push({
         pin: Number(s.sequenceNumber), lat: Number(s.latitude), lng: Number(s.longitude),
-        address: s.address || '', packageCount: Number(s.packageCount) || 0,
+        address: includeAddress ? (s.address || '') : undefined, packageCount: Number(s.packageCount) || 0,
         plannedEndClock: s.plannedEndClock || ''
       });
     });

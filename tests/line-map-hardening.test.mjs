@@ -9,6 +9,7 @@ const Core = require('../line-map-reply-core.js');
 const Store = require('../line-map-store.js');
 const Routes = require('../line-map-routes.js');
 const Gas = require('../line-map-gas-backend.js');
+import { createGasMock } from './helpers/gas-mock.mjs';
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; }; const eq = (a, b, m) => { assert.deepStrictEqual(a, b, m); n++; };
 const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -21,28 +22,19 @@ const payload = { date: today, rows: [{ routeCode: 'DCX-1', driverId: 'A001' }],
   t = 1001; ok(rl.hit('a'), '窓経過で解除'); }
 eq(Routes.clientKey({ headers: { 'x-forwarded-for': '6.6.6.6, 1.2.3.4' }, socket: {} }), '1.2.3.4', 'XFF先頭(偽装可)ではなく末尾を使う');
 
-// ---- GASバックエンド(モック。実接続なし) ----
-{ const calls = []; let store = null, mode = 'ok';
-  const fetchImpl = async (url, o) => { const b = JSON.parse(o.body); calls.push({ url, b, o });
-    if (mode === 'down') throw new Error('network'); if (mode === '500') return { ok: false, status: 500 };
-    if (b.token !== 'gas-token') return { ok: true, json: async () => ({ status: 'error', reason: 'unauthorized' }) };
-    if (b.action === 'save') { store = JSON.parse(JSON.stringify(b.data)); return { ok: true, json: async () => ({ status: 'ok' }) }; }
-    return { ok: true, json: async () => ({ status: 'ok', data: store || {} }) }; };
-  eq(Gas.createGasBackend({ url: '', token: 't', fetchImpl }), null, 'URL未設定なら接続しない'); eq(Gas.createGasBackend({ url: 'https://x.invalid/e', token: '', fetchImpl }), null, 'トークン未設定なら接続しない');
-  const be = () => Gas.createGasBackend({ url: 'https://gas.invalid/exec', token: 'gas-token', fetchImpl });
+// ---- GASバックエンド(モック。実接続なし)。詳細な復元・障害マトリクスは line-map-persistence.test.mjs ----
+{ const gas = createGasMock({ token: 'gas-token' });
+  eq(Gas.createGasBackend({ url: '', token: 't', fetchImpl: gas.fetchImpl }), null, 'URL未設定なら接続しない'); eq(Gas.createGasBackend({ url: 'https://x.invalid/e', token: '', fetchImpl: gas.fetchImpl }), null, 'トークン未設定なら接続しない');
+  const be = () => Gas.createGasBackend({ url: 'https://gas.invalid/exec', token: 'gas-token', fetchImpl: gas.fetchImpl });
   const s1 = Store.createAssignmentStore({ backend: be() }); ok(!s1.isRestored(), '外部ストア使用時は復元完了まで未復元'); await s1.init(); ok(s1.isRestored());
   eq(s1.sync(payload, today).ok, true); eq(await s1.flush(), 'ok');
-  ok(calls.every(c => !c.url.includes('gas-token') && c.o.method === 'POST'), 'トークンはURLに載せずPOSTボディ');
-  ok(!JSON.stringify(calls.find(c => c.b.action === 'save').b.data).match(/address|latitude|longitude/), '配送先住所・座標は保存しない');
-  // 再デプロイ相当: 新しいストアが外部から復元
+  ok(gas.calls.every(c => !c.url.includes('gas-token') && c.method === 'POST'), 'トークンはURLに載せずPOSTボディ');
+  ok(!JSON.stringify(gas.envelope).match(/address|latitude|longitude/), '配送先住所・座標は保存しない');
   const s2 = Store.createAssignmentStore({ backend: be() }); await s2.init(); eq(s2.assignmentsFor(today).length, 1, '再デプロイ後に割当を復元'); eq(s2.linkedMapFor(today)[UA], 'A001');
-  // GAS障害
-  mode = 'down'; const s3 = Store.createAssignmentStore({ backend: be() }); eq(await s3.init(), false, '障害時は未復元'); ok(!s3.isRestored());
-  eq(await s3.ensureRestored(), false, '30秒以内は再試行しない'); const before = calls.length; await s3.ensureRestored(); eq(calls.length, before, 'リトライ間隔の抑制');
+  gas.fault = 'down'; const s3 = Store.createAssignmentStore({ backend: be() }); eq(await s3.init(), false, '障害時は未復元'); ok(!s3.isRestored());
+  eq(await s3.ensureRestored(), false, '30秒以内は再試行しない'); const before = gas.calls.length; await s3.ensureRestored(); eq(gas.calls.length, before, 'リトライ間隔の抑制');
   eq(s3.sync(payload, today).ok, true, '未復元でもメモリへの同期は可能'); eq(await s3.flush(), 'skipped-unrestored', '部分データで外部ストアを上書きしない');
-  mode = '500'; const s4 = Store.createAssignmentStore({ backend: be() }); eq(await s4.init(), false, 'HTTPエラーも未復元');
-  mode = 'ok'; const s5 = Store.createAssignmentStore({ backend: Gas.createGasBackend({ url: 'https://gas.invalid/exec', token: 'wrong', fetchImpl }) }); eq(await s5.init(), false, 'トークン不一致は未復元');
-  mode = 'ok'; const s6 = Store.createAssignmentStore({ backend: be() }); await s6.init(); mode = 'down'; s6.sync(payload, today); eq(await s6.flush(), 'failed', '保存失敗は結果で返す'); eq(s6.assignmentsFor(today).length, 1, '保存失敗でもメモリは有効'); }
+  gas.fault = null; const s6 = Store.createAssignmentStore({ backend: be() }); await s6.init(); gas.fault = 'down'; s6.sync(payload, today); eq(await s6.flush(), 'failed', '保存失敗は結果で返す'); eq(s6.assignmentsFor(today).length, 1, '保存失敗でもメモリは有効'); }
 
 // ---- 未復元時の応答: Webhook / データAPI ----
 { const C = Core; const sent = []; const T0 = Date.now();
