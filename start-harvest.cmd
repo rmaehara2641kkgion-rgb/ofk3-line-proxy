@@ -7,7 +7,7 @@ rem  - Does not start Cortex capture, LINE, GAS or any periodic job.
 rem Optional settings file (not committed): harvest-local.config.cmd
 rem   set HARVEST_PORT=3100
 rem   set HARVEST_UPSTREAM_BASE_URL=https://example.invalid   (read-only GET relay; leave unset for no outbound traffic)
-rem   set HARVEST_UPSTREAM_READ_TOKEN=...   (optional read-only token; only needed after OFK3 enforces auth; never commit it)
+rem   set HARVEST_UPSTREAM_READ_TOKEN=...   (optional; sent as Authorization: Bearer; only needed after OFK3 enforces auth; never commit it)
 rem ASCII only on purpose (console code pages).
 rem ============================================================
 setlocal EnableExtensions

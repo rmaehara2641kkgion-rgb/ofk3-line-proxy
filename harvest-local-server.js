@@ -17,8 +17,9 @@
  *    HARVEST_UPSTREAM_BASE_URL (unset => no outbound communication at all). Only the query keys
  *    localDate / latest are accepted; 5 s timeout; no cookies / credentials / headers forwarded;
  *    redirects are refused; nothing is stored. No automatic retry. When (and only when)
- *    HARVEST_UPSTREAM_READ_TOKEN is set, ONE extra header X-Ofk3-Read-Token is sent; the token is
- *    read-only (GET /cortex-priority) and is never logged, echoed, put in a URL or sent to the browser.
+ *    HARVEST_UPSTREAM_READ_TOKEN is set, ONE extra header "Authorization: Bearer <token>" is sent (the scheme
+ *    OFK3's api-guard accepts for CORTEX_READ_TOKEN). The token's read-only scope is enforced by OFK3;
+ *    it is never logged, echoed, put in a URL or sent to the browser.
  *  - The page never loads ofk3-cortex-priority-ui.js (which fetches on load) until the user
  *    presses "データ読込を開始".
  *  - Page CSP: connect-src 'self' (the browser cannot call anything else).
@@ -39,7 +40,8 @@ var DEFAULT_PORT = 3100;
 var UPSTREAM_TIMEOUT_MS = 5000;
 var UPSTREAM_MAX_BYTES = 20 * 1024 * 1024;
 var APP_ID = 'harvest-local';
-var READ_TOKEN_HEADER = 'X-Ofk3-Read-Token';
+var READ_TOKEN_HEADER = 'Authorization';
+var READ_TOKEN_SCHEME = 'Bearer';
 
 // Existing scripts are served as-is from the repository by a fixed table (no directory serving).
 var FILES = {
@@ -325,7 +327,7 @@ function createServer(opts) {
     var signal = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) : undefined;
     // GET only; no cookies, no Authorization, no forwarded client headers; redirects are refused.
     var upstreamHeaders = { Accept: 'application/json', 'User-Agent': APP_ID };
-    if (readToken.token) upstreamHeaders[READ_TOKEN_HEADER] = readToken.token;
+    if (readToken.token) upstreamHeaders[READ_TOKEN_HEADER] = READ_TOKEN_SCHEME + ' ' + readToken.token;
     fetchImpl(url.toString(), { method: 'GET', redirect: 'manual', headers: upstreamHeaders, signal: signal })
       .then(function (r) {
         if (r.status >= 300 && r.status < 400) {
@@ -456,6 +458,7 @@ module.exports = {
   parseUpstream: parseUpstream,
   parseReadToken: parseReadToken,
   READ_TOKEN_HEADER: READ_TOKEN_HEADER,
+  READ_TOKEN_SCHEME: READ_TOKEN_SCHEME,
   FILES: FILES,
   MANIFEST: MANIFEST,
   SHELL_HTML: SHELL_HTML,

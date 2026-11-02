@@ -20,7 +20,8 @@ function mockUpstream(mode) {
   const seen = [];
   const srv = http.createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers });
-    const tok = req.headers['x-ofk3-read-token'];
+    // OFK3 PR #78 api-guard と同じ解釈: /^Bearer\s+(.+)$/i
+    const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || ''); const tok = m && m[1];
     const j = (st, o) => { res.writeHead(st, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (mode === 'open') return j(200, DATA);                                     // 認証強制前
     if (mode === 'enforce') return !tok ? j(401, { status: 'error', message: 'unauthorized' }) : tok === TOKEN ? j(200, DATA) : j(401, { status: 'error', message: 'unauthorized' });
@@ -52,13 +53,15 @@ eq(L.parseReadToken(TOKEN), { ok: true, token: TOKEN }, '有効');
 for (const bad of ['short', 'has space inside-xxxxxxxxxxxxxxxx', 'line\nbreak-xxxxxxxxxxxxxxxxxxxx', 'x'.repeat(513), 'ok-token-xxxxxxxxxxxx\r\nX-Evil: 1']) {
   const r = L.parseReadToken(bad); assert(r.ok === false && !String(r.error).includes(bad.slice(0, 8)), '不正形式を拒否しエラーに値を含めない: ' + JSON.stringify(bad).slice(0, 20));
 }
-eq(L.READ_TOKEN_HEADER, 'X-Ofk3-Read-Token', 'ヘッダー名');
+eq([L.READ_TOKEN_HEADER, L.READ_TOKEN_SCHEME], ['Authorization', 'Bearer'], '認証方式(OFK3 #78と同じBearer)');
 
 // 2. トークンあり・上流が認証強制 → 正常取得 (ヘッダーはこれ1つだけ追加)
 await scenario('enforce', { HARVEST_UPSTREAM_READ_TOKEN: TOKEN }, async (h, up) => {
   const r = await get(h.port, Q); eq([r.status, r.json.status], [200, 'ok'], '認証強制下でも正常取得');
   eq(up.seen.length, 1, '上流へは1回のみ(再試行なし)');
-  eq(Object.keys(up.seen[0].headers).filter(k => /^x-ofk3|authorization|cookie/i.test(k)).sort(), ['x-ofk3-read-token'], '追加されるのは読取トークンのみ');
+  eq(Object.keys(up.seen[0].headers).filter(k => /^x-ofk3|authorization|cookie|x-proxy/i.test(k)).sort(), ['authorization'], '追加されるのはAuthorizationのみ');
+  eq(up.seen[0].headers.authorization, 'Bearer ' + TOKEN, 'Bearer形式');
+  assert(!('x-ofk3-read-token' in up.seen[0].headers), '旧ヘッダーは送らない');
   assert(!up.seen[0].url.includes(TOKEN), 'URLにトークンなし');
   assert(!r.text.includes(TOKEN), 'ブラウザへの応答にトークンなし');
   const st = await get(h.port, '/harvest-status.json'); assert(!st.text.includes(TOKEN) && st.json.readTokenConfigured === true, '状態JSONは設定有無のみ');
@@ -68,7 +71,7 @@ await scenario('enforce', { HARVEST_UPSTREAM_READ_TOKEN: TOKEN }, async (h, up) 
 // 3. トークンなし: 既存互換 (上流が認証前なら従来どおり、ヘッダー無し)
 await scenario('open', {}, async (h, up) => {
   const r = await get(h.port, Q); eq([r.status, r.json.stopCount], [200, 1], 'トークンなしの既存互換');
-  eq(Object.keys(up.seen[0].headers).filter(k => /^x-ofk3|authorization|cookie/i.test(k)), [], '従来どおり認証ヘッダーなし');
+  eq(Object.keys(up.seen[0].headers).filter(k => /^x-ofk3|authorization|cookie|x-proxy/i.test(k)), [], '従来どおりAuthorizationを送らない');
   eq((await get(h.port, '/harvest-status.json')).json.readTokenConfigured, false);
 });
 // 3b. トークンあり・上流が認証前でも問題なし
