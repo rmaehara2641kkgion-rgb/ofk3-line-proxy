@@ -31,7 +31,7 @@
     "harvest:local": "node harvest-local-server.js",
     "test:harvest-local": "node tests/harvest-local-server.test.mjs",
     "test:line-unlinked": "node tests/line-unlinked-and-qr-order.test.mjs",
-    "test:api-guard": "node tests/api-guard.test.mjs",
+    "test:api-guard": "node tests/api-guard.test.mjs && node tests/api-guard-report-mode.test.mjs",
     "test:billing": "node tests/billing-reconcile.test.mjs",
     "test:dnr": "node tests/dnr-datetime.test.mjs && node tests/dnr-detail-reason.test.mjs",
     "test:contact-compliance": "node tests/contact-compliance-core.test.mjs && node tests/cc-export-ui.test.mjs && node tests/cc-affiliation.test.mjs",
