@@ -12299,6 +12299,24 @@ var driverDB = {
       return null;
     }
 
+    var BILLING_PDF_REPLY_NOTICE = [
+      '━━━━━━━━━━━━━━━',
+      '📄 【請求書PDFについて】',
+      '',
+      '現在、システムの都合により、請求書PDFの閲覧リンクが一定時間経過後に開けなくなる場合がございます。',
+      '',
+      'PDFをご希望の方は、このLINEに「PDF送付希望」とご返信ください。',
+      '',
+      'ご返信いただいた方には、確認後、請求書PDFを個別にお送りいたします。',
+      '',
+      'お手数をおかけしますが、よろしくお願いいたします。'
+    ].join('\n');
+
+    function appendBillingPdfReplyNotice(msg) {
+      if (String(msg || '').indexOf('📄 【請求書PDFについて】') !== -1) return msg;
+      return msg + '\n\n' + BILLING_PDF_REPLY_NOTICE;
+    }
+
     function buildBillingMessage(d) {
       var now = new Date();
       var monthStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月度';
@@ -12327,7 +12345,7 @@ var driverDB = {
       msg += 'ご確認をお願いいたします。\n';
       msg += '内容に相違がある場合はご連絡ください。';
 
-      return msg;
+      return appendBillingPdfReplyNotice(msg);
     }
 
     function escapeHtmlBilling(str) {

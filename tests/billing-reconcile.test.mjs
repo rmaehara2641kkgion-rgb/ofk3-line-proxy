@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -616,6 +617,101 @@ writeFileSync(NAGAURA_PDF, nagauraPdf);
   assert.match(realFn, /billingLineUserId\(d\)/);
   assert.doesNotMatch(realFn, /adminId/);
   console.log('  ok - billing test send does not mark production sent');
+}
+
+{
+  function sliceFunction(src, signature) {
+    const start = src.indexOf(signature);
+    assert.ok(start >= 0, signature);
+    const rest = src.slice(start + signature.length);
+    const next = rest.search(/\n    (?:async )?function /);
+    assert.ok(next > 0, signature);
+    return src.slice(start, start + signature.length + next);
+  }
+
+  const formatFn = sliceFunction(indexSrc, 'function formatYen(n)');
+  const noticeFn = sliceFunction(indexSrc, 'function appendBillingPdfReplyNotice(msg)');
+  const buildFn = sliceFunction(indexSrc, 'function buildBillingMessage(d)');
+  const noticeConstStart = indexSrc.indexOf('var BILLING_PDF_REPLY_NOTICE');
+  const noticeConstEnd = indexSrc.indexOf('function appendBillingPdfReplyNotice', noticeConstStart);
+  assert.ok(noticeConstStart >= 0 && noticeConstEnd > noticeConstStart);
+  const sandbox = { console };
+  vm.runInNewContext(
+    indexSrc.slice(noticeConstStart, noticeConstEnd) + '\n' + formatFn + '\n' + noticeFn + '\n' + buildFn + '\n' +
+    'this.formatYen = formatYen; this.appendBillingPdfReplyNotice = appendBillingPdfReplyNotice; this.buildBillingMessage = buildBillingMessage;',
+    sandbox
+  );
+
+  const row = {
+    name: '架空 太郎',
+    workDays: 12,
+    breakdown: ['通常 10', '日曜 2'],
+    charter: 0,
+    mileage: 0,
+    sysUsageFlag: '',
+    sundayBonus: '',
+    deduction: 0,
+    subtotal: 112345,
+    tax: 11234,
+    sysUsageFee: 0,
+    total: 123579
+  };
+  const body = sandbox.buildBillingMessage(row);
+  const marker = '📄 【請求書PDFについて】';
+  const notice = [
+    '━━━━━━━━━━━━━━━',
+    marker,
+    '',
+    '現在、システムの都合により、請求書PDFの閲覧リンクが一定時間経過後に開けなくなる場合がございます。',
+    '',
+    'PDFをご希望の方は、このLINEに「PDF送付希望」とご返信ください。',
+    '',
+    'ご返信いただいた方には、確認後、請求書PDFを個別にお送りいたします。',
+    '',
+    'お手数をおかけしますが、よろしくお願いいたします。'
+  ].join('\n');
+  const now = new Date();
+  const monthStr = now.getFullYear() + '年' + (now.getMonth() + 1) + '月度';
+  assert.ok(body.startsWith('📋 【' + monthStr + ' 請求金額のご確認】'));
+  assert.match(body, /架空 太郎 様/);
+  assert.match(body, new RegExp('税別: ' + sandbox.formatYen(112345).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(body, new RegExp('消費税: ' + sandbox.formatYen(11234).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(body, new RegExp('合計\\(税込\\): ' + sandbox.formatYen(123579).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const closing = '内容に相違がある場合はご連絡ください。';
+  assert.ok(body.indexOf(closing) > 0);
+  assert.ok(body.indexOf(notice) === body.indexOf(closing) + closing.length + 2);
+  assert.equal((body.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.equal(sandbox.appendBillingPdfReplyNotice(body), body);
+  assert.ok(body.endsWith('お手数をおかけしますが、よろしくお願いいたします。'));
+
+  const testStart = indexSrc.indexOf('async function sendBillingLineTest');
+  const testFn = indexSrc.slice(testStart, indexSrc.indexOf('async function sendAllBillingLine', testStart));
+  const realStart = indexSrc.indexOf('async function sendAllBillingLine');
+  const realFn = indexSrc.slice(realStart, indexSrc.indexOf('// ===== 配送MAP機能 =====', realStart));
+  assert.match(testFn, /【テスト送信】\\n' \+ buildBillingMessage\(d\)/);
+  assert.match(realFn, /var msg = buildBillingMessage\(d\)/);
+  assert.ok(testFn.indexOf('buildBillingMessage(d)') < testFn.indexOf('📎 請求書PDF:'));
+  assert.ok(realFn.indexOf('buildBillingMessage(d)') < realFn.indexOf('📎 請求書PDF:'));
+  assert.match(testFn, /to: adminId/);
+  assert.match(testFn, /billingAdminLineUserId\(\)/);
+  assert.match(realFn, /billingLineUserId\(d\)/);
+  assert.doesNotMatch(realFn, /adminId/);
+  assert.doesNotMatch(testFn, /PDF送付希望/);
+  assert.doesNotMatch(realFn, /PDF送付希望/);
+  const testBody = '【テスト送信】\n' + body;
+  assert.equal((testBody.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.equal((body.match(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+
+  for (const signature of [
+    'async function sendTestLineMessage()',
+    'async function sendDmMessage()',
+    'async function testBulkLineSend(textareaId)'
+  ]) {
+    assert.doesNotMatch(sliceFunction(indexSrc, signature), /PDF送付希望/);
+    assert.doesNotMatch(sliceFunction(indexSrc, signature), /請求書PDFについて/);
+  }
+  assert.equal((indexSrc.match(/PDF送付希望/g) || []).length, 1);
+  console.log('  ok - billing notice is shared and not repeated');
 }
 
 console.log('billing-reconcile tests passed');
