@@ -3062,6 +3062,15 @@
           <textarea id="dm-message" rows="4" class="w-full border border-border rounded px-3 py-2 text-xs" placeholder="送信するメッセージを入力..."></textarea>
         </div>
 
+        <div class="mb-3">
+          <label class="text-xs font-bold text-ink mb-1 block">画像またはPDF</label>
+          <input id="dm-attach-file" type="file" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" class="text-xs" onchange="DmLineClient.onFile(this)">
+          <button type="button" class="text-xs underline ml-2" onclick="DmLineClient.clear()">添付を削除</button>
+          <p class="text-xs text-ink-lighter mt-1">JPEGとPNGは1MB以下をそのまま送ります。PDF変換は別段階で、通常は受け付けません。画像のURLは本文へ入れません。試験アカウント以外への画像送信は、保持確認とは別の本番解禁があるまで停止しています。</p>
+          <div id="dm-attach-preview" class="mt-2"></div>
+          <label class="text-xs flex items-center gap-2 mt-2"><input id="dm-attach-confirm" type="checkbox"> 氏名、所属、LINE、本文、添付画像を確認した</label>
+        </div>
+
         <!-- 誤配住所 -->
         <div id="dm-gohai-section" class="hidden mb-3">
           <label class="text-xs font-bold text-red-600 mb-1 block">❌ 誤配先住所（回収先）</label>
@@ -10628,6 +10637,7 @@ var driverDB = {
       document.getElementById('dm-gohai-preview').classList.add('hidden');
       document.getElementById('dm-seihaisou-preview').classList.add('hidden');
       document.getElementById('dm-send-result').textContent = '';
+      if (window.DmLineClient) DmLineClient.reset();
       document.getElementById('dm-modal').classList.remove('hidden');
     }
 
@@ -10807,6 +10817,7 @@ var driverDB = {
     }
 
     async function sendDmMessage() {
+      if (window.DmLineClient && DmLineClient.hasAttachment()) return DmLineClient.sendFromModal();
       if (!dmTargetDriver) return;
       var lineId = lineMapping[dmTargetDriver];
       if (!lineId) {
@@ -23213,5 +23224,6 @@ var driverDB = {
   <script src="/ofk3-delivery-map.js?v=20260921-7"></script>
   <script src="/ofk3-map-cortex-overlay.js?v=20260927-1"></script>
   <script src="/ofk3-bag-sheet.js?v=20261014-bag2"></script>
+  <script src="/dm-line-client.js?v=20261106-dm1"></script>
 </body>
 </html>

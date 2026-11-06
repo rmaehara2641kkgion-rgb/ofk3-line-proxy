@@ -1251,6 +1251,47 @@ app.post('/mentor-notified', (req, res) => {
 
 const PROXY_SECRET = process.env.PROXY_SECRET || '';
 
+// 個別LINEの画像添付。JPEG と PNG は変換ライブラリを読まずに送る。
+// PDF変換は DM_PDF_CONVERT=1 のときだけ読み込む。未設定では読み込まない。
+// DM_IMAGE_LIVE_SEND=1 だけでは画像を送らない。
+// 保持確認を記録しても本番宛先は開かない。本番解禁は別の明示操作が必要。
+// 試験用1件以外の画像送信は、その操作まで拒否する。テキストのみの既存送信は /proxy のまま。
+var DmLineHttp = require('./dm-line-http.js');
+var DmLineImage = require('./dm-line-image.js');
+var dmDirectoryCache = { at: 0, rows: [] };
+async function loadDmLineDirectory() {
+  if (!TENKO_MASTER_GAS_URL) return [];
+  var nowMs = Date.now();
+  if (dmDirectoryCache.at && (nowMs - dmDirectoryCache.at) < 60000) return dmDirectoryCache.rows;
+  try {
+    var response = await axios.get(TENKO_MASTER_GAS_URL + '?action=getMaster', {
+      timeout: 15000,
+      validateStatus: function () { return true; }
+    });
+    var drivers = response.data && response.data.drivers;
+    if (!Array.isArray(drivers)) return [];
+    var rows = DmLineImage.directoryFromDrivers(drivers);
+    dmDirectoryCache = { at: nowMs, rows: rows };
+    return rows;
+  } catch (e) {
+    return [];
+  }
+}
+var dmLineService = DmLineHttp.createDefaultService({
+  lineEnabled: isLineSendEffectivelyEnabled,
+  sendLine: sendLinePushMessage,
+  directory: loadDmLineDirectory
+});
+app.use(DmLineHttp.createRouter(dmLineService, {
+  proxySecret: function () { return PROXY_SECRET; },
+  publicOriginFromRequest: function (req) {
+    return DmLineImage.resolvePublicOrigin({
+      host: req.get('x-forwarded-host') || req.get('host'),
+      proto: req.get('x-forwarded-proto') || req.protocol
+    });
+  }
+}));
+
 // ===== LINE全送信 非常停止（管理画面から操作） =====
 // 現在状態の確認用。認証不要（送信を行わない読み取り専用のため、他の /wh60/status 等と同様の扱い）。
 app.get('/line-notifications/status', (req, res) => {
