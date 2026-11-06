@@ -14,7 +14,7 @@ var GROUP_RULES = {
   'cortex-read': [['GET', /^\/cortex-priority$/]],
   'share-write': [['POST', /^\/(route-data|map-image|pdf-upload)$/]],
   'masters': [['*', /^\/(volume-master|addr-master|tenko-master|area-experience-master|area-experience-events)$/], ['GET', /^\/mentor-notified$/]],
-  'line-send': [['*', /^\/proxy$/], ['POST', /^\/mentor-alert$/], ['POST', /^\/line-notifications\/toggle$/]],
+  'line-send': [['*', /^\/proxy$/], ['POST', /^\/mentor-alert$/], ['POST', /^\/line-notifications\/toggle$/], ['POST', /^\/dm-line\/(review|send)$/], ['POST', /^\/dm-line\/retention\/(revoke|confirm)$/], ['POST', /^\/dm-line\/production\/unlock$/], ['GET', /^\/dm-line\/retention$/]],
   'line-unlinked': [['*', /^\/line-unlinked(\/.*)?$/]],
   'exports': [['POST', /^\/(encrypt-zip|decrypt-zip|ftds-export|cc-export|dnr-export|twc-export|lat-export)$/], ['*', /^\/wh60\/(save|status)$/]]
 };
