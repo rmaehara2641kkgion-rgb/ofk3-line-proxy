@@ -82,7 +82,8 @@
   }
   var SPEAK_FAIL_TEXT = {
     disabled: '音声OFF', unsupported: 'この端末は音声合成に非対応', speak_threw: '音声エラー', error_event: '音声が中断されました',
-    no_start: '音声が開始しません', empty_text: '音声なし', no_speaker: '音声なし'
+    no_start: '音声が開始しません', empty_text: '音声なし', no_speaker: '音声なし',
+    no_local_voice: 'ローカルの日本語音声がないため鳴りません'
   };
 
   // ---------------------------------------------------------------- state
@@ -98,14 +99,20 @@
       preferredVoice: store('get', KEY_VOICE_NAME) || null,
       onFail: function (reason) { lastSpeech = { text: SPEAK_FAIL_TEXT[reason] || '音声エラー', failed: true }; renderCard(); },
       onTiming: function (t) { lastTimingMs = Math.round(t.toStartMs); renderCard(); },
-      onVoiceChange: function () { renderVoice(); }
+      onVoiceChange: function () { renderVoice(); },
+      onState: function (st) {
+        if (st === 'started') lastSpeech = { text: '再生中', failed: false };
+        else if (st === 'ended') lastSpeech = { text: '再生済み', failed: false };
+        else if (st === 'interrupted') lastSpeech = { text: '音声が中断されました(結果は画面のとおりです)', failed: true };
+        renderCard();
+      }
     });
 
   var controller = Scan.createScanController({
     speaker: speaker, now: nowMs,
     onResult: function (v) {
       lastView = v; lastScanAt = new Date().getTime(); lastTimingMs = null;
-      lastSpeech = v.spoke ? { text: '再生中', failed: false } : { text: SPEAK_FAIL_TEXT[v.speakFailReason] || '音声なし', failed: v.speakFailReason !== 'disabled' };
+      lastSpeech = v.spoke ? { text: '音声を送信', failed: false } : { text: SPEAK_FAIL_TEXT[v.speakFailReason] || '音声なし', failed: v.speakFailReason !== 'disabled' };
       renderCard(); renderHistory();
     }
   });
@@ -227,7 +234,8 @@
     var note, color = '#166534';
     if (!st.supported) { note = '音声合成に非対応の端末です(結果は画面で確認してください)'; color = '#b91c1c'; }
     else if (!st.enabled) { note = '音声OFF'; color = '#475569'; }
-    else if (st.male) { note = '男性声: ' + st.voiceName; }
+    else if (st.voiceReason === 'no_local_ja_voice') { note = '⚠ ローカルの日本語音声がありません(クラウド型音声は使用しません。結果は画面で確認してください)'; color = '#b91c1c'; }
+    else if (st.male) { note = '男性声(ローカル): ' + st.voiceName; }
     else if (st.voiceName) { note = '⚠ 男性声が見つかりません(使用中: ' + st.voiceName + ')'; color = '#b45309'; }
     else { note = '⚠ 日本語の音声がありません(結果は画面で確認してください)'; color = '#b91c1c'; }
     ui.voiceNote.textContent = note; ui.voiceNote.style.color = color;

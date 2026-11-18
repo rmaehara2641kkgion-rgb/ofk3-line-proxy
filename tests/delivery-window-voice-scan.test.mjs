@@ -195,6 +195,71 @@ t('stale speech events: a superseded utterance finishing, starting or failing la
   clock.advance(5000); eq(events.fails, [], 'B started in time: no watchdog failure');
 });
 
+// ---- local-only voices (cloud voices may send the text over the network) ----
+const CLOUD_MALE = { name: 'Cloud Ichiro', lang: 'ja-JP', localService: false };
+const CLOUD_FEMALE = { name: 'Google 日本語', lang: 'ja-JP', localService: false };
+const UNKNOWN_FLAG = { name: 'Takumi', lang: 'ja-JP' };
+t('local-only (default): cloud ja voices are never selected, even if they are the male ones; local male is preferred', () => {
+  const clock = fakeClock(); const synth = fakeSynth([CLOUD_MALE, CLOUD_FEMALE, FEMALE, MALE]);
+  const { spk } = makeSpeaker(synth, clock);
+  eq(spk.getStatus().localOnly, true, 'default on');
+  spk.speak('x');
+  eq(synth.spoken[0].voice, MALE.name, 'local male chosen');
+  eq(spk.listVoices().map((v) => v.name), [FEMALE.name, MALE.name], 'cloud voices are not even offered');
+});
+t('local-only: a voice with a missing localService flag is NOT treated as local', () => {
+  const clock = fakeClock(); const synth = fakeSynth([UNKNOWN_FLAG]);
+  const { spk, events } = makeSpeaker(synth, clock);
+  eq(spk.speak('x'), { ok: false, reason: 'no_local_voice' }, 'refused');
+  eq([synth.spoken.length, events.fails], [0, ['no_local_voice']], 'nothing spoken');
+});
+t('local-only: only cloud voices installed -> no speech at all (no fallback to the browser default voice), status says so', () => {
+  const clock = fakeClock(); const synth = fakeSynth([CLOUD_MALE, CLOUD_FEMALE]);
+  const { spk } = makeSpeaker(synth, clock);
+  eq(spk.speak('8時から12時！'), { ok: false, reason: 'no_local_voice' }, 'refused');
+  eq([synth.spoken.length, spk.getStatus().voiceReason, spk.getStatus().voiceName], [0, 'no_local_ja_voice', null], 'status');
+});
+t('local-only: a saved preference pointing at a cloud voice is ignored', () => {
+  const clock = fakeClock(); const synth = fakeSynth([CLOUD_MALE, MALE]);
+  const { spk } = makeSpeaker(synth, clock, { preferredVoice: CLOUD_MALE.name });
+  spk.speak('x'); eq(synth.spoken[0].voice, MALE.name, 'local used');
+});
+t('localOnly:false (explicit opt-out, for the check page only) can use cloud voices', () => {
+  const clock = fakeClock(); const synth = fakeSynth([CLOUD_MALE]);
+  const { spk } = makeSpeaker(synth, clock, { localOnly: false });
+  eq(spk.speak('x').ok, true, 'allowed'); eq(synth.spoken[0].voice, CLOUD_MALE.name, 'cloud voice');
+});
+t('speech state events (current utterance only): started / ended / interrupted-from-outside; a newer scan is not "interrupted"', () => {
+  const clock = fakeClock(); const synth = fakeSynth([MALE]); const states = [];
+  const { spk, events } = makeSpeaker(synth, clock, { onState: (s) => states.push(s) });
+  spk.speak('A'); synth.start(); synth.end();
+  eq(states, ['started', 'ended'], 'normal');
+  states.length = 0;
+  spk.speak('B'); synth.start(); spk.speak('C');                  // C supersedes B: not reported as interrupted
+  eq(states, ['started'], 'superseded is silent');
+  synth.fail('interrupted');                                       // something outside stopped C
+  eq([states, events.fails], [['started', 'interrupted'], []], 'external stop is a state, not an error');
+  eq(spk.isPlaying(), false, 'not stuck');
+});
+t('screen and audio never disagree: 300 random scans with random external interruptions - the result of scan N is what is on screen and what was last spoken', () => {
+  let seed = 12345; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const clock = fakeClock(); const synth = fakeSynth([MALE]);
+  const { ctl, views } = makeCtl(BASE, synth, clock);
+  const speechOf = { window: null };
+  for (let i = 0; i < 300; i++) {
+    const n = [1, 2, 3, 4, 5, 6, 7, 8, 9, 99][Math.floor(rnd() * 10)];
+    const v = ctl.handleScan(id(n));
+    eq(views[views.length - 1], v, 'onResult delivers the same view');
+    const lastSpoken = synth.spoken[synth.spoken.length - 1].text;
+    eq(lastSpoken, v.speech, 'last spoken text is this scan\'s speech (i=' + i + ')');
+    eq(lastSpoken === '確認できません！', v.kind === 'unknown', 'speech kind matches screen kind');
+    eq(lastSpoken === '時間指定なし！', v.kind === 'no_window', 'no-window speech matches screen kind');
+    const r = rnd();
+    if (r < 0.2) synth.start(); else if (r < 0.35) synth.end(); else if (r < 0.45) synth.fail('interrupted'); else if (r < 0.5) synth.fail('synthesis-failed');
+  }
+  assert(speechOf, 'ran');
+});
+
 // ================= scan controller =================
 function makeCtl(tbl, synth, clock, copts) {
   const sp = makeSpeaker(synth, clock, copts && copts.speaker);

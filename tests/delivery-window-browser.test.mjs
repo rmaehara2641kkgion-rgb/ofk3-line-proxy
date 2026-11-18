@@ -93,7 +93,8 @@ async function openPage(cfg) {
         setTimeout(function () { if (cur === u && u.onstart) u.onstart(); }, 5);
         if (window.__mode === 'error') setTimeout(function () { if (cur === u && u.onerror) u.onerror({ error: 'synthesis-failed' }); }, 15);
       },
-      cancel: function () { var u = cur; cur = null; window.__cancels += 1; if (u && u.onerror) u.onerror({ error: 'canceled' }); }
+      cancel: function () { var u = cur; cur = null; window.__cancels += 1; if (u && u.onerror) u.onerror({ error: 'canceled' }); },
+      __interrupt: function () { var u = cur; cur = null; if (u && u.onerror) u.onerror({ error: 'interrupted' }); }
     };
     Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
   }, c);
@@ -313,6 +314,121 @@ t('male voice not available is stated on screen (female only / no ja voice / no 
   r = await openPage({ synth: false }); await setMode(r.page, true); await loadBoth(r.page);
   assert((await text(r.page, '#dw-voice-note')).indexOf('非対応') >= 0, 'unsupported');
   await scan(r.page, id(1)); eq(await text(r.page, '#dw-card-label'), '8時から12時', 'result still shown without speech'); await r.ctx.close();
+});
+
+// ================= added checks (Phase 5 verification) =================
+t('reloading a file: scanning is impossible while the new file is being read, the old data is never used, and it comes back afterwards', async () => {
+  const { page, ctx } = await openPage();
+  await setMode(page, true); await loadBoth(page);
+  await scan(page, id(1)); eq(await text(page, '#dw-card-label'), '8時から12時', 'works before');
+  const before = (await spoken(page)).length;
+  await page.evaluate(() => { const o = FileReader.prototype.readAsText; FileReader.prototype.readAsText = function (f, e) { const self = this; setTimeout(function () { o.call(self, f, e); }, 500); }; });
+  await page.setInputFiles('#dw-sr-file', { name: 'sr2.csv', mimeType: 'text/csv', buffer: Buffer.from(SR_B, 'utf8') });
+  await page.waitForFunction(() => /読み込み中/.test(document.getElementById('dw-state').textContent));
+  eq(await page.isDisabled('#scan-input'), true, 'input disabled while loading');
+  const r = await page.evaluate((v) => { const i = document.getElementById('scan-input'); i.disabled = false; i.value = v; window.lookupDA(); i.disabled = true; return window.__dwInstalled.controller.handleScan(v).reason; }, id(1));
+  eq(r, 'table_not_loaded', 'old table is gone during the reload');
+  const dur = (await spoken(page)).slice(before);
+  eq(dur, ['確認できません！'], 'only the direct engine call spoke; lookupDA with data not ready did nothing');
+  await page.waitForFunction(() => /使用可能/.test(document.getElementById('dw-state').textContent));
+  await scan(page, id(1)); eq(await text(page, '#dw-card-label'), '16時から18時', 'new data after the reload');
+  await ctx.close();
+});
+t('updateScanStatus duplicate definition: no side effects on the tenko caller, wrapper is transparent in both modes', async () => {
+  const { page, ctx, errors } = await openPage({ manifest: true });
+  const info = await page.evaluate(() => ({ src: String(window.__dwInstalled && window.updateScanStatus).length > 0, nameOk: typeof window.updateScanStatus === 'function' }));
+  assert(info.src && info.nameOk, 'wrapper installed');
+  // the page defines updateScanStatus twice (tenko + scan); the scan version (last one) is active. Calls with tenko arguments must not throw.
+  const probe = () => page.evaluate(() => {
+    const t = document.getElementById('scan-status-title'), d = document.getElementById('scan-status-detail'), b = document.getElementById('scan-driver-badge');
+    const snap = () => [t && t.textContent, d && d.textContent, b && b.textContent, document.getElementById('scan-ready').className, document.getElementById('scan-dropzone').className];
+    const before = snap(); let threw = false;
+    try { updateScanStatus('qr'); updateScanStatus('ocr', 'x'); updateScanStatus('complete'); updateScanStatus(); } catch (e) { threw = true; }
+    return { threw, before, after: snap() };
+  });
+  let r = await probe();
+  eq(r.threw, false, 'mode OFF: no throw'); eq(r.after, r.before, 'mode OFF: nothing in the tenko or scan areas changes');
+  await setMode(page, true); await loadBoth(page);
+  r = await probe();
+  eq(r.threw, false, 'mode ON: no throw');
+  eq(r.after[0], r.before[0], 'tenko status title untouched in mode ON');
+  eq(await page.isDisabled('#scan-input'), false, 'input stays usable after such calls');
+  await setMode(page, false);
+  r = await probe(); eq(r.threw, false, 'after OFF: no throw');
+  eq(errors, [], 'no page errors'); await ctx.close();
+});
+t('switching tabs while mode is ON: coming back to the scan tab keeps the input reachable (updateScanStatus re-hides scan-ready, wrapper restores it)', async () => {
+  const { page, ctx } = await openPage();
+  await setMode(page, true); await loadBoth(page);
+  await page.evaluate(() => { switchTab('dashboard'); switchTab('scan'); });
+  eq(await page.evaluate(() => document.getElementById('scan-ready').classList.contains('hidden')), false, 'visible again');
+  eq(await page.isDisabled('#scan-input'), false, 'enabled'); await scan(page, id(2));
+  eq(await text(page, '#dw-card-label'), '14時から16時', 'works'); await ctx.close();
+});
+t('cloud voices: with only cloud ja voices nothing is spoken, the result is on screen, and the screen says why', async () => {
+  const CLOUD = { name: 'Google 日本語', lang: 'ja-JP', localService: false };
+  const { page, ctx } = await openPage({ voices: [CLOUD, { name: 'Cloud Ichiro', lang: 'ja-JP', localService: false }] });
+  await setMode(page, true); await loadBoth(page);
+  assert((await text(page, '#dw-voice-note')).indexOf('ローカルの日本語音声がありません') >= 0, 'note: ' + await text(page, '#dw-voice-note'));
+  await scan(page, id(1));
+  eq([await text(page, '#dw-card-label'), await spoken(page)], ['8時から12時', []], 'visible, silent');
+  assert((await text(page, '#dw-card-speech')).indexOf('ローカルの日本語音声がない') >= 0, 'speech line: ' + await text(page, '#dw-card-speech'));
+  eq(await page.$$eval('#dw-voice-select option', (o) => o.length), 0, 'cloud voices not offered');
+  await ctx.close();
+});
+t('cloud voices: with local + cloud voices only the local one is used', async () => {
+  const { page, ctx } = await openPage({ voices: [{ name: 'Cloud Ichiro', lang: 'ja-JP', localService: false }, MALE] });
+  await setMode(page, true); await loadBoth(page); await scan(page, id(3));
+  eq(await page.evaluate(() => window.__spoken.map((s) => s.voice)), [MALE.name], 'local voice only'); await ctx.close();
+});
+t('audio stopped from outside: the result stays, the voice line says 中断, a following scan speaks normally; screen = last scan', async () => {
+  const { page, ctx } = await openPage();
+  await setMode(page, true); await loadBoth(page);
+  await scan(page, id(1)); await page.waitForTimeout(30);
+  await page.evaluate(() => window.speechSynthesis.__interrupt());
+  eq(await text(page, '#dw-card-label'), '8時から12時', 'result kept');
+  assert((await text(page, '#dw-card-speech')).indexOf('中断') >= 0, 'line: ' + await text(page, '#dw-card-speech'));
+  await scan(page, id(2)); await page.waitForTimeout(30);
+  eq([await text(page, '#dw-card-label'), (await spoken(page)).slice(-1)[0]], ['14時から16時', '14時から16時！'], 'next scan consistent');
+  assert((await text(page, '#dw-card-speech')).indexOf('中断') < 0, 'stale interruption text is gone');
+  await ctx.close();
+});
+t('rapid sequence: after any run of quick scans the card and the last spoken text belong to the same (last) scan', async () => {
+  const { page, ctx } = await openPage();
+  await setMode(page, true); await loadBoth(page);
+  const ids = [1, 2, 3, 4, 5, 8, 99, 1, 3, 2];
+  for (const n of ids) { await page.fill('#scan-input', id(n)); await page.press('#scan-input', 'Enter'); }
+  await page.waitForTimeout(60);
+  const label = await text(page, '#dw-card-label'), last = (await spoken(page)).slice(-1)[0];
+  eq([label, last], ['14時から16時', '14時から16時！'], 'last scan on screen and in audio');
+  eq((await spoken(page)).length, ids.length, 'every scan was spoken once, in order');
+  await ctx.close();
+});
+t('scanner check page: shows the SHAPE only (digits masked), prefix/suffix characters and the terminator; never the real number', async () => {
+  const ctx = await browser.newContext(); const page = await ctx.newPage();
+  await page.goto('http://127.0.0.1:' + port + '/delivery-window-scanner-check.html');
+  await page.click('#field');
+  await page.keyboard.type(id(1)); await page.keyboard.press('Enter');
+  await page.keyboard.type('*' + id(2) + '*'); await page.keyboard.press('Tab');
+  await page.waitForTimeout(50);
+  const shown = await page.evaluate(() => document.body.innerText);
+  assert(!/[A-Z]{2}(?!9{10})\d{10}/.test(shown), 'no real number on the page (the masked shape DA9999999999 is expected)');
+  assert(shown.indexOf('DA9999999999') >= 0 && shown.indexOf('*DA9999999999*') >= 0, 'shapes shown: ' + shown.slice(0, 200));
+  assert(shown.indexOf('Enter') >= 0 && shown.indexOf('Tab') >= 0, 'terminators shown');
+  await ctx.close();
+});
+t('voice check page: local-only is on by default and cloud voices are reported but not used', async () => {
+  const ctx = await browser.newContext(); const page = await ctx.newPage();
+  await page.addInitScript(() => {
+    const voices = [{ name: 'Google 日本語', lang: 'ja-JP', localService: false }, { name: 'Microsoft Ichiro', lang: 'ja-JP', localService: true }];
+    window.SpeechSynthesisUtterance = function (t) { this.text = t; }; window.__spoken = [];
+    Object.defineProperty(window, 'speechSynthesis', { value: { getVoices: () => voices, addEventListener() {}, speak(u) { window.__spoken.push(u.voice && u.voice.name); }, cancel() {} }, configurable: true });
+  });
+  await page.goto('http://127.0.0.1:' + port + '/delivery-window-voice-check.html');
+  eq(await page.isChecked('#localOnly'), true, 'default on');
+  assert((await text(page, '#voices')).indexOf('通信の可能性あり 1件') >= 0, 'cloud counted: ' + await text(page, '#voices'));
+  await page.click('button[data-t="8時から12時！"]');
+  eq(await page.evaluate(() => window.__spoken), ['Microsoft Ichiro'], 'local voice used'); await ctx.close();
 });
 
 // ================= switching back =================

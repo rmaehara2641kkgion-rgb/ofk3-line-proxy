@@ -9,6 +9,10 @@
  *   'queue'           : keep playing, queue the new one (bounded by maxQueue, oldest dropped).
  * Re-scanning the same item is never suppressed.
  *
+ * Voices: localOnly (default true) restricts the read-out to voices with localService === true, so the
+ * spoken text is never sent to a cloud speech service. With no local ja voice the speaker refuses to
+ * speak (reason 'no_local_voice') instead of falling back to the browser default voice, which might be
+ * a cloud voice. The on-screen result is unaffected.
  * Failures never throw and never hide the on-screen result: speak() returns {ok:false, reason}
  * and onFail(reason) is called. Timing: scanAt (caller) -> spoken call -> onstart is reported to
  * onTiming({toCallMs, toStartMs}); numbers only, never text.
@@ -29,13 +33,14 @@
     EMPTY: 'empty_text',
     SPEAK_THROW: 'speak_threw',
     ERROR_EVENT: 'error_event',
-    NO_START: 'no_start'
+    NO_START: 'no_start',
+    NO_LOCAL_VOICE: 'no_local_voice'
   };
 
   /**
    * createSpeaker(deps, opts)
    * deps: { synth, Utterance, now():ms, setTimer(fn,ms)->id, clearTimer(id) }   (all optional except synth/Utterance for sound)
-   * opts: { policy, maxQueue, rate, pitch, volume, lang, preferredVoice, startTimeoutMs, enabled,
+   * opts: { onState('started'|'ended'|'interrupted') - only for the CURRENT utterance, policy, maxQueue, rate, pitch, volume, lang, preferredVoice, startTimeoutMs, enabled,
    *         onFail(reason), onTiming({toCallMs,toStartMs}), onVoiceChange(status) }
    */
   function createSpeaker(deps, opts) {
@@ -49,6 +54,7 @@
     var startTimeout = o.startTimeoutMs > 0 ? o.startTimeoutMs : 2500;
     var cfg = { rate: o.rate || 1.05, pitch: o.pitch || 0.85, volume: o.volume === undefined ? 1 : o.volume, lang: o.lang || 'ja-JP' };
     var enabled = o.enabled === false ? false : true;
+    var localOnly = o.localOnly === false ? false : true;
     var preferred = o.preferredVoice || null;
     var seq = 0, playing = null, pending = [];
     var voiceInfo = null;
@@ -58,7 +64,7 @@
     function refreshVoice() {
       var list = [];
       try { list = (synth && synth.getVoices && synth.getVoices()) || []; } catch (e) { list = []; }
-      var p = Voice.pickVoice(list, preferred);
+      var p = Voice.pickVoice(list, preferred, { localOnly: localOnly });
       var changed = !voiceInfo || (voiceInfo.name || null) !== (p.voice ? p.voice.name : null) || voiceInfo.male !== p.male;
       voiceInfo = { voice: p.voice, name: p.voice ? p.voice.name : null, male: p.male, reason: p.reason, count: list.length };
       if (changed && typeof o.onVoiceChange === 'function') { try { o.onVoiceChange(getStatus()); } catch (e2) { /* UI callback must not break speech */ } }
@@ -71,8 +77,10 @@
 
     function getStatus() {
       var v = voiceInfo || refreshVoice();
-      return { supported: supported(), enabled: enabled, voiceName: v.name, male: v.male, voiceReason: v.reason, jaVoiceCount: v.count, policy: policy };
+      return { supported: supported(), enabled: enabled, voiceName: v.name, male: v.male, voiceReason: v.reason, jaVoiceCount: v.count, policy: policy, localOnly: localOnly };
     }
+
+    function state(name) { if (typeof o.onState === 'function') { try { o.onState(name); } catch (e) { /* UI callback must not break speech */ } } }
 
     function fail(reason, extra) {
       if (typeof o.onFail === 'function') { try { o.onFail(reason); } catch (e) { /* ignore */ } }
@@ -96,19 +104,22 @@
         u.onstart = function () {
           if (playing !== job) return; // a superseded utterance must not report timing or clear the watchdog of the newest one
           job.started = true;
+          state('started');
           if (job.timer !== null) { clearT(job.timer); job.timer = null; }
           if (typeof o.onTiming === 'function') {
             var t = now();
             try { o.onTiming({ toCallMs: job.callAt - job.scanAt, toStartMs: t - job.scanAt }); } catch (e) { /* ignore */ }
           }
         };
-        u.onend = function () { finish(job); };
+        u.onend = function () { var current = playing === job; finish(job); if (current) state('ended'); };
         u.onerror = function (ev) {
           // 'canceled' / 'interrupted' are our own cancel() calls, not failures
           var err = ev && ev.error ? String(ev.error) : '';
           var current = playing === job; // a superseded utterance erroring is not a failure of the latest one
           finish(job);
-          if (current && err !== 'canceled' && err !== 'interrupted') fail(FAIL.ERROR_EVENT);
+          if (!current) return;
+          if (err === 'canceled' || err === 'interrupted') state('interrupted'); // stopped from outside (not by a newer scan)
+          else fail(FAIL.ERROR_EVENT);
         };
         synth.speak(u);
         return { ok: true };
@@ -133,6 +144,7 @@
       if (!supported()) return fail(FAIL.UNSUPPORTED);
       var s = text === null || text === undefined ? '' : String(text);
       if (!s) return fail(FAIL.EMPTY);
+      if (localOnly && !(voiceInfo || refreshVoice()).voice) return fail(FAIL.NO_LOCAL_VOICE);
       var job = { id: ++seq, text: s, scanAt: meta && meta.scanAt !== undefined ? meta.scanAt : now(), started: false, timer: null };
       if (policy === 'queue') {
         if (playing) {
@@ -164,7 +176,7 @@
       setEnabled: function (v) { enabled = !!v; if (!enabled) cancel(); },
       isEnabled: function () { return enabled; },
       setPreferredVoice: function (name) { preferred = name || null; refreshVoice(); },
-      listVoices: function () { try { return Voice.listJaVoices(synth && synth.getVoices ? synth.getVoices() : []); } catch (e) { return []; } },
+      listVoices: function () { try { return Voice.listJaVoices(synth && synth.getVoices ? synth.getVoices() : [], { localOnly: localOnly }); } catch (e) { return []; } },
       pendingCount: function () { return pending.length; },
       isPlaying: function () { return !!playing; }
     };

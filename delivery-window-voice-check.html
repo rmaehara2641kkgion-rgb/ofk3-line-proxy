@@ -16,7 +16,8 @@
 <h1>配送時間帯 音声確認</h1>
 <p>この端末の音声と、スキャン結果の読み上げ文を確認するページです。データの読込・通信・保存は行いません。読み上げるのは下の固定フレーズだけです。</p>
 <div class="row" id="status">確認中...</div>
-<div class="row">音声: <select id="voice"></select></div>
+<div class="row">音声: <select id="voice"></select> <label><input type="checkbox" id="localOnly" checked> ローカル音声のみ(既定・実データの読み上げはこの設定)</label></div>
+<div class="row" id="cloudNote" style="font-size:13px;"></div>
 <div class="row">
   <button data-t="8時から12時！">8時から12時！</button>
   <button data-t="14時から16時！">14時から16時！</button>
@@ -25,42 +26,60 @@
   <button data-t="確認できません！">確認できません！</button>
 </div>
 <div class="row"><button id="rapid">連続3回(最新優先)</button></div>
-<div class="row">開始までの時間(ms): <span id="timing">-</span></div>
+<div class="row">開始までの時間(ms): <span id="timing">-</span> / 記録: <span id="samples">-</span></div>
 <div class="row">結果: <span id="fail">-</span></div>
 <pre id="voices"></pre>
 <script src="./delivery-window-voice.js"></script>
 <script src="./delivery-window-speaker.js"></script>
 <script>
 (function () {
-  var statusEl = document.getElementById('status'), sel = document.getElementById('voice');
-  var spk = DeliveryWindowSpeaker.createSpeaker(
-    { synth: window.speechSynthesis, Utterance: window.SpeechSynthesisUtterance, now: function () { return performance.now(); } },
-    {
-      onTiming: function (t) { document.getElementById('timing').textContent = Math.round(t.toStartMs); },
-      onFail: function (r) { var f = document.getElementById('fail'); f.textContent = '失敗: ' + r; f.className = 'ng'; },
-      onVoiceChange: render
-    });
+  var statusEl = document.getElementById('status'), sel = document.getElementById('voice'), spk = null, samples = [];
+  function median(a) { var b = a.slice().sort(function (x, y) { return x - y; }); return b[Math.floor(b.length / 2)]; }
+  function make() {
+    var preferred = null;
+    spk = DeliveryWindowSpeaker.createSpeaker(
+      { synth: window.speechSynthesis, Utterance: window.SpeechSynthesisUtterance, now: function () { return performance.now(); } },
+      {
+        localOnly: document.getElementById('localOnly').checked,
+        onTiming: function (t) {
+          var ms = Math.round(t.toStartMs); samples.push(ms);
+          document.getElementById('timing').textContent = ms;
+          document.getElementById('samples').textContent = samples.length + '回 最小' + Math.min.apply(null, samples) + ' / 中央値' + median(samples) + ' / 最大' + Math.max.apply(null, samples);
+        },
+        onFail: function (r) { var f = document.getElementById('fail'); f.textContent = '失敗: ' + r; f.className = 'ng'; },
+        onVoiceChange: render
+      });
+  }
+  function allJa() {
+    var out = [], v = (window.speechSynthesis && window.speechSynthesis.getVoices) ? window.speechSynthesis.getVoices() : [], i;
+    for (i = 0; i < v.length; i++) if (/^ja/i.test(String(v[i].lang).replace('_', '-'))) out.push(v[i]);
+    return out;
+  }
   function render() {
-    var st = spk.getStatus(), list = spk.listVoices(), i;
+    var st = spk.getStatus(), list = spk.listVoices(), i, all = allJa(), remote = 0;
+    for (i = 0; i < all.length; i++) if (all[i].localService !== true) remote += 1;
     statusEl.innerHTML = '';
     var msg = !st.supported ? '音声合成に対応していません' :
-      (st.male ? '男性声を検出: ' + st.voiceName : (st.voiceName ? '男性声は未検出 (使用: ' + st.voiceName + ')' : '日本語音声がありません'));
+      (st.voiceReason === 'no_local_ja_voice' ? 'ローカルの日本語音声がありません(クラウド型のみ検出。使用しません)' :
+      (st.male ? '男性声を検出(ローカル): ' + st.voiceName : (st.voiceName ? '男性声は未検出 (使用: ' + st.voiceName + ')' : '日本語音声がありません')));
     statusEl.textContent = msg; statusEl.className = 'row ' + (st.male ? 'ok' : 'ng');
     sel.innerHTML = '';
     for (i = 0; i < list.length; i++) {
       var o = document.createElement('option'); o.value = list[i].name;
-      o.textContent = list[i].name + (list[i].male ? ' (男性)' : '') + (list[i].local ? '' : ' [通信あり]');
+      o.textContent = list[i].name + (list[i].male ? ' (男性)' : '') + (list[i].local ? ' [ローカル]' : ' [通信の可能性]');
       if (list[i].name === st.voiceName) o.selected = true;
       sel.appendChild(o);
     }
-    document.getElementById('voices').textContent = '日本語音声: ' + list.length + '件';
+    document.getElementById('voices').textContent = '日本語音声: ' + all.length + '件(うち通信の可能性あり ' + remote + '件)';
+    document.getElementById('cloudNote').textContent = remote ? ('通信の可能性がある音声 ' + remote + '件は、「ローカル音声のみ」がオンの間は使用しません。') : '';
   }
   sel.onchange = function () { spk.setPreferredVoice(sel.value); };
+  document.getElementById('localOnly').onchange = function () { make(); render(); };
   function say(t) { document.getElementById('fail').textContent = '-'; document.getElementById('fail').className = ''; var r = spk.speak(t, { scanAt: performance.now() }); if (!r.ok) { document.getElementById('fail').textContent = '失敗: ' + r.reason; document.getElementById('fail').className = 'ng'; } }
   var btns = document.querySelectorAll('button[data-t]'), k;
   for (k = 0; k < btns.length; k++) btns[k].onclick = function () { say(this.getAttribute('data-t')); };
   document.getElementById('rapid').onclick = function () { say('8時から12時！'); say('14時から16時！'); say('時間指定なし！'); };
-  render();
+  make(); render();
 }());
 </script>
 </body>
