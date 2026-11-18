@@ -21,7 +21,7 @@
     "test:cortex-route-line-map": "node tests/cortex-route-line-map.test.mjs",
     "test:lat-core": "node tests/lat-core.test.mjs",
     "test:lat-export-api": "node tests/lat-export-api.test.mjs",
-    "test:delivery-window": "node tests/delivery-window-core.test.mjs",
+    "test:delivery-window": "node tests/delivery-window-core.test.mjs && node tests/delivery-window-report.test.mjs",
     "test:time-window-board": "node tests/time-window-print-board.test.mjs",
     "test:dashboard-map": "node tests/dashboard-map-cortex-overlay.test.mjs",
     "test:gds-fleet-audit": "node tests/gds-fleet-audit-core.test.mjs",

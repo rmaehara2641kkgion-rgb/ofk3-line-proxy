@@ -322,66 +322,86 @@
     return o;
   }
 
+  /**
+   * Collects EVERY applicable problem (allReasons, in priority order). The first one is the
+   * primary reason. Status is window only when there is no problem at all; no_window only when
+   * the sole problem is a blank time and opts.noWindowEvidence(...) === true.
+   */
   function resolveOne(id, sr, el, ctx) {
-    var opts = ctx.opts;
-    var inSr = !!sr, inEl = !!el;
-    var cycles = el ? el.cycles : [];
-    if (!inSr && !inEl) return mkResult(id, STATUS.UNKNOWN, REASON.NOT_FOUND, { cycles: cycles });
-    if (opts.requireElimi && !inEl) return mkResult(id, STATUS.UNKNOWN, REASON.NOT_IN_ELIMI, { cycles: cycles });
-    if (!inSr) return mkResult(id, STATUS.UNKNOWN, REASON.NOT_IN_SR, { cycles: cycles });
-    if (el && el.cycles.length > 1) return mkResult(id, STATUS.UNKNOWN, REASON.DUP_CYCLE_ELIMI, { cycles: cycles });
-    // SearchResults duplicates must agree
-    var first = sr.rows[0], i;
+    var opts = ctx.opts, reasons = [], extra = { cycles: el ? el.cycles : [] }, i;
+    var cycles = extra.cycles;
+    if (!sr && !el) return finish(id, [REASON.NOT_FOUND], extra, ctx);
+    if (!el && opts.requireElimi) reasons.push(REASON.NOT_IN_ELIMI);
+    if (!sr) { reasons.push(REASON.NOT_IN_SR); return finish(id, reasons, extra, ctx); }
+    if (el && el.cycles.length > 1) reasons.push(REASON.DUP_CYCLE_ELIMI);
+    var first = sr.rows[0];
     for (i = 1; i < sr.rows.length; i++) {
-      if (!sameWindow(first, sr.rows[i])) return mkResult(id, STATUS.UNKNOWN, REASON.DUP_CONFLICT_SR, { cycles: cycles });
+      if (!sameWindow(first, sr.rows[i])) { reasons.push(REASON.DUP_CONFLICT_SR); break; }
     }
-    if (first.kind === 'blank') {
-      if (typeof opts.noWindowEvidence === 'function' && opts.noWindowEvidence({ id: id, promised: first.promised, cycles: cycles.slice() }) === true) {
-        return mkResult(id, STATUS.NO_WINDOW, REASON.OK, { cycles: cycles });
+    extra.srStart = first.start; extra.srEnd = first.end; extra.srPromised = first.promised;
+    var timeOk = false;
+    if (first.kind === 'blank') reasons.push(REASON.TIME_BLANK);
+    else if (first.kind === 'partial') reasons.push(REASON.TIME_PARTIAL);
+    else if (first.kind === 'invalid') reasons.push(REASON.TIME_INVALID);
+    else timeOk = true;
+    if (timeOk) {
+      var s = first.s, e = first.e;
+      var promised = parseDate(first.promised);
+      extra.startMin = s.min; extra.endMin = e.min; extra.date = s.date;
+      if (s.date !== e.date) reasons.push(REASON.DATE_SPAN);
+      if (!promised) reasons.push(REASON.DATE_PROMISED_MISSING);
+      else if (s.date !== promised) reasons.push(REASON.DATE_MISMATCH);
+      if (opts.dateRange) {
+        if (!ctx.referenceDate) reasons.push(REASON.DATE_REF_MISSING);
+        else {
+          extra.dayOffset = dayDiff(s.date, ctx.referenceDate);
+          if (extra.dayOffset < opts.dateRange.min || extra.dayOffset > opts.dateRange.max) reasons.push(REASON.DATE_OUT_OF_RANGE);
+        }
       }
-      return mkResult(id, STATUS.UNKNOWN, REASON.TIME_BLANK, { cycles: cycles });
-    }
-    if (first.kind === 'partial') return mkResult(id, STATUS.UNKNOWN, REASON.TIME_PARTIAL, { cycles: cycles });
-    if (first.kind === 'invalid') return mkResult(id, STATUS.UNKNOWN, REASON.TIME_INVALID, { cycles: cycles });
-    // dates
-    var s = first.s, e = first.e;
-    var promised = parseDate(first.promised);
-    var extra = { cycles: cycles, startMin: s.min, endMin: e.min, date: s.date };
-    if (s.date !== e.date) return mkResult(id, STATUS.UNKNOWN, REASON.DATE_SPAN, extra);
-    if (!promised) return mkResult(id, STATUS.UNKNOWN, REASON.DATE_PROMISED_MISSING, extra);
-    if (s.date !== promised) return mkResult(id, STATUS.UNKNOWN, REASON.DATE_MISMATCH, extra);
-    if (opts.dateRange) {
-      if (!ctx.referenceDate) return mkResult(id, STATUS.UNKNOWN, REASON.DATE_REF_MISSING, extra);
-      var off = dayDiff(s.date, ctx.referenceDate);
-      extra.dayOffset = off;
-      if (off < opts.dateRange.min || off > opts.dateRange.max) return mkResult(id, STATUS.UNKNOWN, REASON.DATE_OUT_OF_RANGE, extra);
-    }
-    // contradiction with unambiguous section heading
-    if (el && el.expected && el.expected.length) {
-      var ok = false;
-      for (i = 0; i < el.expected.length; i++) if (el.expected[i][0] === s.min && el.expected[i][1] === e.min) ok = true;
-      if (!ok) {
-        extra.expectedFromHeading = el.expected;
-        return mkResult(id, STATUS.UNKNOWN, REASON.CONFLICT_ELIMI, extra);
+      if (el && el.expected && el.expected.length) {
+        var match = false;
+        for (i = 0; i < el.expected.length; i++) if (el.expected[i][0] === s.min && el.expected[i][1] === e.min) match = true;
+        if (!match) {
+          extra.expectedFromHeading = el.expected;
+          extra.headingDiffers = true;
+          if (opts.headingCheck) reasons.push(REASON.CONFLICT_ELIMI);
+        }
       }
     }
-    extra.speech = windowSpeech(s.min, e.min);
-    extra.startText = fmtHm(s.min);
-    extra.endText = fmtHm(e.min);
-    return mkResult(id, STATUS.WINDOW, REASON.OK, extra);
+    if (reasons.length === 1 && reasons[0] === REASON.TIME_BLANK && typeof opts.noWindowEvidence === 'function' &&
+        opts.noWindowEvidence({ id: id, promised: first.promised, cycles: cycles.slice() }) === true) {
+      return finish(id, [], extra, ctx, true);
+    }
+    return finish(id, reasons, extra, ctx);
+  }
+
+  function finish(id, reasons, extra, ctx, noWindow) {
+    var o;
+    if (noWindow) o = mkResult(id, STATUS.NO_WINDOW, REASON.OK, extra);
+    else if (reasons.length) o = mkResult(id, STATUS.UNKNOWN, reasons[0], extra);
+    else {
+      extra.speech = windowSpeech(extra.startMin, extra.endMin);
+      extra.startText = fmtHm(extra.startMin);
+      extra.endText = fmtHm(extra.endMin);
+      o = mkResult(id, STATUS.WINDOW, REASON.OK, extra);
+    }
+    o.allReasons = reasons.slice();
+    return o;
   }
 
   /**
    * buildTable({srRows, elimiRecords, reportDate, loadedAt}, opts) -> table
    * opts: requireElimi (default true), dateRange {min,max} day offsets vs referenceDate
    *       (default {0,1}; null disables), referenceDate (default reportDate), noWindowEvidence(fn),
-   *       allowedAffixes (scan prefixes/suffixes)
+   *       allowedAffixes (scan prefixes/suffixes), headingCheck (default true: section-heading
+ *       vs SearchResults contradiction check; false = analysis only, see spec)
    */
   function buildTable(input, options) {
     var o = options || {};
     var opts = {
       requireElimi: o.requireElimi === false ? false : true,
       dateRange: o.dateRange === null ? null : (o.dateRange || { min: 0, max: 1 }),
+      headingCheck: o.headingCheck === false ? false : true,
       noWindowEvidence: o.noWindowEvidence || null,
       allowedAffixes: o.allowedAffixes || []
     };
