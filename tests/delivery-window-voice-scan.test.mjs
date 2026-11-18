@@ -184,6 +184,17 @@ t('timing: scan -> speak call -> speech start are reported as numbers only', () 
   eq(events.timings, [{ toCallMs: 3, toStartMs: 43 }], 'timings');
 });
 
+t('stale speech events: a superseded utterance finishing, starting or failing late cannot touch the newest speech state', () => {
+  const clock = fakeClock(); const synth = fakeSynth([MALE]);
+  const { spk, events } = makeSpeaker(synth, clock, { startTimeoutMs: 1000 });
+  spk.speak('A'); const uA = synth.current;
+  spk.speak('B');                                   // cancels A
+  uA.onstart && uA.onstart(); uA.onend && uA.onend(); uA.onerror && uA.onerror({ error: 'synthesis-failed' }); // late events of A
+  eq([spk.isPlaying(), events.timings, events.fails], [true, [], []], 'A cannot change anything');
+  synth.start(); eq(events.timings.length, 1, 'only B reports timing');
+  clock.advance(5000); eq(events.fails, [], 'B started in time: no watchdog failure');
+});
+
 // ================= scan controller =================
 function makeCtl(tbl, synth, clock, copts) {
   const sp = makeSpeaker(synth, clock, copts && copts.speaker);
@@ -367,10 +378,11 @@ t('wedge -> controller: glued scans without terminator are not misread; terminat
 });
 
 // ================= isolation =================
-t('existing female scan voice and page are untouched: index.html has no reference to the new modules', () => {
+t('existing female scan voice is untouched (Phase 5 only adds script tags and one container to index.html)', () => {
   const html = readFileSync(join(root, 'index.html'), 'utf8');
-  assert(html.indexOf('delivery-window') < 0, 'index.html does not load delivery-window modules (Phase 5 not started)');
-  assert(html.indexOf('function speakRouteNumber') > 0 && html.indexOf('utter.pitch = 1.3') > 0, 'female voice code present and unchanged');
+  assert(html.indexOf('function speakRouteNumber') > 0 && html.indexOf('utter.pitch = 1.3') > 0 && html.indexOf('function lookupDA() {') > 0, 'female voice + lookupDA code present and unchanged');
+  assert(html.indexOf('delivery-window-ui.js') > 0 && html.indexOf('id="dw-root"') > 0, 'integration points present');
+  assert(html.indexOf('delivery-window') < html.indexOf('</body>'), 'script tags sit at the end of the body, after the page script');
 });
 t('hygiene: new modules have no template literals, arrow functions, console or storage access', () => {
   for (const f of ['delivery-window-speaker.js', 'delivery-window-scan.js']) {

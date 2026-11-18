@@ -94,6 +94,7 @@
           if (playing === job && !job.started) { job.timedOut = true; fail(FAIL.NO_START); }
         }, startTimeout);
         u.onstart = function () {
+          if (playing !== job) return; // a superseded utterance must not report timing or clear the watchdog of the newest one
           job.started = true;
           if (job.timer !== null) { clearT(job.timer); job.timer = null; }
           if (typeof o.onTiming === 'function') {
