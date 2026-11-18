@@ -48,10 +48,11 @@ t('16:00-18:00 in Cycle2 heading 16-18 -> 16時から18時！', () => {
   const T = build([sr(1, D + '16:00:00', D + '18:00:00')], [el(1)]);
   eq(spoken(T, 1).speech, '16時から18時！', 'speech');
 });
-t('8:00-22:00 is never read as 8-12', () => {
-  const T = build([sr(1, D + '08:00:00', D + '22:00:00')], [el1(1)]);
+t('8:00-22:00 is never read as 8-12 (it is the confirmed "no time window" window)', () => {
+  const T = build([sr(1, D + '08:00:00', D + '22:00:00'), sr(2, D + '08:00:00', D + '12:00:00')], [el1(1), el1(2)]);
   const r = spoken(T, 1);
-  eq([r.speech, r.startMin, r.endMin], ['8時から22時！', 480, 1320], 'speech');
+  eq([r.status, r.speech, r.startMin, r.endMin], ['no_window', '時間指定なし！', 480, 1320], '8-22');
+  eq(spoken(T, 2).speech, '8時から12時！', '8-12 unchanged');
 });
 t('non-standard windows are generated from data (18:00-23:59, 0:00-23:59:59, 5-13)', () => {
   const T = build([
@@ -70,17 +71,72 @@ t('blank time fields -> unknown (確認できません！), never "時間指定�
   const r = spoken(T, 1);
   eq([r.status, r.reason, r.speech], ['unknown', 'time_blank', '確認できません！'], 'blank');
 });
-t('no_window is reachable only through noWindowEvidence (future-ready)', () => {
-  const T = build([sr(1, '', '')], [el1(1)], { noWindowEvidence: (info) => info.id === id(1) });
-  eq([spoken(T, 1).status, spoken(T, 1).speech], ['no_window', '時間指定なし！'], 'with evidence');
-  const T2 = build([sr(1, '', ''), sr(2, '', '')], [el1(1), el1(2)], { noWindowEvidence: (info) => info.id === id(1) });
-  eq(spoken(T2, 2).status, 'unknown', 'other id stays unknown');
-  const T3 = build([sr(1, '', '')], [el1(1)], { noWindowEvidence: () => 'yes' });
-  eq(spoken(T3, 1).status, 'unknown', 'only strict true counts');
+t('three outcomes are distinct: window / no_window / unknown (status, speech, label)', () => {
+  const T = build([sr(1, D + '14:00:00', D + '16:00:00'), sr(2, D + '08:00:00', D + '22:00:00'), sr(3, '', '')], [el1(1), el1(2), el1(3)]);
+  const a = spoken(T, 1), b = spoken(T, 2), c = spoken(T, 3);
+  eq([a.status, a.speech, a.label], ['window', '14時から16時！', '14時から16時'], 'window');
+  eq([b.status, b.speech, b.label, b.noWindowBasis], ['no_window', '時間指定なし！', '時間指定なし', 'full_day_window_0800_2200'], 'no window');
+  eq([c.status, c.speech, c.label], ['unknown', '確認できません！', '確認できません'], 'unknown');
 });
-t('evidence never overrides a data problem (SR duplicate conflict stays unknown)', () => {
-  const T = build([sr(1, '', ''), sr(1, D + '08:00:00', D + '12:00:00')], [el1(1)], { noWindowEvidence: () => true });
-  eq(spoken(T, 1).reason, 'dup_conflict_sr', 'conflict wins');
+t('no-window rule: only an exact 08:00-22:00 qualifies (boundaries)', () => {
+  const cases = [
+    ['08:00:00', '22:00:00', 'no_window', '時間指定なし！'],
+    ['08:00', '22:00', 'no_window', '時間指定なし！'],
+    ['07:59:00', '22:00:00', 'window', '7時59分から22時！'],
+    ['08:01:00', '22:00:00', 'window', '8時1分から22時！'],
+    ['08:00:00', '21:59:00', 'window', '8時から21時59分！'],
+    ['08:00:00', '22:01:00', 'window', '8時から22時1分！'],
+    ['09:00:00', '22:00:00', 'window', '9時から22時！'],
+    ['08:00:00', '23:00:00', 'window', '8時から23時！'],
+    ['08:00:30', '22:00:00', 'window', '8時から22時！'],
+    ['08:00:00', '22:00:59', 'window', '8時から22時！']
+  ];
+  cases.forEach((c, i) => {
+    const T = build([sr(1, D + c[0], D + c[1])], [el1(1)]);
+    eq([spoken(T, 1).status, spoken(T, 1).speech], [c[2], c[3]], 'case ' + i + ' ' + c[0] + '-' + c[1]);
+  });
+  const T = build([sr(1, REF + 'T08:00:00', REF + 'T22:00:00')], [el1(1)]);
+  eq(spoken(T, 1).status, 'no_window', 'T separator');
+});
+t('blank / partial times are never converted to "時間指定なし"', () => {
+  const T = build([sr(1, '', ''), sr(2, D + '08:00:00', ''), sr(3, '', D + '22:00:00')], [el1(1), el1(2), el1(3)]);
+  eq([spoken(T, 1).reason, spoken(T, 2).reason, spoken(T, 3).reason], ['time_blank', 'time_partial', 'time_partial'], 'reasons');
+  for (const n of [1, 2, 3]) eq([spoken(T, n).status, spoken(T, n).speech], ['unknown', '確認できません！'], 'unknown ' + n);
+});
+t('no-window rule is applied only after all safety conditions: each failing condition keeps 8-22 unknown', () => {
+  const W = [D + '08:00:00', D + '22:00:00'];
+  const T = build([
+    sr(1, '2026-11-18 08:00:00', '2026-11-18 22:00:00', REF),           // date mismatch
+    sr(2, '2026-11-16 08:00:00', '2026-11-16 22:00:00', '2026-11-16'),  // yesterday
+    sr(3, '2026-11-22 08:00:00', '2026-11-22 22:00:00', '2026-11-22'),  // far future
+    sr(4, W[0], '2026-11-18 22:00:00'),                                  // spans two dates
+    sr(5, W[0], W[1], ''),                                               // promised blank
+    sr(6, W[0], W[1]), sr(6, D + '08:00:00', D + '12:00:00'),           // duplicate conflict
+    sr(7, W[0], W[1]),                                                   // fine except: in two cycles
+    sr(8, '2026-11-17 22:00:00', '2026-11-17 08:00:00'),                 // reversed
+    sr(10, W[0], W[1])                                                   // not in elimi
+  ], [el1(1), el1(2), el1(3), el1(4), el1(5), el1(6), el1(7), el(7), el1(8), el1(9)]);
+  const want = { 1: 'date_mismatch', 2: 'date_out_of_range', 3: 'date_out_of_range', 4: 'date_span', 5: 'date_promised_missing',
+    6: 'dup_conflict_sr', 7: 'dup_cycle_elimi', 8: 'time_invalid', 9: 'not_in_sr', 10: 'not_in_elimi' };
+  for (const n of Object.keys(want)) eq([spoken(T, Number(n)).status, spoken(T, Number(n)).reason], ['unknown', want[n]], 'id ' + n);
+});
+t('8-22 duplicated identically in SearchResults is still no_window; tomorrow is allowed', () => {
+  const T = build([sr(1, D + '08:00:00', D + '22:00:00'), sr(1, D + '08:00:00', D + '22:00:00'), sr(2, '2026-11-18 08:00:00', '2026-11-18 22:00:00', '2026-11-18')], [el1(1), el1(2)]);
+  eq([spoken(T, 1).status, spoken(T, 2).status], ['no_window', 'no_window'], 'ok');
+});
+t('elimi heading safety stop is unchanged: single-range heading + 8-22 stays stopped; mixed heading does not stop', () => {
+  const T = build([sr(1, D + '08:00:00', D + '22:00:00'), sr(2, D + '08:00:00', D + '22:00:00')], [el(1), el1(2)]);
+  eq([spoken(T, 1).status, spoken(T, 1).reason, spoken(T, 1).speech], ['unknown', 'conflict_elimi', '確認できません！'], 'cycle2 stays stopped');
+  eq(spoken(T, 2).status, 'no_window', 'cycle1 mixed heading');
+  const T2 = build([sr(1, D + '08:00:00', D + '22:00:00')], [el(1)], { headingCheck: false });
+  eq(spoken(T2, 1).status, 'no_window', 'analysis-only option');
+  eq(build([sr(1, D + '08:00:00', D + '22:00:00')], [el(1)]).options.headingCheck, true, 'default on');
+});
+t('noWindowRule:null (analysis) reads 8-22 as an ordinary window; default rule is 08:00-22:00', () => {
+  const T = build([sr(1, D + '08:00:00', D + '22:00:00')], [el1(1)], { noWindowRule: null });
+  eq(spoken(T, 1).speech, '8時から22時！', 'ordinary');
+  eq(C.NO_WINDOW_RULE, { startMin: 480, endMin: 1320 }, 'rule');
+  eq(build([], []).options.noWindowRule, C.NO_WINDOW_RULE, 'default on');
 });
 t('only one of start/end -> time_partial; garbage/zone/reversed -> time_invalid', () => {
   const T = build([
@@ -131,7 +187,7 @@ t('SR duplicate with different windows -> dup_conflict_sr, not spoken', () => {
 // ---------- elimi heading vs SearchResults ----------
 t('mixed heading (Cycle1) never creates a contradiction by itself', () => {
   const T = build([sr(1, D + '08:00:00', D + '12:00:00'), sr(2, D + '14:00:00', D + '16:00:00'), sr(3, D + '08:00:00', D + '22:00:00')], [el1(1), el1(2), el1(3)]);
-  for (const n of [1, 2, 3]) eq(spoken(T, n).status, 'window', 'cycle1 ' + n);
+  eq([1, 2, 3].map((n) => spoken(T, n).status), ['window', 'window', 'no_window'], 'cycle1: 8-12 / 14-16 window, 8-22 no_window');
 });
 t('single-range heading that disagrees -> conflict_elimi, neither side is trusted', () => {
   const T = build([sr(1, D + '08:00:00', D + '22:00:00')], [el(1)]);

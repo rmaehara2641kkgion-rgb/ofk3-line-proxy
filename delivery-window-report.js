@@ -23,7 +23,8 @@
 
   // Japanese labels for the report (code -> label)
   var REASON_LABEL = {
-    ok: '読み上げ可能',
+    ok: '時間指定あり(読み上げ可)',
+    no_window: '時間指定なし(8:00〜22:00)',
     not_found: 'どちらにも無い',
     not_in_elimi: 'SearchResultsのみ(エリミ未掲載)',
     not_in_sr: 'SearchResultsに無い',
@@ -42,7 +43,7 @@
   };
 
   /** Primary-reason display order (same as the evaluation order). */
-  var REASON_ORDER = ['ok', 'not_found', 'not_in_elimi', 'not_in_sr', 'dup_cycle_elimi', 'dup_conflict_sr',
+  var REASON_ORDER = ['ok', 'no_window', 'not_found', 'not_in_elimi', 'not_in_sr', 'dup_cycle_elimi', 'dup_conflict_sr',
     'time_blank', 'time_partial', 'time_invalid', 'date_span', 'date_promised_missing', 'date_mismatch',
     'date_out_of_range', 'date_ref_missing', 'conflict_elimi'];
 
@@ -89,7 +90,7 @@
     return out;
   }
 
-  function primaryKey(r) { return r.status === 'unknown' ? r.reason : 'ok'; }
+  function primaryKey(r) { return r.status === 'unknown' ? r.reason : (r.status === 'no_window' ? 'no_window' : 'ok'); }
 
   /** One primary reason per target ID. Returns { total, counts:{key:n}, anyCounts:{key:n} } */
   function reasonSummary(table) {
@@ -125,7 +126,8 @@
       for (k in list[i].options) if (Object.prototype.hasOwnProperty.call(list[i].options, k)) o[k] = list[i].options[k];
       var t = Core.buildTable(input, o);
       var s = reasonSummary(t);
-      out.push({ name: list[i].name, label: list[i].label, total: s.total, readable: s.counts.ok || 0, counts: s.counts, table: t });
+      out.push({ name: list[i].name, label: list[i].label, total: s.total, readable: (s.counts.ok || 0) + (s.counts.no_window || 0),
+        withWindow: s.counts.ok || 0, noWindow: s.counts.no_window || 0, counts: s.counts, table: t });
     }
     return out;
   }
@@ -145,7 +147,7 @@
       var k = REASON_ORDER[i], n = s.counts[k] || 0;
       if (!n && !(s.anyCounts[k])) continue;
       sum += n;
-      rows.push([k, REASON_LABEL[k] || k, n, s.total ? (Math.round(n / s.total * 1000) / 10) : 0, k === 'ok' ? '' : (s.anyCounts[k] || 0)]);
+      rows.push([k, REASON_LABEL[k] || k, n, s.total ? (Math.round(n / s.total * 1000) / 10) : 0, (k === 'ok' || k === 'no_window') ? '' : (s.anyCounts[k] || 0)]);
     }
     rows.push(['TOTAL', '', sum, s.total ? 100 : 0, '']);
     return csv(rows);
@@ -168,11 +170,11 @@
 
   /** scenario x reason count matrix, plus readable count. */
   function scenarioCsv(results) {
-    var keys = REASON_ORDER.slice(), head = ['scenario', 'label', 'total'], i, j;
+    var keys = REASON_ORDER.slice(), head = ['scenario', 'label', 'total', 'readable'], i, j;
     for (i = 0; i < keys.length; i++) head.push(keys[i]);
     var rows = [head];
     for (j = 0; j < results.length; j++) {
-      var row = [results[j].name, results[j].label, results[j].total];
+      var row = [results[j].name, results[j].label, results[j].total, results[j].readable];
       for (i = 0; i < keys.length; i++) row.push(results[j].counts[keys[i]] || 0);
       rows.push(row);
     }

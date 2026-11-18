@@ -8,7 +8,9 @@
  * Rules (see docs/DELIVERY_WINDOW_SPEC.md):
  *  - A window is spoken only when it is positively confirmed. Everything else is "unknown"
  *    (spoken as the unknown phrase). Blank time fields NEVER mean "no time window".
- *  - "no_window" is reachable only through opts.noWindowEvidence (no evidence exists today).
+ *  - Operational rule (confirmed): a SearchResults window of exactly 08:00-22:00 means
+ *    "no time window" (status no_window). It is applied only AFTER every safety condition passed.
+ *    Any other window is left as a normal window; a blank time is never converted to no_window.
  *  - When the two sources contradict, neither is trusted: recorded as a conflict, not spoken.
  *  - Date inconsistencies are excluded from speaking until verified.
  *
@@ -49,6 +51,10 @@
 
   var SPEECH_UNKNOWN = '確認できません！';
   var SPEECH_NO_WINDOW = '時間指定なし！';
+  var LABEL_NO_WINDOW = '時間指定なし';
+  var LABEL_UNKNOWN = '確認できません';
+  // Confirmed rule: exactly 08:00-22:00 (seconds 00) = no time window.
+  var NO_WINDOW_RULE = { startMin: 480, endMin: 1320 };
 
   var SR_REQUIRED = [
     'Tracking ID',
@@ -178,7 +184,7 @@
     if (!m) return null;
     var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], se = m[6] === undefined ? 0 : +m[6];
     if (!validDate(y, mo, d) || h > 23 || mi > 59 || se > 59) return null;
-    return { date: m[1] + '-' + m[2] + '-' + m[3], min: h * 60 + mi };
+    return { date: m[1] + '-' + m[2] + '-' + m[3], min: h * 60 + mi, sec: se };
   }
 
   function validDate(y, m, d) {
@@ -317,7 +323,8 @@
   }
 
   function mkResult(id, status, reason, extra) {
-    var o = { id: id, status: status, reason: reason, speech: status === STATUS.WINDOW ? null : (status === STATUS.NO_WINDOW ? SPEECH_NO_WINDOW : SPEECH_UNKNOWN) };
+    var o = { id: id, status: status, reason: reason, speech: status === STATUS.WINDOW ? null : (status === STATUS.NO_WINDOW ? SPEECH_NO_WINDOW : SPEECH_UNKNOWN),
+      label: status === STATUS.NO_WINDOW ? LABEL_NO_WINDOW : (status === STATUS.UNKNOWN ? LABEL_UNKNOWN : null) };
     if (extra) for (var k in extra) if (has(extra, k)) o[k] = extra[k];
     return o;
   }
@@ -325,7 +332,7 @@
   /**
    * Collects EVERY applicable problem (allReasons, in priority order). The first one is the
    * primary reason. Status is window only when there is no problem at all; no_window only when
-   * the sole problem is a blank time and opts.noWindowEvidence(...) === true.
+   * the window is exactly the configured no-window window (08:00-22:00) and nothing else is wrong.
    */
   function resolveOne(id, sr, el, ctx) {
     var opts = ctx.opts, reasons = [], extra = { cycles: el ? el.cycles : [] }, i;
@@ -368,8 +375,11 @@
         }
       }
     }
-    if (reasons.length === 1 && reasons[0] === REASON.TIME_BLANK && typeof opts.noWindowEvidence === 'function' &&
-        opts.noWindowEvidence({ id: id, promised: first.promised, cycles: cycles.slice() }) === true) {
+    if (!reasons.length && opts.noWindowRule && first.s.sec === 0 && first.e.sec === 0 &&
+        first.s.min === opts.noWindowRule.startMin && first.e.min === opts.noWindowRule.endMin) {
+      extra.noWindowBasis = 'full_day_window_0800_2200';
+      extra.startText = fmtHm(first.s.min);
+      extra.endText = fmtHm(first.e.min);
       return finish(id, [], extra, ctx, true);
     }
     return finish(id, reasons, extra, ctx);
@@ -381,6 +391,7 @@
     else if (reasons.length) o = mkResult(id, STATUS.UNKNOWN, reasons[0], extra);
     else {
       extra.speech = windowSpeech(extra.startMin, extra.endMin);
+      extra.label = fmtClock(extra.startMin) + 'から' + fmtClock(extra.endMin);
       extra.startText = fmtHm(extra.startMin);
       extra.endText = fmtHm(extra.endMin);
       o = mkResult(id, STATUS.WINDOW, REASON.OK, extra);
@@ -392,7 +403,8 @@
   /**
    * buildTable({srRows, elimiRecords, reportDate, loadedAt}, opts) -> table
    * opts: requireElimi (default true), dateRange {min,max} day offsets vs referenceDate
-   *       (default {0,1}; null disables), referenceDate (default reportDate), noWindowEvidence(fn),
+   *       (default {0,1}; null disables), referenceDate (default reportDate), noWindowRule ({startMin,endMin}; default 08:00-22:00;
+ *       null = analysis only, treat it as an ordinary window),
    *       allowedAffixes (scan prefixes/suffixes), headingCheck (default true: section-heading
  *       vs SearchResults contradiction check; false = analysis only, see spec)
    */
@@ -402,7 +414,7 @@
       requireElimi: o.requireElimi === false ? false : true,
       dateRange: o.dateRange === null ? null : (o.dateRange || { min: 0, max: 1 }),
       headingCheck: o.headingCheck === false ? false : true,
-      noWindowEvidence: o.noWindowEvidence || null,
+      noWindowRule: o.noWindowRule === null ? null : (o.noWindowRule || NO_WINDOW_RULE),
       allowedAffixes: o.allowedAffixes || []
     };
     var referenceDate = o.referenceDate || input.reportDate || null;
@@ -491,7 +503,7 @@
 
   return {
     VERSION: VERSION, STATUS: STATUS, REASON: REASON,
-    SPEECH_UNKNOWN: SPEECH_UNKNOWN, SPEECH_NO_WINDOW: SPEECH_NO_WINDOW, SR_REQUIRED: SR_REQUIRED,
+    SPEECH_UNKNOWN: SPEECH_UNKNOWN, SPEECH_NO_WINDOW: SPEECH_NO_WINDOW, LABEL_NO_WINDOW: LABEL_NO_WINDOW, LABEL_UNKNOWN: LABEL_UNKNOWN, NO_WINDOW_RULE: NO_WINDOW_RULE, SR_REQUIRED: SR_REQUIRED,
     parseCsv: parseCsv, parseSearchResults: parseSearchResults,
     parseElimiCycleSheet: parseElimiCycleSheet, parseHeadingExpectation: parseHeadingExpectation,
     parseTimestamp: parseTimestamp, parseDate: parseDate, windowSpeech: windowSpeech,

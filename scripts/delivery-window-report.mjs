@@ -39,7 +39,7 @@ writeFileSync(join(outDir, 'items.csv'), R.itemsCsv(ing.table));
 writeFileSync(join(outDir, 'scenario_comparison.csv'), R.scenarioCsv(scenarios));
 console.log(JSON.stringify({
   report: ing.table.report,
-  scenarios: scenarios.map((s) => ({ name: s.name, total: s.total, readable: s.readable, counts: s.counts })),
+  scenarios: scenarios.map((s) => ({ name: s.name, total: s.total, readable: s.readable, with_window: s.withWindow, no_window: s.noWindow, counts: s.counts })),
   transitions_current_to_heading_off: R.transitions(scenarios[0], scenarios[1]),
   transitions_current_to_range_off: R.transitions(scenarios[0], scenarios[2]),
   transitions_current_to_both_off: R.transitions(scenarios[0], scenarios[3])

@@ -115,7 +115,7 @@ t('default keeps the heading check (production condition unchanged)', () => {
 });
 t('headingCheck:false removes only the heading-derived conflict; other safety conditions stay', () => {
   const g = ingest(LINES, C1, C2, null, { options: { headingCheck: false } });
-  eq(g.table.byId[id(3)].status, 'window', '8-22 readable without heading rule');
+  eq(g.table.byId[id(3)].status, 'no_window', '8-22 (no time window) readable without heading rule');
   eq(g.table.byId[id(3)].headingDiffers, true, 'difference is still recorded');
   for (const [n, reason] of [[4, 'time_blank'], [5, 'not_in_sr'], [6, 'date_mismatch'], [7, 'date_out_of_range'], [8, 'time_partial'], [9, 'dup_cycle_elimi']]) {
     eq(g.table.byId[id(n)].reason, reason, 'still excluded ' + n);
@@ -132,9 +132,10 @@ t('scenario comparison: current / heading off / date range off / both off', () =
   const sc = R.compareScenarios(g.input, {});
   eq(sc.map((s) => [s.name, s.total, s.readable]), [['current', 9, 2], ['heading_off', 9, 3], ['date_range_off', 9, 2], ['heading_and_range_off', 9, 4]], 'scenarios');
   eq(srt(sc[0].counts), srt(R.reasonSummary(g.table).counts), 'first scenario == production table');
-  eq(R.transitions(sc[0], sc[1]), { 'conflict_elimi -> ok': 1 }, 'heading off moves one');
+  eq(R.transitions(sc[0], sc[1]), { 'conflict_elimi -> no_window': 1 }, 'heading off moves one');
+  eq([sc[1].withWindow, sc[1].noWindow, sc[3].withWindow, sc[3].noWindow], [2, 1, 3, 1], 'window / no-window split');
   eq(R.transitions(sc[0], sc[2]), { 'date_out_of_range -> conflict_elimi': 1 }, 'range off: still heading-conflict');
-  eq(R.transitions(sc[0], sc[3]), { 'conflict_elimi -> ok': 1, 'date_out_of_range -> ok': 1 }, 'both off');
+  eq(R.transitions(sc[0], sc[3]), { 'conflict_elimi -> no_window': 1, 'date_out_of_range -> ok': 1 }, 'both off');
 });
 t('date range off alone does not make date-mismatch rows readable', () => {
   const g = ingest(LINES, C1, C2);
@@ -212,10 +213,20 @@ t('scenario CSV has one row per scenario and a column per reason', () => {
   eq(lines.length, 5, 'header + 4');
   assert(lines[0].split(',').indexOf('conflict_elimi') > 0, 'column');
 });
-t('no_window can only appear through noWindowEvidence (reported as ok, speech 時間指定なし！)', () => {
-  const g = ingest([srLine(1, '', '')], [], [1], null, { options: { noWindowEvidence: () => true } });
-  eq(g.table.byId[id(1)].status, 'no_window', 'status');
-  eq(R.reasonSummary(g.table).counts, { ok: 1 }, 'summary treats it as resolved');
+t('summary separates 時間指定あり(ok) / 時間指定なし(no_window) / 確認不能 and "readable" is their sum', () => {
+  const g = ingest(LINES, C1, C2, null, { options: { headingCheck: false } });
+  const sm = R.reasonSummary(g.table);
+  eq([sm.counts.ok, sm.counts.no_window], [2, 1], 'ok(1,2), no_window(3); id 9 stays stopped by its duplicate cycle');
+});
+t('summary CSV lists no_window as its own row and still totals the target count', () => {
+  const lines = [srLine(1, D + '08:00:00', D + '22:00:00'), srLine(2, D + '08:00:00', D + '12:00:00'), srLine(3, '', '')];
+  const g = ingest(lines, [1, 2, 3], []);
+  const rows = R.summaryCsv(g.table).slice(1).trim().split('\r\n').map((l) => l.split(','));
+  eq(rows.map((r) => [r[0], r[2]]), [['primary_reason', 'count'], ['ok', '1'], ['no_window', '1'], ['time_blank', '1'], ['TOTAL', '3']], 'rows');
+  const sc = R.compareScenarios(g.input, {});
+  eq([sc[0].readable, sc[0].withWindow, sc[0].noWindow], [2, 1, 1], 'readable = with + no');
+  const items = R.itemsCsv(g.table);
+  assert(items.indexOf('時間指定なし！') > 0 && items.indexOf('8時から12時！') > 0, 'speech columns');
 });
 
 // ---------- CLI ----------
