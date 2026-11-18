@@ -137,8 +137,8 @@
    *  1. exact (after normalisation) -> kind 'exact'
    *  2. a configured literal prefix/suffix stripped, remainder is exactly an ID -> 'affix'
    *  3. exactly one ID-shaped token delimited by non-alphanumerics -> 'embedded'
-   * Never matches an ID glued to other letters/digits ("XDA0013850402", "DA00138504023",
-   * a truncated "DA001385040"), and never picks one of several tokens.
+   * Never matches an ID glued to other letters/digits ("XDA0000000001", "DA00000000013",
+   * a truncated "DA000000000"), and never picks one of several tokens.
    * Returns { id|null, kind: 'exact'|'affix'|'embedded'|'none'|'ambiguous', raw length only }.
    */
   function resolveScan(raw, opts) {
