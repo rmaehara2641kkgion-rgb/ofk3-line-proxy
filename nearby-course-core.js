@@ -94,8 +94,20 @@
     FUKUOKA_NAMES[short] = full;
   });
   var FUKUOKA_KEYS = Object.keys(FUKUOKA_NAMES).sort(function(a,b){return b.length-a.length;});
+  // Explicit aliases only; do not transliterate unknown town or building names.
+  var ROMAN_MUNI = Object.create(null);
+  var romanCities = 'Kitakyushu:北九州市 Fukuoka:福岡市 Omuta:大牟田市 Kurume:久留米市 Nogata:直方市 Iizuka:飯塚市 Tagawa:田川市 Yanagawa:柳川市 Yame:八女市 Chikugo:筑後市 Okawa:大川市 Yukuhashi:行橋市 Buzen:豊前市 Nakama:中間市 Ogori:小郡市 Chikushino:筑紫野市 Kasuga:春日市 Onojo:大野城市 Munakata:宗像市 Dazaifu:太宰府市 Koga:古賀市 Fukutsu:福津市 Ukiha:うきは市 Miyawaka:宮若市 Kama:嘉麻市 Asakura:朝倉市 Miyama:みやま市 Itoshima:糸島市 Nakagawa:那珂川市';
+  romanCities.split(' ').forEach(function(pair){
+    var a=pair.split(':'); ROMAN_MUNI[a[0].toLowerCase()+'shi']=a[1]; ROMAN_MUNI[a[0].toLowerCase()+'city']=a[1];
+  });
+  function romanMunicipality(s) {
+    var k=s.toLowerCase().replace(/[\s-]/g,'');
+    return Object.prototype.hasOwnProperty.call(ROMAN_MUNI,k) ? ROMAN_MUNI[k] : '';
+  }
   function fukuokaMatch(s, exact) {
     s = s.replace(/\s+/g, '');
+    var roman = exact ? romanMunicipality(s) : '';
+    if (roman) return {full:roman,rest:''};
     for (var i=0;i<FUKUOKA_KEYS.length;i++) {
       var k=FUKUOKA_KEYS[i];
       if (exact ? s===k : s.indexOf(k)===0) return {full:FUKUOKA_NAMES[k], rest:s.slice(k.length)};
