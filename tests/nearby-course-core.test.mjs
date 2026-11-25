@@ -298,7 +298,8 @@ assert(['comma_no_municipality_part','unknown_fukuoka_municipality'].includes(C.
   assert(b.ok && b.muni === '福岡市博多区' && b.town === '御供所町', '日本語順: 都道府県の直後が市区町村');
   assert(C.parseAddress('新宮区, 粕屋町').ok === false, '都道府県なしで町域/市区町村が判別できない組合せは除外');
   assert(C.parseAddress('新宮区粕屋町').ok === false, '市を含まない区のみ表記は、都道府県なしでは推測しない');
-  assert(C.parseAddress('福岡県東区箱崎1-1').ok === true, '都道府県が明示されていれば区のみ表記を解析');
+  assert(C.parseAddress('福岡県東区箱崎1-1').ok === false, '市が省略された区のみ表記は推測しない');
+  assert(C.parseAddress('福岡県福岡市東区箱崎1-1').ok === true, '正式な市区名は解析する');
 }
 // 3) 郡は属性として保持。郡が両方にあり異なれば別自治体、片方のみなら一致可（同一都道府県内の同名町の衝突を回避）
 {
