@@ -475,10 +475,21 @@
       var R = extracted.routes[i];
       for (j = 0; j < R.rows.length; j++) {
         var p = parseAddress(R.rows[j].address);
-        if (p.ok && isChomeEvidence(p)) chomeTowns[townKey(p)] = true;
+        
         parsed.push({ route: R.route, row: R.rows[j], p: p });
       }
     }
+    // Only use an explicit, unanimous prefecture context; never override a conflicting address.
+    var knownPrefs = Object.create(null);
+    parsed.forEach(function(it){ if (it.p.pref) knownPrefs[it.p.pref] = true; });
+    var prefKeys = Object.keys(knownPrefs);
+    parsed.forEach(function(it){
+      if (!it.p.pref && prefKeys.length === 1) {
+        var retry = parseAddress(prefKeys[0] + ', ' + it.row.address);
+        if (retry.ok) it.p = retry;
+      }
+      if (it.p.ok && isChomeEvidence(it.p)) chomeTowns[townKey(it.p)] = true;
+    });
     var byBase = {}, list = [], unparsed = 0;
     for (i = 0; i < parsed.length; i++) {
       var it = parsed[i], postal = normalizePostal(it.row.postal) || it.p.postal;
