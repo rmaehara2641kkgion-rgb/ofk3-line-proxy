@@ -78,7 +78,30 @@
     PREF_LOOKUP[pf] = pf;
     PREF_LOOKUP[pf === '北海道' ? pf : pf.slice(0, -1)] = pf;
   });
-  function prefOf(str) { return PREF_LOOKUP[String(str).replace(/\s+/g, '')] || ''; }
+  function prefOf(str) {
+    var key = String(str).replace(/\s+/g, '');
+    if (/^fukuoka(?:-?ken|prefecture)?$/i.test(key)) return '福岡県';
+    return Object.prototype.hasOwnProperty.call(PREF_LOOKUP, key) ? PREF_LOOKUP[key] : '';
+  }
+
+  // 福岡県の市町村・政令市の区。住所本文と独立セグメントに同じ境界規則を使う。
+  // 対象外地域は既存の解析規則を維持する。
+  var FUKUOKA_MUNI = ('北九州市門司区 北九州市若松区 北九州市戸畑区 北九州市小倉北区 北九州市小倉南区 北九州市八幡東区 北九州市八幡西区 福岡市東区 福岡市博多区 福岡市中央区 福岡市南区 福岡市西区 福岡市城南区 福岡市早良区 北九州市 福岡市 大牟田市 久留米市 直方市 飯塚市 田川市 柳川市 八女市 筑後市 大川市 行橋市 豊前市 中間市 小郡市 筑紫野市 春日市 大野城市 宗像市 太宰府市 古賀市 福津市 うきは市 宮若市 嘉麻市 朝倉市 みやま市 糸島市 那珂川市 糟屋郡宇美町 糟屋郡篠栗町 糟屋郡志免町 糟屋郡須恵町 糟屋郡新宮町 糟屋郡久山町 糟屋郡粕屋町 遠賀郡芦屋町 遠賀郡水巻町 遠賀郡岡垣町 遠賀郡遠賀町 鞍手郡小竹町 鞍手郡鞍手町 嘉穂郡桂川町 朝倉郡筑前町 朝倉郡東峰村 三井郡大刀洗町 三潴郡大木町 八女郡広川町 田川郡香春町 田川郡添田町 田川郡糸田町 田川郡川崎町 田川郡大任町 田川郡赤村 田川郡福智町 京都郡苅田町 京都郡みやこ町 築上郡吉富町 築上郡上毛町 築上郡築上町').split(' ');
+  var FUKUOKA_NAMES = Object.create(null);
+  FUKUOKA_MUNI.forEach(function (full) {
+    FUKUOKA_NAMES[full] = full;
+    var short = full.replace(/^.+?郡/, '');
+    FUKUOKA_NAMES[short] = full;
+  });
+  var FUKUOKA_KEYS = Object.keys(FUKUOKA_NAMES).sort(function(a,b){return b.length-a.length;});
+  function fukuokaMatch(s, exact) {
+    s = s.replace(/\s+/g, '');
+    for (var i=0;i<FUKUOKA_KEYS.length;i++) {
+      var k=FUKUOKA_KEYS[i];
+      if (exact ? s===k : s.indexOf(k)===0) return {full:FUKUOKA_NAMES[k], rest:s.slice(k.length)};
+    }
+    return null;
+  }
 
   /** 先頭の都道府県を切り出す。 */
   function takePrefecture(s) {
@@ -111,7 +134,11 @@
     function weak(x) { return nd(x) && /[町村]$/.test(x.replace(/\s+/g, '')); }
     var muni = '', pos = '', kind = '', last = parts.length - 1;
     if (parts.length >= 2) {
-      if (prefEnd) {
+      if (pref === '福岡県' && (prefEnd || prefStart)) {
+        var ix = prefEnd ? last : 0;
+        var fm = fukuokaMatch(parts[ix], true);
+        if (fm) { muni = fm.full; parts.splice(ix,1); pos = prefEnd ? 'last' : 'first'; kind = 'strong'; }
+      } else if (prefEnd) {
         // 都道府県の直前だけが市区町村の候補（それ以外の位置は推測しない）
         if (strong(parts[last])) { muni = parts.pop(); pos = 'last'; kind = 'strong'; }
         else if (weak(parts[last])) { muni = parts.pop(); pos = 'last'; kind = 'weak'; }
@@ -180,7 +207,15 @@
 
     // 市区町村: 郡+町村 / 市(+区) / 区のみ
     var muni = '', town = head, mm;
-    if (explicitMuni) {
+    if (out.pref === '福岡県') {
+      var fm = fukuokaMatch(explicitMuni || head, !!explicitMuni);
+      if (!fm) { out.reason = 'unknown_fukuoka_municipality'; return out; }
+      var fg = fm.full.match(/^(.+?郡)(.+)$/);
+      out.gun = fg ? fg[1] : '';
+      muni = fg ? fg[2] : fm.full;
+      town = explicitMuni ? head : fm.rest;
+      out.via = explicitMuni ? 'segment' : 'inline';
+    } else if (explicitMuni) {
       // 郡は別属性として保持（「糟屋郡粕屋町」と「粕屋町」は一致扱い、郡が両方にあり異なれば不一致）
       var gm = explicitMuni.match(/^(.+?郡)(.+)$/);
       if (gm) { out.gun = gm[1]; muni = gm[2]; } else muni = explicitMuni;
@@ -255,7 +290,7 @@
   }
 
   function baseKey(a) {
-    return [a.muni, a.town, a.chome === null ? '' : a.chome, a.banchi === null ? '' : a.banchi, a.go === null ? '' : a.go].join('|');
+    return [a.pref || '', a.gun || '', a.muni, a.town, a.chome === null ? '' : a.chome, a.banchi === null ? '' : a.banchi, a.go === null ? '' : a.go].join('|');
   }
 
   function formatBase(a) {
@@ -447,7 +482,7 @@
     if (q.pref && rec.pref && q.pref !== rec.pref) return null; // 都道府県が明確に異なれば別地域
     if (q.gun && rec.gun && q.gun !== rec.gun) return null;     // 郡が明確に異なれば別自治体
     if (q.muni && q.town && rec.muni === q.muni && rec.town === q.town) {
-      if (rec.chome === q.chome && rec.banchi === q.banchi && rec.go === q.go) return { level: 1, diff: 0 };
+      if (rec.chome === q.chome && rec.banchi === q.banchi && rec.go === q.go && q.banchi !== null) return { level: 1, diff: 0 };
       // 丁目が無い町域は「丁目なし同士」を同一丁目扱いにする
       if (rec.chome === q.chome) {
         if (q.banchi !== null && rec.banchi === q.banchi) return { level: 2, diff: 0 };
