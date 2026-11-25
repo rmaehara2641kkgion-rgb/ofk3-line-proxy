@@ -27,8 +27,7 @@
     2: '同一町名・丁目・番地',
     3: '同一町名・丁目（番地が近い）',
     4: '同一町名・丁目',
-    5: '同一町名のみ',
-    6: '郵便番号のみ一致（参考）'
+    5: '同一町名のみ'
   };
 
   var PREFECTURES = ['北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県', '茨城県', '栃木県', '群馬県',
@@ -431,22 +430,25 @@
     return null;
   }
 
-  function search(index, addressInput, postalInput) {
+  /**
+   * 近隣コース検索。postalInput は互換のため受け取るが候補判定には使わない（郵便番号のみ一致の候補表示は無効）。
+   * opts.limit: 返す候補数（既定3。検証スクリプトは Infinity を指定）。
+   */
+  function search(index, addressInput, postalInput, opts) {
+    var limit = opts && opts.limit ? opts.limit : 3;
     var res = { ok: true, query: null, candidates: [], note: '' };
     var p = parseAddress(addressInput);
-    var inPostal = normalizePostal(postalInput) || p.postal;
-    if (!p.ok && !inPostal) {
+    if (!p.ok) {
       return { ok: false, error: '住所から市区町村・町名を判別できません。都道府県または市区町村から入力してください', candidates: [] };
     }
-    var q = p.ok ? resolveParts(p, index.chomeTowns) : { pref: '', muni: '', town: '', chome: null, banchi: null, go: null };
-    res.query = { display: p.ok ? formatBase(q) : '', postal: inPostal };
+    var q = resolveParts(p, index.chomeTowns);
+    res.query = { display: formatBase(q) };
 
     // コース単位に集約
     var courses = {}, i, rec, lv;
     for (i = 0; i < index.records.length; i++) {
       rec = index.records[i];
-      lv = p.ok ? levelOf(q, rec) : null;
-      if (!lv && inPostal && rec.postal === inPostal) lv = { level: 6, diff: Infinity };
+      lv = levelOf(q, rec); // 住所構造の一致のみで判定（郵便番号は使わない）
       if (!lv) continue;
       var c = courses[rec.route] || (courses[rec.route] = {
         route: rec.route, level: 99, diff: Infinity, goDiff: Infinity, best: null,
@@ -466,10 +468,6 @@
     var arr = Object.keys(courses).map(function (k) { return courses[k]; });
     if (!arr.length) { res.note = 'none'; return res; }
 
-    // LEVEL6（郵便番号のみ）は、LEVEL1〜5が1件も無い場合だけ参考として出す
-    var strong = arr.filter(function (c) { return c.level <= 5; });
-    if (strong.length) arr = strong;
-
     function areaCount(c) {
       if (c.level <= 2) return c.sameBanchi;
       if (c.level <= 4) return c.sameChome;
@@ -484,7 +482,7 @@
       return a.route < b.route ? -1 : a.route > b.route ? 1 : 0;
     });
 
-    res.candidates = arr.slice(0, 3).map(function (c, idx) {
+    res.candidates = arr.slice(0, limit).map(function (c, idx) {
       var next = arr[idx + 1], prev = arr[idx - 1];
       function same(x, y) { return x && y && x.level === y.level && x.diff === y.diff && x.goDiff === y.goDiff && areaCount(x) === areaCount(y); }
       return {
@@ -493,7 +491,6 @@
         sameBanchi: c.sameBanchi, sameChome: c.sameChome, sameTown: c.sameTown,
         banchiDiff: c.diff === Infinity ? null : c.diff,
         tie: same(c, next) || same(c, prev),
-        reference: c.level === 6,
         reason: reasonFor(c)
       };
     });
@@ -508,7 +505,6 @@
       case 3: s = '同一丁目内で番地番号が近い(差' + c.diff + ')配送先が存在します'; break;
       case 4: s = '同一丁目に配送先が存在します'; break;
       case 5: s = '同一町名に配送先が存在します（丁目は異なる／不明）'; break;
-      default: return '郵便番号のみ一致しています。住所は一致していないため参考情報です';
     }
     if (c.level <= 4 && c.sameChome > 1) s += '。同一丁目の配送先も' + c.sameChome + '件あります';
     else if (c.level === 5 && c.sameTown > 1) s += '。同一町名の配送先は' + c.sameTown + '件です';

@@ -27,12 +27,16 @@ const prefixes = {};
 for (const r of ex.routes) prefixes[r.route.replace(/\d+$/, '')] = (prefixes[r.route.replace(/\d+$/, '')] || 0) + 1;
 
 // 自己整合: 各配送先の基本住所で検索し、(a) 自コースがLEVEL1で見つかる (b) LEVEL1候補が別の基本住所を指さない
-let selfMiss = 0, falseL1 = 0, maxMs = 0, sumMs = 0;
+let selfTop3 = 0, selfHiddenByLimit = 0, selfMiss = 0, falseL1 = 0, maxMs = 0, sumMs = 0;
 for (const rec of idx.records) {
   const s = Date.now();
-  const r = C.search(idx, rec.display);
+  const r = C.search(idx, rec.display, '', { limit: Infinity }); // 全候補を取得して判定
   const ms = Date.now() - s; sumMs += ms; if (ms > maxMs) maxMs = ms;
-  if (!r.ok || !r.candidates.length || r.candidates[0].level !== 1) selfMiss++;
+  // 元コースがLEVEL1候補に含まれるか。上位3件内=表示される / 4位以降=候補数制限で未表示 / 無し=検索漏れ
+  const own = r.ok ? r.candidates.find((c) => c.route === rec.route) : null;
+  if (!own || own.level !== 1) selfMiss++;
+  else if (own.rank <= 3) selfTop3++;
+  else selfHiddenByLimit++;
   for (const c of r.candidates) if (c.level === 1 && c.bestAddress !== rec.display) falseL1++;
 }
 const townCourses = {};
@@ -47,7 +51,9 @@ console.log(JSON.stringify({
   解析失敗率: total ? +(idx.unparsed / total * 100).toFixed(2) + '%' : '0%',
   検索対象の基本住所数: idx.baseCount, 都道府県別基本住所数: prefCount,
   複数コースにまたがる町域数: multi,
-  自己検索でLEVEL1にならない件数: selfMiss,
+  自己検索_元コースが上位3件のLEVEL1に表示: selfTop3,
+  自己検索_元コースはLEVEL1だが候補数制限で未表示: selfHiddenByLimit,
+  自己検索_元コースがLEVEL1候補に無い_検索漏れ: selfMiss,
   LEVEL1なのに別住所を指す件数_誤一致: falseL1,
   インデックス構築ms: buildMs, 検索ms平均: +(sumMs / Math.max(1, idx.records.length)).toFixed(2), 検索ms最大: maxMs,
   警告: ex.noAddress ? '住所なし行 ' + ex.noAddress + ' 件' : 'なし'

@@ -66,7 +66,7 @@
     q.appendChild(els.addr);
     var r2 = el('div', 'flex flex-wrap items-center gap-2 mt-2');
     els.postal = el('input', 'px-3 py-2 border border-gray-300 rounded-lg text-sm w-40');
-    els.postal.type = 'text'; els.postal.placeholder = '郵便番号（任意）'; els.postal.maxLength = 10;
+    els.postal.type = 'text'; els.postal.placeholder = '郵便番号（任意・候補判定には不使用）'; els.postal.maxLength = 10;
     els.searchBtn = el('button', 'px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700', '検索');
     els.searchBtn.type = 'button';
     els.resetBtn = el('button', 'px-3 py-2 bg-white border border-border rounded-lg text-xs font-medium hover:bg-gray-50', '入力クリア');
@@ -179,7 +179,7 @@
     els.results.textContent = '';
     if (!state) { setMsg('先にマニフェストを取り込んでください', 'error'); return; }
     var addr = els.addr.value.trim();
-    if (!addr && !els.postal.value.trim()) { setMsg('配送先住所を入力してください', 'error'); return; }
+    if (!addr) { setMsg('配送先住所を入力してください', 'error'); return; }
     setMsg('', 'ok');
     var r = Core.search(state.index, addr, els.postal.value);
     if (!r.ok) { setMsg(r.error, 'error'); return; }
@@ -208,7 +208,6 @@
     d.style.background = top ? '#ECFDF5' : '#ffffff';
     var h = el('div', 'flex items-center gap-2 mb-2');
     h.appendChild(el('span', top ? 'text-base font-bold' : 'text-sm font-bold', '【第' + c.rank + '候補】' + c.route));
-    if (c.reference) h.appendChild(el('span', 'text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800', '参考'));
     if (c.tie) h.appendChild(el('span', 'text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700', '同等の候補あり'));
     d.appendChild(h);
     function line(k, v) {

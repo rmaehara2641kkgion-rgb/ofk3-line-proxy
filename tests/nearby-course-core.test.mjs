@@ -97,6 +97,7 @@ eq(C.normalizePostal('813-0013'), C.normalizePostal('8130013'), '郵便番号 �
 assert(C.parseAddress('').ok === false, '空住所は解析不可');
 
 // --- 検索
+const sig2 = (r) => JSON.stringify(r.candidates.map((c) => [c.route, c.level]));
 const top = (r) => r.candidates.map((c) => c.route + ':' + c.level);
 let r = C.search(idx, '福岡県福岡市東区香椎駅前2-15-6');
 assert(r.ok, 'search ok');
@@ -133,16 +134,25 @@ eq(r.candidates.length, 0, '市違いは該当なし');
 r = C.search(idx, '福岡市西区姪浜1-1-1');
 eq(r.candidates.length, 0, '該当住所なし');
 
-// 郵便番号のみ一致は参考候補
+// 郵便番号のみ一致の候補表示は無効（住所構造が一致しなければ候補なし）
 r = C.search(idx, '福岡市西区姪浜1-1-1', '811-2301');
-assert(r.candidates.length === 1 && r.candidates[0].level === 6 && r.candidates[0].reference, '郵便番号のみ一致=参考(LEVEL6)');
-// 住所一致があるときはLEVEL6を混ぜない
+eq(r.candidates.length, 0, '郵便番号のみ一致では候補を出さない');
 r = C.search(idx, '福岡市東区香椎駅前2-15-6', '812-0011');
-assert(r.candidates.every((c) => c.level <= 5), 'LEVEL6はLEVEL1-5がある場合は出さない');
+assert(r.candidates.every((c) => c.level <= 5) && r.candidates[0].route === 'DCX1', '郵便番号が別でも住所一致のコースを表示');
+eq(sig2(C.search(idx, '福岡市東区香椎駅前2-15-6', '999-9999')), sig2(C.search(idx, '福岡市東区香椎駅前2-15-6')), '郵便番号入力の有無で結果が変わらない');
+assert(C.LEVEL_LABEL[6] === undefined, 'LEVEL6は定義しない');
 
 // 丁目無し町域（番地差）
 r = C.search(idx, '糟屋郡粕屋町大隈124');
 eq(top(r)[0].endsWith(':3') || top(r)[0].endsWith(':2'), true, '丁目無し町域の近接番地');
+
+// limit指定で全候補を取得できる（既定は3件）
+{
+  const many = {}; for (let i = 0; i < 6; i++) many['K' + i] = [{ addr: '福岡市東区香椎駅前2-15-6' }];
+  const im = indexOf(many);
+  eq(C.search(im, '福岡市東区香椎駅前2-15-6').candidates.length, 3, '既定は上位3件');
+  eq(C.search(im, '福岡市東区香椎駅前2-15-6', '', { limit: Infinity }).candidates.length, 6, 'limit指定で全件');
+}
 
 // 解析不能入力
 r = C.search(idx, '１２３');
