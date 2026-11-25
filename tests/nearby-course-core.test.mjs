@@ -5,7 +5,16 @@ const XLSX = require('xlsx');
 const C = require('../nearby-course-core.js');
 
 let passed = 0;
-function assert(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
+const failures = [];
+const collect = process.argv.includes('--collect');
+function assert(cond, msg) {
+  if (!cond) {
+    if (!collect) throw new Error('FAIL: ' + msg);
+    failures.push(msg);
+    return;
+  }
+  passed++;
+}
 function eq(a, b, msg) { assert(JSON.stringify(a) === JSON.stringify(b), msg + ' => ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); }
 
 const HEADER = ['Stop', 'Tracking ID', 'Customer Notes', 'Phone', 'Name', 'Address', 'Postal'];
@@ -311,7 +320,7 @@ assert(['comma_no_municipality_part','unknown_fukuoka_municipality'].includes(C.
   const r = C.search(g, '福岡県糟屋郡粕屋町大隈1-1', '', { limit: Infinity });
   eq(r.candidates.map((c) => c.route).sort(), ['G1', 'G2'], '郡あり入力: 同郡と郡省略は一致、別郡は不一致');
   const r2 = C.search(g, '大隈1-1, 粕屋町, 福岡県', '', { limit: Infinity });
-  eq(r2.candidates.map((c) => c.route).sort(), ['G1', 'G2', 'G3'], '郡なし入力は郡を問わない（曖昧さは候補に残す）');
+  eq(r2.candidates.map((c) => c.route).sort(), ['G1', 'G2'], '郡省略でも辞書で正式な郡を特定し別郡は除外');
 }
 // 4) 文字数制限は維持（建物名などが混入した長い市区町村は推測せず除外）
 assert(C.parseAddress('ABCDEFGHIJKLMNOPQRSTUVWXYZ福岡市東区箱崎1-1-1').ok === false, '長すぎる市区町村は除外');
@@ -423,4 +432,6 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
   assert(out.indexOf('極秘') < 0 && out.length < 20000, '診断出力は小さな集計のみ');
 }
 
-console.log('nearby-course-core: ' + passed + ' assertions passed');
+console.log('nearby-course-core: ' + passed + ' assertions passed; ' + failures.length + ' failed');
+for (const msg of failures) console.error('FAIL: ' + msg);
+if (failures.length) process.exitCode = 1;
