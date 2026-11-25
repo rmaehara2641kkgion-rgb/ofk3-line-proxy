@@ -433,6 +433,32 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
   assert(out.indexOf('極秘') < 0 && out.length < 20000, '診断出力は小さな集計のみ');
 }
 
+
+ // OFK3 priority areas: synthetic addresses, not actual delivery records.
+{
+  const local = indexOf({
+    DCX101: [{addr:'姪の浜2丁目10番1号, 福岡市西区, 福岡県'}, {addr:'大字元岡100番地, 福岡市西区, 福岡県'}],
+    DCX102: [{addr:'梅林2丁目10番1号, 福岡市城南区, 福岡県'}, {addr:'七隈3丁目10番1号, 福岡市城南区, 福岡県'}],
+    DCX103: [{addr:'梅林2丁目10番1号, 福岡市早良区, 福岡県'}],
+    DCX104: [{addr:'前原中央2丁目10番1号, 糸島市, 福岡県'}]
+  });
+  const cases = [
+    ['福岡市西区姪の浜2丁目10番2号','DCX101',2],
+    ['福岡市西区姪の浜2丁目12番1号','DCX101',3],
+    ['福岡市城南区梅林2丁目10番2号','DCX102',2],
+    ['福岡市早良区梅林2丁目10番2号','DCX103',2],
+    ['福岡市城南区七隈3丁目12番1号','DCX102',3],
+    ['糸島市前原中央2丁目12番1号','DCX104',3],
+    ['福岡市西区大字元岡102番地','DCX101',3]
+  ];
+  for (const [query, route, level] of cases) {
+    const result = C.search(local, query);
+    eq(result.candidates.map(c => [c.route,c.level]), [[route,level]], 'OFK3 未登録住所: '+query);
+  }
+  eq(C.search(local,'福岡市西区梅林2丁目10番1号').candidates.length,0,'OFK3 区違いは候補なし');
+  eq(C.search(local,'福岡市城南区梅林2丁目10番1号').candidates.map(c=>[c.route,c.level]),[['DCX102',1]],'OFK3 同名町域の区境界');
+}
+
 console.log('nearby-course-core: ' + passed + ' assertions passed; ' + failures.length + ' failed');
 for (const msg of failures) console.error('FAIL: ' + msg);
 if (failures.length) process.exitCode = 1;
