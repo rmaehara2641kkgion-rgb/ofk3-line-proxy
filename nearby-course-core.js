@@ -17,6 +17,7 @@
     maxZipEntries: 2000,
     maxSheets: 300,
     maxRowsPerSheet: 5000,
+    maxColsPerSheet: 128,
     maxValidRows: 100000,
     maxRouteLen: 40,
     nearBanchiMax: 5                       // LEVEL3: 番地番号の差がこの値以内なら「近い」
@@ -434,12 +435,13 @@
   function extractManifest(XLSX, wb) {
     var names = wb.SheetNames || [];
     if (names.length > LIMITS.maxSheets) return { ok: false, error: 'シート数が多すぎます' };
-    var routes = [], seen = {}, skipped = 0, noAddress = 0, valid = 0, dup = 0;
+    var routes = [], seen = Object.create(null), skipped = 0, noAddress = 0, valid = 0, dup = 0;
     for (var i = 0; i < names.length; i++) {
       var ws = wb.Sheets[names[i]];
       if (!ws || !ws['!ref']) { skipped++; continue; }
       var rg = XLSX.utils.decode_range(ws['!ref']);
       if (rg.e.r - rg.s.r + 1 > LIMITS.maxRowsPerSheet) return { ok: false, error: '行数が上限(' + LIMITS.maxRowsPerSheet + ')を超えるシートがあります' };
+      if (rg.e.c - rg.s.c + 1 > LIMITS.maxColsPerSheet) return { ok: false, error: '列数が上限を超えるシートがあります' };
       var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '', blankrows: false });
       var route = routeFromSheet(names[i], rows);
       var cols = route ? findColumns(rows) : null;
@@ -567,7 +569,7 @@
     res.query = { display: formatBase(q) };
 
     // コース単位に集約
-    var courses = {}, i, rec, lv;
+    var courses = Object.create(null), i, rec, lv;
     for (i = 0; i < index.records.length; i++) {
       rec = index.records[i];
       lv = levelOf(q, rec); // 住所構造の一致のみで判定（郵便番号は使わない）
