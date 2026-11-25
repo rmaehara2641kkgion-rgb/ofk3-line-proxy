@@ -276,4 +276,70 @@ QUERIES.forEach((q) => eq(sig(C.search(amzIdx, q)), base0, 'カンマ有無・�
   assert(ix.validCount === 1 && ix.unparsed === 0, '拠点住所除外・Amazon形式を全件解析');
 }
 
+
+// ================= 診断・往復一貫性（実データ検証で判明した原因別の回帰テスト） =================
+const { diagnose } = require('../scripts/nearby-diagnose.js');
+
+// 解析失敗の原因コード
+eq(C.parseAddress('香椎駅前2-15-8, 福岡県').reason, 'comma_no_municipality_part', '市区町村の区切り無し');
+eq(C.parseAddress('香椎駅前2-15-8').reason, 'no_municipality_found', 'カンマ無しで市区町村なし');
+eq(C.parseAddress('2-15, 福岡市東区, 福岡県').reason, 'town_empty', '町域が空');
+eq(C.parseAddress('あ'.repeat(21) + '1-1, 福岡市東区, 福岡県').reason, 'town_too_long', '町域が長すぎる(建物名等の混入)');
+eq(C.parseAddress('').reason, 'empty', '空');
+assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason === '', '成功時は reason 空');
+
+// 原因: formatBase(表示用)は単位・郡/市・都道府県を落とすため、これをクエリにすると往復で構造が変わる。
+// 正規形(canonicalQuery)なら全パターンで元の基本住所に戻る。
+{
+  const RT = indexOf({
+    R1: [
+      { addr: '香椎駅前2-15-8, 福岡市東区, 福岡県' },        // 丁目-番-号
+      { addr: '香椎駅前2丁目, 福岡市東区, 福岡県' },         // 丁目のみ  → 表示 "…2" が番地と誤読される
+      { addr: '香椎駅前2丁目15番, 福岡市東区, 福岡県' },     // 丁目-番(号なし)
+      { addr: '大隈123-4, 糟屋郡粕屋町, 福岡県' },           // 町(郡あり・市なし) → 表示から市区町村を再解析できない
+      { addr: '大隈125, 粕屋町, 福岡県' },                   // 番地のみ
+      { addr: '香椎駅前3番5号, 福岡市東区, 福岡県' },        // 丁目なし・番-号 → 表示 "3-5" が丁目-番と誤読される
+    ],
+  });
+  assert(RT.records.length === 6 && RT.unparsed === 0, '往復テスト用データ');
+  let legacyBroken = 0;
+  RT.records.forEach((rec) => {
+    const r = C.search(RT, C.canonicalQuery(rec), '', { limit: Infinity });
+    assert(r.ok && r.candidates.some((c) => c.route === 'R1' && c.level === 1 && c.baseKey === rec.key), '正規形クエリは必ず自分自身にLEVEL1で戻る: ' + rec.key);
+    const l = C.search(RT, C.formatBase(rec), '', { limit: Infinity });
+    if (!l.ok || !l.candidates.some((c) => c.level === 1 && c.baseKey === rec.key)) legacyBroken++;
+  });
+  assert(legacyBroken >= 3, '旧方式(表示用文字列クエリ)は往復で構造が変わる＝検証側の不具合として再現: ' + legacyBroken);
+  // 都道府県は正規形に含まれ、再解析しても保持される
+  assert(C.canonicalQuery(RT.records[0]).endsWith('福岡県'), '正規形に都道府県を含む');
+}
+
+// 診断出力に顧客情報が含まれない（町名・建物名・Tracking ID・郵便番号の目印文字列を仕込んで検査）
+{
+  const MARK = ['極秘町', 'シークレット館', 'ZZTRACK', '9876543', '幻想市', '987-6543'];
+  const ex2 = {
+    ok: true,
+    routes: [{
+      route: 'R9',
+      rows: [
+        { stop: 1, postal: '987-6543', address: '極秘町1丁目2番3号 シークレット館101, 幻想市, 福岡県' },
+        { stop: 2, postal: '987-6543', address: '極秘町2-3-4, 幻想市, 福岡県' },
+        { stop: 3, postal: '9876543', address: '極秘町シークレット館, 福岡県' },          // 解析失敗
+        { stop: 4, postal: '', address: '5-6, 幻想市, 福岡県' },                           // 解析失敗
+        { stop: 5, postal: '', address: '極秘町七丁目一番, 幻想市, 福岡県' },
+        { stop: 6, postal: '', address: '大隈9, 糟屋郡幻想町, 福岡県' },
+      ],
+    }],
+  };
+  const ix2 = C.buildIndex(ex2);
+  const out = JSON.stringify(diagnose(C, ex2, ix2));
+  MARK.forEach((m) => assert(out.indexOf(m) < 0, '診断出力に顧客情報が含まれない: ' + m.replace(/./g, '*')));
+  assert(out.indexOf('ZZTRACK') < 0, 'Tracking ID非出力');
+  const d = JSON.parse(out);
+  assert(d.住所解析失敗.件数 === 2 && d.住所解析失敗.原因別.comma_no_municipality_part === 1 && d.住所解析失敗.原因別.town_empty === 1, '解析失敗の原因別件数');
+  assert(d.自己検索_正規形クエリ.件数.検索漏れ === 0, '正規形クエリの自己検索漏れ0');
+  assert(d.自己検索_旧方式_表示用文字列.件数.検索漏れ > 0, '旧方式の検索漏れを診断で検出できる');
+  assert(out.indexOf('極秘') < 0 && out.length < 20000, '診断出力は小さな集計のみ');
+}
+
 console.log('nearby-course-core: ' + passed + ' assertions passed');

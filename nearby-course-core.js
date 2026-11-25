@@ -98,7 +98,7 @@
     if (!/[,、]/.test(s)) return null;
     var parts = s.split(/\s*[,、]\s*/).map(function (x) { return x.trim(); })
       .filter(function (x) { return x && !/^(日本|japan|jp)$/i.test(x); });
-    if (!parts.length) return { pref: '', muni: '', street: '' };
+    if (!parts.length) return { pref: '', muni: '', street: '', muniPos: '', muniKind: '', partCount: 0 };
     var pref = '', i;
     for (i = parts.length - 1; i >= 0; i--) {
       if (prefOf(parts[i])) { pref = prefOf(parts[i]); parts.splice(i, 1); break; }
@@ -106,20 +106,20 @@
     function nd(x) { return !/\d/.test(x); }
     function strong(x) { return nd(x) && /([市区]|郡.+[町村])$/.test(x.replace(/\s+/g, '')); }
     function weak(x) { return nd(x) && /[町村]$/.test(x.replace(/\s+/g, '')); }
-    var muni = '', last = parts.length - 1;
+    var muni = '', last = parts.length - 1, pos = '', kind = '';
     if (parts.length >= 2) {
-      if (strong(parts[last])) muni = parts.pop();
-      else if (strong(parts[0])) muni = parts.shift();
-      else if (weak(parts[last])) muni = parts.pop();
-      else if (weak(parts[0])) muni = parts.shift();
+      if (strong(parts[last])) { muni = parts.pop(); pos = 'last'; kind = 'strong'; }
+      else if (strong(parts[0])) { muni = parts.shift(); pos = 'first'; kind = 'strong'; }
+      else if (weak(parts[last])) { muni = parts.pop(); pos = 'last'; kind = 'weak'; }
+      else if (weak(parts[0])) { muni = parts.shift(); pos = 'first'; kind = 'weak'; }
     }
-    return { pref: pref, muni: muni, street: parts.join(' ') };
+    return { pref: pref, muni: muni, street: parts.join(' '), muniPos: pos, muniKind: kind, partCount: parts.length + (muni ? 1 : 0) + (pref ? 1 : 0) };
   }
 
   /** 住所文字列を正規化し、構成要素に分解する（丁目の省略解釈は resolveParts で確定）。 */
   function parseAddress(raw) {
-    var out = { ok: false, pref: '', muni: '', town: '', nums: null, explicit: false, postal: '' };
-    if (raw === null || raw === undefined) return out;
+    var out = { ok: false, reason: '', pref: '', muni: '', town: '', nums: null, explicit: false, postal: '', hasTail: false };
+    if (raw === null || raw === undefined) { out.reason = 'empty'; return out; }
     var s = toHalf(raw).replace(/[\t\r\n]+/g, ' ').trim();
     // 先頭の郵便番号
     var pm = s.match(/^〒?\s*(\d{3}-?\d{4})\s*/);
@@ -159,7 +159,7 @@
     var head = di < 0 ? s : s.slice(0, di);
     var tail = di < 0 ? '' : s.slice(di);
     head = head.replace(/\s+/g, '');
-    if (!head) return out;
+    if (!head) { out.reason = explicitMuni ? 'town_empty' : (s ? 'no_text_before_number' : 'empty'); return out; }
 
     // 市区町村: 郡+町村 / 市(+区) / 区のみ
     var muni = '', town = head, mm;
@@ -197,11 +197,18 @@
       if (unit === '号') break;
       if (!m[3] && !/\d/.test(tail.charAt(pos))) break; // 区切り無し・次が数字でなければ終了
     }
+    out.hasTail = pos < tail.length;
     out.nums = nums;
     out.explicit = explicit;
     out.count = count;
     // 市区町村と町域を取り違えた住所は不正として扱う（検索対象外）
     out.ok = !!(out.muni && out.town && /[市区町村]$/.test(out.muni) && out.muni.length <= 12 && out.town.length <= 20);
+    if (!out.ok) {
+      out.reason = !out.muni ? (rc ? 'comma_no_municipality_part' : 'no_municipality_found')
+        : !out.town ? 'town_empty'
+        : !/[市区町村]$/.test(out.muni) ? 'municipality_bad_suffix'
+        : out.muni.length > 12 ? 'municipality_too_long' : 'town_too_long';
+    }
     return out;
   }
 
@@ -486,7 +493,7 @@
       var next = arr[idx + 1], prev = arr[idx - 1];
       function same(x, y) { return x && y && x.level === y.level && x.diff === y.diff && x.goDiff === y.goDiff && areaCount(x) === areaCount(y); }
       return {
-        rank: idx + 1, route: c.route, level: c.level, levelLabel: LEVEL_LABEL[c.level],
+        rank: idx + 1, route: c.route, baseKey: c.best.key, level: c.level, levelLabel: LEVEL_LABEL[c.level],
         bestAddress: c.best.display, stop: c.best.stop,
         sameBanchi: c.sameBanchi, sameChome: c.sameChome, sameTown: c.sameTown,
         banchiDiff: c.diff === Infinity ? null : c.diff,
@@ -511,11 +518,72 @@
     return s + '。';
   }
 
+  /**
+   * インデックス済み配送先の「正規形」クエリ（丁目/番/号の単位付き・Amazon形式）。
+   * formatBase(表示用)は単位・郡・都道府県を落とす非可逆表現のため、検証にはこちらを使う。
+   * 例: 香椎駅前2丁目15番8号, 福岡市東区, 福岡県
+   */
+  function canonicalQuery(rec) {
+    var t = rec.town;
+    if (rec.chome !== null) t += rec.chome + '丁目';
+    if (rec.banchi !== null) t += rec.banchi + '番';
+    if (rec.go !== null) t += rec.go + '号';
+    return t + ', ' + rec.muni + (rec.pref ? ', ' + rec.pref : '');
+  }
+
+  function bucketLen(n) { return n === 0 ? '0' : n <= 2 ? '1-2' : n <= 6 ? '3-6' : n <= 12 ? '7-12' : n <= 20 ? '13-20' : '21+'; }
+  function bucketN(n) { return n >= 5 ? '5+' : String(n); }
+
+  /**
+   * 住所1件の構造診断（診断モード用）。返すのは列挙値・真偽・件数のみで、住所の文字列は一切含めない。
+   */
+  function explainAddress(raw) {
+    var p = parseAddress(raw);
+    var s = toHalf(raw === null || raw === undefined ? '' : raw).trim();
+    var pm = s.match(/^〒?\s*(\d{3}-?\d{4})\s*/);
+    var body = pm ? s.slice(pm[0].length) : s;
+    var rc = reorderComma(body);
+    var parts = body.split(/\s*[,、]\s*/).filter(function (x) { return x; });
+    var prefForm = 'none', i;
+    for (i = 0; i < parts.length; i++) {
+      if (PREFECTURES.indexOf(parts[i]) >= 0) prefForm = 'full';
+      else if (prefOf(parts[i])) prefForm = prefForm === 'full' ? 'full' : 'abbr';
+    }
+    if (prefForm === 'none' && takePrefecture(body).pref) prefForm = 'embedded';
+    var street = rc ? rc.street : body;
+    var munisrc = rc ? rc.muni : p.muni;
+    var suffix = munisrc ? munisrc.replace(/\s+/g, '').slice(-1) : '';
+    return {
+      ok: p.ok, reason: p.reason || '',
+      f: {
+        commaCount: bucketN((s.match(/[,、]/g) || []).length),
+        partCount: bucketN(parts.length),
+        prefForm: prefForm,
+        muniSource: rc ? (rc.muni ? 'comma_' + rc.muniKind + '_' + rc.muniPos : 'comma_none') : (p.muni ? 'regex' : 'none'),
+        muniSuffix: /[市区町村]/.test(suffix) ? suffix : (suffix ? 'other' : 'none'),
+        muniLen: bucketLen(munisrc ? munisrc.replace(/\s+/g, '').length : 0),
+        townLen: bucketLen(p.town ? p.town.length : 0),
+        digitBlocks: bucketN((street.match(/\d+/g) || []).length),
+        startsWithDigit: /^\s*\d/.test(street),
+        noDigits: !/\d/.test(street),
+        hasTailAfterNumbers: !!p.hasTail,
+        hasKanjiNumeral: /[〇一二三四五六七八九十百]/.test(street),
+        hasLatin: /[A-Za-z]/.test(street),
+        hasParen: /[()\[\]【】「」]/.test(body),
+        hasPostalInAddress: !!pm,
+        hasCountryToken: /(^|[,、]\s*)(日本|japan|jp)\s*($|[,、])/i.test(body),
+        hasUnitMarks: /(丁目|番地|番|号)/.test(street)
+      },
+      shape: p.ok ? ((p.nums && p.nums[0] !== null ? 'C' : '-') + (p.nums && p.nums[1] !== null ? 'B' : '-') + (p.nums && p.nums[2] !== null ? 'G' : '-') + (p.explicit ? 'x' : 'i')) : ''
+    };
+  }
+
   var api = {
     LIMITS: LIMITS, LEVEL_LABEL: LEVEL_LABEL,
     parseAddress: parseAddress, resolveParts: resolveParts, normalizePostal: normalizePostal,
     inspectZip: inspectZip, parseFileName: parseFileName, todayJst: todayJst,
-    extractManifest: extractManifest, buildIndex: buildIndex, search: search
+    extractManifest: extractManifest, buildIndex: buildIndex, search: search,
+    canonicalQuery: canonicalQuery, explainAddress: explainAddress, formatBase: formatBase, baseKeyOf: baseKey
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.NearbyCourseCore = api;

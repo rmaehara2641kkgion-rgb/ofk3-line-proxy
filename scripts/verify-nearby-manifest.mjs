@@ -1,5 +1,6 @@
 // 管理者向け ローカル検証スクリプト（実マニフェスト用）。
-// 使い方: node scripts/verify-nearby-manifest.mjs <マニフェスト.xlsx>
+// 使い方: node scripts/verify-nearby-manifest.mjs <マニフェスト.xlsx> [--diagnose]
+// --diagnose: 解析失敗・自己検索漏れ・LEVEL1誤一致の原因別件数(匿名化済み)を追加出力する。
 // 出力は件数などの集計のみ。住所・Tracking ID・ファイル内容は一切表示/保存/送信しない。
 import { createRequire } from 'module';
 import { readFileSync } from 'fs';
@@ -7,7 +8,8 @@ const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
 const C = require('../nearby-course-core.js');
 
-const path = process.argv[2];
+const path = process.argv.slice(2).find((a) => !a.startsWith('--'));
+const DIAG = process.argv.includes('--diagnose');
 if (!path) { console.error('usage: node scripts/verify-nearby-manifest.mjs <manifest.xlsx>'); process.exit(2); }
 const buf = readFileSync(path);
 const z = C.inspectZip(new Uint8Array(buf));
@@ -26,18 +28,19 @@ for (const rec of idx.records) prefCount[rec.pref || '(なし)'] = (prefCount[re
 const prefixes = {};
 for (const r of ex.routes) prefixes[r.route.replace(/\d+$/, '')] = (prefixes[r.route.replace(/\d+$/, '')] || 0) + 1;
 
-// 自己整合: 各配送先の基本住所で検索し、(a) 自コースがLEVEL1で見つかる (b) LEVEL1候補が別の基本住所を指さない
+// 自己整合: 各配送先を「正規形クエリ(丁目/番/号の単位付き・Amazon形式)」で検索し、
+// (a) 自コースがLEVEL1で見つかる (b) LEVEL1候補が別の基本住所を指さない、を確認する。
+// ※ 表示用の基本住所(formatBase)は単位・郡・都道府県を落とす非可逆表現のため、クエリには使わない。
 let selfTop3 = 0, selfHiddenByLimit = 0, selfMiss = 0, falseL1 = 0, maxMs = 0, sumMs = 0;
 for (const rec of idx.records) {
   const s = Date.now();
-  const r = C.search(idx, rec.display, '', { limit: Infinity }); // 全候補を取得して判定
+  const r = C.search(idx, C.canonicalQuery(rec), '', { limit: Infinity }); // 全候補を取得して判定
   const ms = Date.now() - s; sumMs += ms; if (ms > maxMs) maxMs = ms;
-  // 元コースがLEVEL1候補に含まれるか。上位3件内=表示される / 4位以降=候補数制限で未表示 / 無し=検索漏れ
   const own = r.ok ? r.candidates.find((c) => c.route === rec.route) : null;
-  if (!own || own.level !== 1) selfMiss++;
+  if (!own || own.level !== 1 || own.baseKey !== rec.key) selfMiss++;
   else if (own.rank <= 3) selfTop3++;
   else selfHiddenByLimit++;
-  for (const c of r.candidates) if (c.level === 1 && c.bestAddress !== rec.display) falseL1++;
+  if (r.ok) for (const c of r.candidates) if (c.level === 1 && c.baseKey !== rec.key) falseL1++;
 }
 const townCourses = {};
 for (const rec of idx.records) { const k = rec.muni + '|' + rec.town; (townCourses[k] = townCourses[k] || new Set()).add(rec.route); }
@@ -58,3 +61,9 @@ console.log(JSON.stringify({
   インデックス構築ms: buildMs, 検索ms平均: +(sumMs / Math.max(1, idx.records.length)).toFixed(2), 検索ms最大: maxMs,
   警告: ex.noAddress ? '住所なし行 ' + ex.noAddress + ' 件' : 'なし'
 }, null, 2));
+
+if (DIAG) {
+  const { diagnose } = require('./nearby-diagnose.js');
+  console.log('\n===== 診断結果（匿名化済み・集計のみ。この出力だけを共有してください） =====');
+  console.log(JSON.stringify(diagnose(C, ex, idx), null, 2));
+}
