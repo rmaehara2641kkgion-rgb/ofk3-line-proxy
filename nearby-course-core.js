@@ -90,7 +90,7 @@
   var FUKUOKA_NAMES = Object.create(null);
   FUKUOKA_MUNI.forEach(function (full) {
     FUKUOKA_NAMES[full] = full;
-    var short = full.replace(/^.+?郡/, '');
+    var short = /[町村]$/.test(full) ? full.replace(/^.+?郡/, '') : full;
     FUKUOKA_NAMES[short] = full;
   });
   var FUKUOKA_KEYS = Object.keys(FUKUOKA_NAMES).sort(function(a,b){return b.length-a.length;});
@@ -239,14 +239,14 @@
     if (out.pref === '福岡県') {
       var fm = fukuokaMatch(explicitMuni || head, !!explicitMuni);
       if (!fm) { out.reason = 'unknown_fukuoka_municipality'; return out; }
-      var fg = fm.full.match(/^(.+?郡)(.+)$/);
+      var fg = fm.full.match(/^(.+?郡)(.+[町村])$/);
       out.gun = fg ? fg[1] : '';
       muni = fg ? fg[2] : fm.full;
       town = explicitMuni ? head : fm.rest;
       out.via = explicitMuni ? 'segment' : 'inline';
     } else if (explicitMuni) {
       // 郡は別属性として保持（「糟屋郡粕屋町」と「粕屋町」は一致扱い、郡が両方にあり異なれば不一致）
-      var gm = explicitMuni.match(/^(.+?郡)(.+)$/);
+      var gm = explicitMuni.match(/^(.+?郡)(.+[町村])$/);
       if (gm) { out.gun = gm[1]; muni = gm[2]; } else muni = explicitMuni;
       out.via = 'segment';
     } else {
@@ -485,7 +485,8 @@
     var prefKeys = Object.keys(knownPrefs);
     parsed.forEach(function(it){
       if (!it.p.pref && prefKeys.length === 1) {
-        var retry = parseAddress(prefKeys[0] + ', ' + it.row.address);
+        var retry = parseAddress(it.row.address + ', ' + prefKeys[0]);
+        if (!retry.ok) retry = parseAddress(prefKeys[0] + ', ' + it.row.address);
         if (retry.ok) it.p = retry;
       }
       if (it.p.ok && isChomeEvidence(it.p)) chomeTowns[townKey(it.p)] = true;
@@ -554,7 +555,8 @@
     if (!p.pref && index.records.length) {
       var known = index.records[0].pref;
       if (known && index.records.every(function(r){return r.pref === known;})) {
-        var retry = parseAddress(known + ', ' + addressInput);
+        var retry = parseAddress(addressInput + ', ' + known);
+        if (!retry.ok) retry = parseAddress(known + ', ' + addressInput);
         if (retry.ok) p = retry;
       }
     }
