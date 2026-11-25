@@ -39,18 +39,29 @@
     card.appendChild(el('p', 'text-xs text-ink-lighter mb-3',
       '本日のマニフェストに無い荷物の配送先住所から、近隣住所を配送するコースを探します。データはこのブラウザ内のみで処理し、外部へ送信しません。'));
 
-    // --- 取込エリア
+    // --- 取込エリア（ドラッグ＆ドロップ領域 + ファイル選択ボタン。どちらも同じ importFile() を使う）
     var imp = el('div', 'mb-4 p-3 rounded-lg border border-gray-200');
-    var row = el('div', 'flex flex-wrap items-center gap-2');
     els.file = el('input'); els.file.type = 'file'; els.file.accept = '.xlsx';
-    els.file.className = 'text-xs';
-    els.importBtn = el('button', 'px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600', '取込');
+    els.file.style.display = 'none';
+    els.zone = el('div', 'text-center rounded-lg cursor-pointer');
+    els.zone.tabIndex = 0;
+    els.zone.setAttribute('role', 'button');
+    els.zone.setAttribute('aria-label', 'マニフェストExcelをドロップ、またはクリックしてファイルを選択');
+    zoneStyle('idle');
+    els.zone.appendChild(el('div', 'text-3xl mb-1', '📂'));
+    els.zone.appendChild(el('p', 'text-sm font-bold', 'マニフェストExcel(xlsx)をここにドラッグ＆ドロップ'));
+    els.zone.appendChild(el('p', 'text-xs text-ink-lighter mt-1', 'またはクリックしてファイルを選択（選択・ドロップすると自動で取込みます）'));
+    imp.appendChild(els.zone);
+    var row = el('div', 'flex flex-wrap items-center gap-2 mt-2');
+    els.importBtn = el('button', 'px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600', '取込（ファイルを選択）');
     els.importBtn.type = 'button';
     els.clearBtn = el('button', 'px-3 py-2 bg-white border border-border rounded-lg text-xs font-medium hover:bg-gray-50', 'データクリア');
     els.clearBtn.type = 'button';
-    row.appendChild(els.file); row.appendChild(els.importBtn); row.appendChild(els.clearBtn);
+    row.appendChild(els.importBtn); row.appendChild(els.clearBtn); row.appendChild(els.file);
     imp.appendChild(row);
-    els.msg = el('p', 'text-xs mt-2');
+    els.msg = el('div', 'text-sm font-bold rounded-lg mt-2');
+    els.msg.setAttribute('role', 'status');
+    els.msg.style.display = 'none';
     imp.appendChild(els.msg);
     els.status = el('dl', 'grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs mt-2 hidden');
     imp.appendChild(els.status);
@@ -82,7 +93,7 @@
 
     panel.insertBefore(card, panel.firstChild);
 
-    els.importBtn.addEventListener('click', doImport);
+    wireImport();
     els.clearBtn.addEventListener('click', clearAll);
     els.searchBtn.addEventListener('click', doSearch);
     els.resetBtn.addEventListener('click', function () {
@@ -94,76 +105,154 @@
     renderStatus();
   }
 
+  // 画面の表示状態: kind = ok | warn | error | busy
   function setMsg(text, kind) {
-    els.msg.textContent = text || '';
-    els.msg.style.color = kind === 'error' ? '#b91c1c' : kind === 'warn' ? '#b45309' : '#047857';
+    var m = els.msg;
+    m.textContent = text || '';
+    if (!text) { m.style.display = 'none'; return; }
+    var c = kind === 'error' ? ['#991b1b', '#fef2f2', '#fca5a5'] : kind === 'warn' || kind === 'busy' ? ['#92400e', '#fffbeb', '#fcd34d'] : ['#065f46', '#ecfdf5', '#6ee7b7'];
+    m.style.display = 'block';
+    m.style.color = c[0]; m.style.background = c[1]; m.style.border = '1px solid ' + c[2]; m.style.padding = '8px 12px';
+    m.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   }
 
-  function doImport() {
-    var f = els.file.files && els.file.files[0];
-    if (!f) { setMsg('取り込むマニフェスト(xlsx)を選択してください', 'error'); return; }
-    if (!/\.xlsx$/i.test(f.name)) { setMsg('xlsxファイルのみ取り込めます', 'error'); return; }
-    if (f.size > Core.LIMITS.maxFileBytes) { setMsg('ファイルサイズが大きすぎます（上限 ' + Math.round(Core.LIMITS.maxFileBytes / 1048576) + 'MB）', 'error'); return; }
-    if (typeof XLSX === 'undefined') { setMsg('Excel読込ライブラリが利用できません', 'error'); return; }
+  // ドロップ領域の見た目: idle | drag（ドラッグ中: 枠線と背景色を変える） | busy
+  function zoneStyle(mode) {
+    var st = els.zone.style;
+    st.padding = '18px 12px';
+    st.border = '2px dashed ' + (mode === 'drag' ? '#2563eb' : mode === 'busy' ? '#d97706' : '#9ca3af');
+    st.background = mode === 'drag' ? '#dbeafe' : mode === 'busy' ? '#fffbeb' : '#f9fafb';
+    st.transition = 'background .1s, border-color .1s';
+  }
+
+  function setBusy(b) {
+    importing = b;
+    els.importBtn.disabled = b;
+    els.searchBtn.disabled = b;
+    zoneStyle(b ? 'busy' : 'idle');
+  }
+
+  /** 共通取込処理: ファイル選択・ドロップ・ボタンのすべてがここを通る。失敗時は必ず画面にエラーを表示する。 */
+  function importFile(f, note) {
+    note = note ? ' ' + note : '';
+    if (!f) { els.file.click(); return; }
+    if (!/\.xlsx$/i.test(f.name)) { setMsg('取込失敗: xlsxファイルのみ取り込めます（既存データは維持されています）', 'error'); return; }
+    if (!f.size) { setMsg('取込失敗: ファイルが空です（既存データは維持されています）', 'error'); return; }
+    if (f.size > Core.LIMITS.maxFileBytes) { setMsg('取込失敗: ファイルサイズが大きすぎます（上限 ' + Math.round(Core.LIMITS.maxFileBytes / 1048576) + 'MB）（既存データは維持されています）', 'error'); return; }
+    if (typeof XLSX === 'undefined') { setMsg('取込失敗: Excel読込ライブラリが利用できません', 'error'); return; }
     var generation = ++importGeneration;
-    importing = true;
-    els.importBtn.disabled = true;
+    setBusy(true);
     els.clearBtn.disabled = false;
-    els.searchBtn.disabled = true;
-    function finish() { importing = false; els.importBtn.disabled = false; els.searchBtn.disabled = false; renderStatus(); }
-    setMsg('読込中…', 'warn');
-    var reader = new FileReader();
-    reader.onerror = function () { if (generation !== importGeneration) return; finish(); setMsg('ファイルを読み込めませんでした（既存データは維持されています）', 'error'); };
+    setMsg('読込中… ' + f.name + note, 'busy');
+    function fail(text) {
+      if (generation !== importGeneration) return;
+      setBusy(false); renderStatus();
+      setMsg('取込失敗: ' + text + '（既存データは維持されています）' + note, 'error');
+    }
+    var reader;
+    try { reader = new FileReader(); } catch (err) { fail('ファイルを読み込めません'); return; }
+    reader.onerror = function () { fail('ファイルを読み込めませんでした'); };
+    reader.onabort = function () { fail('ファイルの読込が中断されました'); };
     reader.onload = function (e) {
       if (generation !== importGeneration) return;
-      var next;
-      try {
-        var bytes = new Uint8Array(e.target.result);
-        var z = Core.inspectZip(bytes);
-        if (!z.ok) throw new Error(z.error);
-        // 数式は評価せず、書式・HTML・VBA等は読まない（キャッシュ値のみ）
-        var wb = XLSX.read(bytes, { type: 'array', cellFormula: false, cellHTML: false, cellStyles: false, cellNF: false, bookVBA: false });
-        var ex = Core.extractManifest(XLSX, wb);
-        wb = null;
-        if (!ex.ok) throw new Error(ex.error);
-        var idx = Core.buildIndex(ex);
-        if (!idx.validCount) throw new Error('有効な配送データ（Tracking IDあり）が1件もありません');
-        var meta = Core.parseFileName(f.name);
-        var warnings = [];
-        var today = Core.todayJst();
-        if (!meta.date) warnings.push('ファイル名から対象配送日を特定できません。本日のマニフェストか確認してください。');
-        else if (meta.date < today) warnings.push('⚠ 過去日付(' + meta.date + ')のマニフェストです。本日(' + today + ')のものか確認してください。');
-        else if (meta.date > today) warnings.push('対象配送日(' + meta.date + ')が本日(' + today + ')と異なります。');
-        if (ex.sheetsSkipped) warnings.push('コースとして読めないシートを' + ex.sheetsSkipped + '件スキップしました。');
-        if (ex.noAddress) warnings.push('住所が空の配送行 ' + ex.noAddress + '件は検索対象外です。');
-        if (!idx.records.length) throw new Error('住所を解析できた配送先が1件もありません（住所形式を確認してください）');
-        if (idx.unparsed) warnings.push('⚠ 住所の市区町村・町域を解析できない' + idx.unparsed + '件（有効' + idx.validCount + '件中）は検索対象から除外しました。');
-        next = { fileName: f.name, date: meta.date, cycle: meta.cycle, importedAt: jstNowText(), index: idx, warnings: warnings };
-      } catch (err) {
-        finish();
-        setMsg('取込失敗: ' + (err && err.message ? err.message : '不明なエラー') + '（既存データは維持されています）', 'error');
-        return;
-      }
-      finish();
-      state = next; // 正常に解析できた場合のみ置換
-      els.results.textContent = '';
-      els.file.value = '';
-      setMsg(next.warnings.length ? '取込完了（要確認あり）' : '取込完了', next.warnings.length ? 'warn' : 'ok');
-      renderStatus();
+      // 「読込中」表示を描画させてから解析する（大きなファイルで画面が固まって見えないように）
+      setTimeout(function () {
+        if (generation !== importGeneration) return;
+        var next;
+        try {
+          var bytes = new Uint8Array(e.target.result);
+          var z = Core.inspectZip(bytes);
+          if (!z.ok) throw new Error(z.error);
+          // 数式は評価せず、書式・HTML・VBA等は読まない（キャッシュ値のみ）
+          var wb = XLSX.read(bytes, { type: 'array', cellFormula: false, cellHTML: false, cellStyles: false, cellNF: false, bookVBA: false });
+          var ex = Core.extractManifest(XLSX, wb);
+          wb = null;
+          if (!ex.ok) throw new Error(ex.error);
+          var idx = Core.buildIndex(ex);
+          if (!idx.validCount) throw new Error('有効な配送データ（Tracking IDあり）が1件もありません');
+          var meta = Core.parseFileName(f.name);
+          var warnings = [];
+          var today = Core.todayJst();
+          if (!meta.date) warnings.push('ファイル名から対象配送日を特定できません。本日のマニフェストか確認してください。');
+          else if (meta.date < today) warnings.push('⚠ 過去日付(' + meta.date + ')のマニフェストです。本日(' + today + ')のものか確認してください。');
+          else if (meta.date > today) warnings.push('対象配送日(' + meta.date + ')が本日(' + today + ')と異なります。');
+          if (ex.sheetsSkipped) warnings.push('コースとして読めないシートを' + ex.sheetsSkipped + '件スキップしました。');
+          if (ex.noAddress) warnings.push('住所が空の配送行 ' + ex.noAddress + '件は検索対象外です。');
+          if (!idx.records.length) throw new Error('住所を解析できた配送先が1件もありません（住所形式を確認してください）');
+          if (idx.unparsed) warnings.push('⚠ 住所の市区町村・町域を解析できない' + idx.unparsed + '件（有効' + idx.validCount + '件中）は検索対象から除外しました。');
+          next = { fileName: f.name, date: meta.date, cycle: meta.cycle, importedAt: jstNowText(), index: idx, warnings: warnings };
+        } catch (err) {
+          fail(err && err.message ? err.message : '不明なエラー');
+          return;
+        }
+        state = next; // 正常に解析できた場合のみ置換
+        els.results.textContent = '';
+        setBusy(false);
+        setMsg((next.warnings.length ? '取込完了（要確認あり）: ' : '取込完了: ') + next.fileName + note, next.warnings.length ? 'warn' : 'ok');
+        renderStatus();
+      }, 30);
     };
-    try { reader.readAsArrayBuffer(f); } catch (_) { if (generation === importGeneration) { finish(); setMsg('ファイルを読み込めませんでした', 'error'); } }
+    try { reader.readAsArrayBuffer(f); } catch (err) { fail('ファイルを読み込めません'); }
+  }
+
+  function hasFiles(ev) {
+    var dt = ev && ev.dataTransfer;
+    if (!dt || !dt.types) return false;
+    for (var i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+    return false;
+  }
+
+  function wireImport() {
+    // ファイル選択: 選択したら自動で取込。同じファイルを選び直しても反応するよう、毎回 value を空にする
+    els.file.addEventListener('change', function () {
+      var f = els.file.files && els.file.files[0];
+      els.file.value = '';
+      if (f) importFile(f);
+    });
+    els.importBtn.addEventListener('click', function () { els.file.click(); });
+    els.zone.addEventListener('click', function () { els.file.click(); });
+    els.zone.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); els.file.click(); }
+    });
+    // ドラッグ＆ドロップ（領域内）
+    ['dragenter', 'dragover'].forEach(function (t) {
+      els.zone.addEventListener(t, function (e) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        if (!importing) zoneStyle('drag');
+      });
+    });
+    els.zone.addEventListener('dragleave', function (e) {
+      if (e.relatedTarget && els.zone.contains(e.relatedTarget)) return;
+      zoneStyle(importing ? 'busy' : 'idle');
+    });
+    els.zone.addEventListener('drop', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      zoneStyle(importing ? 'busy' : 'idle');
+      var fl = e.dataTransfer.files;
+      if (!fl || !fl.length) return;
+      importFile(fl[0], fl.length > 1 ? '※複数ファイルがドロップされたため、最初の1ファイルのみ取り込みました' : '');
+    });
+    // 領域外にドロップしてもブラウザがExcelを直接開かないようにする（住所検索タブ表示中のみ）
+    var panel = document.getElementById('panel-addr-search');
+    function panelVisible() { return !!panel && panel.offsetParent !== null; }
+    document.addEventListener('dragover', function (e) {
+      if (hasFiles(e) && panelVisible()) { e.preventDefault(); if (e.dataTransfer && !els.zone.contains(e.target)) e.dataTransfer.dropEffect = 'none'; }
+    });
+    document.addEventListener('drop', function (e) {
+      if (hasFiles(e) && panelVisible()) e.preventDefault(); // 領域内のドロップは zone の drop ハンドラが処理する
+    });
   }
 
   function clearAll() {
     ++importGeneration;
-    importing = false;
-    els.importBtn.disabled = false;
-    els.searchBtn.disabled = false;
+    setBusy(false);
     els.addr.value = '';
     els.postal.value = '';
     state = null;
     els.results.textContent = '';
-    els.file.value = '';
     setMsg('データをクリアしました', 'ok');
     renderStatus();
   }
