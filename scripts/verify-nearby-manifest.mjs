@@ -31,12 +31,15 @@ for (const r of ex.routes) prefixes[r.route.replace(/\d+$/, '')] = (prefixes[r.r
 // 自己整合: 各配送先を「正規形クエリ(丁目/番/号の単位付き・Amazon形式)」で検索し、
 // (a) 自コースがLEVEL1で見つかる (b) LEVEL1候補が別の基本住所を指さない、を確認する。
 // ※ 表示用の基本住所(formatBase)は単位・郡・都道府県を落とす非可逆表現のため、クエリには使わない。
+let ownTop3 = 0, ownHidden = 0, ownAbsent = 0, ownNonL1 = 0;
 let selfTop3 = 0, selfHiddenByLimit = 0, selfMiss = 0, falseL1 = 0, maxMs = 0, sumMs = 0;
 for (const rec of idx.records) {
   const s = Date.now();
   const r = C.search(idx, C.canonicalQuery(rec), '', { limit: Infinity }); // 全候補を取得して判定
   const ms = Date.now() - s; sumMs += ms; if (ms > maxMs) maxMs = ms;
   const own = r.ok ? r.candidates.find((c) => c.route === rec.route) : null;
+  if (!own) ownAbsent++;
+  else { if (own.rank <= 3) ownTop3++; else ownHidden++; if (own.level !== 1) ownNonL1++; }
   if (!own || own.level !== 1 || own.baseKey !== rec.key) selfMiss++;
   else if (own.rank <= 3) selfTop3++;
   else selfHiddenByLimit++;
@@ -58,6 +61,8 @@ console.log(JSON.stringify({
   自己検索_元コースはLEVEL1だが候補数制限で未表示: selfHiddenByLimit,
   自己検索_元コースがLEVEL1候補に無い_検索漏れ: selfMiss,
   LEVEL1なのに別住所を指す件数_誤一致: falseL1,
+  元コース_全LEVEL上位3: ownTop3, 元コース_全LEVEL上位3圏外: ownHidden,
+  元コース_全候補なし: ownAbsent, 元コース_LEVEL1以外: ownNonL1,
   インデックス構築ms: buildMs, 検索ms平均: +(sumMs / Math.max(1, idx.records.length)).toFixed(2), 検索ms最大: maxMs,
   警告: ex.noAddress ? '住所なし行 ' + ex.noAddress + ' 件' : 'なし'
 }, null, 2));
