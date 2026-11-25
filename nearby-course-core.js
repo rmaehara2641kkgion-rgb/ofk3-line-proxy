@@ -157,6 +157,23 @@
         }
       }
     }
+    // If the municipality is embedded in a non-leading segment, move only a
+    // uniquely identified official municipality+street prefix to the front.
+    if (pref === '福岡県' && !muni) {
+      var hits = [];
+      parts.forEach(function(part, ix) {
+        var hit = fukuokaMatch(part, false);
+        if (hit && hit.rest && !/^\d/.test(hit.rest)) hits.push(ix);
+      });
+      if (hits.length === 1 && hits[0] > 0) {
+        var at = hits[0];
+        // Do not move a segment across a preceding numeric address block.
+        if (parts.slice(0,at).every(function(part){return !/\d/.test(part);})) {
+          var primary = parts.splice(at,1)[0];
+          parts.unshift(primary);
+        }
+      }
+    }
     return { pref: pref, muni: muni, street: parts.join(' '), muniPos: pos, muniKind: kind, partCount: parts.length + (muni ? 1 : 0) + (pref ? 1 : 0) };
   }
 
@@ -274,13 +291,17 @@
    * 丁目の省略解釈を確定して {muni, town, chome, banchi, go} にする。
    * 単位無し(例 2-15-8)は 3個→丁目-番-号 / 1個→番地 / 2個→「丁目あり町域」なら丁目-番、それ以外は番-号。
    */
+  function townKey(p) {
+    return [p.pref || '', p.gun || '', p.muni, p.town].join('|');
+  }
+
   function resolveParts(p, chomeTowns) {
     var n = p.nums || [null, null, null];
     var chome = n[0], banchi = n[1], go = n[2];
     if (!p.explicit) {
       var c = p.count || 0;
       if (c === 1) { banchi = n[0]; chome = null; go = null; }
-      else if (c === 2 && !(chomeTowns && chomeTowns[p.muni + '|' + p.town])) { banchi = n[0]; go = n[1]; chome = null; }
+      else if (c === 2 && !(chomeTowns && chomeTowns[townKey(p)])) { banchi = n[0]; go = n[1]; chome = null; }
     }
     return { pref: p.pref || '', gun: p.gun || '', muni: p.muni, town: p.town, chome: chome, banchi: banchi, go: go };
   }
@@ -442,7 +463,7 @@
       var R = extracted.routes[i];
       for (j = 0; j < R.rows.length; j++) {
         var p = parseAddress(R.rows[j].address);
-        if (p.ok && isChomeEvidence(p)) chomeTowns[p.muni + '|' + p.town] = true;
+        if (p.ok && isChomeEvidence(p)) chomeTowns[townKey(p)] = true;
         parsed.push({ route: R.route, row: R.rows[j], p: p });
       }
     }
@@ -505,6 +526,15 @@
     var limit = opts && opts.limit ? opts.limit : 3;
     var res = { ok: true, query: null, candidates: [], note: '' };
     var p = parseAddress(addressInput);
+    // In a single-prefecture manifest, retry omitted-prefecture queries with
+    // that known context, never override an explicitly supplied prefecture.
+    if (!p.pref && index.records.length) {
+      var known = index.records[0].pref;
+      if (known && index.records.every(function(r){return r.pref === known;})) {
+        var retry = parseAddress(known + ', ' + addressInput);
+        if (retry.ok) p = retry;
+      }
+    }
     if (!p.ok) {
       return { ok: false, error: '住所から市区町村・町名を判別できません。都道府県または市区町村から入力してください', candidates: [] };
     }
