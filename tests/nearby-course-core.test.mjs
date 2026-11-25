@@ -459,6 +459,27 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
   eq(C.search(local,'福岡市城南区梅林2丁目10番1号').candidates.map(c=>[c.route,c.level]),[['DCX102',1]],'OFK3 同名町域の区境界');
 }
 
+
+ // SEC-01/02: malformed archive and worksheet bounds.
+{
+  const mutate = (fn) => {
+    const b = Buffer.from(good);
+    const e = b.lastIndexOf(Buffer.from([0x50,0x4b,0x05,0x06]));
+    const c = b.readUInt32LE(e+16);
+    fn(b,e,c);
+    return C.inspectZip(new Uint8Array(b)).ok;
+  };
+  assert(!mutate((b,e,c)=>b.writeUInt32LE(b.length,c+42)), 'SEC02 不正ローカルオフセット拒否');
+  assert(!mutate((b,e,c)=>b.writeUInt32LE(0,e+12)), 'SEC02 不正ディレクトリ長拒否');
+  assert(!mutate((b,e,c)=>b.writeUInt16LE(1,e+4)), 'SEC02 分割ZIP拒否');
+  assert(!mutate((b,e,c)=>b.writeUInt16LE(99,c+10)), 'SEC02 未対応圧縮方式拒否');
+  assert(!mutate((b,e,c)=>{const o=b.readUInt32LE(c+42); b[o+30]^=1;}), 'SEC02 ローカルファイル名不一致拒否');
+  assert(!mutate((b,e,c)=>b.writeUInt32LE(0xffffffff,c+20)), 'SEC02 圧縮データ範囲超過拒否');
+  const wb=makeWb({DCX1:[{addr:'福岡市西区姪の浜2丁目10番1号'}]});
+  wb.Sheets[wb.SheetNames[0]]['!ref']='A1:XFD3';
+  assert(!C.extractManifest(XLSX,wb).ok,'SEC01 過大列範囲拒否');
+}
+
 console.log('nearby-course-core: ' + passed + ' assertions passed; ' + failures.length + ' failed');
 for (const msg of failures) console.error('FAIL: ' + msg);
 if (failures.length) process.exitCode = 1;
