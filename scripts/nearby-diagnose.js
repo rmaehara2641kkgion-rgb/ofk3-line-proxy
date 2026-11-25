@@ -11,6 +11,14 @@ function sortObj(o) {
   return out;
 }
 
+function top(o, n) {
+  var keys = Object.keys(o).sort(function (a, b) { return o[b] - o[a] || (a < b ? -1 : 1); });
+  var out = {}, rest = 0;
+  keys.forEach(function (k, i) { if (i < n) out[k] = o[k]; else rest += o[k]; });
+  if (rest) out['(その他)'] = rest;
+  return out;
+}
+
 function diffFields(a, b) {
   var f = [];
   ['muni', 'town', 'chome', 'banchi', 'go'].forEach(function (k) { if (a[k] !== b[k]) f.push(k); });
@@ -24,6 +32,7 @@ function parts(C, text, chomeTowns) {
 
 function diagnose(C, extracted, idx) {
   var features = {}, failFeatures = {}, failReasons = {}, failCross = {}, shapes = {}, total = 0, failed = 0;
+  var sigAll = {}, sigFail = {}, sigFailByReason = {}, viaCount = {};
 
   extracted.routes.forEach(function (R) {
     R.rows.forEach(function (row) {
@@ -35,6 +44,9 @@ function diagnose(C, extracted, idx) {
         inc(features[k], v);
         if (!e.ok) { (failFeatures[k] = failFeatures[k] || {}); inc(failFeatures[k], v); }
       });
+      inc(sigAll, e.sig);
+      if (e.ok) inc(viaCount, e.via || 'none');
+      if (!e.ok) { inc(sigFail, e.sig); inc(sigFailByReason, e.reason + ' :: ' + e.sig); }
       if (e.ok) inc(shapes, e.shape); // C=丁目 B=番地 G=号 / x=単位表記あり i=単位なし(省略解釈)
       else {
         failed++;
@@ -64,7 +76,7 @@ function diagnose(C, extracted, idx) {
         } else {
           var rp = parts(C, q, idx.chomeTowns);
           var d = rp.r ? diffFields(rp.r, rec) : 'parse_fail';
-          if (d) inc(causes, '再解析で構造が変化:' + d);
+          if (d) inc(causes, '再解析で構造が変化:' + d + ' | 元の市区町村由来=' + (rec.via || '?') + ' 郡=' + (rec.gun ? '有' : '無') + ' 都道府県=' + (rec.pref ? '有' : '無') + ' 再解析由来=' + (rp.p.via || '?'));
           else inc(causes, 'LEVEL1にならない:own=' + (own ? 'LEVEL' + own.level : '候補なし'));
         }
       }
@@ -88,6 +100,11 @@ function diagnose(C, extracted, idx) {
   return {
     診断対象行数: total,
     住所解析失敗: { 件数: failed, 原因別: sortObj(failReasons), 原因別_詳細: sortObj(failCross) },
+    区切り構造シグネチャ: {
+      凡例: 'P=都道府県 p=略称 C=国名 Z=郵便番号様 L=英字のみ S=市区町村様 W=町村で終わる M=先頭に市区町村様+後続 N=数字始まり D=数字含む A=その他',
+      解析失敗行_上位: top(sigFail, 40), 解析失敗_原因別_上位: top(sigFailByReason, 40), 全行_上位: top(sigAll, 30)
+    },
+    市区町村の由来_解析成功行: sortObj(viaCount),
     住所構造の特徴_全行: features,
     住所構造の特徴_解析失敗行のみ: failFeatures,
     解析成功住所の構造: sortObj(shapes),

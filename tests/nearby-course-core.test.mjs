@@ -84,7 +84,7 @@ assert(idx.routeCount === 5, 'コース数');
 }
 
 // --- 住所正規化
-const parse = (s, towns) => { const p = C.parseAddress(s); const r = C.resolveParts(p, towns || {}); delete r.pref; return r; };
+const parse = (s, towns) => { const p = C.parseAddress(s); const r = C.resolveParts(p, towns || {}); delete r.pref; delete r.gun; return r; };
 const BASE = { muni: '福岡市東区', town: '香椎駅前', chome: 2, banchi: 15, go: 8 };
 ['福岡市東区香椎駅前２丁目１５番８号', '福岡県福岡市東区香椎駅前2-15-8', '福岡市東区香椎駅前2丁目15-8 ○○マンション101',
   '福岡市東区香椎駅前二丁目十五番八号', '福岡市東区　香椎駅前　２－１５－８', '〒813-0013 福岡県福岡市東区香椎駅前2‐15‐8',
@@ -266,8 +266,9 @@ QUERIES.forEach((q) => eq(sig(C.search(amzIdx, q)), base0, 'カンマ有無・�
   const i3 = indexOf({ T1: [{ addr: '銀座1-1-1, 中央区, 東京都' }], O1: [{ addr: '銀座1-1-1, 中央区, 大阪府' }] });
   const r3 = C.search(i3, '東京都中央区銀座1-1-1');
   eq(r3.candidates.map((c) => c.route), ['T1'], '都道府県が異なる同名区を区別');
-  const r4 = C.search(i3, '中央区銀座1-1-1'); // 都道府県なしなら両方
-  eq(r4.candidates.length, 2, '都道府県なし入力は両方を候補にする');
+  const r4 = C.search(i3, '中央区銀座1-1-1'); // 市の無い区のみ表記は都道府県が無いと町域と区別できない → 解析しない
+  assert(r4.ok === false, '都道府県なしの「区のみ」表記は推測しない');
+  eq(C.search(i3, '大阪府中央区銀座1-1-1').candidates.map((c) => c.route), ['O1'], '都道府県付きの区のみ表記は解析できる');
 }
 // Amazon形式でも拠点(Tracking IDなし)は除外され、全件が同一形式で取り込める
 {
@@ -276,6 +277,79 @@ QUERIES.forEach((q) => eq(sig(C.search(amzIdx, q)), base0, 'カンマ有無・�
   assert(ix.validCount === 1 && ix.unparsed === 0, '拠点住所除外・Amazon形式を全件解析');
 }
 
+
+// ================= 市区町村の抽出（実データ診断 2b63d8a: weak_first 87/87失敗, 再解析でmuni変化20件, LEVEL1誤一致3件） =================
+// 1) 先頭が町・村で終わるセグメントは町域であり市区町村ではない（「町域, 番地, …」形式）→ 推測せず除外
+for (const a of ['千代町, 1-2-3, 福岡県', '千代町, 1-2-3, ビル名, 福岡県', '福岡県, 粕屋町, 大隈123-4']) {
+  assert(C.parseAddress(a).ok === false, '町・村で終わる先頭セグメントを市区町村にしない: ' + a.slice(0, 3));
+}
+eq(C.parseAddress('千代町, 1-2-3, 福岡県').reason, 'comma_no_municipality_part', '原因コードは市区町村セグメントなし');
+// 2) 数字のない町域（「…区」「…町」）を市区町村と取り違えない（都道府県の位置で語順を決める）
+{
+  const a = C.parseAddress('新宮区, 粕屋町, 福岡県');
+  assert(a.ok && a.muni === '粕屋町' && a.town === '新宮区', 'Amazon形式: 都道府県の直前が市区町村');
+  const b = C.parseAddress('福岡県, 福岡市博多区, 御供所町');
+  assert(b.ok && b.muni === '福岡市博多区' && b.town === '御供所町', '日本語順: 都道府県の直後が市区町村');
+  assert(C.parseAddress('新宮区, 粕屋町').ok === false, '都道府県なしで町域/市区町村が判別できない組合せは除外');
+  assert(C.parseAddress('新宮区粕屋町').ok === false, '市を含まない区のみ表記は、都道府県なしでは推測しない');
+  assert(C.parseAddress('福岡県東区箱崎1-1').ok === true, '都道府県が明示されていれば区のみ表記を解析');
+}
+// 3) 郡は属性として保持。郡が両方にあり異なれば別自治体、片方のみなら一致可（同一都道府県内の同名町の衝突を回避）
+{
+  const g = indexOf({
+    G1: [{ addr: '大隈1-1, 糟屋郡粕屋町, 福岡県' }],
+    G2: [{ addr: '大隈1-1, 粕屋町, 福岡県' }],
+    G3: [{ addr: '大隈1-1, 別郡粕屋町, 福岡県' }],
+  });
+  const r = C.search(g, '福岡県糟屋郡粕屋町大隈1-1', '', { limit: Infinity });
+  eq(r.candidates.map((c) => c.route).sort(), ['G1', 'G2'], '郡あり入力: 同郡と郡省略は一致、別郡は不一致');
+  const r2 = C.search(g, '大隈1-1, 粕屋町, 福岡県', '', { limit: Infinity });
+  eq(r2.candidates.map((c) => c.route).sort(), ['G1', 'G2', 'G3'], '郡なし入力は郡を問わない（曖昧さは候補に残す）');
+}
+// 4) 文字数制限は維持（建物名などが混入した長い市区町村は推測せず除外）
+assert(C.parseAddress('ABCDEFGHIJKLMNOPQRSTUVWXYZ福岡市東区箱崎1-1-1').ok === false, '長すぎる市区町村は除外');
+
+// 5) 往復整合性(総当たり): 構成要素を組合せた住所を解析し、正規形クエリで検索して必ず自分自身に LEVEL1 で戻ること。
+//    解析できない住所は除外されるだけで、誤った構造に解釈されてはならない。
+{
+  const MUNIS = ['福岡市東区', '古賀市', '糟屋郡粕屋町', '粕屋町', '筑紫郡那珂川町', '那珂川町', '北九州市八幡西区'];
+  const TOWNS = ['香椎駅前', '新宮区', '千代町', '一区', '市場通', '原', '大字多々良', '花見ヶ丘'];
+  const NUMS = ['', '1', '2-3', '2丁目', '4-5-6', '3番5号', '7丁目8番'];
+  const PREFS = ['福岡県', '福岡', ''];
+  const FORMS = [
+    (t, n, m, p) => [t + n, m, p].filter(Boolean).join(', '),            // Amazon形式
+    (t, n, m, p) => [p, m, t + n].filter(Boolean).join(', '),            // カンマ入り日本語順
+    (t, n, m, p) => (p === '福岡' ? '福岡県' : p) + m + t + n,           // 従来形式(カンマなし)
+    (t, n, m, p) => [m + t + n, p].filter(Boolean).join(', '),           // 市区町村と町域が同一セグメント
+  ];
+  const rows = []; const seen = new Set();
+  for (const m of MUNIS) for (const t of TOWNS) for (const n of NUMS) for (const p of PREFS) FORMS.forEach((f) => {
+    const a = f(t, n, m, p); if (!seen.has(a)) { seen.add(a); rows.push({ addr: a }); }
+  });
+  // 1行1コース（コース間の干渉を避けるため分離）で解析→正規形往復
+  let ok = 0, excluded = 0, wrongStruct = 0, miss = 0, falseL1 = 0;
+  const expectMuni = (a) => MUNIS.find((m) => a.indexOf(m.replace(/^.+?郡/, '')) >= 0);
+  const all = indexOf({ ALL: rows.map((r, i) => ({ addr: r.addr, stop: i + 1, tid: 'TBA' + i })) });
+  rows.forEach((r) => {
+    const p = C.parseAddress(r.addr);
+    if (!p.ok) { excluded++; return; }
+    ok++;
+    // 解析結果の市区町村・町域は、入力に含まれる構成要素そのものでなければならない（取り違え禁止）
+    const m = MUNIS.find((x) => x.replace(/^.+?郡/, '') === p.muni);
+    const t = TOWNS.find((x) => x.replace(/^大字/, '').replace(/[ヶヵケ]/g, 'ケ') === p.town || x.replace(/[ヶヵケ]/g, 'ケ') === p.town);
+    if (!m || !t || r.addr.indexOf(m.replace(/^.+?郡/, '')) < 0 || r.addr.indexOf(t.replace(/[ヶヵケ]/g, (c) => c)) < 0) wrongStruct++;
+  });
+  all.records.forEach((rec) => {
+    const q = C.search(all, C.canonicalQuery(rec), '', { limit: Infinity });
+    const own = q.ok ? q.candidates.find((c) => c.route === 'ALL') : null;
+    if (!own || own.level !== 1 || own.baseKey !== rec.key) miss++;
+    if (q.ok) q.candidates.forEach((c) => { if (c.level === 1 && c.baseKey !== rec.key) falseL1++; });
+  });
+  assert(ok > 500 && excluded > 0, '総当たり: 解析成功と除外の両方が存在 (' + ok + '/' + excluded + ')');
+  eq(wrongStruct, 0, '総当たり: 市区町村/町域の取り違えゼロ');
+  eq(miss, 0, '総当たり: 正規形クエリの自己検索漏れゼロ');
+  eq(falseL1, 0, '総当たり: LEVEL1誤一致ゼロ');
+}
 
 // ================= 診断・往復一貫性（実データ検証で判明した原因別の回帰テスト） =================
 const { diagnose } = require('../scripts/nearby-diagnose.js');
