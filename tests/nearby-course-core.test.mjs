@@ -282,10 +282,14 @@ QUERIES.forEach((q) => eq(sig(C.search(amzIdx, q)), base0, 'カンマ有無・�
 
 // ================= 市区町村の抽出（実データ診断 2b63d8a: weak_first 87/87失敗, 再解析でmuni変化20件, LEVEL1誤一致3件） =================
 // 1) 先頭が町・村で終わるセグメントは町域であり市区町村ではない（「町域, 番地, …」形式）→ 推測せず除外
-for (const a of ['千代町, 1-2-3, 福岡県', '千代町, 1-2-3, ビル名, 福岡県', '福岡県, 粕屋町, 大隈123-4']) {
+for (const a of ['千代町, 1-2-3, 福岡県', '千代町, 1-2-3, ビル名, 福岡県']) {
   assert(C.parseAddress(a).ok === false, '町・村で終わる先頭セグメントを市区町村にしない: ' + a.slice(0, 3));
 }
-eq(C.parseAddress('千代町, 1-2-3, 福岡県').reason, 'comma_no_municipality_part', '原因コードは市区町村セグメントなし');
+assert(['comma_no_municipality_part','unknown_fukuoka_municipality'].includes(C.parseAddress('千代町, 1-2-3, 福岡県').reason), '自治体不明は除外');
+{
+  const p = C.parseAddress('福岡県, 粕屋町, 大隈123-4');
+  assert(p.ok && p.muni === '粕屋町' && p.gun === '糟屋郡' && p.town === '大隈', '正式自治体辞書で日本語順の町を識別');
+}
 // 2) 数字のない町域（「…区」「…町」）を市区町村と取り違えない（都道府県の位置で語順を決める）
 {
   const a = C.parseAddress('新宮区, 粕屋町, 福岡県');
