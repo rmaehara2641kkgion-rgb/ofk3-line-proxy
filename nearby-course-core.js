@@ -487,7 +487,7 @@
       if (!it.p.pref && prefKeys.length === 1) {
         var retry = parseAddress(it.row.address + ', ' + prefKeys[0]);
         if (!retry.ok) retry = parseAddress(prefKeys[0] + ', ' + it.row.address);
-        if (retry.ok) it.p = retry;
+        it.p = retry;
       }
       if (it.p.ok && isChomeEvidence(it.p)) chomeTowns[townKey(it.p)] = true;
     });
@@ -557,7 +557,7 @@
       if (known && index.records.every(function(r){return r.pref === known;})) {
         var retry = parseAddress(addressInput + ', ' + known);
         if (!retry.ok) retry = parseAddress(known + ', ' + addressInput);
-        if (retry.ok) p = retry;
+        p = retry;
       }
     }
     if (!p.ok) {
