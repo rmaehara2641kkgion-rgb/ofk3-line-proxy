@@ -418,6 +418,7 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
         { stop: 4, postal: '', address: '5-6, 古賀市, 福岡県' },                           // 解析失敗
         { stop: 5, postal: '', address: '極秘町七丁目一番, 古賀市, 福岡県' },
         { stop: 6, postal: '', address: '大隈9, 糟屋郡粕屋町, 福岡県' },
+        { stop: 7, postal: '', address: '極秘町3番5号, 古賀市, 福岡県' },
       ],
     }],
   };
