@@ -350,13 +350,18 @@
       if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
     }
     if (eocd < 0) return { ok: false, error: 'ZIP構造を確認できません' };
+    if (eocd + 22 + dv.getUint16(eocd + 20, true) !== len ||
+        dv.getUint16(eocd + 4, true) !== 0 || dv.getUint16(eocd + 6, true) !== 0 ||
+        dv.getUint16(eocd + 8, true) !== dv.getUint16(eocd + 10, true))
+      return { ok: false, error: 'ZIP終端構造が不正です' };
     var total = dv.getUint16(eocd + 10, true);
     var cdOff = dv.getUint32(eocd + 16, true);
     if (total === 0xffff || cdOff === 0xffffffff) return { ok: false, error: 'ZIP64形式は対応していません' };
     if (total > LIMITS.maxZipEntries) return { ok: false, error: 'ZIP内のファイル数が多すぎます' };
-    var p = cdOff, sum = 0, names = [];
+    if (cdOff + dv.getUint32(eocd + 12, true) !== eocd) return { ok: false, error: 'ZIPディレクトリ範囲が不正です' };
+    var p = cdOff, sum = 0, names = [], ranges = [];
     for (i = 0; i < total; i++) {
-      if (p + 46 > len || dv.getUint32(p, true) !== 0x02014b50) return { ok: false, error: 'ZIP構造が不正です' };
+      if (p + 46 > eocd || dv.getUint32(p, true) !== 0x02014b50) return { ok: false, error: 'ZIP構造が不正です' };
       var flags = dv.getUint16(p + 8, true);
       var usz = dv.getUint32(p + 24, true);
       var nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
@@ -364,11 +369,30 @@
       if (usz === 0xffffffff) return { ok: false, error: 'ZIP64形式は対応していません' };
       sum += usz;
       if (sum > LIMITS.maxUncompressedBytes) return { ok: false, error: '展開後のサイズが大きすぎます' };
+      var cs = dv.getUint32(p + 20, true), off = dv.getUint32(p + 42, true);
+      var method = dv.getUint16(p + 10, true);
+      if (p + 46 + nl + el + cl > eocd || off + 30 > cdOff ||
+          dv.getUint32(off, true) !== 0x04034b50 || (method !== 0 && method !== 8) ||
+          dv.getUint16(off + 8, true) !== method || dv.getUint16(off + 6, true) !== flags)
+        return { ok: false, error: 'ZIPローカルヘッダーが不正です' };
+      var ln = dv.getUint16(off + 26, true), lx = dv.getUint16(off + 28, true);
+      var start = off + 30 + ln + lx, end = start + cs;
+      if (ln !== nl || end > cdOff || (method === 0 && cs !== usz))
+        return { ok: false, error: 'ZIPデータ範囲が不正です' };
+      for (var j = 0; j < nl; j++) if (bytes[off + 30 + j] !== bytes[p + 46 + j])
+        return { ok: false, error: 'ZIPファイル名が一致しません' };
+      if (!(flags & 8) && (dv.getUint32(off + 18, true) !== cs || dv.getUint32(off + 22, true) !== usz || dv.getUint32(off + 14, true) !== dv.getUint32(p + 16, true)))
+        return { ok: false, error: 'ZIPサイズ情報が一致しません' };
+      ranges.push([off,end]);
       var nameBytes = bytes.subarray(p + 46, p + 46 + nl), nm = '';
       for (var k = 0; k < nameBytes.length; k++) nm += String.fromCharCode(nameBytes[k]);
+      if (names.indexOf(nm) >= 0) return { ok: false, error: 'ZIP内に重複ファイルがあります' };
       names.push(nm);
       p += 46 + nl + el + cl;
     }
+    ranges.sort(function(a,b){return a[0]-b[0];});
+    for (i=1;i<ranges.length;i++) if (ranges[i][0]<ranges[i-1][1]) return {ok:false,error:'ZIPデータ範囲が重複しています'};
+    if (p !== eocd) return {ok:false,error:'ZIPディレクトリ長が不正です'};
     if (names.indexOf('xl/workbook.xml') < 0) return { ok: false, error: 'Excelブック(xlsx)ではありません' };
     for (i = 0; i < names.length; i++) {
       if (/vbaProject\.bin$/i.test(names[i])) return { ok: false, error: 'マクロ付きファイルは対応していません' };
