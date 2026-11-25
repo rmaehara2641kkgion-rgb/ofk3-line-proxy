@@ -358,8 +358,8 @@ assert(C.parseAddress('ABCDEFGHIJKLMNOPQRSTUVWXYZ福岡市東区箱崎1-1-1').ok
   all.records.forEach((rec) => {
     const q = C.search(all, C.canonicalQuery(rec), '', { limit: Infinity });
     const own = q.ok ? q.candidates.find((c) => c.route === 'ALL') : null;
-    if (!own || own.level !== 1 || own.baseKey !== rec.key) { miss++; if (collect && miss <= 12) console.log('ROUNDTRIP', JSON.stringify({key:rec.key,query:C.canonicalQuery(rec),own:own && {level:own.level,key:own.baseKey}})); }
-    if (q.ok) q.candidates.forEach((c) => { if (c.level === 1 && c.baseKey !== rec.key) falseL1++; });
+    if (!own || (rec.banchi === null ? own.level === 1 : own.level !== 1 || own.baseKey !== rec.key)) { miss++; if (collect && miss <= 12) console.log('ROUNDTRIP', JSON.stringify({key:rec.key,query:C.canonicalQuery(rec),own:own && {level:own.level,key:own.baseKey}})); }
+    if (q.ok) q.candidates.forEach((c) => { if (c.level === 1 && c.baseKey !== rec.key) { falseL1++; if (collect && falseL1 <= 15) console.log('FALSE_L1', JSON.stringify({key:rec.key,query:C.canonicalQuery(rec),candidate:c.baseKey})); } });
   });
   assert(ok > 500 && excluded > 0, '総当たり: 解析成功と除外の両方が存在 (' + ok + '/' + excluded + ')');
   eq(wrongStruct, 0, '総当たり: 市区町村/町域の取り違えゼロ');
@@ -412,12 +412,12 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
     routes: [{
       route: 'R9',
       rows: [
-        { stop: 1, postal: '987-6543', address: '極秘町1丁目2番3号 シークレット館101, 幻想市, 福岡県' },
-        { stop: 2, postal: '987-6543', address: '極秘町2-3-4, 幻想市, 福岡県' },
+        { stop: 1, postal: '987-6543', address: '極秘町1丁目2番3号 シークレット館101, 古賀市, 福岡県' },
+        { stop: 2, postal: '987-6543', address: '極秘町2-3-4, 古賀市, 福岡県' },
         { stop: 3, postal: '9876543', address: '極秘町シークレット館, 福岡県' },          // 解析失敗
-        { stop: 4, postal: '', address: '5-6, 幻想市, 福岡県' },                           // 解析失敗
-        { stop: 5, postal: '', address: '極秘町七丁目一番, 幻想市, 福岡県' },
-        { stop: 6, postal: '', address: '大隈9, 糟屋郡幻想町, 福岡県' },
+        { stop: 4, postal: '', address: '5-6, 古賀市, 福岡県' },                           // 解析失敗
+        { stop: 5, postal: '', address: '極秘町七丁目一番, 古賀市, 福岡県' },
+        { stop: 6, postal: '', address: '大隈9, 糟屋郡粕屋町, 福岡県' },
       ],
     }],
   };
@@ -426,7 +426,7 @@ assert(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡県').reason =
   MARK.forEach((m) => assert(out.indexOf(m) < 0, '診断出力に顧客情報が含まれない: ' + m.replace(/./g, '*')));
   assert(out.indexOf('ZZTRACK') < 0, 'Tracking ID非出力');
   const d = JSON.parse(out);
-  assert(d.住所解析失敗.件数 === 2 && d.住所解析失敗.原因別.comma_no_municipality_part === 1 && d.住所解析失敗.原因別.town_empty === 1, '解析失敗の原因別件数');
+  assert(d.住所解析失敗.件数 === 2 && d.住所解析失敗.原因別.unknown_fukuoka_municipality === 1 && d.住所解析失敗.原因別.town_empty === 1, '解析失敗の原因別件数');
   assert(d.自己検索_正規形クエリ.件数.検索漏れ === 0, '正規形クエリの自己検索漏れ0');
   assert(d.自己検索_旧方式_表示用文字列.件数.検索漏れ > 0, '旧方式の検索漏れを診断で検出できる');
   assert(out.indexOf('極秘') < 0 && out.length < 20000, '診断出力は小さな集計のみ');
