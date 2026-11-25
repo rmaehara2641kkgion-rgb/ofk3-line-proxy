@@ -331,7 +331,9 @@ app.get(['/', '/index.html'], function(req, res, next) {
     next(e);
   }
 });
-app.use(express.static(path.join(__dirname)));
+// SEC-04: リポジトリルート全体の express.static は廃止。許可リスト(static-public-policy.js)のファイルだけを配信する。
+// 未許可・不正なパスは next() に渡るため、以降のAPIルート/404処理には影響しない。
+app.use(require('./static-public-policy.js').createStaticPublicPolicy({ root: __dirname }));
 
 // 簡易ログ（Render Dashboard → Logs で確認）
 function log(...args) {
