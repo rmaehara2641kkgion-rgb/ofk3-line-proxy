@@ -84,7 +84,7 @@ assert(idx.routeCount === 5, 'コース数');
 }
 
 // --- 住所正規化
-const parse = (s, towns) => { const p = C.parseAddress(s); return C.resolveParts(p, towns || {}); };
+const parse = (s, towns) => { const p = C.parseAddress(s); const r = C.resolveParts(p, towns || {}); delete r.pref; return r; };
 const BASE = { muni: '福岡市東区', town: '香椎駅前', chome: 2, banchi: 15, go: 8 };
 ['福岡市東区香椎駅前２丁目１５番８号', '福岡県福岡市東区香椎駅前2-15-8', '福岡市東区香椎駅前2丁目15-8 ○○マンション101',
   '福岡市東区香椎駅前二丁目十五番八号', '福岡市東区　香椎駅前　２－１５－８', '〒813-0013 福岡県福岡市東区香椎駅前2‐15‐8',
@@ -195,6 +195,75 @@ assert(!C.inspectZip(new Uint8Array(Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3
   const wb2 = XLSX.read(buf, { type: 'buffer', cellFormula: false, cellHTML: false, cellStyles: false, bookVBA: false });
   const rr = C.extractManifest(XLSX, wb2);
   assert(rr.ok && rr.routes[0].rows[0].address === '福岡市東区箱崎1-1-1', '数式はキャッシュ値のみ');
+}
+
+
+// ================= Amazonマニフェスト形式（町域・番地, 市区町村, 都道府県）=================
+const AMZ = [
+  '香椎駅前2-15-8, 福岡市東区, 福岡県',
+  '香椎駅前2-15-8, 福岡市東区, 福岡',                       // 都道府県の略称
+  '香椎駅前2丁目15番8号 ○○マンション101, 福岡市東区, 福岡県', // 建物名・部屋番号
+  '香椎駅前２－１５－８，福岡市東区，福岡県',                 // 全角カンマ/数字
+  '香椎駅前2-15-8,福岡市東区,福岡県',                         // 空白なし
+  '香椎駅前二丁目十五番八号, 福岡市東区, 福岡県, 日本',       // 漢数字・国名付き
+  '福岡県, 福岡市東区, 香椎駅前2-15-8',                       // カンマ入り日本語順
+  '福岡県福岡市東区香椎駅前2-15-8',                           // 従来形式（カンマなし）
+  '福岡市東区香椎駅前2-15-8',                                 // 都道府県なし
+];
+AMZ.forEach((a) => eq(parse(a), BASE, 'Amazon/日本語順の同値: ' + a));
+eq(C.parseAddress('香椎駅前2-15-8, 福岡市東区, 福岡').pref, '福岡県', '略称「福岡」→福岡県');
+eq(C.parseAddress('x1-1, 港区, 東京').pref, '東京都', '略称「東京」→東京都');
+eq(C.parseAddress('天神1-1, 京都市中京区, 京都').pref, '京都府', '略称「京都」→京都府');
+eq(C.parseAddress('札幌市中央区北1条西2-1, 北海道').pref, '北海道', '北海道');
+eq(parse('大隈123-4, 粕屋町, 福岡県'), parse('糟屋郡粕屋町大隈123-4'), '郡あり/なしを同一視(Amazon形式 vs 従来)');
+eq(parse('大隈123-4, 糟屋郡粕屋町, 福岡県'), parse('糟屋郡粕屋町大隈123-4'), '郡付きAmazon形式');
+eq(C.parseAddress('福岡市博多区, 御供所町').muni, '福岡市博多区', '町で終わる町域を市区町村と取り違えない');
+eq(C.parseAddress('御供所町, 福岡市博多区, 福岡県').town, '御供所町', 'Amazon形式で町域が町で終わる');
+
+// 誤認識の排除（市区町村なし・取り違え）
+for (const bad of ['香椎駅前2-15-8, 福岡県', '香椎駅前2-15-8', '福岡県', '2-15-8, 福岡市東区, 福岡県', ', , ,']) {
+  assert(C.parseAddress(bad).ok === false, '不正住所は解析不可: ' + bad);
+}
+
+// 両形式の検索: カンマの有無・形式でインデックス/結果が変わらない
+const amzIdx = indexOf({
+  DCX1: [{ addr: '香椎駅前2-15-6, 福岡市東区, 福岡県', postal: '813-0013' }, { addr: '香椎駅前2-15-7 ○○ビル301, 福岡市東区, 福岡県', postal: '813-0013' }, { addr: '香椎駅前2-16-1, 福岡市東区, 福岡県', postal: '813-0013' }],
+  DCMRA1: [{ addr: '香椎駅前2-15-6, 福岡市東区, 福岡県', postal: '813-0013' }, { addr: '香椎駅前3-1-1, 福岡市東区, 福岡県', postal: '813-0013' }],
+  DCMRB1: [{ addr: '香椎駅前2-15-6, 福岡市博多区, 福岡県', postal: '812-0011' }, { addr: '大隈123-4, 糟屋郡粕屋町, 福岡県', postal: '811-2301' }],
+  DCZ1: [{ addr: '香椎駅前2-15-6, 福岡市東区, 福岡県', postal: '999-9999' }, { addr: '拠点所在地不明, 福岡県', postal: '813-0013' }], // 後者は解析不可→除外
+});
+assert(amzIdx.unparsed === 1, 'Amazon形式: 解析失敗の件数');
+assert(amzIdx.records.every((x) => x.postal !== '' || true) && !amzIdx.records.some((x) => x.display.indexOf('拠点') >= 0), '解析失敗行は検索対象外');
+const QUERIES = ['福岡県福岡市東区香椎駅前2-15-6', '香椎駅前2-15-6, 福岡市東区, 福岡', '福岡県, 福岡市東区, 香椎駅前２丁目１５番６号', '福岡市東区香椎駅前2-15-6 ○○ビル'];
+const sig = (r) => JSON.stringify(r.candidates.map((c) => [c.route, c.level, c.sameBanchi, c.sameChome, c.sameTown, c.bestAddress]));
+const base0 = sig(C.search(amzIdx, QUERIES[0]));
+QUERIES.forEach((q) => eq(sig(C.search(amzIdx, q)), base0, 'カンマ有無・形式で検索結果が不変: ' + q));
+{
+  const rr = C.search(amzIdx, QUERIES[0]);
+  const routes = rr.candidates.map((c) => c.route);
+  assert(!routes.includes('DCMRB1') || rr.candidates.find((c) => c.route === 'DCMRB1').level >= 6 === false, '区違い(博多区)のコースを東区住所に誤一致させない');
+  assert(rr.candidates.filter((c) => c.level === 1).map((c) => c.route).sort().join() === 'DCMRA1,DCX1,DCZ1', '複数コースの同一住所は全て LEVEL1');
+  assert(!routes.includes('DCMRB1'), '博多区のみのコースは候補に入らない');
+}
+// 郵便番号一致より住所構造を優先
+{
+  const r2 = C.search(amzIdx, '福岡市東区香椎駅前2-16-1', '812-0011'); // 郵便番号は博多区DCMRB1と一致
+  assert(r2.candidates[0].route === 'DCX1' && r2.candidates[0].level === 1, '住所構造一致が郵便番号一致に優先');
+  assert(r2.candidates.every((c) => c.level <= 5), '構造一致がある限り郵便番号のみの候補は出さない');
+}
+// 同名ward(中央区)でも都道府県が異なれば誤一致しない
+{
+  const i3 = indexOf({ T1: [{ addr: '銀座1-1-1, 中央区, 東京都' }], O1: [{ addr: '銀座1-1-1, 中央区, 大阪府' }] });
+  const r3 = C.search(i3, '東京都中央区銀座1-1-1');
+  eq(r3.candidates.map((c) => c.route), ['T1'], '都道府県が異なる同名区を区別');
+  const r4 = C.search(i3, '中央区銀座1-1-1'); // 都道府県なしなら両方
+  eq(r4.candidates.length, 2, '都道府県なし入力は両方を候補にする');
+}
+// Amazon形式でも拠点(Tracking IDなし)は除外され、全件が同一形式で取り込める
+{
+  const rowsAmz = [{ addr: '拠点町1-1, 福岡市東区, 福岡県', tid: '' }, { addr: '箱崎1-1-1, 福岡市東区, 福岡県' }];
+  const ix = indexOf({ H1: rowsAmz });
+  assert(ix.validCount === 1 && ix.unparsed === 0, '拠点住所除外・Amazon形式を全件解析');
 }
 
 console.log('nearby-course-core: ' + passed + ' assertions passed');

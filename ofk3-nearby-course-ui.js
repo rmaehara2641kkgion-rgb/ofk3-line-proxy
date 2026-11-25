@@ -127,7 +127,8 @@
         else if (meta.date > today) warnings.push('対象配送日(' + meta.date + ')が本日(' + today + ')と異なります。');
         if (ex.sheetsSkipped) warnings.push('コースとして読めないシートを' + ex.sheetsSkipped + '件スキップしました。');
         if (ex.noAddress) warnings.push('住所が空の配送行 ' + ex.noAddress + '件は検索対象外です。');
-        if (idx.unparsed) warnings.push('住所を解析できない行が' + idx.unparsed + '件あります（郵便番号一致のみ対象）。');
+        if (!idx.records.length) throw new Error('住所を解析できた配送先が1件もありません（住所形式を確認してください）');
+        if (idx.unparsed) warnings.push('⚠ 住所の市区町村・町域を解析できない' + idx.unparsed + '件（有効' + idx.validCount + '件中）は検索対象から除外しました。');
         next = { fileName: f.name, date: meta.date, cycle: meta.cycle, importedAt: jstNowText(), index: idx, warnings: warnings };
       } catch (err) {
         setMsg('取込失敗: ' + (err && err.message ? err.message : '不明なエラー') + '（既存データは維持されています）', 'error');

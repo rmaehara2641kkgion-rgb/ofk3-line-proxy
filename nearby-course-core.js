@@ -73,21 +73,62 @@
     return d.length === 7 ? d : '';
   }
 
-  function stripPrefecture(s) {
+  // 都道府県の正式名・略称（福岡→福岡県, 東京→東京都, 京都→京都府, 大阪→大阪府）
+  var PREF_LOOKUP = {};
+  PREFECTURES.forEach(function (pf) {
+    PREF_LOOKUP[pf] = pf;
+    PREF_LOOKUP[pf === '北海道' ? pf : pf.slice(0, -1)] = pf;
+  });
+  function prefOf(str) { return PREF_LOOKUP[String(str).replace(/\s+/g, '')] || ''; }
+
+  /** 先頭の都道府県を切り出す。 */
+  function takePrefecture(s) {
     for (var i = 0; i < PREFECTURES.length; i++) {
-      if (s.indexOf(PREFECTURES[i]) === 0) return s.slice(PREFECTURES[i].length);
+      if (s.indexOf(PREFECTURES[i]) === 0) return { pref: PREFECTURES[i], rest: s.slice(PREFECTURES[i].length) };
     }
-    return s;
+    return { pref: '', rest: s };
+  }
+
+  /**
+   * カンマ区切り住所を日本語順（都道府県→市区町村→町域・番地）に再構成する。
+   * - Amazon形式: 「町域・番地[, 建物], 市区町村, 都道府県」
+   * - カンマ入りの日本語順: 「都道府県, 市区町村, 町域・番地」
+   * カンマが無ければ null。市区町村判定は 市/区(強) → 町/村(弱) の順で、末尾→先頭の順に探す。
+   */
+  function reorderComma(s) {
+    if (!/[,、]/.test(s)) return null;
+    var parts = s.split(/\s*[,、]\s*/).map(function (x) { return x.trim(); })
+      .filter(function (x) { return x && !/^(日本|japan|jp)$/i.test(x); });
+    if (!parts.length) return { pref: '', muni: '', street: '' };
+    var pref = '', i;
+    for (i = parts.length - 1; i >= 0; i--) {
+      if (prefOf(parts[i])) { pref = prefOf(parts[i]); parts.splice(i, 1); break; }
+    }
+    function nd(x) { return !/\d/.test(x); }
+    function strong(x) { return nd(x) && /([市区]|郡.+[町村])$/.test(x.replace(/\s+/g, '')); }
+    function weak(x) { return nd(x) && /[町村]$/.test(x.replace(/\s+/g, '')); }
+    var muni = '', last = parts.length - 1;
+    if (parts.length >= 2) {
+      if (strong(parts[last])) muni = parts.pop();
+      else if (strong(parts[0])) muni = parts.shift();
+      else if (weak(parts[last])) muni = parts.pop();
+      else if (weak(parts[0])) muni = parts.shift();
+    }
+    return { pref: pref, muni: muni, street: parts.join(' ') };
   }
 
   /** 住所文字列を正規化し、構成要素に分解する（丁目の省略解釈は resolveParts で確定）。 */
   function parseAddress(raw) {
-    var out = { ok: false, muni: '', town: '', nums: null, explicit: false, postal: '' };
+    var out = { ok: false, pref: '', muni: '', town: '', nums: null, explicit: false, postal: '' };
     if (raw === null || raw === undefined) return out;
     var s = toHalf(raw).replace(/[\t\r\n]+/g, ' ').trim();
     // 先頭の郵便番号
     var pm = s.match(/^〒?\s*(\d{3}-?\d{4})\s*/);
     if (pm) { out.postal = normalizePostal(pm[1]); s = s.slice(pm[0].length); }
+    // カンマ区切り（Amazonマニフェスト形式を含む）→ 日本語順へ再構成
+    var explicitMuni = '';
+    var rc = reorderComma(s);
+    if (rc) { out.pref = rc.pref; explicitMuni = rc.muni; s = rc.street; }
     // ハイフン類（NFKCで未変換のもの）→ '-'
     s = s.replace(/[‐-―−ーｰ]/g, function (c, off, all) {
       // 長音は数字に挟まれる場合のみハイフン扱い（「ビー」等を壊さない）
@@ -96,7 +137,12 @@
       }
       return '-';
     });
-    s = stripPrefecture(s.replace(/^\s+/, ''));
+    if (!out.pref) { var tp = takePrefecture(s.replace(/^\s+/, '')); out.pref = tp.pref; s = tp.rest; }
+    if (explicitMuni) {
+      var tm = takePrefecture(explicitMuni.replace(/\s+/g, ''));
+      if (tm.pref && !out.pref) out.pref = tm.pref;
+      explicitMuni = tm.rest;
+    }
     // 数字直前の漢数字の丁目: 二丁目→2丁目 / 数字直後の漢数字の番・号
     s = s.replace(/([〇零一二三四五六七八九十百]+)(丁目)/g, function (m, k, u) {
       var n = kanjiToInt(k); return isNaN(n) ? m : n + u;
@@ -117,9 +163,18 @@
     if (!head) return out;
 
     // 市区町村: 郡+町村 / 市(+区) / 区のみ
-    var mm = head.match(/^(.+?郡)(.+?[町村])/) || head.match(/^(.+?市)((?:[^市郡]{1,4}?区))?/) || head.match(/^([^市郡]{1,4}?区)/);
-    var muni = '', town = head;
-    if (mm) { muni = mm[0]; town = head.slice(mm[0].length); }
+    var muni = '', town = head, mm;
+    if (explicitMuni) {
+      // 郡は省略して扱う（「糟屋郡粕屋町」と「粕屋町」を同一視）
+      muni = explicitMuni.replace(/^.+?郡(?=.)/, '');
+    } else {
+      mm = head.match(/^(.+?郡)(.+?[町村])/);
+      if (mm) { muni = mm[2]; town = head.slice(mm[0].length); }
+      else {
+        mm = head.match(/^(.+?市)((?:[^市郡]{1,4}?区))?/) || head.match(/^([^市郡]{1,4}?区)/);
+        if (mm) { muni = mm[0]; town = head.slice(mm[0].length); }
+      }
+    }
     town = town.replace(/^大?字/, '').replace(/[ヶヵケ]/g, 'ケ').replace(/(\d|-)+$/, '');
     out.muni = muni;
     out.town = town;
@@ -146,7 +201,8 @@
     out.nums = nums;
     out.explicit = explicit;
     out.count = count;
-    out.ok = !!(out.muni && out.town);
+    // 市区町村と町域を取り違えた住所は不正として扱う（検索対象外）
+    out.ok = !!(out.muni && out.town && /[市区町村]$/.test(out.muni) && out.muni.length <= 12 && out.town.length <= 20);
     return out;
   }
 
@@ -162,7 +218,7 @@
       if (c === 1) { banchi = n[0]; chome = null; go = null; }
       else if (c === 2 && !(chomeTowns && chomeTowns[p.muni + '|' + p.town])) { banchi = n[0]; go = n[1]; chome = null; }
     }
-    return { muni: p.muni, town: p.town, chome: chome, banchi: banchi, go: go };
+    return { pref: p.pref || '', muni: p.muni, town: p.town, chome: chome, banchi: banchi, go: go };
   }
 
   function isChomeEvidence(p) {
@@ -329,18 +385,20 @@
     var byBase = {}, list = [], unparsed = 0;
     for (i = 0; i < parsed.length; i++) {
       var it = parsed[i], postal = normalizePostal(it.row.postal) || it.p.postal;
-      var a = it.p.ok ? resolveParts(it.p, chomeTowns) : { muni: '', town: '', chome: null, banchi: null, go: null };
-      if (!it.p.ok) unparsed++;
-      var key = it.route + '#' + (it.p.ok ? baseKey(a) : 'x' + i);
+      // 住所構造(市区町村/町域)を解析できない行は検索対象から除外（郵便番号だけでは候補にしない）
+      if (!it.p.ok) { unparsed++; continue; }
+      var a = resolveParts(it.p, chomeTowns);
+      var key = it.route + '#' + baseKey(a);
       var rec = byBase[key];
       if (!rec) {
         rec = byBase[key] = {
-          route: it.route, muni: a.muni, town: a.town, chome: a.chome, banchi: a.banchi, go: a.go,
-          key: baseKey(a), display: it.p.ok ? formatBase(a) : '(住所解析不可)', postal: postal, stop: it.row.stop, packages: 0
+          route: it.route, pref: a.pref, muni: a.muni, town: a.town, chome: a.chome, banchi: a.banchi, go: a.go,
+          key: baseKey(a), display: formatBase(a), postal: postal, stop: it.row.stop, packages: 0
         };
         list.push(rec);
       }
       rec.packages++;
+      if (!rec.pref && a.pref) rec.pref = a.pref;
       if (it.row.stop !== null && (rec.stop === null || it.row.stop < rec.stop)) rec.stop = it.row.stop;
     }
     var routeSet = {};
@@ -356,6 +414,7 @@
 
   function levelOf(q, rec) {
     // 町名一致が前提（市区町村・町名が異なれば LEVEL1〜5 には絶対にならない）
+    if (q.pref && rec.pref && q.pref !== rec.pref) return null; // 都道府県が明確に異なれば別地域
     if (q.muni && q.town && rec.muni === q.muni && rec.town === q.town) {
       if (rec.chome === q.chome && rec.banchi === q.banchi && rec.go === q.go) return { level: 1, diff: 0 };
       // 丁目が無い町域は「丁目なし同士」を同一丁目扱いにする
@@ -379,7 +438,7 @@
     if (!p.ok && !inPostal) {
       return { ok: false, error: '住所から市区町村・町名を判別できません。都道府県または市区町村から入力してください', candidates: [] };
     }
-    var q = p.ok ? resolveParts(p, index.chomeTowns) : { muni: '', town: '', chome: null, banchi: null, go: null };
+    var q = p.ok ? resolveParts(p, index.chomeTowns) : { pref: '', muni: '', town: '', chome: null, banchi: null, go: null };
     res.query = { display: p.ok ? formatBase(q) : '', postal: inPostal };
 
     // コース単位に集約
@@ -393,7 +452,7 @@
         route: rec.route, level: 99, diff: Infinity, goDiff: Infinity, best: null,
         sameBanchi: 0, sameChome: 0, sameTown: 0
       });
-      var sameTown = p.ok && rec.muni === q.muni && rec.town === q.town;
+      var sameTown = p.ok && rec.muni === q.muni && rec.town === q.town && !(q.pref && rec.pref && q.pref !== rec.pref);
       if (sameTown) {
         c.sameTown++;
         if (rec.chome === q.chome) c.sameChome++;
