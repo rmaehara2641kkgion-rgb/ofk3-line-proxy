@@ -13,6 +13,8 @@
 
   var state = null; // {fileName, date, cycle, importedAt, index, warnings}
   var els = {};
+  var importGeneration = 0;
+  var importing = false;
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -60,7 +62,7 @@
     var q = el('div', 'mb-4');
     q.appendChild(el('label', 'text-xs font-bold text-ink mb-1 block', '追加荷物の配送先住所'));
     els.addr = el('input', 'w-full text-base px-4 py-3 border-2 border-blue-300 rounded-xl focus:border-blue-500 outline-none');
-    els.addr.type = 'text'; els.addr.autocomplete = 'off';
+    els.addr.type = 'text'; els.addr.autocomplete = 'off'; els.addr.spellcheck = false;
     els.addr.placeholder = '例: 福岡県福岡市東区香椎駅前2-15-8';
     els.addr.maxLength = 200;
     q.appendChild(els.addr);
@@ -103,10 +105,17 @@
     if (!/\.xlsx$/i.test(f.name)) { setMsg('xlsxファイルのみ取り込めます', 'error'); return; }
     if (f.size > Core.LIMITS.maxFileBytes) { setMsg('ファイルサイズが大きすぎます（上限 ' + Math.round(Core.LIMITS.maxFileBytes / 1048576) + 'MB）', 'error'); return; }
     if (typeof XLSX === 'undefined') { setMsg('Excel読込ライブラリが利用できません', 'error'); return; }
+    var generation = ++importGeneration;
+    importing = true;
+    els.importBtn.disabled = true;
+    els.clearBtn.disabled = false;
+    els.searchBtn.disabled = true;
+    function finish() { importing = false; els.importBtn.disabled = false; els.searchBtn.disabled = false; renderStatus(); }
     setMsg('読込中…', 'warn');
     var reader = new FileReader();
-    reader.onerror = function () { setMsg('ファイルを読み込めませんでした（既存データは維持されています）', 'error'); };
+    reader.onerror = function () { if (generation !== importGeneration) return; finish(); setMsg('ファイルを読み込めませんでした（既存データは維持されています）', 'error'); };
     reader.onload = function (e) {
+      if (generation !== importGeneration) return;
       var next;
       try {
         var bytes = new Uint8Array(e.target.result);
@@ -131,19 +140,27 @@
         if (idx.unparsed) warnings.push('⚠ 住所の市区町村・町域を解析できない' + idx.unparsed + '件（有効' + idx.validCount + '件中）は検索対象から除外しました。');
         next = { fileName: f.name, date: meta.date, cycle: meta.cycle, importedAt: jstNowText(), index: idx, warnings: warnings };
       } catch (err) {
+        finish();
         setMsg('取込失敗: ' + (err && err.message ? err.message : '不明なエラー') + '（既存データは維持されています）', 'error');
         return;
       }
+      finish();
       state = next; // 正常に解析できた場合のみ置換
       els.results.textContent = '';
       els.file.value = '';
       setMsg(next.warnings.length ? '取込完了（要確認あり）' : '取込完了', next.warnings.length ? 'warn' : 'ok');
       renderStatus();
     };
-    reader.readAsArrayBuffer(f);
+    try { reader.readAsArrayBuffer(f); } catch (_) { if (generation === importGeneration) { finish(); setMsg('ファイルを読み込めませんでした', 'error'); } }
   }
 
   function clearAll() {
+    ++importGeneration;
+    importing = false;
+    els.importBtn.disabled = false;
+    els.searchBtn.disabled = false;
+    els.addr.value = '';
+    els.postal.value = '';
     state = null;
     els.results.textContent = '';
     els.file.value = '';
@@ -153,7 +170,7 @@
 
   function renderStatus() {
     els.status.textContent = '';
-    if (!state) { els.status.classList.add('hidden'); els.clearBtn.disabled = true; return; }
+    if (!state) { els.status.classList.add('hidden'); els.clearBtn.disabled = !importing; return; }
     els.clearBtn.disabled = false;
     els.status.classList.remove('hidden');
     function item(k, v) {
@@ -176,6 +193,7 @@
   }
 
   function doSearch() {
+    if (importing) return;
     els.results.textContent = '';
     if (!state) { setMsg('先にマニフェストを取り込んでください', 'error'); return; }
     var addr = els.addr.value.trim();
@@ -217,7 +235,7 @@
       d.appendChild(p);
     }
     line('住所一致', 'LEVEL ' + c.level + '（' + c.levelLabel + '）');
-    line('最寄り候補住所', c.bestAddress);
+    line('照合候補住所', c.bestAddress);
     if (c.banchiDiff !== null && c.level === 3) line('番地番号の差', String(c.banchiDiff));
     line('同一番地', c.sameBanchi + '件');
     line('同一丁目', c.sameChome + '件');
