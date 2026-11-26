@@ -100,7 +100,7 @@ function runTests() {
   });
   assert(expDb.ok, 'case6 exp parse');
   var workers6 = case1.workers;
-  var expEntry = expDb.db.byTransportId['A111'];
+  var expEntry = expDb.byTransportId['A111'];
   var eval6 = AssignSupportCore.evaluateDriverForRoute(
     workers6[0],
     [{ label: '原', role: 'primary' }],
